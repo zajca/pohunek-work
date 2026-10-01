@@ -1,0 +1,22 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "00000000-0000-0000-0000-000000000002",
+          "identifier": "ABC-2",
+          "title": "Fix widget layout",
+          "url": "https://linear.example/acme/issue/ABC-2",
+          "state": { "name": "In Review", "type": "started" },
+          "team": { "key": "ABC" },
+          "cycle": null,
+          "attachments": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false, "endCursor": null }
+          }
+        }
+      ],
+      "pageInfo": { "hasNextPage": false, "endCursor": "cursor-2" }
+    }
+  }
+}

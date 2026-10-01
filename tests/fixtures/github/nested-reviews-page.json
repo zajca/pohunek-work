@@ -1,0 +1,18 @@
+{
+  "data": {
+    "rateLimit": { "remaining": 4899 },
+    "c0": {
+      "reviews": {
+        "nodes": [
+          {
+            "id": "RV_5",
+            "state": "APPROVED",
+            "submittedAt": "2026-09-30T08:00:00Z",
+            "author": { "__typename": "User", "login": "reviewer-b" }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": "R2" }
+      }
+    }
+  }
+}

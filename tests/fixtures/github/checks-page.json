@@ -1,0 +1,62 @@
+{
+  "data": {
+    "rateLimit": { "remaining": 4900 },
+    "authored": {
+      "issueCount": 1,
+      "pageInfo": { "hasNextPage": false, "endCursor": "A1" },
+      "nodes": [
+        {
+          "id": "PR_node_50",
+          "number": 50,
+          "url": "https://github.example/acme/widgets/pull/50",
+          "title": "Check outcome coverage",
+          "isDraft": false,
+          "headRefName": "owner/ABC-2/checks",
+          "baseRefName": "main",
+          "reviewDecision": "APPROVED",
+          "mergeable": "MERGEABLE",
+          "updatedAt": "2026-09-30T10:00:00Z",
+          "repository": { "nameWithOwner": "acme/widgets" },
+          "author": { "__typename": "User", "login": "owner-user" },
+          "reviews": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "reviewThreads": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "timelineItems": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "reviewRequests": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "commits": {
+            "nodes": [
+              {
+                "commit": {
+                  "id": "CM_50",
+                  "statusCheckRollup": {
+                    "contexts": {
+                      "nodes": [
+                        { "__typename": "CheckRun", "name": "run/success", "status": "COMPLETED", "conclusion": "SUCCESS" },
+                        { "__typename": "CheckRun", "name": "run/neutral", "status": "COMPLETED", "conclusion": "NEUTRAL" },
+                        { "__typename": "CheckRun", "name": "run/skipped", "status": "COMPLETED", "conclusion": "SKIPPED" },
+                        { "__typename": "CheckRun", "name": "run/failure", "status": "COMPLETED", "conclusion": "FAILURE" },
+                        { "__typename": "CheckRun", "name": "run/timed-out", "status": "COMPLETED", "conclusion": "TIMED_OUT" },
+                        { "__typename": "CheckRun", "name": "run/cancelled", "status": "COMPLETED", "conclusion": "CANCELLED" },
+                        { "__typename": "CheckRun", "name": "run/startup", "status": "COMPLETED", "conclusion": "STARTUP_FAILURE" },
+                        { "__typename": "CheckRun", "name": "run/action-required", "status": "COMPLETED", "conclusion": "ACTION_REQUIRED" },
+                        { "__typename": "CheckRun", "name": "run/stale", "status": "COMPLETED", "conclusion": "STALE" },
+                        { "__typename": "CheckRun", "name": "run/in-progress", "status": "IN_PROGRESS", "conclusion": null },
+                        { "__typename": "CheckRun", "name": "run/null-conclusion", "status": "COMPLETED", "conclusion": null },
+                        { "__typename": "StatusContext", "context": "ctx/success", "state": "SUCCESS" },
+                        { "__typename": "StatusContext", "context": "ctx/failure", "state": "FAILURE" },
+                        { "__typename": "StatusContext", "context": "ctx/error", "state": "ERROR" },
+                        { "__typename": "StatusContext", "context": "ctx/pending", "state": "PENDING" },
+                        { "__typename": "StatusContext", "context": "ctx/expected", "state": "EXPECTED" }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": "X1" }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "requested": { "issueCount": 0, "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] }
+  }
+}

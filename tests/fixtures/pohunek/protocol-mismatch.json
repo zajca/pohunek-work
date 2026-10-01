@@ -1,0 +1,5 @@
+{
+  "cli_version": "9.0.0",
+  "protocol": { "minimum": 4, "maximum": 5 },
+  "ok": []
+}

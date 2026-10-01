@@ -1,0 +1,148 @@
+// GraphQL documents for the GitHub source. Only query operations are built.
+// Search strings and page sizes travel as variables; no caller value is ever
+// interpolated into the document text.
+
+export type ConnectionKind =
+  | "reviews"
+  | "reviewThreads"
+  | "timelineItems"
+  | "reviewRequests"
+  | "checkContexts"
+  | "threadComments";
+
+const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
+const ACTOR = "author { __typename login }";
+
+const REVIEWS_FIELDS = `nodes { id state submittedAt ${ACTOR} } ${PAGE_INFO}`;
+const THREAD_COMMENTS_FIELDS = `nodes { ${ACTOR} createdAt } ${PAGE_INFO}`;
+const THREADS_FIELDS = `nodes { id isResolved isOutdated comments(first: $nested) { ${THREAD_COMMENTS_FIELDS} } } ${PAGE_INFO}`;
+const TIMELINE_FIELDS = `nodes { __typename ... on PullRequestCommit { commit { committedDate } } ... on HeadRefForcePushedEvent { createdAt } } ${PAGE_INFO}`;
+const REQUEST_FIELDS = `nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } ${PAGE_INFO}`;
+const CONTEXT_FIELDS = `nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } ${PAGE_INFO}`;
+
+const TIMELINE_ITEM_TYPES = "[PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]";
+
+const PULL_REQUEST_FRAGMENT = `
+fragment PrFields on PullRequest {
+  id number url title isDraft headRefName baseRefName reviewDecision mergeable updatedAt
+  repository { nameWithOwner }
+  ${ACTOR}
+  reviews(first: $nested) { ${REVIEWS_FIELDS} }
+  reviewThreads(first: $nested) { ${THREADS_FIELDS} }
+  timelineItems(first: $nested, itemTypes: ${TIMELINE_ITEM_TYPES}) { ${TIMELINE_FIELDS} }
+  reviewRequests(first: $nested) { ${REQUEST_FIELDS} }
+  commits(last: 1) { nodes { commit { id statusCheckRollup { contexts(first: $nested) { ${CONTEXT_FIELDS} } } } } }
+}`;
+
+export interface SearchSpec {
+  /** Alias of the search field and suffix of its variables. */
+  readonly alias: string;
+  /** Search string, sent as a variable. */
+  readonly queryString: string;
+  /** Cursor of the page to fetch; null for the first page. */
+  readonly after: string | null;
+}
+
+export type GraphqlVariables = Record<string, string | number | null>;
+
+export interface GraphqlRequest {
+  readonly query: string;
+  readonly variables: GraphqlVariables;
+}
+
+export interface SearchRequestSizes {
+  readonly pullRequestPageSize: number;
+  readonly nestedPageSize: number;
+}
+
+/** One request that fetches the next page of every active search. */
+export function buildSearchRequest(
+  searches: readonly SearchSpec[],
+  sizes: SearchRequestSizes,
+): GraphqlRequest {
+  const variables: GraphqlVariables = {
+    top: sizes.pullRequestPageSize,
+    nested: sizes.nestedPageSize,
+  };
+  const declarations = ["$top: Int!", "$nested: Int!"];
+  const fields: string[] = [];
+  for (const search of searches) {
+    variables[`q_${search.alias}`] = search.queryString;
+    variables[`after_${search.alias}`] = search.after;
+    declarations.push(`$q_${search.alias}: String!`, `$after_${search.alias}: String`);
+    fields.push(
+      `${search.alias}: search(query: $q_${search.alias}, type: ISSUE, first: $top, after: $after_${search.alias}) { issueCount ${PAGE_INFO} nodes { ...PrFields } }`,
+    );
+  }
+  const query = `query PohunekWorkPullRequests(${declarations.join(", ")}) {
+  rateLimit { remaining }
+  ${fields.join("\n  ")}
+}${PULL_REQUEST_FRAGMENT}`;
+  return { query, variables };
+}
+
+interface KindSpec {
+  /** GraphQL type of the node the connection hangs off. */
+  readonly parentType: string;
+  /** Field path from the node to the connection, last element is the connection. */
+  readonly path: readonly string[];
+  readonly fields: string;
+}
+
+export const CONNECTION_KINDS: Readonly<Record<ConnectionKind, KindSpec>> = {
+  reviews: { parentType: "PullRequest", path: ["reviews"], fields: REVIEWS_FIELDS },
+  reviewThreads: { parentType: "PullRequest", path: ["reviewThreads"], fields: THREADS_FIELDS },
+  timelineItems: { parentType: "PullRequest", path: ["timelineItems"], fields: TIMELINE_FIELDS },
+  reviewRequests: { parentType: "PullRequest", path: ["reviewRequests"], fields: REQUEST_FIELDS },
+  checkContexts: {
+    parentType: "Commit",
+    path: ["statusCheckRollup", "contexts"],
+    fields: CONTEXT_FIELDS,
+  },
+  threadComments: {
+    parentType: "PullRequestReviewThread",
+    path: ["comments"],
+    fields: THREAD_COMMENTS_FIELDS,
+  },
+};
+
+export interface ConnectionPageSpec {
+  readonly alias: string;
+  readonly kind: ConnectionKind;
+  readonly nodeId: string;
+  readonly after: string;
+}
+
+function connectionSelection(spec: ConnectionPageSpec): string {
+  const kind = CONNECTION_KINDS[spec.kind];
+  const args = `first: $nested, after: $after_${spec.alias}`;
+  const timelineArgs = spec.kind === "timelineItems" ? `, itemTypes: ${TIMELINE_ITEM_TYPES}` : "";
+  let inner = "";
+  kind.path.forEach((segment, index) => {
+    const isLast = index === kind.path.length - 1;
+    inner += isLast ? `${segment}(${args}${timelineArgs}) { ${kind.fields} }` : `${segment} { `;
+  });
+  inner += " }".repeat(kind.path.length - 1);
+  return `${spec.alias}: node(id: $id_${spec.alias}) { ... on ${kind.parentType} { ${inner} } }`;
+}
+
+/** One request that fetches the next page of several nested connections by node id. */
+export function buildConnectionRequest(
+  pages: readonly ConnectionPageSpec[],
+  nestedPageSize: number,
+): GraphqlRequest {
+  const variables: GraphqlVariables = { nested: nestedPageSize };
+  const declarations = ["$nested: Int!"];
+  const fields: string[] = [];
+  for (const page of pages) {
+    variables[`id_${page.alias}`] = page.nodeId;
+    variables[`after_${page.alias}`] = page.after;
+    declarations.push(`$id_${page.alias}: ID!`, `$after_${page.alias}: String!`);
+    fields.push(connectionSelection(page));
+  }
+  const query = `query PohunekWorkConnections(${declarations.join(", ")}) {
+  rateLimit { remaining }
+  ${fields.join("\n  ")}
+}`;
+  return { query, variables };
+}

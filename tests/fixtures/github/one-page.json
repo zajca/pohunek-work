@@ -1,0 +1,137 @@
+{
+  "data": {
+    "rateLimit": { "remaining": 4900 },
+    "authored": {
+      "issueCount": 1,
+      "pageInfo": { "hasNextPage": false, "endCursor": "A1" },
+      "nodes": [
+        {
+          "id": "PR_node_12",
+          "number": 12,
+          "url": "https://github.example/acme/widgets/pull/12",
+          "title": "Add widget cache",
+          "isDraft": false,
+          "headRefName": "owner/ABC-1/widget-cache",
+          "baseRefName": "main",
+          "reviewDecision": "CHANGES_REQUESTED",
+          "mergeable": "CONFLICTING",
+          "updatedAt": "2026-09-30T10:00:00Z",
+          "repository": { "nameWithOwner": "acme/widgets" },
+          "author": { "__typename": "User", "login": "owner-user" },
+          "reviews": {
+            "nodes": [
+              {
+                "id": "RV_1",
+                "state": "CHANGES_REQUESTED",
+                "submittedAt": "2026-09-29T09:00:00Z",
+                "author": { "__typename": "User", "login": "reviewer-a" }
+              },
+              {
+                "id": "RV_2",
+                "state": "COMMENTED",
+                "submittedAt": "2026-09-29T09:30:00Z",
+                "author": { "__typename": "Bot", "login": "ai-reviewer[bot]" }
+              },
+              {
+                "id": "RV_3",
+                "state": "PENDING",
+                "submittedAt": null,
+                "author": { "__typename": "User", "login": "owner-user" }
+              },
+              { "id": "RV_4", "state": "DISMISSED", "submittedAt": "2026-09-28T09:00:00Z", "author": null }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "R1" }
+          },
+          "reviewThreads": {
+            "nodes": [
+              {
+                "id": "TH_1",
+                "isResolved": false,
+                "isOutdated": true,
+                "comments": {
+                  "nodes": [
+                    { "author": { "__typename": "User", "login": "reviewer-a" }, "createdAt": "2026-09-29T09:00:01Z" },
+                    { "author": { "__typename": "User", "login": "owner-user" }, "createdAt": "2026-09-29T12:00:00Z" }
+                  ],
+                  "pageInfo": { "hasNextPage": false, "endCursor": "C1" }
+                }
+              },
+              {
+                "id": "TH_2",
+                "isResolved": true,
+                "isOutdated": false,
+                "comments": {
+                  "nodes": [{ "author": null, "createdAt": "2026-09-29T09:00:02Z" }],
+                  "pageInfo": { "hasNextPage": false, "endCursor": "C2" }
+                }
+              }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "T1" }
+          },
+          "timelineItems": {
+            "nodes": [
+              { "__typename": "PullRequestCommit", "commit": { "committedDate": "2026-09-29T11:00:00Z" } },
+              { "__typename": "HeadRefForcePushedEvent", "createdAt": "2026-09-29T13:00:00Z" }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "L1" }
+          },
+          "reviewRequests": {
+            "nodes": [
+              { "requestedReviewer": { "__typename": "User", "login": "reviewer-a" } },
+              { "requestedReviewer": { "__typename": "Team", "slug": "platform" } },
+              { "requestedReviewer": { "__typename": "Bot" } },
+              { "requestedReviewer": null }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "Q1" }
+          },
+          "commits": {
+            "nodes": [
+              {
+                "commit": {
+                  "id": "CM_12",
+                  "statusCheckRollup": {
+                    "contexts": {
+                      "nodes": [
+                        { "__typename": "CheckRun", "name": "CI / Build", "status": "COMPLETED", "conclusion": "SUCCESS" },
+                        { "__typename": "StatusContext", "context": "legacy/ci", "state": "FAILURE" }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": "X1" }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "requested": {
+      "issueCount": 1,
+      "pageInfo": { "hasNextPage": false, "endCursor": "B1" },
+      "nodes": [
+        {
+          "id": "PR_node_34",
+          "number": 34,
+          "url": "https://github.example/acme/widgets/pull/34",
+          "title": "Bump widget parser",
+          "isDraft": true,
+          "headRefName": "deps/parser",
+          "baseRefName": "main",
+          "reviewDecision": null,
+          "mergeable": "UNKNOWN",
+          "updatedAt": "2026-09-30T11:00:00Z",
+          "repository": { "nameWithOwner": "acme/widgets" },
+          "author": { "__typename": "Bot", "login": "dep-bot[bot]" },
+          "reviews": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "reviewThreads": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "timelineItems": { "nodes": [], "pageInfo": { "hasNextPage": false, "endCursor": null } },
+          "reviewRequests": {
+            "nodes": [{ "requestedReviewer": { "__typename": "User", "login": "owner-user" } }],
+            "pageInfo": { "hasNextPage": false, "endCursor": "Q2" }
+          },
+          "commits": { "nodes": [{ "commit": { "id": "CM_34", "statusCheckRollup": null } }] }
+        }
+      ]
+    }
+  }
+}
