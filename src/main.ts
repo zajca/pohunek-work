@@ -2,7 +2,7 @@
 // Command line entry point: `pohunek-work list`, `do` and `doctor`.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
-import { ActionError, LAUNCH_ACTIONS, type LaunchAction } from "./actions/types.ts";
+import { ActionError, DO_ACTIONS, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
@@ -12,13 +12,17 @@ import { resolveConfigDir, resolveLogDir } from "./paths.ts";
 import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
 import { createPohunekClient } from "./sources/pohunek.ts";
+import { exec } from "./util/exec.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
   pohunek-work list [--mine] [--json] [--project <label>]
-  pohunek-work do <key> <implement|babysit> [--profile <name>] [--project <label>] [--dry-run] [--yes] [--json]
+  pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--dry-run] [--yes] [--json]
+  pohunek-work do <key> ready [--project <label>] [--dry-run] [--yes] [--json]
+  pohunek-work do <key> attach [--project <label>] [--dry-run [--json]]
   pohunek-work doctor
 
+merge is not an action: merging stays manual.
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
 doctor exits with the code of its first failed check (see doctor output)`;
 
@@ -102,9 +106,12 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
     const [key, action, ...extra] = positionals;
     if (key === undefined || action === undefined) throw new UsageError("do needs a key and an action");
     if (extra.length > 0) throw new UsageError(`unexpected argument: ${extra.join(" ")}`);
-    const known = LAUNCH_ACTIONS.find((name) => name === action);
-    if (known === undefined) throw new UsageError(`unknown action: ${action} (known: ${LAUNCH_ACTIONS.join(", ")})`);
+    const known = DO_ACTIONS.find((name) => name === action);
+    if (known === undefined) throw new UsageError(`unknown action: ${action} (known: ${DO_ACTIONS.join(", ")})`);
     if (values["dry-run"] && values.yes) throw new UsageError("--dry-run and --yes exclude each other");
+    if (values.profile !== undefined && !isLaunchAction(known)) throw new UsageError(`--profile does not apply to ${known}`);
+    // attach hands the terminal to the session, so there is no JSON result to print afterwards.
+    if (known === "attach" && values.json && !values["dry-run"]) throw new UsageError("attach takes --json only with --dry-run");
     return {
       key,
       action: known,
@@ -122,7 +129,7 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
 
 interface DoArgs {
   readonly key: string;
-  readonly action: LaunchAction;
+  readonly action: DoAction;
   readonly profile: string | null;
   readonly project: string | null;
   readonly dryRun: boolean;
@@ -165,6 +172,8 @@ async function doCommand(argv: readonly string[]): Promise<number> {
       logger,
       cliVersion: pkg.version,
       confirm: terminalConfirm(),
+      exec,
+      terminal: process.stdin.isTTY && process.stdout.isTTY,
     });
     for (const warning of output.warnings) console.error(warning);
     console.log(output.stdout);

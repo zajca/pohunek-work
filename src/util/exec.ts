@@ -30,6 +30,29 @@ export class SpawnError extends Error {
 
 export type Exec = (argv: readonly string[], options: ExecOptions) => Promise<ExecResult>;
 
+/** Runs a child on the caller's terminal and resolves with its exit code (null when a signal ended it). */
+export type InteractiveExec = (argv: readonly string[]) => Promise<number | null>;
+
+/**
+ * The child shares the terminal and the foreground process group: a child in
+ * its own group would be stopped by SIGTTIN when it reads the terminal. There
+ * is no timeout because the owner ends the child (for example by detaching).
+ */
+export const execInteractive: InteractiveExec = async (argv) => {
+  const [binary, ...args] = argv;
+  if (binary === undefined) {
+    throw new TypeError("execInteractive requires a non-empty argv");
+  }
+  let child: Bun.Subprocess<"inherit", "inherit", "inherit">;
+  try {
+    child = Bun.spawn([binary, ...args], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+  } catch (cause) {
+    throw new SpawnError(binary, cause);
+  }
+  await child.exited;
+  return child.exitCode;
+};
+
 /** Ends the child's whole process group; falls back to the child alone when the group is gone. */
 function killGroup(child: Bun.Subprocess): void {
   try {

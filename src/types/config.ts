@@ -52,6 +52,8 @@ export interface NotifyConfig {
 export interface ActionsConfig {
   /** First branch segment of a launched issue branch (`<prefix>/<KEY>/<slug>`). */
   readonly branchPrefix: string;
+  /** Second segment of a review branch (`<prefix>/<segment>/<number>-<head sha>`). */
+  readonly reviewBranchSegment: string;
   /** Longest slug taken from the issue title. */
   readonly slugMaxLength: number;
   /** Time the daemon may take to answer `pohunek session new`, which creates a worktree. */

@@ -65,7 +65,7 @@ describe("loadConfig valid", () => {
       pohunek: { bin: "/usr/local/bin/pohunek", timeoutMs: 10000, notificationsPageSize: 25 },
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
-      actions: { branchPrefix: "alice", slugMaxLength: 40, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
+      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
       notify: { command: "/usr/bin/notify-send" },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
@@ -115,6 +115,7 @@ describe("loadConfig missing keys", () => {
     ["config.toml", 'keyring_service = "test-service"\n', "linear.keyring_service", "[linear] keyring_service is required"],
     ["config.toml", "poll_interval_secs = 300\n", "watch.poll_interval_secs", "[watch] poll_interval_secs is required"],
     ["config.toml", "max_string_length = 2000\n", "log.max_string_length", "[log] max_string_length is required"],
+    ["config.toml", 'review_branch_segment = "review"\n', "actions.review_branch_segment", "[actions] review_branch_segment is required"],
     ["config.toml", "slug_max_length = 40\n", "actions.slug_max_length", "[actions] slug_max_length is required"],
     ["config.toml", "launch_timeout_ms = 120000\n", "actions.launch_timeout_ms", "[actions] launch_timeout_ms is required"],
     ["config.toml", "launch_kill_margin_ms = 10000\n", "actions.launch_kill_margin_ms", "[actions] launch_kill_margin_ms is required"],
@@ -137,6 +138,13 @@ describe("loadConfig missing keys", () => {
     await editFile(dir, "config.toml", (t) => t.replace('branch_prefix = "alice"', 'branch_prefix = "Al/ice"'));
     const error = await loadError(dir);
     expect(error.key).toBe("actions.branch_prefix");
+  });
+
+  test("an invalid actions.review_branch_segment fails naming the key", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace('review_branch_segment = "review"', 'review_branch_segment = "re/view"'));
+    const error = await loadError(dir);
+    expect(error.key).toBe("actions.review_branch_segment");
   });
 
   test("missing table fails naming the table", async () => {

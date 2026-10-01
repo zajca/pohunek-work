@@ -1,21 +1,27 @@
 // `pohunek-work do <key> <action>`: runs one write action on one row.
 // Fresh data, typed refusals, the exact argv shown before anything runs.
+import { executeAttach, planAttach } from "../actions/attach.ts";
+import { executeReady, planReady } from "../actions/github.ts";
 import { displayArgv, executePlan, planLaunch } from "../actions/launch.ts";
 import { resolveRow } from "../actions/resolve.ts";
 import {
   ActionError,
   DO_CONTRACT_VERSION,
+  isLaunchAction,
   type ActionPlan,
   type ActionResult,
-  type LaunchAction,
+  type AttachPlan,
+  type DoAction,
+  type ReadyPlan,
 } from "../actions/types.ts";
 import type { Logger } from "../log.ts";
+import type { Exec } from "../util/exec.ts";
 import type { ListDeps } from "./list.ts";
 import type { PluginConfig } from "../types/config.ts";
 
 export interface DoOptions {
   readonly key: string;
-  readonly action: LaunchAction;
+  readonly action: DoAction;
   readonly profile: string | null;
   readonly project: string | null;
   readonly dryRun: boolean;
@@ -28,6 +34,10 @@ export interface DoDeps extends Omit<ListDeps, "cliVersion"> {
   readonly cliVersion: string;
   /** Asks the owner to confirm the shown command; absent when there is no terminal. */
   readonly confirm: ((question: string) => Promise<boolean>) | null;
+  /** Runs non-pohunek commands (`gh`). */
+  readonly exec: Exec;
+  /** Stdin and stdout are a terminal, so `attach` can hand it over. */
+  readonly terminal: boolean;
 }
 
 export interface DoOutput {
@@ -42,6 +52,10 @@ function quote(arg: string): string {
   return SAFE_ARG.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`;
 }
 
+function commandLine(argv: readonly string[]): string {
+  return argv.map(quote).join(" ");
+}
+
 function planText(plan: ActionPlan, argv: readonly string[]): string {
   return [
     `action:  ${plan.action}`,
@@ -49,8 +63,10 @@ function planText(plan: ActionPlan, argv: readonly string[]): string {
     `project: ${plan.project}`,
     `profile: ${plan.profile}`,
     ...(plan.branch === null ? [] : [`branch:  ${plan.branch}`]),
+    ...(plan.baseBranch === null ? [] : [`from:    ${plan.baseBranch} (fetched from origin)`]),
+    ...(plan.expectedHead === null ? [] : [`head:    ${plan.expectedHead} (checked after the launch)`]),
     ...(plan.cwd === null ? [] : [`cwd:     ${plan.cwd}`]),
-    `command: ${argv.map(quote).join(" ")}`,
+    `command: ${commandLine(argv)}`,
     "prompt (stdin):",
     ...plan.prompt.split("\n").map((line) => `  ${line}`),
   ].join("\n");
@@ -63,6 +79,9 @@ function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unk
     project: plan.project,
     profile: plan.profile,
     branch: plan.branch,
+    // Only review plans carry these, so the implement and babysit plans keep their exact shape.
+    ...(plan.baseBranch === null ? {} : { base_branch: plan.baseBranch }),
+    ...(plan.expectedHead === null ? {} : { expected_head: plan.expectedHead }),
     cwd: plan.cwd,
     name: plan.name,
     metadata: plan.metadata,
@@ -78,6 +97,7 @@ function resultJson(result: ActionResult): Record<string, unknown> {
     branch: result.branch,
     worktree_path: result.worktreePath,
     metadata: result.metadata,
+    ...(result.warnings.length === 0 ? {} : { warnings: result.warnings }),
   };
 }
 
@@ -106,35 +126,127 @@ async function logged<T>(logger: Logger, options: DoOptions, body: () => Promise
   }
 }
 
+/** Shows the plan and asks unless `--yes`; refuses without a terminal or an explicit yes. */
+async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Promise<void> {
+  if (options.yes) return;
+  if (deps.confirm === null) {
+    throw new ActionError("confirmation_required", "no terminal to confirm on: pass --yes after reviewing --dry-run");
+  }
+  console.error(text);
+  if (!(await deps.confirm("Run this command?"))) {
+    throw new ActionError("confirmation_required", "not confirmed; nothing was executed");
+  }
+}
+
+async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps, action: ActionPlan["action"]): Promise<DoOutput> {
+  const { logger } = deps;
+  const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, deps);
+  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions });
+  const argv = displayArgv(config.global.pohunek.bin, plan);
+  logger.info("do_plan", { key: plan.key, action: plan.action, profile: plan.profile, branch: plan.branch, cwd: plan.cwd, argv });
+
+  if (options.dryRun) {
+    const stdout = options.json
+      ? envelope(deps.cliVersion, { dry_run: true, plan: planJson(plan, argv) })
+      : `dry run: nothing was executed\n${planText(plan, argv)}`;
+    return { stdout, warnings };
+  }
+  await confirmPlan(options, deps, planText(plan, argv));
+  const result = await executePlan(plan, deps.pohunek, config);
+  logger.info("do_done", { key: plan.key, action: plan.action, profile: plan.profile, session_id: result.sessionId, warnings: [...result.warnings] });
+  const stdout = options.json
+    ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
+    : `started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`;
+  return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`)] };
+}
+
+function readyText(plan: ReadyPlan): string {
+  return [
+    "action:  ready",
+    `key:     ${plan.key}`,
+    `project: ${plan.project}`,
+    `pull request: ${plan.pullRequest}`,
+    `command: ${commandLine(plan.argv)}`,
+    `verify:  ${commandLine(plan.verifyArgv)}`,
+  ].join("\n");
+}
+
+function readyJson(plan: ReadyPlan): Record<string, unknown> {
+  return {
+    action: plan.action,
+    key: plan.key,
+    project: plan.project,
+    pull_request: plan.pullRequest,
+    argv: plan.argv,
+    verify_argv: plan.verifyArgv,
+  };
+}
+
+async function runReady(config: PluginConfig, options: DoOptions, deps: DoDeps): Promise<DoOutput> {
+  const { logger } = deps;
+  const { row, warnings } = await resolveRow(config, options.key, options.project, deps);
+  const plan = planReady(row, config);
+  logger.info("do_plan", { key: plan.key, action: plan.action, argv: [...plan.argv], verify_argv: [...plan.verifyArgv] });
+  if (options.dryRun) {
+    const stdout = options.json
+      ? envelope(deps.cliVersion, { dry_run: true, plan: readyJson(plan) })
+      : `dry run: nothing was executed\n${readyText(plan)}`;
+    return { stdout, warnings };
+  }
+  await confirmPlan(options, deps, readyText(plan));
+  await executeReady(plan, deps.exec, config);
+  logger.info("do_done", { key: plan.key, action: plan.action, pull_request: plan.pullRequest, is_draft: false });
+  const stdout = options.json
+    ? envelope(deps.cliVersion, { dry_run: false, plan: readyJson(plan), result: { pull_request: plan.pullRequest, is_draft: false } })
+    : `${plan.pullRequest} is ready for review (re-read: not a draft)`;
+  return { stdout, warnings };
+}
+
+function attachText(plan: AttachPlan): string {
+  return [
+    "action:  attach",
+    `key:     ${plan.key}`,
+    `project: ${plan.project}`,
+    `session: ${plan.sessionId}`,
+    `command: ${commandLine(plan.argv)}`,
+  ].join("\n");
+}
+
+/** Not a write, so there is no confirmation: the terminal goes to the session until the owner detaches. */
+async function runAttach(config: PluginConfig, options: DoOptions, deps: DoDeps): Promise<DoOutput> {
+  const { logger } = deps;
+  const { row, warnings } = await resolveRow(config, options.key, options.project, deps);
+  const plan = planAttach(row, config);
+  logger.info("do_plan", { key: plan.key, action: plan.action, session_id: plan.sessionId, argv: [...plan.argv] });
+  if (options.dryRun) {
+    const stdout = options.json
+      ? envelope(deps.cliVersion, {
+          dry_run: true,
+          plan: { action: plan.action, key: plan.key, project: plan.project, session_id: plan.sessionId, argv: plan.argv },
+        })
+      : `dry run: nothing was executed\n${attachText(plan)}`;
+    return { stdout, warnings };
+  }
+  if (!deps.terminal) {
+    throw new ActionError("no_terminal", "attach needs a terminal on stdin and stdout");
+  }
+  for (const warning of warnings) console.error(warning);
+  await executeAttach(plan, deps.pohunek);
+  logger.info("do_done", { key: plan.key, action: plan.action, session_id: plan.sessionId });
+  return { stdout: `detached from session ${plan.sessionId}`, warnings: [] };
+}
+
 /** Throws `ActionError` for every refusal; returns the text for stdout otherwise. */
 export async function runDo(config: PluginConfig, options: DoOptions, deps: DoDeps): Promise<DoOutput> {
-  const { logger } = deps;
-  return logged(logger, options, async () => {
-    const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, deps);
-    const plan = await planLaunch(options.action, row, config, { profile: options.profile, sessions });
-    const argv = displayArgv(config.global.pohunek.bin, plan);
-    logger.info("do_plan", { key: plan.key, action: plan.action, profile: plan.profile, branch: plan.branch, cwd: plan.cwd, argv });
-
-    if (options.dryRun) {
-      const stdout = options.json
-        ? envelope(deps.cliVersion, { dry_run: true, plan: planJson(plan, argv) })
-        : `dry run: nothing was executed\n${planText(plan, argv)}`;
-      return { stdout, warnings };
+  return logged(deps.logger, options, async () => {
+    const { action } = options;
+    if (action === "merge") {
+      // D10: merging is never delegated; nothing is read or run.
+      throw new ActionError("not_supported", "merge is not supported: merging stays manual (merge on GitHub yourself)");
     }
-    if (!options.yes) {
-      if (deps.confirm === null) {
-        throw new ActionError("confirmation_required", "no terminal to confirm on: pass --yes after reviewing --dry-run");
-      }
-      console.error(planText(plan, argv));
-      if (!(await deps.confirm("Run this command?"))) {
-        throw new ActionError("confirmation_required", "not confirmed; nothing was executed");
-      }
-    }
-    const result = await executePlan(plan, deps.pohunek, config);
-    logger.info("do_done", { key: plan.key, action: plan.action, profile: plan.profile, session_id: result.sessionId });
-    const stdout = options.json
-      ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
-      : `started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`;
-    return { stdout, warnings };
+    if (action === "ready") return runReady(config, options, deps);
+    if (action === "attach") return runAttach(config, options, deps);
+    if (isLaunchAction(action)) return runLaunch(config, options, deps, action);
+    throw new ActionError("not_supported", `unknown action ${String(action)}`);
   });
 }

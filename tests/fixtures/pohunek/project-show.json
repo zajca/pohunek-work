@@ -1,0 +1,22 @@
+{
+  "cli_version": "0.31.6",
+  "protocol": { "minimum": 3, "maximum": 3 },
+  "ok": {
+    "project": {
+      "id": "prj_1",
+      "label": "widgets",
+      "repo_root": "/work/widgets",
+      "git_common_dir": "/work/widgets/.git",
+      "origin_url": "git@github.com:acme/widgets.git",
+      "source": "manual",
+      "is_bare": false,
+      "added_at": "2026-10-01T20:04:45Z",
+      "last_used_at": "2026-10-01T20:05:38Z"
+    },
+    "worktrees": [
+      { "path": "/work/widgets", "branch": "main", "head": "67d09c29d2b18924b1856540077a7439493db856", "bare": false, "locked": false, "owned": false },
+      { "path": "/work/wt/s-review-1-widgets-review", "branch": "alice/review/7-1111111111111111111111111111111111111111", "head": "1111111111111111111111111111111111111111", "bare": false, "locked": false, "owned": true, "session_id": "s-review-1" },
+      { "path": "/work/wt/detached", "head": "2222222222222222222222222222222222222222", "bare": false, "locked": false, "owned": false }
+    ]
+  }
+}
