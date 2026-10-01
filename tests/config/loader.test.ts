@@ -195,6 +195,8 @@ describe("loadConfig invalid values", () => {
     ["empty array item", 'delegable = ["review"]', 'delegable = [""]', "policy.delegable"],
     ["negative cost ceiling", "daily_cost_ceiling_usd = 12.5", "daily_cost_ceiling_usd = -1", "policy.daily_cost_ceiling_usd"],
     ["string max_active_tasks", "max_active_tasks = 2", 'max_active_tasks = "2"', "policy.max_active_tasks"],
+    ["fractional max_active_tasks", "max_active_tasks = 2", "max_active_tasks = 1.5", "policy.max_active_tasks"],
+    ["negative max_active_tasks", "max_active_tasks = 2", "max_active_tasks = -1", "policy.max_active_tasks"],
     ["non-string profile", 'review = "profile-b"', "review = 3", "profiles.review"],
     ["empty profile value", 'review = "profile-b"', 'review = ""', "profiles.review"],
   ])("%s", async (_name, from, to, key) => {

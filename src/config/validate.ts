@@ -84,6 +84,14 @@ export function readNonNegativeNumber(table: Table, name: string, file: string, 
   return value;
 }
 
+export function readNonNegativeInt(table: Table, name: string, file: string, path: KeyPath): number {
+  const full = [...path, name];
+  const value = requireKey(table, name, file, path);
+  if (typeof value !== "number") throw fail(file, full, "must be an integer");
+  if (!Number.isInteger(value) || value < 0) throw fail(file, full, "must be a non-negative integer");
+  return value;
+}
+
 export function readStringArray(table: Table, name: string, file: string, path: KeyPath): readonly string[] {
   const full = [...path, name];
   const value = requireKey(table, name, file, path);

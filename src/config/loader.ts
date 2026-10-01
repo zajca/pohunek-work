@@ -21,6 +21,7 @@ import {
   isTable,
   readAbsolutePath,
   readHttpsUrl,
+  readNonNegativeInt,
   readNonNegativeNumber,
   readPositiveInt,
   readRepo,
@@ -160,7 +161,7 @@ function parsePolicy(root: Table, file: string): PolicyConfig {
   rejectUnknownKeys(table, ["delegable", "max_active_tasks", "daily_cost_ceiling_usd"], file, path);
   return {
     delegable: readStringArray(table, "delegable", file, path),
-    maxActiveTasks: readNonNegativeNumber(table, "max_active_tasks", file, path),
+    maxActiveTasks: readNonNegativeInt(table, "max_active_tasks", file, path),
     dailyCostCeilingUsd: readNonNegativeNumber(table, "daily_cost_ceiling_usd", file, path),
   };
 }
