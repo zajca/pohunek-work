@@ -9,6 +9,8 @@ export interface IdentityConfig {
 
 export interface GithubConfig {
   readonly endpoint: string;
+  /** Absolute path of the `gh` binary used for `gh auth token`. */
+  readonly ghBin: string;
   readonly timeoutMs: number;
   /** Page size of the top-level pull request connections. */
   readonly pullRequestPageSize: number;
@@ -18,6 +20,8 @@ export interface GithubConfig {
 
 export interface LinearConfig {
   readonly endpoint: string;
+  /** Absolute path of the `secret-tool` binary used to read the keyring entry. */
+  readonly secretToolBin: string;
   readonly keyringService: string;
   readonly keyringKey: string;
   readonly timeoutMs: number;
