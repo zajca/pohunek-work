@@ -146,7 +146,7 @@ export function options(overrides: Partial<DoOptions> = {}): DoOptions {
   return { key: "linear:ABC-1", action: "implement", profile: null, project: "widgets", dryRun: false, yes: true, json: true, ...overrides };
 }
 
-async function refusal(promise: Promise<unknown>): Promise<ActionError> {
+export async function refusal(promise: Promise<unknown>): Promise<ActionError> {
   try {
     await promise;
   } catch (error) {

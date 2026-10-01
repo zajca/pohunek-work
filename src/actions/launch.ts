@@ -8,7 +8,7 @@ import { isLiveSession, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { PohunekSession, PullRequest } from "../types/sources.ts";
 import { isIssueKey, slugify } from "./branch.ts";
-import { requireAuthoredPullRequest, requireTurn } from "./preconditions.ts";
+import { requireAuthoredPullRequest, requireGithub, requireTurn } from "./preconditions.ts";
 import { dataBlock, readTemplate, renderTemplate, type PromptName } from "./prompt.ts";
 import { ActionError, type ActionPlan, type ActionResult, type LaunchAction } from "./types.ts";
 
@@ -286,6 +286,7 @@ async function planReview(
   profile: string,
   sessions: readonly PohunekSession[],
 ): Promise<ActionPlan> {
+  requireGithub(row, "review");
   const pr = row.item.pullRequest;
   if (pr === null || pr.relation !== "review_requested") {
     throw new ActionError("precondition_failed", `review refused: ${row.listItem.key} has no pull request waiting for your review`);

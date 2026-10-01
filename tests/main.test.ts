@@ -44,6 +44,37 @@ test("an unexpected positional argument is a usage error", async () => {
   expect((await run([], dir)).code).toBe(2);
 });
 
+test("do rejects unknown actions and options that do not apply, before reading the config", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const cases: readonly (readonly string[])[] = [
+    ["do", "ABC-1", "deploy"],
+    ["do", "ABC-1", "ready", "--profile", "x"],
+    ["do", "ABC-1", "attach", "--profile", "x"],
+  ];
+  for (const args of cases) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("usage:");
+    expect(result.err).not.toContain("config.toml");
+  }
+  const attachJson = await run(["do", "ABC-1", "attach", "--json"], dir);
+  expect(attachJson.code).toBe(2);
+  const envelope = JSON.parse(attachJson.out) as { err: { class: string; msg: string } };
+  expect(envelope.err.class).toBe("usage");
+  expect(envelope.err.msg).toContain("attach takes --json only with --dry-run");
+});
+
+test("do accepts every action name and reaches the config", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  for (const action of ["fix-ci", "rebase", "review", "ready", "merge"]) {
+    const result = await run(["do", "ABC-1", action, "--json"], dir);
+    const envelope = JSON.parse(result.out) as { err: { code: string } };
+    expect(envelope.err.code).toBe("config_invalid");
+  }
+  const attach = await run(["do", "ABC-1", "attach", "--dry-run", "--json"], dir);
+  expect((JSON.parse(attach.out) as { err: { code: string } }).err.code).toBe("config_invalid");
+});
+
 test("a missing config exits 2 with a JSON error envelope under --json", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
   const result = await run(["list", "--json"], dir);

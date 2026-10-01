@@ -21,8 +21,17 @@ export function requireTurn(
   }
 }
 
+/** Without GitHub data a row has no pull request, which is not the same as having none. */
+export function requireGithub(row: CollectedRow, action: DoAction): void {
+  const status = row.listItem.sources.github;
+  if (status !== "ok") {
+    throw new ActionError("source_unavailable", `${action} refused: github did not answer (${status})`);
+  }
+}
+
 /** The pull request of the row when the owner authored it. */
 export function requireAuthoredPullRequest(row: CollectedRow, action: DoAction): PullRequest {
+  requireGithub(row, action);
   const pr = row.item.pullRequest;
   if (pr === null || pr.relation !== "authored") {
     throw new ActionError("precondition_failed", `${action} refused: ${row.listItem.key} has no pull request of yours`);
