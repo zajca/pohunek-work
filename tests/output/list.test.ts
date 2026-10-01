@@ -86,7 +86,7 @@ test("--mine keeps only rows on the owner's turn", () => {
   expect(filterMine([mine, other])).toEqual([mine]);
 });
 
-test("unknown rows carry the failing source and are not dropped by --mine filtering logic", () => {
+test("unknown rows carry the failing source and are excluded by the --mine filter", () => {
   const row = buildListItem(item(), { ...context, sources: { ...allOk, github: "rate_limited" } });
   expect(row.on_turn).toEqual({ actor: "unknown", reason: "github:rate_limited", rule: null });
   expect(row.sources.github).toBe("rate_limited");

@@ -5,7 +5,7 @@ import { ConfigError, loadConfig } from "./config/index.ts";
 import { runList } from "./commands/list.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createLogger } from "./log.ts";
-import { buildErrorEnvelope } from "./output/list.ts";
+import { reportError, EXIT_ERROR } from "./cli-errors.ts";
 import { resolveConfigDir, resolveLogDir } from "./paths.ts";
 import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
@@ -19,22 +19,10 @@ const USAGE = `usage:
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
 doctor exits with the code of its first failed check (see doctor output)`;
 
-/** Failed command; the pohunek CLI uses the same value for errors. */
-const EXIT_ERROR = 2;
 /** `list` printed rows but at least one source did not answer, so rows may be `unknown` or missing. */
 const EXIT_PARTIAL = 3;
 
 class UsageError extends Error {}
-
-function reportError(json: boolean, code: string, message: string): number {
-  if (json) {
-    const err = { class: "configuration", code, msg: message };
-    console.log(JSON.stringify(buildErrorEnvelope(pkg.version, err), null, 2));
-  } else {
-    console.error(message);
-  }
-  return EXIT_ERROR;
-}
 
 function parseListArgs(argv: readonly string[]): { mine: boolean; json: boolean; project: string | null } {
   try {
@@ -63,7 +51,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
     config = await loadConfig(resolveConfigDir());
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    return reportError(options.json, "config_invalid", error.message);
+    return reportError(options.json, "configuration", "config_invalid", error.message);
   }
 
   const logger = createLogger({
@@ -119,7 +107,7 @@ async function main(argv: readonly string[]): Promise<number> {
       return EXIT_ERROR;
     }
     const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    return reportError(json, "internal_error", `unexpected failure: ${message}`);
+    return reportError(json, "internal", "internal_error", `unexpected failure: ${message}`);
   }
 }
 

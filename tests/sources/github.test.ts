@@ -90,11 +90,11 @@ function fakeExec(result: Partial<ExecResult> = {}): { exec: Exec; calls: { argv
 
 async function run(
   responder: Responder,
-  options: { identity?: IdentityConfig; exec?: Exec; project?: ProjectConfig } = {},
+  options: { identity?: IdentityConfig; exec?: Exec; project?: ProjectConfig; github?: GithubConfig } = {},
 ): Promise<{ result: SourceResult<readonly PullRequest[]>; requests: RecordedRequest[] }> {
   const { fetch: fetchFn, requests } = fakeFetch(responder);
   const source = createGithubSource(
-    { github: githubConfig, identity: options.identity ?? identity },
+    { github: options.github ?? githubConfig, identity: options.identity ?? identity },
     { exec: options.exec ?? fakeExec().exec, fetch: fetchFn },
   );
   const result = await source.fetchPullRequests(options.project ?? project);
@@ -312,6 +312,20 @@ describe("request shape", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.variables["q_team0"]).toBe("repo:acme/widgets is:pr is:open team-review-requested:other-org/reviewers");
     expect(requests[0]?.variables["q_team1"]).toBe("repo:acme/widgets is:pr is:open team-review-requested:acme/platform");
+  });
+
+  test("page sizes that fit two searches but not the configured teams are not_configured before any call", async () => {
+    const exec = fakeExec();
+    const github = { ...githubConfig, pullRequestPageSize: 50, nestedPageSize: 40, threadCommentPageSize: 20 };
+    const teams = Array.from({ length: 10 }, (_, index) => `team${index.toString()}`);
+    const { result, requests } = await run(() => reply({}), {
+      exec: exec.exec,
+      github,
+      identity: { ...identity, reviewTeams: teams },
+    });
+    expectFailure(result, "not_configured");
+    expect(exec.calls).toHaveLength(0);
+    expect(requests).toHaveLength(0);
   });
 
   test("an invalid repo is not_configured and never reaches gh or the network", async () => {

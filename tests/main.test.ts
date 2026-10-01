@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { reportError } from "../src/cli-errors.ts";
 import { exec } from "../src/util/exec.ts";
 
 const MAIN = new URL("../src/main.ts", import.meta.url).pathname;
@@ -41,4 +42,19 @@ test("a missing config exits 2 with a JSON error envelope under --json", async (
   const envelope = JSON.parse(result.out) as { err: { code: string; msg: string } };
   expect(envelope.err.code).toBe("config_invalid");
   expect(envelope.err.msg).toContain("config.toml");
+});
+
+test("reportError prints the given class in the JSON envelope and returns exit 2", () => {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line: string): void => {
+    lines.push(line);
+  };
+  try {
+    expect(reportError(true, "internal", "internal_error", "boom")).toBe(2);
+  } finally {
+    console.log = original;
+  }
+  const envelope = JSON.parse(lines.join("\n")) as { err: { class: string; code: string; msg: string } };
+  expect(envelope.err).toEqual({ class: "internal", code: "internal_error", msg: "boom" });
 });

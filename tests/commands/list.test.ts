@@ -168,3 +168,24 @@ test("no failures are reported when every source answers", async () => {
   const result = await runList(config, { mine: false, json: true, project: "widgets" }, deps({}));
   expect(result.sourceFailures).toEqual([]);
 });
+
+test("a failed linear source marks issue rows unknown with the linear code", async () => {
+  const result = await runList(
+    config,
+    { mine: false, json: true, project: "widgets" },
+    deps({ prs: ok("github", [draftPr]), issues: fail("linear", "timeout") }),
+  );
+  expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
+  expect(result.items[0]?.sources).toEqual({ github: "ok", linear: "timeout", pohunek: "ok" });
+  expect(result.items[0]?.no_issue).toBe(false);
+  expect(result.sourceFailures).toEqual(["widgets linear: timeout"]);
+});
+
+test("a started issue without a pull request or live session is on my turn (rule 8)", async () => {
+  const result = await runList(
+    config,
+    { mine: false, json: true, project: "widgets" },
+    deps({ issues: ok("linear", [issue()]), prs: ok("github", []) }),
+  );
+  expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
+});
