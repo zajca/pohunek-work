@@ -79,7 +79,7 @@ function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unk
     project: plan.project,
     profile: plan.profile,
     branch: plan.branch,
-    // Only review plans carry these, so the implement and babysit plans keep their exact shape.
+    // Only review plans have a base branch and an expected head; other launch plans omit both keys.
     ...(plan.baseBranch === null ? {} : { base_branch: plan.baseBranch }),
     ...(plan.expectedHead === null ? {} : { expected_head: plan.expectedHead }),
     cwd: plan.cwd,

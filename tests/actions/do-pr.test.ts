@@ -132,6 +132,12 @@ test("rebase is allowed on a conflict even when a failing check decides the reas
   expect(launches).toHaveLength(1);
 });
 
+test("rebase without a configured profile is refused naming the action", async () => {
+  const { deps, launches } = setup({ prs: ok("github", [CONFLICTING]), sessions: [OWNER] });
+  await expectRefusal(runDo(baseConfig, prOptions("rebase", { profile: null }), deps), "no_profile", "[profiles] rebase");
+  expect(launches).toHaveLength(0);
+});
+
 test("rebase is refused without a merge conflict", async () => {
   const { deps, launches } = setup({ prs: ok("github", [FAILING]), sessions: [OWNER] });
   await expectRefusal(runDo(baseConfig, prOptions("rebase"), deps), "precondition_failed", "no merge conflict");

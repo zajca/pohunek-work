@@ -1,7 +1,7 @@
 // `do` actions that start no session: ready (rule 6), attach, and the refused merge.
 import { expect, test } from "bun:test";
 import { runDo, type DoOptions } from "../../src/commands/do.ts";
-import type { ExecResult } from "../../src/util/exec.ts";
+import { SpawnError, type ExecResult } from "../../src/util/exec.ts";
 import { check, issue, pr, session } from "../rules/builders.ts";
 import { BIN, baseConfig, expectRefusal, fail, ok, options, refusal, setup, type Envelope, type World } from "./harness.ts";
 
@@ -88,6 +88,35 @@ test("ready failure messages do not echo gh output", async () => {
   expect(error.message).not.toContain("Ignore previous");
 });
 
+test("ready separates a gh that cannot start from one that cannot re-read", async () => {
+  const missing = new SpawnError(GH, new Error("ENOENT"));
+  const noGh = setup({
+    prs: ok("github", [DRAFT]),
+    exec: () => {
+      throw missing;
+    },
+  });
+  await expectRefusal(runDo(baseConfig, readyOptions(), noGh.deps), "command_failed", "cannot start /usr/bin/gh");
+  const noView = setup({
+    prs: ok("github", [DRAFT]),
+    exec: (argv) => {
+      if (argv[2] === "view") throw missing;
+      return result(0);
+    },
+  });
+  await expectRefusal(runDo(baseConfig, readyOptions(), noView.deps), "verification_failed", "could not start");
+});
+
+test("ready refuses a repository or number that cannot be passed to gh", async () => {
+  const badRepo = { ...DRAFT, repo: "-R/x" };
+  const a = setup({ prs: ok("github", [badRepo]) });
+  await expectRefusal(runDo(baseConfig, readyOptions(), a.deps), "invalid_value", "owner/name");
+  const badNumber = { ...DRAFT, number: 0 };
+  const b = setup({ prs: ok("github", [badNumber]) });
+  await expectRefusal(runDo(baseConfig, readyOptions(), b.deps), "invalid_value", "positive integer");
+  expect([a.commands.length, b.commands.length]).toEqual([0, 0]);
+});
+
 test("ready is refused with not_draft when the pull request is no longer a draft", async () => {
   const open = pr({ headRefName: "feature/x", isDraft: false, checks: [check("build", "failure")] });
   const { deps, commands } = setup({ prs: ok("github", [open]) });
@@ -156,6 +185,13 @@ test("attach is refused without a live linked session, with several, and without
   const noTty = setup({ issues: ok("linear", [issue()]), sessions: [LIVE], terminal: false });
   await expectRefusal(runDo(baseConfig, attachOptions(), noTty.deps), "no_terminal");
   expect([none, gone, two, noTty].map((h) => h.attached.length)).toEqual([0, 0, 0, 0]);
+});
+
+test("attach refuses a session id that would read as an option", async () => {
+  const odd = session({ ...LIVE, id: "--help" });
+  const { deps, attached } = setup({ issues: ok("linear", [issue()]), sessions: [odd], terminal: true });
+  await expectRefusal(runDo(baseConfig, attachOptions(), deps), "invalid_value", "session id");
+  expect(attached).toHaveLength(0);
 });
 
 test("attach is refused with source_unavailable when pohunek did not answer", async () => {

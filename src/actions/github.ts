@@ -12,7 +12,7 @@ const READY_RULE = 6;
 
 export function planReady(row: CollectedRow, config: PluginConfig): ReadyPlan {
   const pr = requireAuthoredPullRequest(row, "ready");
-  // Checked before the turn: a pull request that is no longer a draft never holds rule 6.
+  // Checked before the turn: a pull request that is not a draft never holds rule 6.
   if (!pr.isDraft) {
     throw new ActionError("not_draft", `ready refused: ${pr.id} is no longer a draft`);
   }

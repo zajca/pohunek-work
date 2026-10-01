@@ -109,6 +109,7 @@ Verified on 2026-10-01 against pohunek 0.31.6 (CLI help, daemon source, host fil
 | S5 | What `session rm` leaves behind (worktree, branch, transcript) | scratch session with a bound worktree | recorded; decides what step 2.5 must remove itself |
 | S6 | Can a systemd user service read the Secret Service entry and call `notify-send`? | a oneshot test unit that runs `pohunek-work doctor` and `notify-send` | exit 0 from the unit; the unit imports the session D-Bus environment |
 | S7 | How does connection merge (merge queue, auto-merge) and which `gh` call matches it? | read-only `gh repo view`/branch rules | recorded; only relevant if D10 is reversed |
+| S8 | How does `session new` check out the head branch of someone else's pull request (fetch, local branch, existing branch)? | scratch project with a bare origin and branches that are fetched, not fetched and already local | the working invocation and its failure signals are recorded |
 
 ### Spike results (pohunek 0.31.6, scratch repository, 2026-10-01)
 
@@ -280,7 +281,10 @@ Implementation notes (M2b):
   checked through a pseudo-terminal).
 - `merge` is accepted by the parser only to refuse it with `not_supported` before any
   source is read.
-- Config adds the required `[actions] review_branch_segment`. The `do --json` contract
+- Config adds the required `[actions] review_branch_segment`; `list` and `do` on this
+  branch fail against the installed host config until the installer (a.1) appends it.
+  `scripts/spike-launch.ts` was run again with the launch-warning parsing and both
+  launch shapes still parse. The `do --json` contract
   stays at version 1: launch plans of `implement`, `babysit`, `fix-ci` and `rebase` keep
   their shape, a review plan adds `base_branch` and `expected_head`, a launch result adds
   `warnings` only when the daemon reported some, and `ready` and `attach` have their own
