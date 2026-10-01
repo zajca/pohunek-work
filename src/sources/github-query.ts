@@ -134,12 +134,18 @@ export function buildConnectionRequest(
   pages: readonly ConnectionPageSpec[],
   sizes: Pick<SearchRequestSizes, "nestedPageSize" | "threadCommentPageSize">,
 ): GraphqlRequest {
-  const variables: GraphqlVariables = {
-    nested: sizes.nestedPageSize,
-    comments: sizes.threadCommentPageSize,
-  };
-  const declarations = ["$nested: Int!", "$comments: Int!"];
+  const variables: GraphqlVariables = {};
+  const declarations: string[] = [];
   const fields: string[] = [];
+  // GraphQL rejects a declared variable that no field uses, so the size variables are declared only when needed.
+  if (pages.some((page) => page.kind !== "threadComments")) {
+    variables["nested"] = sizes.nestedPageSize;
+    declarations.push("$nested: Int!");
+  }
+  if (pages.some((page) => page.kind === "reviewThreads" || page.kind === "threadComments")) {
+    variables["comments"] = sizes.threadCommentPageSize;
+    declarations.push("$comments: Int!");
+  }
   for (const page of pages) {
     variables[`id_${page.alias}`] = page.nodeId;
     variables[`after_${page.alias}`] = page.after;

@@ -317,18 +317,35 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
+/** Schema names only: error `type`, `extensions.code` and the field path; free text is never copied. */
+function graphqlErrorLabel(raw: unknown): string | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const error = raw as JsonObject;
+  const extensions = error["extensions"];
+  const code =
+    typeof extensions === "object" && extensions !== null ? (extensions as JsonObject)["code"] : undefined;
+  const type = typeof error["type"] === "string" ? error["type"] : code;
+  const path = Array.isArray(error["path"])
+    ? (error["path"] as unknown[])
+        .filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number")
+        .map(String)
+        .filter((segment) => /^[A-Za-z0-9_]{1,40}$/.test(segment))
+        .join(".")
+    : "";
+  const label = typeof type === "string" && GRAPHQL_ERROR_TYPE_PATTERN.test(type) ? type : "";
+  const joined = [label, path === "" ? "" : `at ${path}`].filter((part) => part !== "").join(" ");
+  return joined === "" ? null : joined;
+}
+
 function graphqlErrorFailure(errors: unknown[]): SourceFailureError {
-  const types: string[] = [];
-  for (const raw of errors) {
-    const type = typeof raw === "object" && raw !== null ? (raw as JsonObject)["type"] : undefined;
-    if (typeof type === "string" && GRAPHQL_ERROR_TYPE_PATTERN.test(type)) {
-      types.push(type);
-    }
-  }
-  if (types.includes("RATE_LIMITED")) {
+  const labels = errors.map(graphqlErrorLabel).filter((label): label is string => label !== null);
+  const hasRateLimit = errors.some(
+    (raw) => typeof raw === "object" && raw !== null && (raw as JsonObject)["type"] === "RATE_LIMITED",
+  );
+  if (hasRateLimit) {
     return new SourceFailureError("rate_limited", "GitHub GraphQL rate limit reached");
   }
-  const detail = types.length > 0 ? `: ${[...new Set(types)].join(", ")}` : "";
+  const detail = labels.length > 0 ? `: ${[...new Set(labels)].slice(0, 5).join("; ")}` : "";
   return new SourceFailureError("invalid_response", `GitHub GraphQL returned errors${detail}`);
 }
 
