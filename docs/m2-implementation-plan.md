@@ -2,8 +2,10 @@
 
 - **Status:** M2a in progress on branch `zajca/m2a`: spikes S1-S3 and S5 done, tasks
   a.2-a.5 implemented and covered by tests; a.1 (host configuration through the
-  machine-management installer) and the M2a checkpoint on a real issue are open. D8-D14
-  are confirmed as recommended below (decided by delegation, see section 2a).
+  machine-management installer) and the M2a checkpoint on a real issue are open. M2b
+  on branch `zajca/m2b`: spike S8 done, tasks b.1-b.4 implemented and covered by tests;
+  the M2b checkpoint on real pull requests is open. D8-D14 are confirmed as
+  recommended below (decided by delegation, see section 2a).
 - **Date:** 2026-10-01
 - **Builds on:** [`implementation-plan.md`](implementation-plan.md) section 6 (M2 tasks
   2.1-2.10) and [`rfc.md`](rfc.md) sections 7.1, 7.4, 9, 10. This document refines
@@ -247,6 +249,42 @@ this branch. `scripts/spike-launch.ts` is the manual real-daemon check of both l
 
 **Checkpoint M2b:** one `fix-ci` or `rebase` and one `ready` on real PRs of the owner, each
 confirmed afterwards on GitHub.
+
+Implementation notes (M2b):
+
+- `fix-ci` needs rule 5 and a failing check after `ignored_checks` are removed; `rebase`
+  needs rule 5 and `mergeable = CONFLICTING` (also when a failing check gave rule 5 its
+  reason). Both start like `babysit` in the worktree of the owning session (`--cwd`, S2)
+  with the same refusals (`already_running`, `no_worktree`); the failing check names or
+  the base branch go into the prompt's data block. No host actions are added (D15).
+- `review` needs rule 3 (`review_requested`) and launches per S8:
+  `--branch <branch_prefix>/<review_branch_segment>/<number>-<head SHA> --base-branch
+  <head branch>`. It refuses a pull request from a fork (GitHub `isCrossRepository`,
+  now read by the list query), a head branch that is not a plain branch name, a branch
+  that `branch_pattern` would match, and a head whose review branch is still held by a
+  session. After the launch, any daemon warning or a worktree `head` (from
+  `project show`) other than the pull request head is `launch_unverified`; the session
+  keeps running, so the message names the `session rm` and the branch to delete.
+  `scripts/spike-review.ts` is the manual real-daemon check of this shape and of the
+  fallback refusal; it passed against a scratch project on 2026-10-01.
+- `ready` refuses with `not_draft` before the turn check, runs `gh pr ready <number> -R
+  <repo>` with `[github] gh_bin` and `timeout_ms`, then re-reads `gh pr view --json
+  isDraft`: a failed or timed-out `gh pr ready` (`command_failed`,
+  `command_timed_out`), an unreadable re-read (`verification_failed`) and a pull request
+  that is still a draft (`command_unverified`) are distinct codes; messages never echo
+  `gh` output.
+- `attach` needs exactly one live linked session (`no_session`, `ambiguous_session`)
+  and a terminal (`no_terminal`); it runs `pohunek attach <id>` in the foreground
+  process group with inherited stdio and no confirmation, since it writes nothing.
+  Detaching with Ctrl-] exits 0 and an unknown session id exits 1 (pohunek 0.31.6,
+  checked through a pseudo-terminal).
+- `merge` is accepted by the parser only to refuse it with `not_supported` before any
+  source is read.
+- Config adds the required `[actions] review_branch_segment`. The `do --json` contract
+  stays at version 1: launch plans of `implement`, `babysit`, `fix-ci` and `rebase` keep
+  their shape, a review plan adds `base_branch` and `expected_head`, a launch result adds
+  `warnings` only when the daemon reported some, and `ready` and `attach` have their own
+  `plan`/`result` objects in the same envelope.
 
 ### M2c — Watch, rofi, `/work` (2.6-2.8)
 
