@@ -181,8 +181,17 @@ describe("rules one per rule", () => {
     expect(onTurn(it)).toEqual({ actor: "reviewer", reason: "waiting", rule: 10 });
   });
 
-  test("rule 10: PR with review decision REVIEW_REQUIRED and no pending request", () => {
-    expect(onTurn(item({ pullRequest: pr({ reviewDecision: "REVIEW_REQUIRED" }) })).rule).toBe(10);
+  test("rule 9: REVIEW_REQUIRED without a pending request is no decision yet", () => {
+    expect(onTurn(item({ pullRequest: pr({ reviewDecision: "REVIEW_REQUIRED" }) }))).toEqual({
+      actor: "me",
+      reason: "request review",
+      rule: 9,
+    });
+  });
+
+  test("rule 10: REVIEW_REQUIRED with a pending request waits on the reviewer", () => {
+    const it = item({ pullRequest: pr({ reviewDecision: "REVIEW_REQUIRED", reviewRequests: [user("rev-one")] }) });
+    expect(onTurn(it).rule).toBe(10);
   });
 });
 
@@ -328,15 +337,15 @@ describe("rule 4 sub-conditions", () => {
     expect(result.progress?.rerequested).toBe(false);
   });
 
-  test("a newer COMMENTED review counts as a new review of the reviewer", () => {
+  test("a newer COMMENTED review does not count as a re-request", () => {
     const result = run(
       deliveredPr({
         reviewRequests: [],
         reviews: [review("rev-one", "CHANGES_REQUESTED", T1), review("rev-one", "COMMENTED", T3)],
       }),
     );
-    expect(result.progress?.rerequested).toBe(true);
-    expect(result.onTurn.rule).toBe(10);
+    expect(result.progress?.rerequested).toBe(false);
+    expect(result.onTurn).toEqual({ actor: "me", reason: "respond", rule: 4 });
   });
 
   test("a newer approval ends the changes request", () => {

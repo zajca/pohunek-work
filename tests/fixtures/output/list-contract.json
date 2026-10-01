@@ -110,6 +110,16 @@
         "name": null,
         "linkId": "ABC-9"
       }
+    ],
+    "projects": [
+      {
+        "project": "widgets",
+        "sources": {
+          "github": "ok",
+          "linear": "ok",
+          "pohunek": "ok"
+        }
+      }
     ]
   }
 }

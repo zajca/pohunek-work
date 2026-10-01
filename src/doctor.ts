@@ -164,8 +164,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     exec: run,
     ...(deps.env === undefined ? {} : { env: deps.env }),
   });
-  const projects = await client.listProjects();
-  if (projects.ok) {
+  const [projects, sessions, notifications] = await Promise.all([
+    client.listProjects(),
+    client.listSessions(),
+    client.listNotifications(),
+  ]);
+  // `list` needs all three calls, so an unreadable session or notification list is a pohunek failure too.
+  const unreadable = sessions.ok ? notifications : sessions;
+  if (projects.ok && !unreadable.ok) {
+    checks.push(failed("pohunek", "pohunek_unreachable", `${unreadable.code}: ${unreadable.message}`));
+  } else if (projects.ok) {
     checks.push(pass("pohunek", `reachable, ${String(projects.data.length)} project(s) registered`));
     for (const project of config.projects) {
       checks.push(checkProject(project.name, project.pohunekLabel, project.repo, projects.data));

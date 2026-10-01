@@ -134,19 +134,12 @@ function evaluateReview(
       );
     });
 
-  const requestedAgain = pr.reviewRequests.some(
+  // A newer APPROVED or DISMISSED review replaces R in changesRequestedReviews, and a
+  // COMMENTED review does not hand the turn back, so only a new request counts here.
+  const rerequested = pr.reviewRequests.some(
     (request) => request.kind === "user" && normalizeLogin(request.login) === reviewer,
   );
-  const newerReview = pr.reviews.some(
-    (other) =>
-      other.author !== null &&
-      other.state !== "PENDING" &&
-      normalizeLogin(other.author.login) === reviewer &&
-      other.submittedAt !== null &&
-      isAfter(other.submittedAt, submitted),
-  );
-
-  return { fixDelivered, threadsAnswered, rerequested: requestedAgain || newerReview };
+  return { fixDelivered, threadsAnswered, rerequested };
 }
 
 /** Rule 4 evaluation; null when no reviewer requested changes. */
@@ -255,7 +248,7 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   if (
     authored !== null &&
     authored.reviewRequests.length === 0 &&
-    authored.reviewDecision === null
+    (authored.reviewDecision === null || authored.reviewDecision === "REVIEW_REQUIRED")
   ) {
     return result(me("request review", 9));
   }

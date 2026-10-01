@@ -129,9 +129,16 @@ export interface ListItem {
   readonly sources: SourceStatuses;
 }
 
+/** Source availability of one project's poll, independent of any row filter. */
+export interface ListProjectStatus {
+  readonly project: string;
+  readonly sources: SourceStatuses;
+}
+
 export interface ListPayload {
   readonly items: readonly ListItem[];
   readonly orphaned_sessions: readonly OrphanedSession[];
+  readonly projects: readonly ListProjectStatus[];
 }
 
 export interface ListError {

@@ -16,6 +16,8 @@ export interface GithubConfig {
   readonly pullRequestPageSize: number;
   /** Page size of connections nested in a pull request (reviews, threads, timeline, checks). */
   readonly nestedPageSize: number;
+  /** Page size of the comments nested in a review thread. */
+  readonly threadCommentPageSize: number;
 }
 
 export interface LinearConfig {

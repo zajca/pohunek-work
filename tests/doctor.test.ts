@@ -4,14 +4,14 @@ import { DOCTOR_EXIT_CODES, formatDoctorReport, runDoctor, type DoctorDeps } fro
 import type { KeyringPresence } from "../src/sources/keyring.ts";
 import type { PohunekClient } from "../src/sources/pohunek.ts";
 import type { GlobalConfig, PluginConfig, ProjectConfig } from "../src/types/config.ts";
-import type { PohunekProject, SourceErrorCode, SourceResult } from "../src/types/sources.ts";
+import type { PohunekNotification, PohunekProject, PohunekSession, SourceErrorCode, SourceResult } from "../src/types/sources.ts";
 import { SpawnError, type Exec, type ExecResult } from "../src/util/exec.ts";
 
 const FAKE_SECRET = "fake-token-not-real";
 const GH_STDOUT = "fake-gh-stdout-not-real";
 
 const global = {
-  github: { endpoint: "https://gh.example", ghBin: "/bin/gh-fake", timeoutMs: 111, pullRequestPageSize: 1, nestedPageSize: 1 },
+  github: { endpoint: "https://gh.example", ghBin: "/bin/gh-fake", timeoutMs: 111, pullRequestPageSize: 1, nestedPageSize: 1, threadCommentPageSize: 1 },
   linear: {
     endpoint: "https://linear.example",
     secretToolBin: "/bin/st-fake",
@@ -56,6 +56,8 @@ function makeDeps(
   overrides: {
     config?: PluginConfig | Error;
     projects?: SourceResult<readonly PohunekProject[]>;
+    sessions?: SourceResult<readonly PohunekSession[]>;
+    notifications?: SourceResult<readonly PohunekNotification[]>;
     ghExit?: number | "spawn" | "timeout";
     keyring?: KeyringPresence;
   } = {},
@@ -87,7 +89,12 @@ function makeDeps(
     },
     createPohunekClient: () => {
       calls.client += 1;
-      return { listProjects: () => Promise.resolve(projects) } as unknown as PohunekClient;
+      return {
+        listProjects: () => Promise.resolve(projects),
+        listSessions: () => Promise.resolve(overrides.sessions ?? { ok: true, source: "pohunek", data: [], durationMs: 1 }),
+        listNotifications: () =>
+          Promise.resolve(overrides.notifications ?? { ok: true, source: "pohunek", data: [], durationMs: 1 }),
+      } as unknown as PohunekClient;
     },
     keyringEntryPresent: () => {
       calls.keyring += 1;
@@ -285,4 +292,13 @@ test("exit codes are distinct and non-zero", () => {
     linear_keyring_unavailable: 18,
     pohunek_protocol: 19,
   });
+});
+
+test("an unreadable notification list is a pohunek failure even when project list works", async () => {
+  const { deps } = makeDeps({
+    notifications: { ok: false, source: "pohunek", code: "unavailable", message: "framing", durationMs: 1 },
+  });
+  const report = await runDoctor(deps);
+  expect(report.exitCode).toBe(DOCTOR_EXIT_CODES.pohunek_unreachable);
+  expect(report.checks.find((c) => c.name === "pohunek")?.message).toContain("unavailable");
 });

@@ -139,3 +139,32 @@ test("unknown --project label warns", async () => {
 test("read-only: the injected pohunek client exposes no mutating call", () => {
   expect(Object.keys(deps({}).pohunek).sort()).toEqual(["listNotifications", "listProjects", "listSessions"]);
 });
+
+test("failed sources are reported regardless of the --mine filter", async () => {
+  const result = await runList(
+    config,
+    { mine: true, json: true, project: "widgets" },
+    deps({ prs: fail("github", "rate_limited"), issues: ok("linear", [issue()]), sessions: fail("pohunek", "timeout") }),
+  );
+  expect(result.items).toEqual([]);
+  expect(result.sourceFailures).toEqual(["pohunek: timeout", "widgets github: rate_limited"]);
+  const envelope = JSON.parse(result.stdout) as { ok: { projects: { project: string; sources: Record<string, string> }[] } };
+  expect(envelope.ok.projects[0]).toEqual({
+    project: "widgets",
+    sources: { github: "rate_limited", linear: "ok", pohunek: "timeout" },
+  });
+});
+
+test("a registry failure counts as a pohunek failure", async () => {
+  const result = await runList(
+    config,
+    { mine: false, json: true, project: "widgets" },
+    deps({ registry: fail("pohunek", "timeout") }),
+  );
+  expect(result.sourceFailures).toContain("pohunek: timeout");
+});
+
+test("no failures are reported when every source answers", async () => {
+  const result = await runList(config, { mine: false, json: true, project: "widgets" }, deps({}));
+  expect(result.sourceFailures).toEqual([]);
+});

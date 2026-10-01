@@ -8,6 +8,7 @@ import {
   type ListError,
   type ListItem,
   type ListPayload,
+  type ListProjectStatus,
   type ListPullRequest,
   type OrphanedSession,
   type SourceStatuses,
@@ -74,8 +75,9 @@ export function buildListEnvelope(
   cliVersion: string,
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
+  projects: readonly ListProjectStatus[],
 ): ListEnvelope {
-  const ok: ListPayload = { items, orphaned_sessions: orphanedSessions };
+  const ok: ListPayload = { items, orphaned_sessions: orphanedSessions, projects };
   return {
     cli_version: cliVersion,
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },

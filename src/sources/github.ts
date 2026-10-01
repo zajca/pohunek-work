@@ -33,6 +33,7 @@ import {
   type GraphqlRequest,
   type SearchSpec,
 } from "./github-query.ts";
+import { estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -503,7 +504,10 @@ async function completeNestedConnections(
       nodeId: page.nodeId,
       after: page.after,
     }));
-    const data = await send(transport, buildConnectionRequest(specs, transport.config.nestedPageSize));
+    const data = await send(transport, buildConnectionRequest(specs, {
+      nestedPageSize: transport.config.nestedPageSize,
+      threadCommentPageSize: transport.config.threadCommentPageSize,
+    }));
     pending.forEach((page, index) => {
       const fetched = walkPath(data[`c${index}`], CONNECTION_KINDS[page.kind].path, page.kind);
       const target = asObject(page.container[page.connectionKey], page.kind);
@@ -553,6 +557,7 @@ async function runSearches(
       buildSearchRequest(specs, {
         pullRequestPageSize: transport.config.pullRequestPageSize,
         nestedPageSize: transport.config.nestedPageSize,
+        threadCommentPageSize: transport.config.threadCommentPageSize,
       }),
     );
 
@@ -647,13 +652,20 @@ export function createGithubSource(
     const elapsed = (): number => Math.round(performance.now() - startedAt);
     try {
       validateInputs(project, config.identity);
+      const searches = buildSearches(project, config.identity);
+      if (estimateRequestNodes(config.github, searches.length) > GITHUB_MAX_NODES) {
+        throw new SourceFailureError(
+          "not_configured",
+          "github page sizes exceed the GitHub node limit for the configured review teams; lower the page sizes",
+        );
+      }
       const token = await obtainToken(config.github, execFn);
       const transport: Transport = {
         token,
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
       };
-      const collected = await runSearches(transport, buildSearches(project, config.identity));
+      const collected = await runSearches(transport, searches);
       const raws = [...collected.values()].map((entry) => entry.raw);
       await completeNestedConnections(transport, raws, new WeakMap());
       const data = [...collected.values()].map((entry) => toPullRequest(entry.raw, entry.relation));
@@ -662,13 +674,8 @@ export function createGithubSource(
       if (error instanceof SourceFailureError) {
         return { ok: false, source: "github", code: error.code, message: error.message, durationMs: elapsed() };
       }
-      return {
-        ok: false,
-        source: "github",
-        code: "invalid_response",
-        message: "unexpected failure while reading GitHub data",
-        durationMs: elapsed(),
-      };
+      // Anything else is a plugin bug and surfaces to the caller instead of masquerading as a provider failure.
+      throw error;
     }
   };
 

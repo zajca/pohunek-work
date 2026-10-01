@@ -48,9 +48,14 @@ export const exec: Exec = async (argv, options) => {
   }
 
   const state = { timedOut: false };
+  let onTimeout: () => void = () => undefined;
+  const timedOutSignal = new Promise<void>((resolve) => {
+    onTimeout = resolve;
+  });
   const timer = setTimeout(() => {
     state.timedOut = true;
     child.kill("SIGKILL");
+    onTimeout();
   }, options.timeoutMs);
 
   try {
@@ -58,11 +63,19 @@ export const exec: Exec = async (argv, options) => {
       await Promise.resolve(child.stdin.write(options.stdin));
     }
     await Promise.resolve(child.stdin.end());
-    const [stdout, stderr, exitCode] = await Promise.all([
+    const finished = Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
       child.exited,
     ]);
+    // A grandchild that inherited the pipes keeps them open after the kill, so
+    // the timeout must not wait for the reads to finish.
+    const outcome = await Promise.race([finished, timedOutSignal.then(() => null)]);
+    if (outcome === null) {
+      finished.catch(() => undefined);
+      return { exitCode: null, stdout: "", stderr: "", timedOut: true };
+    }
+    const [stdout, stderr, exitCode] = outcome;
     return { exitCode: state.timedOut ? null : exitCode, stdout, stderr, timedOut: state.timedOut };
   } finally {
     clearTimeout(timer);

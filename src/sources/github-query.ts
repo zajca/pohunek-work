@@ -15,7 +15,7 @@ const ACTOR = "author { __typename login }";
 
 const REVIEWS_FIELDS = `nodes { id state submittedAt ${ACTOR} } ${PAGE_INFO}`;
 const THREAD_COMMENTS_FIELDS = `nodes { ${ACTOR} createdAt } ${PAGE_INFO}`;
-const THREADS_FIELDS = `nodes { id isResolved isOutdated comments(first: $nested) { ${THREAD_COMMENTS_FIELDS} } } ${PAGE_INFO}`;
+const THREADS_FIELDS = `nodes { id isResolved isOutdated comments(first: $comments) { ${THREAD_COMMENTS_FIELDS} } } ${PAGE_INFO}`;
 const TIMELINE_FIELDS = `nodes { __typename ... on PullRequestCommit { commit { committedDate } } ... on HeadRefForcePushedEvent { createdAt } } ${PAGE_INFO}`;
 const REQUEST_FIELDS = `nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } ${PAGE_INFO}`;
 const CONTEXT_FIELDS = `nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } ${PAGE_INFO}`;
@@ -53,6 +53,7 @@ export interface GraphqlRequest {
 export interface SearchRequestSizes {
   readonly pullRequestPageSize: number;
   readonly nestedPageSize: number;
+  readonly threadCommentPageSize: number;
 }
 
 /** One request that fetches the next page of every active search. */
@@ -63,8 +64,9 @@ export function buildSearchRequest(
   const variables: GraphqlVariables = {
     top: sizes.pullRequestPageSize,
     nested: sizes.nestedPageSize,
+    comments: sizes.threadCommentPageSize,
   };
-  const declarations = ["$top: Int!", "$nested: Int!"];
+  const declarations = ["$top: Int!", "$nested: Int!", "$comments: Int!"];
   const fields: string[] = [];
   for (const search of searches) {
     variables[`q_${search.alias}`] = search.queryString;
@@ -115,7 +117,8 @@ export interface ConnectionPageSpec {
 
 function connectionSelection(spec: ConnectionPageSpec): string {
   const kind = CONNECTION_KINDS[spec.kind];
-  const args = `first: $nested, after: $after_${spec.alias}`;
+  const size = spec.kind === "threadComments" ? "$comments" : "$nested";
+  const args = `first: ${size}, after: $after_${spec.alias}`;
   const timelineArgs = spec.kind === "timelineItems" ? `, itemTypes: ${TIMELINE_ITEM_TYPES}` : "";
   let inner = "";
   kind.path.forEach((segment, index) => {
@@ -129,10 +132,13 @@ function connectionSelection(spec: ConnectionPageSpec): string {
 /** One request that fetches the next page of several nested connections by node id. */
 export function buildConnectionRequest(
   pages: readonly ConnectionPageSpec[],
-  nestedPageSize: number,
+  sizes: Pick<SearchRequestSizes, "nestedPageSize" | "threadCommentPageSize">,
 ): GraphqlRequest {
-  const variables: GraphqlVariables = { nested: nestedPageSize };
-  const declarations = ["$nested: Int!"];
+  const variables: GraphqlVariables = {
+    nested: sizes.nestedPageSize,
+    comments: sizes.threadCommentPageSize,
+  };
+  const declarations = ["$nested: Int!", "$comments: Int!"];
   const fields: string[] = [];
   for (const page of pages) {
     variables[`id_${page.alias}`] = page.nodeId;

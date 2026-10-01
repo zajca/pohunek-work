@@ -29,3 +29,10 @@ test("reports a missing binary as SpawnError", async () => {
   );
   expect(failure).toBeInstanceOf(SpawnError);
 });
+
+test("the timeout is a hard bound even when a grandchild keeps the pipes open", async () => {
+  const started = Date.now();
+  const result = await exec(["/bin/sh", "-c", "sleep 5 & sleep 10"], { timeoutMs: 200 });
+  expect(result.timedOut).toBe(true);
+  expect(Date.now() - started).toBeLessThan(2000);
+});

@@ -388,3 +388,65 @@ describe("ordering", () => {
     expect(second).toEqual(first);
   });
 });
+
+describe("claim of an issue row and session attachment", () => {
+  const stackedSession = session("s1", {
+    "work.link.provider": "linear",
+    "work.link.id": "ABC-1",
+    "work.link.branch": "me/ABC-1/main",
+  });
+
+  test("the strongest match claims the issue row regardless of input order", () => {
+    for (const order of [[20, 12], [12, 20]] as const) {
+      const heads: Record<number, string> = { 20: "me/ABC-1/follow-up", 12: "me/ABC-1/main" };
+      const { items } = run({
+        issues: [issue("ABC-1")],
+        pullRequests: order.map((n) => pr(n, heads[n] ?? "")),
+        sessions: [stackedSession],
+      });
+      const issueRow = items.find((i) => i.key === "linear:ABC-1");
+      expect(issueRow?.pullRequest?.number).toBe(12);
+      expect(issueRow?.joinedBy).toBe("session_link");
+      expect(items.find((i) => i.key === "github:acme/widgets#20")?.noIssue).toBe(false);
+    }
+  });
+
+  test("equal strength is broken by the lowest pull request number", () => {
+    const { items } = run({
+      issues: [issue("ABC-1")],
+      pullRequests: [pr(30, "me/ABC-1/b"), pr(25, "me/ABC-1/a")],
+    });
+    expect(items.find((i) => i.key === "linear:ABC-1")?.pullRequest?.number).toBe(25);
+  });
+
+  test("a session attaches to exactly one row", () => {
+    const { items, orphanedSessions } = run({
+      issues: [issue("ABC-1")],
+      pullRequests: [pr(20, "me/ABC-1/follow-up"), pr(12, "me/ABC-1/main")],
+      sessions: [stackedSession],
+    });
+    const holders = items.filter((i) => i.sessions.some((s) => s.id === "s1"));
+    expect(holders.map((i) => i.key)).toEqual(["linear:ABC-1"]);
+    expect(orphanedSessions).toEqual([]);
+  });
+});
+
+describe("orphans with failed sources", () => {
+  const link = session("s1", { "work.link.provider": "github", "work.link.id": "acme/widgets#12" });
+
+  test("a failed github source suppresses the orphan verdict for a github link", () => {
+    const { orphanedSessions } = run({ sessions: [link], sources: { ...okSources, github: "rate_limited" } });
+    expect(orphanedSessions).toEqual([]);
+  });
+
+  test("a failed linear source suppresses the orphan verdict for a linear link", () => {
+    const linearLink = session("s2", { "work.link.provider": "linear", "work.link.id": "ABC-5" });
+    const { orphanedSessions } = run({ sessions: [linearLink], sources: { ...okSources, linear: "timeout" } });
+    expect(orphanedSessions).toEqual([]);
+  });
+
+  test("a linear failure does not hide an orphaned github link", () => {
+    const { orphanedSessions } = run({ sessions: [link], sources: { ...okSources, linear: "timeout" } });
+    expect(orphanedSessions.map((o) => o.id)).toEqual(["s1"]);
+  });
+});

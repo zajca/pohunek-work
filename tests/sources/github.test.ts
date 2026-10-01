@@ -14,6 +14,7 @@ const githubConfig: GithubConfig = {
   timeoutMs: 5000,
   pullRequestPageSize: 7,
   nestedPageSize: 5,
+  threadCommentPageSize: 3,
 };
 
 const identity: IdentityConfig = { githubLogin: "owner-user", agentIdentities: [], reviewTeams: [] };
@@ -334,7 +335,7 @@ describe("pagination", () => {
     const { result, requests } = await run((_request, index) => reply(index === 0 ? data : page2));
 
     expect(requests).toHaveLength(2);
-    expect(requests[1]?.variables).toEqual({ nested: 5, id_c0: "PR_node_12", after_c0: "R1" });
+    expect(requests[1]?.variables).toEqual({ nested: 5, comments: 3, id_c0: "PR_node_12", after_c0: "R1" });
     expect(requests[1]?.query).toContain("node(id: $id_c0)");
     expect(requests[1]?.query).not.toContain("mutation");
     expect(requests[1]?.headers["Authorization"]).toBe(`Bearer ${FAKE_TOKEN}`);

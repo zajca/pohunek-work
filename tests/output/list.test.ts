@@ -44,7 +44,7 @@ function sampleEnvelope(): unknown {
     ),
     buildListItem(item({ key: "linear:ABC-2", issue: issue({ id: "ABC-2" }), pullRequest: null, noIssue: false }), context),
   ];
-  return buildListEnvelope("0.1.0", rows, [{ id: "s-9", name: null, linkId: "ABC-9" }]);
+  return buildListEnvelope("0.1.0", rows, [{ id: "s-9", name: null, linkId: "ABC-9" }], [{ project: "widgets", sources: allOk }]);
 }
 
 test("list --json contract is pinned by a golden file", async () => {
@@ -56,11 +56,11 @@ test("list --json contract is pinned by a golden file", async () => {
 });
 
 test("envelope carries the contract version and exactly one of ok or err", () => {
-  const ok = buildListEnvelope("0.1.0", [], []);
+  const ok = buildListEnvelope("0.1.0", [], [], []);
   expect(ok).toEqual({
     cli_version: "0.1.0",
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
-    ok: { items: [], orphaned_sessions: [] },
+    ok: { items: [], orphaned_sessions: [], projects: [] },
   });
   const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" });
   expect("ok" in err).toBe(false);

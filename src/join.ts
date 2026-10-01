@@ -111,14 +111,52 @@ interface RowDraft {
   readonly noIssue: boolean;
 }
 
+const RANK: Readonly<Record<JoinMatch, number>> = {
+  session_link: 0,
+  linear_attachment: 1,
+  branch_pattern: 2,
+};
+
+interface Candidate {
+  readonly pr: PullRequest;
+  readonly resolution: PrResolution | null;
+}
+
+/**
+ * Per issue key, the pull request with the strongest precedence level wins;
+ * ties go to the lowest pull request number, so the choice does not depend on
+ * the order GitHub returns the search results in.
+ */
+function claimWinners(candidates: readonly Candidate[]): Map<string, PullRequest> {
+  const winners = new Map<string, { pr: PullRequest; rank: number }>();
+  for (const { pr, resolution } of candidates) {
+    if (resolution === null) continue;
+    const rank = RANK[resolution.joinedBy];
+    const current = winners.get(resolution.key);
+    if (current === undefined || rank < current.rank || (rank === current.rank && pr.number < current.pr.number)) {
+      winners.set(resolution.key, { pr, rank });
+    }
+  }
+  return new Map([...winners].map(([key, value]) => [key, value.pr]));
+}
+
+/** Source that must be `ok` before a session without a row may be called orphaned. */
+function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | "linear")[] {
+  if (provider === "github") return ["github"];
+  return ["github", "linear"];
+}
+
 /**
  * Builds the table rows and the orphaned sessions.
  *
  * Row order: pull requests in input order, then issue-only rows in issue order.
- * Only `authored` pull requests are joined to issues. When two pull requests
- * resolve to the same issue key, the first joins the issue row and the second
- * becomes its own `github:` row with `noIssue` false, because the issue exists
- * (or is known by key) and only one row may carry a `linear:<KEY>` key.
+ * Only `authored` pull requests are joined to issues. When several pull
+ * requests resolve to the same issue key, the strongest match joins the issue
+ * row (see claimWinners); the others become their own `github:` rows with
+ * `noIssue` false, because the issue exists (or is known by key) and only one
+ * row may carry a `linear:<KEY>` key. A session attaches to exactly one row. A
+ * session without a row is reported as orphaned only when the sources that
+ * could have matched it are `ok`.
  */
 export function joinItems(input: JoinInput): JoinResult {
   const { project, issues, pullRequests, sessions, notifications, sources } = input;
@@ -128,23 +166,16 @@ export function joinItems(input: JoinInput): JoinResult {
     if (!issuesById.has(issue.id)) issuesById.set(issue.id, issue);
   }
 
+  const candidates: Candidate[] = pullRequests.map((pr) => ({
+    pr,
+    resolution: pr.relation === "authored" ? resolveIssueKey(pr, project, issues, linked) : null,
+  }));
+  const winners = claimWinners(candidates);
+
   const drafts: RowDraft[] = [];
   const claimedKeys = new Set<string>();
 
-  for (const pr of pullRequests) {
-    if (pr.relation !== "authored") {
-      drafts.push({
-        key: `github:${pr.id}`,
-        issue: null,
-        issueKey: null,
-        pullRequest: pr,
-        joinedBy: null,
-        noIssue: false,
-      });
-      continue;
-    }
-
-    const resolution = resolveIssueKey(pr, project, issues, linked);
+  for (const { pr, resolution } of candidates) {
     if (resolution === null) {
       drafts.push({
         key: `github:${pr.id}`,
@@ -152,13 +183,13 @@ export function joinItems(input: JoinInput): JoinResult {
         issueKey: null,
         pullRequest: pr,
         joinedBy: null,
-        // Without Linear data the absence of an issue cannot be concluded.
-        noIssue: sources.linear === "ok",
+        // Review requests of others are never joined; for authored pull requests
+        // without Linear data the absence of an issue cannot be concluded.
+        noIssue: pr.relation === "authored" && sources.linear === "ok",
       });
       continue;
     }
-
-    if (claimedKeys.has(resolution.key)) {
+    if (winners.get(resolution.key) !== pr) {
       drafts.push({
         key: `github:${pr.id}`,
         issue: null,
@@ -169,7 +200,6 @@ export function joinItems(input: JoinInput): JoinResult {
       });
       continue;
     }
-
     claimedKeys.add(resolution.key);
     drafts.push({
       key: `linear:${resolution.key}`,
@@ -194,19 +224,25 @@ export function joinItems(input: JoinInput): JoinResult {
     });
   }
 
-  const attachedSessionIds = new Set<string>();
-  const items: WorkItem[] = drafts.map((draft) => {
-    const rowSessions = linked
-      .filter((l) => {
-        const pr = draft.pullRequest;
-        return (
-          (draft.issueKey !== null && l.linkId === draft.issueKey) ||
-          (pr !== null && l.linkId === pr.id) ||
-          (pr !== null && l.branch !== null && l.branch === pr.headRefName)
-        );
-      })
-      .map((l) => l.session);
-    for (const session of rowSessions) attachedSessionIds.add(session.id);
+  // A link id (issue key or pull request id) outranks a branch match.
+  const sessionsByRow = new Map<number, PohunekSession[]>();
+  const orphanedSessions: OrphanedSession[] = [];
+  for (const l of linked) {
+    let target = drafts.findIndex(
+      (d) => (d.issueKey !== null && d.issueKey === l.linkId) || d.pullRequest?.id === l.linkId,
+    );
+    if (target < 0 && l.branch !== null) {
+      target = drafts.findIndex((d) => d.pullRequest?.headRefName === l.branch);
+    }
+    if (target >= 0) {
+      sessionsByRow.set(target, [...(sessionsByRow.get(target) ?? []), l.session]);
+    } else if (sourcesToConcludeOrphan(l.provider).every((name) => sources[name] === "ok")) {
+      orphanedSessions.push({ id: l.session.id, name: l.session.name, linkId: l.linkId });
+    }
+  }
+
+  const items: WorkItem[] = drafts.map((draft, index) => {
+    const rowSessions = sessionsByRow.get(index) ?? [];
     const sessionIds = new Set(rowSessions.map((s) => s.id));
     return {
       key: draft.key,
@@ -221,10 +257,6 @@ export function joinItems(input: JoinInput): JoinResult {
       ),
     };
   });
-
-  const orphanedSessions: OrphanedSession[] = linked
-    .filter((l) => !attachedSessionIds.has(l.session.id))
-    .map((l) => ({ id: l.session.id, name: l.session.name, linkId: l.linkId }));
 
   return { items, orphanedSessions };
 }

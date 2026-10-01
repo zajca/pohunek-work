@@ -14,6 +14,7 @@ import type {
   ProjectConfig,
   WatchConfig,
 } from "../types/config.ts";
+import { estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
 import {
   fail,
@@ -63,14 +64,31 @@ function parseIdentity(root: Table, file: string): IdentityConfig {
 function parseGithub(root: Table, file: string): GithubConfig {
   const table = requireTable(root, "github", file);
   const path = ["github"];
-  rejectUnknownKeys(table, ["endpoint", "gh_bin", "timeout_ms", "pull_request_page_size", "nested_page_size"], file, path);
-  return {
+  rejectUnknownKeys(table, [
+    "endpoint",
+    "gh_bin",
+    "timeout_ms",
+    "pull_request_page_size",
+    "nested_page_size",
+    "thread_comment_page_size",
+  ], file, path);
+  const config: GithubConfig = {
     endpoint: readHttpsUrl(table, "endpoint", file, path),
     ghBin: readAbsolutePath(table, "gh_bin", file, path),
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
     pullRequestPageSize: readPositiveInt(table, "pull_request_page_size", file, path),
     nestedPageSize: readPositiveInt(table, "nested_page_size", file, path),
+    threadCommentPageSize: readPositiveInt(table, "thread_comment_page_size", file, path),
   };
+  // The authored and the directly requested searches always run in one request.
+  if (estimateRequestNodes(config, 2) > GITHUB_MAX_NODES) {
+    throw fail(
+      file,
+      [...path, "pull_request_page_size"],
+      `with nested_page_size and thread_comment_page_size exceeds the GitHub limit of ${GITHUB_MAX_NODES.toString()} nodes per request; lower the page sizes`,
+    );
+  }
+  return config;
 }
 
 function parseLinear(root: Table, file: string): LinearConfig {

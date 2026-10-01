@@ -8,7 +8,13 @@ import {
   renderTable,
 } from "../output/list.ts";
 import type { GlobalConfig, PluginConfig, ProjectConfig } from "../types/config.ts";
-import type { ListItem, OrphanedSession, SourceStatus, SourceStatuses } from "../types/item.ts";
+import type {
+  ListItem,
+  ListProjectStatus,
+  OrphanedSession,
+  SourceStatus,
+  SourceStatuses,
+} from "../types/item.ts";
 import type {
   LinearIssue,
   PohunekNotification,
@@ -43,6 +49,8 @@ export interface ListOutput {
   /** Diagnostics for stderr (projects left out, never guessed). */
   readonly warnings: readonly string[];
   readonly items: readonly ListItem[];
+  /** One entry per source that did not return `ok`, regardless of the row filter. */
+  readonly sourceFailures: readonly string[];
 }
 
 function statusOf(result: SourceResult<unknown>): SourceStatus {
@@ -105,7 +113,7 @@ export async function runList(
   logger.sourceResult(sessionsResult);
   logger.sourceResult(notificationsResult);
 
-  const pohunek = pohunekStatus(sessionsResult, notificationsResult);
+  const pohunek = pohunekStatus(registry, sessionsResult, notificationsResult);
   const sessions: readonly PohunekSession[] = sessionsResult.ok ? sessionsResult.data : [];
   const notifications: readonly PohunekNotification[] = notificationsResult.ok ? notificationsResult.data : [];
 
@@ -117,6 +125,9 @@ export async function runList(
 
   const items: ListItem[] = [];
   const orphans: OrphanedSession[] = [];
+  const projectStatuses: ListProjectStatus[] = [];
+  const sourceFailures: string[] = [];
+  if (pohunek !== "ok") sourceFailures.push(`pohunek: ${pohunek}`);
   const perProject = await Promise.all(
     projects.map(async (project) => {
       const [github, linear] = await Promise.all([
@@ -135,6 +146,9 @@ export async function runList(
       linear: statusOf(linear),
       pohunek,
     };
+    projectStatuses.push({ project: project.pohunekLabel, sources });
+    if (sources.github !== "ok") sourceFailures.push(`${project.pohunekLabel} github: ${sources.github}`);
+    if (sources.linear !== "ok") sourceFailures.push(`${project.pohunekLabel} linear: ${sources.linear}`);
     const pullRequests: readonly PullRequest[] = github.ok ? github.data : [];
     const issues: readonly LinearIssue[] = linear.ok ? linear.data : [];
     const joined = joinItems({ project, issues, pullRequests, sessions, notifications, sources });
@@ -145,9 +159,10 @@ export async function runList(
   }
 
   const shown = options.mine ? filterMine(items) : items;
+  for (const failure of sourceFailures) logger.error("source_failed", { failure });
   logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine });
   const stdout = options.json
-    ? JSON.stringify(buildListEnvelope(deps.cliVersion, shown, options.mine ? [] : orphans), null, 2)
+    ? JSON.stringify(buildListEnvelope(deps.cliVersion, shown, options.mine ? [] : orphans, projectStatuses), null, 2)
     : renderTable(shown, options.mine ? [] : orphans, new Set(sessions.filter(isLiveSession).map((s) => s.id)));
-  return { stdout, warnings, items: shown };
+  return { stdout, warnings, items: shown, sourceFailures };
 }

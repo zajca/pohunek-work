@@ -50,8 +50,9 @@ describe("loadConfig valid", () => {
         endpoint: "https://api.github.example/graphql",
         ghBin: "/usr/bin/gh",
         timeoutMs: 20000,
-        pullRequestPageSize: 50,
-        nestedPageSize: 100,
+        pullRequestPageSize: 20,
+        nestedPageSize: 50,
+        threadCommentPageSize: 10,
       },
       linear: {
         endpoint: "https://linear.example/graphql",
@@ -134,12 +135,27 @@ describe("loadConfig missing keys", () => {
   });
 });
 
+describe("loadConfig github node budget", () => {
+  test("page sizes above the GitHub node limit fail naming the key", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) =>
+      t.replace("pull_request_page_size = 20", "pull_request_page_size = 50")
+        .replace("nested_page_size = 50", "nested_page_size = 100")
+        .replace("thread_comment_page_size = 10", "thread_comment_page_size = 100"),
+    );
+    const error = await loadConfig(dir).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ConfigError);
+    expect((error as ConfigError).key).toBe("github.pull_request_page_size");
+    expect((error as ConfigError).message).toContain("500000");
+  });
+});
+
 describe("loadConfig invalid values", () => {
   test.each([
     ["wrong type", "timeout_ms = 20000", 'timeout_ms = "20000"', "github.timeout_ms"],
     ["zero timeout", "timeout_ms = 20000", "timeout_ms = 0", "github.timeout_ms"],
     ["negative page size", "page_size = 40", "page_size = -1", "linear.page_size"],
-    ["fractional page size", "nested_page_size = 100", "nested_page_size = 1.5", "github.nested_page_size"],
+    ["fractional page size", "nested_page_size = 50", "nested_page_size = 1.5", "github.nested_page_size"],
     ["zero poll interval", "poll_interval_secs = 300", "poll_interval_secs = 0", "watch.poll_interval_secs"],
     ["relative gh_bin", 'gh_bin = "/usr/bin/gh"', 'gh_bin = "gh"', "github.gh_bin"],
     ["relative secret_tool_bin", 'secret_tool_bin = "/usr/bin/secret-tool"', 'secret_tool_bin = "secret-tool"', "linear.secret_tool_bin"],

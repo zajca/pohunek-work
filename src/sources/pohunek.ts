@@ -135,14 +135,11 @@ function parseProject(raw: unknown, path: string): PohunekProject {
   };
 }
 
-/** Returns null for entries without kind or status; those cannot be classified. */
-function parseNotification(raw: unknown, path: string): PohunekNotification | null {
+/** An entry without kind or status is an invalid response: skipping it could hide a blocked agent. */
+function parseNotification(raw: unknown, path: string): PohunekNotification {
   const obj = asObject(raw, path);
   const kind = obj["kind"];
   const status = obj["status"];
-  if (kind === undefined || kind === null || status === undefined || status === null) {
-    return null;
-  }
   if (typeof kind !== "string") {
     return invalid(`${path}.kind`, "a string");
   }
@@ -320,10 +317,7 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
             const page = asObject(outcome.payload, "$.ok");
             const entries = asArray(page["notifications"], "$.ok.notifications");
             entries.forEach((raw, index) => {
-              const notification = parseNotification(raw, `$.ok.notifications[${String(index)}]`);
-              if (notification !== null) {
-                collected.push(notification);
-              }
+              collected.push(parseNotification(raw, `$.ok.notifications[${String(index)}]`));
             });
             const next = page["next_cursor"];
             if (next === undefined || next === null) {
