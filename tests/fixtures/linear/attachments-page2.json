@@ -1,0 +1,10 @@
+{
+  "data": {
+    "issue": {
+      "attachments": {
+        "nodes": [{ "url": "https://github.com/acme/widgets/pull/31" }],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }
+    }
+  }
+}

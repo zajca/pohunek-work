@@ -1,0 +1,16 @@
+[project]
+pohunek_label = "gadgets"
+repo = "acme/gadgets"
+linear_team = "ABC"
+branch_pattern = "^alice/(?P<key>ABC-[0-9]+)/"
+ignored_checks = []
+paused_states = []
+ai_reviewers = []
+
+[policy]
+delegable = []
+max_active_tasks = 0
+daily_cost_ceiling_usd = 0
+
+[profiles]
+implement = "profile-c"

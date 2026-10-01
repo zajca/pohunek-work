@@ -251,12 +251,26 @@ For each human reviewer whose latest review is `CHANGES_REQUESTED` (review
 2. **Threads answered.** Every unresolved thread with a comment by `R.author`
    ends with a comment by the PR author or a configured agent identity posted
    after `R.submittedAt`.
-3. **Review re-requested.** `R.author` is in `reviewRequests` again or
-   submitted a newer review.
+3. **Review re-requested.** `R.author` is in `reviewRequests` again as a
+   user.
+
+`R` is the reviewer's latest review that is `CHANGES_REQUESTED`, `APPROVED` or
+`DISMISSED`; `COMMENTED` and pending reviews are skipped, because a comment
+does not clear a requested change on GitHub. A newer `APPROVED` or `DISMISSED`
+review therefore ends `R`, and a newer `COMMENTED` review does not count as a
+re-request. Fix delivery is judged by the commit date of the timeline commit
+(GitHub exposes no push time), so a fix committed before `R` and pushed after
+it is not recognized; a force push event is.
 
 Reviews by configured AI reviewer accounts never create an `R`.
 
 ### 8.3 Missing data
+
+A pull request with `mergeable = UNKNOWN` is neither a conflict (rule 5) nor
+mergeable (rule 7). When it is otherwise merge-ready (authored, approved,
+checks green or none) the row is `unknown` with the reason
+`github:mergeable_unknown` until GitHub reports a value. A `reviewDecision` of
+`REVIEW_REQUIRED` counts as "no decision" in rule 9.
 
 If a source needed by a rule is unavailable, the row shows `on_turn =
 unknown` with the stable error code of that source. Rules are never evaluated
@@ -409,6 +423,7 @@ linear_team = "DMD"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
+paused_states = ["On hold", "Waiting for Support"]
 
 # Optional per-project overrides; a table here replaces the global table whole.
 # [profiles]

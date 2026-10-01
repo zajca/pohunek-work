@@ -1,0 +1,43 @@
+[identity]
+github_login = "alice"
+agent_identities = ["alice", "alice-agent"]
+review_teams = ["acme/reviewers"]
+
+[github]
+endpoint = "https://api.github.example/graphql"
+gh_bin = "/usr/bin/gh"
+timeout_ms = 20000
+pull_request_page_size = 20
+nested_page_size = 50
+thread_comment_page_size = 10
+
+[linear]
+endpoint = "https://linear.example/graphql"
+secret_tool_bin = "/usr/bin/secret-tool"
+keyring_service = "test-service"
+keyring_key = "test-key"
+timeout_ms = 15000
+page_size = 40
+
+[pohunek]
+bin = "/usr/local/bin/pohunek"
+timeout_ms = 10000
+notifications_page_size = 25
+
+[watch]
+poll_interval_secs = 300
+
+[notify]
+command = "/usr/bin/notify-send"
+
+[log]
+max_string_length = 2000
+
+[policy]
+delegable = ["review"]
+max_active_tasks = 2
+daily_cost_ceiling_usd = 12.5
+
+[profiles]
+implement = "profile-a"
+review = "profile-b"

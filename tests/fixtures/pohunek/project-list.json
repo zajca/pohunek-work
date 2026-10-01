@@ -1,0 +1,8 @@
+{
+  "cli_version": "0.31.6",
+  "protocol": { "minimum": 3, "maximum": 3 },
+  "ok": [
+    { "id": "prj_1", "label": "widgets", "repo_root": "/work/widgets", "git_common_dir": "/work/widgets/.git", "origin_url": "git@github.com:acme/widgets.git", "default_base_branch": "main", "source": "manual", "is_bare": false, "added_at": "2026-01-01T00:00:00Z", "last_used_at": "2026-01-02T00:00:00Z" },
+    { "id": "prj_2", "label": "gadgets", "repo_root": "/work/gadgets", "git_common_dir": "/work/gadgets/.git", "origin_url": "https://github.com/acme/gadgets", "source": "manual", "is_bare": false, "added_at": "2026-01-01T00:00:00Z", "last_used_at": "2026-01-02T00:00:00Z" }
+  ]
+}

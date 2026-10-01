@@ -1,0 +1,69 @@
+import { expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { reportError } from "../src/cli-errors.ts";
+import { exec } from "../src/util/exec.ts";
+
+const MAIN = new URL("../src/main.ts", import.meta.url).pathname;
+
+async function run(args: readonly string[], configDir: string): Promise<{ code: number | null; out: string; err: string }> {
+  const result = await exec(["bun", MAIN, ...args], {
+    timeoutMs: 20_000,
+    env: {
+      PATH: process.env["PATH"] ?? "",
+      HOME: configDir,
+      POHUNEK_WORK_CONFIG_DIR: join(configDir, "missing"),
+      POHUNEK_WORK_STATE_DIR: join(configDir, "state"),
+    },
+  });
+  return { code: result.exitCode, out: result.stdout, err: result.stderr };
+}
+
+test("an unknown option prints usage and exits 2 without a stack dump", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await run(["list", "--bogus"], dir);
+  expect(result.code).toBe(2);
+  expect(result.err).toContain("usage:");
+  expect(result.err).not.toContain("node:internal");
+});
+
+test("a usage error under --json is a JSON error envelope on stdout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await run(["list", "--json", "--bogus"], dir);
+  expect(result.code).toBe(2);
+  const envelope = JSON.parse(result.out) as { err: { class: string; code: string; msg: string } };
+  expect(envelope.err.class).toBe("usage");
+  expect(envelope.err.msg).toContain("usage:");
+});
+
+test("an unexpected positional argument is a usage error", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  expect((await run(["list", "foo"], dir)).code).toBe(2);
+  expect((await run(["doctor", "--whatever"], dir)).code).toBe(2);
+  expect((await run([], dir)).code).toBe(2);
+});
+
+test("a missing config exits 2 with a JSON error envelope under --json", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await run(["list", "--json"], dir);
+  expect(result.code).toBe(2);
+  const envelope = JSON.parse(result.out) as { err: { code: string; msg: string } };
+  expect(envelope.err.code).toBe("config_invalid");
+  expect(envelope.err.msg).toContain("config.toml");
+});
+
+test("reportError prints the given class in the JSON envelope and returns exit 2", () => {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line: string): void => {
+    lines.push(line);
+  };
+  try {
+    expect(reportError(true, "internal", "internal_error", "boom")).toBe(2);
+  } finally {
+    console.log = original;
+  }
+  const envelope = JSON.parse(lines.join("\n")) as { err: { class: string; code: string; msg: string } };
+  expect(envelope.err).toEqual({ class: "internal", code: "internal_error", msg: "boom" });
+});

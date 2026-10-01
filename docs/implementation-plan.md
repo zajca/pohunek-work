@@ -106,16 +106,30 @@ agent_identities = ["zajca"]
 review_teams = []
 
 [github]
+endpoint = "https://api.github.com/graphql"
+gh_bin = "/usr/bin/gh"
 timeout_ms = 20000
+# searches x pull_request_page_size x (1 + 5 x nested_page_size
+#   + nested_page_size x thread_comment_page_size) must stay below 500000
+pull_request_page_size = 20
+nested_page_size = 50
+thread_comment_page_size = 10
 
 [linear]
+endpoint = "https://api.linear.app/graphql"
+secret_tool_bin = "/usr/bin/secret-tool"
 keyring_service = "<service name used by pohunek GUI>"
 keyring_key = "linear.token_key"
 timeout_ms = 20000
+page_size = 50
 
 [pohunek]
 bin = "/home/zajca/.local/bin/pohunek"
 timeout_ms = 10000
+notifications_page_size = 100
+
+[log]
+max_string_length = 2000
 
 [watch]
 poll_interval_secs = 300
@@ -145,7 +159,17 @@ linear_team = "DMD"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
+# Linear state names; started issues in these states and without a pull
+# request get no row (they are not on anyone's turn).
+paused_states = ["On hold", "Waiting for Support"]
 ```
+
+`branch_pattern` is written with the Python/Rust group syntax `(?P<key>...)`;
+the loader converts it for JavaScript and requires a group named `key`.
+`ignored_checks` entries match the exact check name GitHub reports
+(`CheckRun.name` or `StatusContext.context`, for example `CD / Enqueue E2E`).
+`pohunek notifications list` fails with a framing error without `--limit`, so
+the plugin always pages with `notifications_page_size`.
 
 Open values to fill during M0: the keyring service name used by pohunek GUI
 for the Linear token (read the GUI configuration or ask the owner; never read

@@ -1,0 +1,8 @@
+[project]
+pohunek_label = "widgets"
+repo = "acme/widgets"
+linear_team = "ABC"
+branch_pattern = "^alice/(?P<key>ABC-[0-9]+)/"
+ignored_checks = ["CI / Flaky"]
+paused_states = ["On hold"]
+ai_reviewers = ["review-bot"]
