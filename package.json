@@ -1,0 +1,24 @@
+{
+  "name": "pohunek-work",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pohunek workflow plugin: who is on turn for each work item",
+  "bin": {
+    "pohunek-work": "src/main.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "bun run lint && bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.11.0",
+    "typescript": "6",
+    "typescript-eslint": "^8.71.0"
+  },
+  "packageManager": "bun@1.4.2"
+}
