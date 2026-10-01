@@ -18,6 +18,7 @@ const project = {
   branchPatternSource: "^me/(?P<key>[A-Z]+-\\d+)/",
   ignoredChecks: [],
   aiReviewers: [],
+  pausedStates: ["On hold"],
   policy: null,
   profiles: null,
 } satisfies ProjectConfig;
@@ -448,5 +449,27 @@ describe("orphans with failed sources", () => {
   test("a linear failure does not hide an orphaned github link", () => {
     const { orphanedSessions } = run({ sessions: [link], sources: { ...okSources, linear: "timeout" } });
     expect(orphanedSessions.map((o) => o.id)).toEqual(["s1"]);
+  });
+});
+
+describe("paused issue states", () => {
+  const paused = { ...issue("ABC-7"), stateName: "On hold" };
+
+  test("a paused issue without a pull request gets no row", () => {
+    const { items } = run({ issues: [paused, issue("ABC-8")] });
+    expect(items.map((i) => i.key)).toEqual(["linear:ABC-8"]);
+  });
+
+  test("a paused issue with a pull request keeps its row", () => {
+    const { items } = run({ issues: [paused], pullRequests: [pr(30, "me/ABC-7/work")] });
+    expect(items.map((i) => i.key)).toEqual(["linear:ABC-7"]);
+    expect(items[0]?.pullRequest?.number).toBe(30);
+  });
+
+  test("a session linked to a paused issue is not reported as orphaned", () => {
+    const linkedToPaused = session("s7", { "work.link.provider": "linear", "work.link.id": "ABC-7" });
+    const { items, orphanedSessions } = run({ issues: [paused], sessions: [linkedToPaused] });
+    expect(items).toEqual([]);
+    expect(orphanedSessions).toEqual([]);
   });
 });

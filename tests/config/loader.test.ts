@@ -77,6 +77,7 @@ describe("loadConfig valid", () => {
     expect(widgets?.branchPatternSource).toBe("^alice/(?P<key>ABC-[0-9]+)/");
     expect(widgets?.ignoredChecks).toEqual(["CI / Flaky"]);
     expect(widgets?.aiReviewers).toEqual(["review-bot"]);
+    expect(widgets?.pausedStates).toEqual(["On hold"]);
     expect(widgets?.policy).toBeNull();
     expect(widgets?.profiles).toBeNull();
   });
@@ -116,6 +117,7 @@ describe("loadConfig missing keys", () => {
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
     ["projects/widgets.toml", 'ignored_checks = ["CI / Flaky"]\n', "project.ignored_checks", "[project] ignored_checks is required"],
     ["projects/widgets.toml", 'ai_reviewers = ["review-bot"]\n', "project.ai_reviewers", "[project] ai_reviewers is required"],
+    ["projects/widgets.toml", 'paused_states = ["On hold"]\n', "project.paused_states", "[project] paused_states is required"],
   ])("%s without a line fails naming file and key", async (file, line, key, fragment) => {
     const dir = await copyFixture();
     await editFile(dir, file, (t) => t.replace(line, ""));

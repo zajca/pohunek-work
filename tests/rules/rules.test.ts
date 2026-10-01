@@ -125,9 +125,27 @@ describe("rules one per rule", () => {
     expect(onTurn(it).rule).toBe(10);
   });
 
-  test("rule 5: mergeable UNKNOWN is neither conflict nor mergeable", () => {
+  test("mergeable UNKNOWN is neither conflict (rule 5) nor mergeable (rule 7)", () => {
     const base = { reviewDecision: "APPROVED" as const, checks: [check("build", "success")] };
-    expect(onTurn(item({ pullRequest: pr({ ...base, mergeable: "UNKNOWN" }) })).rule).toBe(10);
+    const result = onTurn(item({ pullRequest: pr({ ...base, mergeable: "UNKNOWN" }) }));
+    expect(result.rule).not.toBe(5);
+    expect(result.rule).not.toBe(7);
+  });
+
+  test("an approved green PR with mergeable UNKNOWN is unknown, never reviewer", () => {
+    const base = { reviewDecision: "APPROVED" as const, checks: [check("build", "success")] };
+    expect(onTurn(item({ pullRequest: pr({ ...base, mergeable: "UNKNOWN" }) }))).toEqual({
+      actor: "unknown",
+      reason: "github:mergeable_unknown",
+      rule: null,
+    });
+  });
+
+  test("mergeable UNKNOWN does not hide an earlier rule or a pending check", () => {
+    const approved = { reviewDecision: "APPROVED" as const, mergeable: "UNKNOWN" as const };
+    expect(onTurn(item({ pullRequest: pr({ ...approved, isDraft: true }) })).rule).toBe(6);
+    expect(onTurn(item({ pullRequest: pr({ ...approved, checks: [check("build", "failure")] }) })).rule).toBe(5);
+    expect(onTurn(item({ pullRequest: pr({ ...approved, checks: [check("build", "pending")] }) })).rule).toBe(10);
   });
 
   test("rule 6: draft", () => {

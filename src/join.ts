@@ -156,7 +156,7 @@ function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | 
  * `noIssue` false, because the issue exists (or is known by key) and only one
  * row may carry a `linear:<KEY>` key. A session attaches to exactly one row. A
  * session without a row is reported as orphaned only when the sources that
- * could have matched it are `ok`.
+ * could have matched it are `ok` and its issue is not in a paused state.
  */
 export function joinItems(input: JoinInput): JoinResult {
   const { project, issues, pullRequests, sessions, notifications, sources } = input;
@@ -211,8 +211,12 @@ export function joinItems(input: JoinInput): JoinResult {
     });
   }
 
+  // Issues in a configured paused state are not on anyone's turn; without a pull request they get no row.
+  const pausedIds = new Set(
+    issues.filter((issue) => project.pausedStates.includes(issue.stateName)).map((issue) => issue.id),
+  );
   for (const issue of issues) {
-    if (claimedKeys.has(issue.id)) continue;
+    if (claimedKeys.has(issue.id) || pausedIds.has(issue.id)) continue;
     claimedKeys.add(issue.id);
     drafts.push({
       key: `linear:${issue.id}`,
@@ -236,7 +240,10 @@ export function joinItems(input: JoinInput): JoinResult {
     }
     if (target >= 0) {
       sessionsByRow.set(target, [...(sessionsByRow.get(target) ?? []), l.session]);
-    } else if (sourcesToConcludeOrphan(l.provider).every((name) => sources[name] === "ok")) {
+    } else if (
+      !pausedIds.has(l.linkId) &&
+      sourcesToConcludeOrphan(l.provider).every((name) => sources[name] === "ok")
+    ) {
       orphanedSessions.push({ id: l.session.id, name: l.session.name, linkId: l.linkId });
     }
   }

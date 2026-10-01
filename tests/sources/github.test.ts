@@ -28,6 +28,7 @@ const project: ProjectConfig = {
   branchPatternSource: "(?P<key>ABC-\\d+)",
   ignoredChecks: [],
   aiReviewers: [],
+  pausedStates: [],
   policy: null,
   profiles: null,
 };

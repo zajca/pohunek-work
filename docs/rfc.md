@@ -267,9 +267,10 @@ Reviews by configured AI reviewer accounts never create an `R`.
 ### 8.3 Missing data
 
 A pull request with `mergeable = UNKNOWN` is neither a conflict (rule 5) nor
-mergeable (rule 7); such an approved, green pull request falls through to rule
-10 until GitHub reports a value. A `reviewDecision` of `REVIEW_REQUIRED` counts
-as "no decision" in rule 9.
+mergeable (rule 7). When it is otherwise merge-ready (authored, approved,
+checks green or none) the row is `unknown` with the reason
+`github:mergeable_unknown` until GitHub reports a value. A `reviewDecision` of
+`REVIEW_REQUIRED` counts as "no decision" in rule 9.
 
 If a source needed by a rule is unavailable, the row shows `on_turn =
 unknown` with the stable error code of that source. Rules are never evaluated
@@ -422,6 +423,7 @@ linear_team = "DMD"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
+paused_states = ["On hold", "Waiting for Support"]
 
 # Optional per-project overrides; a table here replaces the global table whole.
 # [profiles]

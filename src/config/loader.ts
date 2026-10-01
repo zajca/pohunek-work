@@ -200,7 +200,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "linear_team", "branch_pattern", "ignored_checks", "ai_reviewers"],
+    ["pohunek_label", "repo", "linear_team", "branch_pattern", "ignored_checks", "ai_reviewers", "paused_states"],
     file,
     path,
   );
@@ -218,6 +218,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     branchPatternSource,
     ignoredChecks: readStringArray(table, "ignored_checks", file, path),
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
+    pausedStates: readStringArray(table, "paused_states", file, path),
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,
   };

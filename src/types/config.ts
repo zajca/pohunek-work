@@ -85,6 +85,8 @@ export interface ProjectConfig {
   readonly ignoredChecks: readonly string[];
   /** GitHub logins of AI reviewer accounts; compared case-insensitively, `[bot]` suffix ignored. */
   readonly aiReviewers: readonly string[];
+  /** Linear state names whose issues without a pull request are left out of the table. */
+  readonly pausedStates: readonly string[];
   readonly policy: PolicyConfig | null;
   readonly profiles: ProfilesConfig | null;
 }

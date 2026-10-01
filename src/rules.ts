@@ -223,10 +223,11 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     if (authored.isDraft) return result(me("leave draft", 6));
     if (
       authored.reviewDecision === "APPROVED" &&
-      authored.mergeable === "MERGEABLE" &&
       ["success", "none"].includes(summarizeChecks(authored.checks, project.ignoredChecks))
     ) {
-      return result(me("merge", 7));
+      if (authored.mergeable === "MERGEABLE") return result(me("merge", 7));
+      // GitHub has not computed mergeability yet; the row cannot be called merge-ready or waiting.
+      return unknown("github:mergeable_unknown");
     }
   }
 
