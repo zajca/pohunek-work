@@ -28,6 +28,15 @@ test("an unknown option prints usage and exits 2 without a stack dump", async ()
   expect(result.err).not.toContain("node:internal");
 });
 
+test("a usage error under --json is a JSON error envelope on stdout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await run(["list", "--json", "--bogus"], dir);
+  expect(result.code).toBe(2);
+  const envelope = JSON.parse(result.out) as { err: { class: string; code: string; msg: string } };
+  expect(envelope.err.class).toBe("usage");
+  expect(envelope.err.msg).toContain("usage:");
+});
+
 test("an unexpected positional argument is a usage error", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
   expect((await run(["list", "foo"], dir)).code).toBe(2);

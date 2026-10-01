@@ -33,7 +33,7 @@ import {
   type GraphqlRequest,
   type SearchSpec,
 } from "./github-query.ts";
-import { estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
+import { estimateConnectionNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -396,14 +396,9 @@ async function send(transport: Transport, request: GraphqlRequest): Promise<Json
   if (errors !== undefined && errors !== null) {
     throw graphqlErrorFailure(Array.isArray(errors) ? (errors as unknown[]) : []);
   }
-  const data = asObject(envelope["data"], "data");
-  const rateLimit = data["rateLimit"];
-  if (rateLimit !== undefined && rateLimit !== null) {
-    if (asInteger(asObject(rateLimit, "rateLimit")["remaining"], "rateLimit.remaining") <= 0) {
-      throw new SourceFailureError("rate_limited", "GitHub GraphQL rate limit exhausted");
-    }
-  }
-  return data;
+  // rateLimit.remaining is the budget left after this query, so 0 on a complete response is valid;
+  // exhaustion arrives as a RATE_LIMITED error or HTTP 403/429.
+  return asObject(envelope["data"], "data");
 }
 
 async function obtainToken(config: GithubConfig, execFn: Exec): Promise<string> {
@@ -505,6 +500,36 @@ function walkPath(root: unknown, path: readonly string[], label: string): JsonOb
   return current;
 }
 
+/**
+ * Splits pending pages, in order, into batches whose estimated node count stays
+ * within the GitHub limit. A page that cannot fit even alone is a configuration error.
+ */
+function batchPending(pending: readonly PendingPage[], config: GithubConfig): PendingPage[][] {
+  const batches: PendingPage[][] = [];
+  let current: PendingPage[] = [];
+  let currentNodes = 0;
+  for (const page of pending) {
+    const cost = estimateConnectionNodes(page.kind, config);
+    if (cost > GITHUB_MAX_NODES) {
+      throw new SourceFailureError(
+        "not_configured",
+        "github page sizes exceed the GitHub node limit for a nested connection; lower the page sizes",
+      );
+    }
+    if (current.length > 0 && currentNodes + cost > GITHUB_MAX_NODES) {
+      batches.push(current);
+      current = [];
+      currentNodes = 0;
+    }
+    current.push(page);
+    currentNodes += cost;
+  }
+  if (current.length > 0) {
+    batches.push(current);
+  }
+  return batches;
+}
+
 async function completeNestedConnections(
   transport: Transport,
   prs: readonly JsonObject[],
@@ -515,26 +540,28 @@ async function completeNestedConnections(
     if (pending.length === 0) {
       return;
     }
-    const specs: ConnectionPageSpec[] = pending.map((page, index) => ({
-      alias: `c${index}`,
-      kind: page.kind,
-      nodeId: page.nodeId,
-      after: page.after,
-    }));
-    const data = await send(transport, buildConnectionRequest(specs, {
-      nestedPageSize: transport.config.nestedPageSize,
-      threadCommentPageSize: transport.config.threadCommentPageSize,
-    }));
-    pending.forEach((page, index) => {
-      const fetched = walkPath(data[`c${index}`], CONNECTION_KINDS[page.kind].path, page.kind);
-      const target = asObject(page.container[page.connectionKey], page.kind);
-      const merged = [
-        ...asArray(target["nodes"], `${page.kind}.nodes`),
-        ...asArray(fetched["nodes"], `${page.kind}.nodes`),
-      ];
-      target["nodes"] = merged;
-      target["pageInfo"] = fetched["pageInfo"];
-    });
+    for (const batch of batchPending(pending, transport.config)) {
+      const specs: ConnectionPageSpec[] = batch.map((page, index) => ({
+        alias: `c${index}`,
+        kind: page.kind,
+        nodeId: page.nodeId,
+        after: page.after,
+      }));
+      const data = await send(transport, buildConnectionRequest(specs, {
+        nestedPageSize: transport.config.nestedPageSize,
+        threadCommentPageSize: transport.config.threadCommentPageSize,
+      }));
+      batch.forEach((page, index) => {
+        const fetched = walkPath(data[`c${index}`], CONNECTION_KINDS[page.kind].path, page.kind);
+        const target = asObject(page.container[page.connectionKey], page.kind);
+        const merged = [
+          ...asArray(target["nodes"], `${page.kind}.nodes`),
+          ...asArray(fetched["nodes"], `${page.kind}.nodes`),
+        ];
+        target["nodes"] = merged;
+        target["pageInfo"] = fetched["pageInfo"];
+      });
+    }
   }
 }
 

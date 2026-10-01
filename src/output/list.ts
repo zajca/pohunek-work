@@ -12,6 +12,7 @@ import {
   type ListPullRequest,
   type OrphanedSession,
   type SourceStatuses,
+  type UnlinkedSession,
   type WorkItem,
 } from "../types/item.ts";
 
@@ -75,9 +76,15 @@ export function buildListEnvelope(
   cliVersion: string,
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
+  unlinkedSessions: readonly UnlinkedSession[],
   projects: readonly ListProjectStatus[],
 ): ListEnvelope {
-  const ok: ListPayload = { items, orphaned_sessions: orphanedSessions, projects };
+  const ok: ListPayload = {
+    items,
+    orphaned_sessions: orphanedSessions,
+    unlinked_sessions: unlinkedSessions,
+    projects,
+  };
   return {
     cli_version: cliVersion,
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
@@ -118,6 +125,7 @@ function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
 export function renderTable(
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
+  unlinkedSessions: readonly UnlinkedSession[],
   liveSessionIds: ReadonlySet<string>,
 ): string {
   const rows = items.map((item) => {
@@ -142,6 +150,13 @@ export function renderTable(
   );
   for (const orphan of orphanedSessions) {
     lines.push(sanitizeCell(`orphaned session ${orphan.id} (${orphan.name ?? "unnamed"}) links ${orphan.linkId}`));
+  }
+  for (const session of unlinkedSessions) {
+    lines.push(
+      sanitizeCell(
+        `unlinked session ${session.id} (${session.name ?? "unnamed"}) in ${session.project}: ${session.activity ?? session.state}`,
+      ),
+    );
   }
   return lines.join("\n");
 }

@@ -6,6 +6,7 @@ import type {
   WorkItem,
 } from "./types/item.ts";
 import type { ProjectConfig } from "./types/config.ts";
+import { isLiveSession } from "./sources/pohunek.ts";
 import type {
   LinearIssue,
   PohunekNotification,
@@ -25,11 +26,13 @@ export interface JoinInput {
 export interface JoinResult {
   readonly items: WorkItem[];
   readonly orphanedSessions: OrphanedSession[];
+  /** Live sessions of the project without any link; never attached to a row by guessing. */
+  readonly unlinkedSessions: PohunekSession[];
 }
 
-const META_PROVIDER = "work.link.provider";
-const META_LINK_ID = "work.link.id";
-const META_LINK_BRANCH = "work.link.branch";
+// Plugin namespace and the namespace written by pohunek's own provider launch path.
+const PLUGIN_KEYS = { provider: "work.link.provider", id: "work.link.id", branch: "work.link.branch" } as const;
+const LEGACY_KEYS = { provider: "link.provider", id: "link.id", branch: "link.branch" } as const;
 
 interface LinkedSession {
   readonly session: PohunekSession;
@@ -43,6 +46,26 @@ interface PrResolution {
   readonly joinedBy: JoinMatch;
 }
 
+function nonEmpty(value: string | undefined): string | null {
+  return value === undefined || value === "" ? null : value;
+}
+
+/**
+ * Link of a session: `work.link.*` wins; otherwise the legacy `link.*` keys. The
+ * namespaces are never mixed field by field. A legacy GitHub pull request id is
+ * the bare number, which becomes `owner/name#number` for the project.
+ */
+function linkOf(project: ProjectConfig, session: PohunekSession): Omit<LinkedSession, "session"> | null {
+  const plugin = nonEmpty(session.metadata[PLUGIN_KEYS.id]);
+  const keys = plugin !== null ? PLUGIN_KEYS : LEGACY_KEYS;
+  const id = plugin ?? nonEmpty(session.metadata[LEGACY_KEYS.id]);
+  if (id === null) return null;
+  const provider = nonEmpty(session.metadata[keys.provider]);
+  const linkId =
+    keys === LEGACY_KEYS && provider === "github" && /^\d+$/.test(id) ? `${project.repo}#${id}` : id;
+  return { provider, linkId, branch: nonEmpty(session.metadata[keys.branch]) };
+}
+
 /** Sessions of the project that carry a link id; the rest never take part in the join. */
 function linkedSessionsOf(
   project: ProjectConfig,
@@ -51,15 +74,8 @@ function linkedSessionsOf(
   const linked: LinkedSession[] = [];
   for (const session of sessions) {
     if (session.projectLabel !== project.pohunekLabel) continue;
-    const linkId = session.metadata[META_LINK_ID];
-    if (linkId === undefined || linkId === "") continue;
-    const branch = session.metadata[META_LINK_BRANCH];
-    linked.push({
-      session,
-      provider: session.metadata[META_PROVIDER] ?? null,
-      linkId,
-      branch: branch === undefined || branch === "" ? null : branch,
-    });
+    const link = linkOf(project, session);
+    if (link !== null) linked.push({ session, ...link });
   }
   return linked;
 }
@@ -265,5 +281,10 @@ export function joinItems(input: JoinInput): JoinResult {
     };
   });
 
-  return { items, orphanedSessions };
+  const unlinkedSessions = sessions.filter(
+    (session) =>
+      session.projectLabel === project.pohunekLabel && isLiveSession(session) && linkOf(project, session) === null,
+  );
+
+  return { items, orphanedSessions, unlinkedSessions };
 }

@@ -44,7 +44,13 @@ function sampleEnvelope(): unknown {
     ),
     buildListItem(item({ key: "linear:ABC-2", issue: issue({ id: "ABC-2" }), pullRequest: null, noIssue: false }), context),
   ];
-  return buildListEnvelope("0.1.0", rows, [{ id: "s-9", name: null, linkId: "ABC-9" }], [{ project: "widgets", sources: allOk }]);
+  return buildListEnvelope(
+    "0.1.0",
+    rows,
+    [{ id: "s-9", name: null, linkId: "ABC-9" }],
+    [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }],
+    [{ project: "widgets", sources: allOk }],
+  );
 }
 
 test("list --json contract is pinned by a golden file", async () => {
@@ -56,11 +62,11 @@ test("list --json contract is pinned by a golden file", async () => {
 });
 
 test("envelope carries the contract version and exactly one of ok or err", () => {
-  const ok = buildListEnvelope("0.1.0", [], [], []);
+  const ok = buildListEnvelope("0.1.0", [], [], [], []);
   expect(ok).toEqual({
     cli_version: "0.1.0",
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
-    ok: { items: [], orphaned_sessions: [], projects: [] },
+    ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [] },
   });
   const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" });
   expect("ok" in err).toBe(false);
@@ -102,15 +108,21 @@ test("table renders rows, no-issue marker and orphans", () => {
   const rows = [
     buildListItem(item({ pullRequest: pr({ isDraft: true }), notifications: [notification()] }), context),
   ];
-  const text = renderTable(rows, [{ id: "s-9", name: "x", linkId: "ABC-9" }], new Set());
+  const text = renderTable(
+    rows,
+    [{ id: "s-9", name: "x", linkId: "ABC-9" }],
+    [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }],
+    new Set(),
+  );
   expect(text.split("\n")[0]).toMatch(/^KEY\s+ON TURN\s+PR\s+REVIEW\s+CHECKS\s+SESSIONS\s+TITLE$/);
   expect(text).toContain("github:acme/widgets#12 (no issue)");
   expect(text).toContain("me: leave draft (r6)");
   expect(text).toContain("orphaned session s-9 (x) links ABC-9");
+  expect(text).toContain("unlinked session s-8 (scratch) in widgets: idle");
 });
 
 test("terminal control sequences in provider text are neutralized", () => {
   expect(sanitizeCell("a\u001b[31mred\u0007\nb")).toBe("a [31mred  b");
   const row = buildListItem(item({ pullRequest: pr({ title: "evil\u001b]0;pwn\u0007" }) }), context);
-  expect(renderTable([row], [], new Set())).not.toContain("\u001b");
+  expect(renderTable([row], [], [], new Set())).not.toContain("\u001b");
 });

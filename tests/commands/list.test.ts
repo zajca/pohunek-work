@@ -189,3 +189,12 @@ test("a started issue without a pull request or live session is on my turn (rule
   );
   expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
 });
+
+test("live sessions without a link are listed as unlinked, hidden under --mine", async () => {
+  const unlinked = session({ id: "s-77", name: "scratch", projectLabel: "widgets", metadata: {} });
+  const all = await runList(config, { mine: false, json: true, project: "widgets" }, deps({ sessions: ok("pohunek", [unlinked]) }));
+  const envelope = JSON.parse(all.stdout) as { ok: { unlinked_sessions: { id: string; project: string }[] } };
+  expect(envelope.ok.unlinked_sessions.map((u) => [u.id, u.project])).toEqual([["s-77", "widgets"]]);
+  const mine = await runList(config, { mine: true, json: true, project: "widgets" }, deps({ sessions: ok("pohunek", [unlinked]) }));
+  expect((JSON.parse(mine.stdout) as { ok: { unlinked_sessions: unknown[] } }).ok.unlinked_sessions).toEqual([]);
+});

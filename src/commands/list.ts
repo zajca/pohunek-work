@@ -14,6 +14,7 @@ import type {
   OrphanedSession,
   SourceStatus,
   SourceStatuses,
+  UnlinkedSession,
 } from "../types/item.ts";
 import type {
   LinearIssue,
@@ -125,6 +126,7 @@ export async function runList(
 
   const items: ListItem[] = [];
   const orphans: OrphanedSession[] = [];
+  const unlinked: UnlinkedSession[] = [];
   const projectStatuses: ListProjectStatus[] = [];
   const sourceFailures: string[] = [];
   if (pohunek !== "ok") sourceFailures.push(`pohunek: ${pohunek}`);
@@ -156,13 +158,32 @@ export async function runList(
       items.push(buildListItem(item, { sources, identity: global.identity, project }));
     }
     orphans.push(...joined.orphanedSessions);
+    unlinked.push(
+      ...joined.unlinkedSessions.map((session) => ({
+        id: session.id,
+        name: session.name,
+        project: project.pohunekLabel,
+        state: session.state,
+        activity: session.activity,
+      })),
+    );
   }
 
   const shown = options.mine ? filterMine(items) : items;
   for (const failure of sourceFailures) logger.error("source_failed", { failure });
   logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine });
   const stdout = options.json
-    ? JSON.stringify(buildListEnvelope(deps.cliVersion, shown, options.mine ? [] : orphans, projectStatuses), null, 2)
-    : renderTable(shown, options.mine ? [] : orphans, new Set(sessions.filter(isLiveSession).map((s) => s.id)));
+    ? JSON.stringify(buildListEnvelope(
+          deps.cliVersion,
+          shown,
+          options.mine ? [] : orphans,
+          options.mine ? [] : unlinked,
+          projectStatuses,
+        ), null, 2)
+    : renderTable(
+        shown,
+        options.mine ? [] : orphans,
+        options.mine ? [] : unlinked,
+        new Set(sessions.filter(isLiveSession).map((s) => s.id)));
   return { stdout, warnings, items: shown, sourceFailures };
 }

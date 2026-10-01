@@ -111,6 +111,15 @@
         "linkId": "ABC-9"
       }
     ],
+    "unlinked_sessions": [
+      {
+        "id": "s-8",
+        "name": "scratch",
+        "project": "widgets",
+        "state": "running",
+        "activity": "idle"
+      }
+    ],
     "projects": [
       {
         "project": "widgets",

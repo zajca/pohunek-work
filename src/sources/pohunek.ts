@@ -18,6 +18,8 @@ export const SUPPORTED_PROTOCOL_VERSION = 3;
 const SESSION_ENV = "POHUNEK_SESSION_ID";
 const DAEMON_ENV = "POHUNEK_DAEMON_ID";
 const NOTIFICATION_STATUSES = ["unread", "read"] as const;
+/** Every lifecycle status pohunek defines; any other value is an invalid response. */
+const KNOWN_NOTIFICATION_STATUSES: readonly string[] = ["unread", "read", "acknowledged", "archived", "deleted"];
 
 export interface PohunekClientDeps {
   readonly exec?: Exec;
@@ -145,6 +147,9 @@ function parseNotification(raw: unknown, path: string): PohunekNotification {
   }
   if (typeof status !== "string") {
     return invalid(`${path}.status`, "a string");
+  }
+  if (!KNOWN_NOTIFICATION_STATUSES.includes(status)) {
+    return invalid(`${path}.status`, `one of ${KNOWN_NOTIFICATION_STATUSES.join(", ")}`);
   }
   return {
     id: reqString(obj, "id", path),

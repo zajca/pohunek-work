@@ -260,6 +260,7 @@ test("wrong types and wrong payload shapes are invalid_response", async () => {
     ["notifications", wrap({ notifications: [{ kind: "error", status: "unread", created_at: "t" }] }), "$.ok.notifications[0].id"],
     ["notifications", wrap({ notifications: [{ id: "n", status: "unread", created_at: "t" }] }), "$.ok.notifications[0].kind"],
     ["notifications", wrap({ notifications: [{ id: "n", kind: "agent_blocked", status: null, created_at: "t" }] }), "$.ok.notifications[0].status"],
+    ["notifications", wrap({ notifications: [{ id: "n", kind: "agent_blocked", status: "pending", created_at: "t" }] }), "$.ok.notifications[0].status"],
   ];
   for (const [kind, body, path] of cases) {
     const { exec } = fakeExec(() => reply(body));

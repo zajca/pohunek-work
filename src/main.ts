@@ -103,6 +103,7 @@ async function main(argv: readonly string[]): Promise<number> {
     }
   } catch (error) {
     if (error instanceof UsageError) {
+      if (json) return reportError(true, "usage", "usage", `${error.message}\n${USAGE}`);
       console.error(`${error.message}\n${USAGE}`);
       return EXIT_ERROR;
     }

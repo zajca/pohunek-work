@@ -67,6 +67,14 @@ export interface WorkItem {
   readonly notifications: readonly PohunekNotification[];
 }
 
+export interface UnlinkedSession {
+  readonly id: string;
+  readonly name: string | null;
+  readonly project: string;
+  readonly state: string;
+  readonly activity: string | null;
+}
+
 export interface OrphanedSession {
   readonly id: string;
   readonly name: string | null;
@@ -138,6 +146,8 @@ export interface ListProjectStatus {
 export interface ListPayload {
   readonly items: readonly ListItem[];
   readonly orphaned_sessions: readonly OrphanedSession[];
+  /** Live sessions without a work link; `gc --adopt` links them later. */
+  readonly unlinked_sessions: readonly UnlinkedSession[];
   readonly projects: readonly ListProjectStatus[];
 }
 

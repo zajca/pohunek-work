@@ -473,3 +473,59 @@ describe("paused issue states", () => {
     expect(orphanedSessions).toEqual([]);
   });
 });
+
+describe("legacy link.* metadata and unlinked sessions", () => {
+  test("a legacy GitHub link id is the bare PR number of the project repo", () => {
+    const legacy = session("s1", { "link.provider": "github", "link.kind": "pull_request", "link.id": "12" });
+    const { items, orphanedSessions } = run({ pullRequests: [pr(12, "feature/x")], sessions: [legacy] });
+    expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s1"]);
+    expect(orphanedSessions).toEqual([]);
+  });
+
+  test("a legacy linear link joins by session_link through link.branch", () => {
+    const legacy = session("s2", {
+      "link.provider": "linear",
+      "link.id": "ABC-12",
+      "link.branch": "feature/y",
+    });
+    const { items } = run({ issues: [issue("ABC-12")], pullRequests: [pr(30, "feature/y")], sessions: [legacy] });
+    expect(items[0]).toMatchObject({ key: "linear:ABC-12", joinedBy: "session_link" });
+    expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s2"]);
+  });
+
+  test("work.link.* wins over link.* and the namespaces are not mixed", () => {
+    const both = session("s3", {
+      "work.link.provider": "linear",
+      "work.link.id": "ABC-12",
+      "link.provider": "github",
+      "link.id": "99",
+      "link.branch": "legacy/branch",
+    });
+    const { items, orphanedSessions } = run({
+      issues: [issue("ABC-12")],
+      pullRequests: [pr(99, "legacy/branch")],
+      sessions: [both],
+    });
+    expect(items.find((i) => i.key === "linear:ABC-12")?.sessions.map((s) => s.id)).toEqual(["s3"]);
+    expect(items.find((i) => i.key === "github:acme/widgets#99")?.sessions).toEqual([]);
+    expect(orphanedSessions).toEqual([]);
+  });
+
+  test("a legacy link matching no row is orphaned", () => {
+    const legacy = session("s4", { "link.provider": "github", "link.id": "404" });
+    expect(run({ sessions: [legacy] }).orphanedSessions).toEqual([{ id: "s4", name: "name-s4", linkId: "acme/widgets#404" }]);
+  });
+
+  test("live sessions without any link are listed as unlinked, not guessed onto a row", () => {
+    const live = session("s5");
+    const stopped = { ...session("s6"), state: "stopped" };
+    const lost = { ...session("s7"), runtimeState: "lost" };
+    const other = session("s8", {}, "gadgets");
+    const { items, unlinkedSessions } = run({
+      pullRequests: [pr(12, "feature/x")],
+      sessions: [{ ...live, branch: "feature/x" }, stopped, lost, other],
+    });
+    expect(unlinkedSessions.map((s) => s.id)).toEqual(["s5"]);
+    expect(items[0]?.sessions).toEqual([]);
+  });
+});

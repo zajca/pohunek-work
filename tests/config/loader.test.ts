@@ -137,6 +137,29 @@ describe("loadConfig missing keys", () => {
   });
 });
 
+describe("loadConfig github page sizes", () => {
+  test.each(["pull_request_page_size = 20", "nested_page_size = 50", "thread_comment_page_size = 10"])(
+    "%s above 100 fails naming the key",
+    async (line) => {
+      const dir = await copyFixture();
+      const key = line.split(" = ")[0] ?? "";
+      await editFile(dir, "config.toml", (t) => t.replace(line, `${key} = 101`));
+      const error = await loadConfig(dir).then(() => null, (e: unknown) => e);
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).key).toBe(`github.${key}`);
+      expect((error as ConfigError).message).toContain("100");
+    },
+  );
+
+  test("100 is accepted when the node budget allows it", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) =>
+      t.replace("pull_request_page_size = 20", "pull_request_page_size = 100").replace("nested_page_size = 50", "nested_page_size = 5").replace("thread_comment_page_size = 10", "thread_comment_page_size = 5"),
+    );
+    expect((await loadConfig(dir)).global.github.pullRequestPageSize).toBe(100);
+  });
+});
+
 describe("loadConfig github node budget", () => {
   test("page sizes above the GitHub node limit fail naming the key", async () => {
     const dir = await copyFixture();

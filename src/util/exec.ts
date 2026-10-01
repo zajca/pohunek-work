@@ -30,6 +30,15 @@ export class SpawnError extends Error {
 
 export type Exec = (argv: readonly string[], options: ExecOptions) => Promise<ExecResult>;
 
+/** Ends the child's whole process group; falls back to the child alone when the group is gone. */
+function killGroup(child: Bun.Subprocess): void {
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 export const exec: Exec = async (argv, options) => {
   const [binary, ...args] = argv;
   if (binary === undefined) {
@@ -41,6 +50,8 @@ export const exec: Exec = async (argv, options) => {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
+      // Own process group, so a timeout can end grandchildren as well.
+      detached: true,
       ...(options.env === undefined ? {} : { env: { ...options.env } }),
     });
   } catch (cause) {
@@ -54,7 +65,7 @@ export const exec: Exec = async (argv, options) => {
   });
   const timer = setTimeout(() => {
     state.timedOut = true;
-    child.kill("SIGKILL");
+    killGroup(child);
     onTimeout();
   }, options.timeoutMs);
 

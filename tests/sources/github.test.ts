@@ -3,6 +3,8 @@ import { createGithubSource, type FetchLike } from "../../src/sources/github.ts"
 import type { GithubConfig, IdentityConfig, ProjectConfig } from "../../src/types/config.ts";
 import type { PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type Exec, type ExecOptions, type ExecResult } from "../../src/util/exec.ts";
+import { estimateConnectionNodes, GITHUB_MAX_NODES } from "../../src/util/github-budget.ts";
+import type { ConnectionKind } from "../../src/sources/github-query.ts";
 
 type Json = Record<string, unknown>;
 
@@ -468,6 +470,139 @@ describe("pagination", () => {
   });
 });
 
+describe("follow-up batching", () => {
+  const done = { hasNextPage: false, endCursor: "END" };
+
+  /** Kind of the connection each alias of a follow-up request selects. */
+  function aliasKinds(query: string): Map<string, ConnectionKind> {
+    const kinds = new Map<string, ConnectionKind>();
+    for (const line of query.split("\n")) {
+      const alias = /^\s*(c\d+): node/.exec(line)?.[1];
+      if (alias === undefined) continue;
+      if (line.includes("reviewThreads")) kinds.set(alias, "reviewThreads");
+      else if (line.includes("comments(")) kinds.set(alias, "threadComments");
+      else if (line.includes("timelineItems")) kinds.set(alias, "timelineItems");
+      else if (line.includes("reviewRequests")) kinds.set(alias, "reviewRequests");
+      else if (line.includes("statusCheckRollup")) kinds.set(alias, "checkContexts");
+      else kinds.set(alias, "reviews");
+    }
+    return kinds;
+  }
+
+  function requestNodes(request: RecordedRequest, nested: number, comments: number): number {
+    let total = 0;
+    for (const kind of aliasKinds(request.query).values()) {
+      total += estimateConnectionNodes(kind, { nestedPageSize: nested, threadCommentPageSize: comments });
+    }
+    return total;
+  }
+
+  function followUpReply(request: RecordedRequest): Response {
+    const body: Json = { rateLimit: { remaining: 0 } };
+    for (const [alias, kind] of aliasKinds(request.query)) {
+      body[alias] = { [kind]: { nodes: [], pageInfo: done } };
+    }
+    return reply({ data: body });
+  }
+
+  /** First response with `count` authored pull requests whose `kind` connection has another page. */
+  async function manyPending(count: number, kind: "reviews" | "reviewThreads"): Promise<Json> {
+    const data = await fixture("one-page");
+    const template = dig(data, "data", "authored", "nodes", 0);
+    const nodes: Json[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const clone = structuredClone(template);
+      clone["id"] = `PR_bulk_${index}`;
+      clone["number"] = 1000 + index;
+      dig(clone, kind)["pageInfo"] = { hasNextPage: true, endCursor: `P${index}` };
+      nodes.push(clone);
+    }
+    const authored = dig(data, "data", "authored");
+    authored["nodes"] = nodes;
+    authored["issueCount"] = count;
+    authored["pageInfo"] = { hasNextPage: false, endCursor: "A1" };
+    const requested = dig(data, "data", "requested");
+    requested["nodes"] = [];
+    requested["issueCount"] = 0;
+    return data;
+  }
+
+  test("60 pending review-thread connections at nested=100 and comments=100 are split below the node limit", async () => {
+    const github: GithubConfig = { ...githubConfig, pullRequestPageSize: 1, nestedPageSize: 100, threadCommentPageSize: 100 };
+    const first = await manyPending(60, "reviewThreads");
+    const { result, requests } = await run((request, index) => (index === 0 ? reply(first) : followUpReply(request)), { github });
+
+    expect(expectOk(result)).toHaveLength(60);
+    const followUps = requests.slice(1);
+    expect(followUps.length).toBeGreaterThan(1);
+    const requested = new Set<string>();
+    for (const request of followUps) {
+      expect(requestNodes(request, 100, 100)).toBeLessThanOrEqual(GITHUB_MAX_NODES);
+      expect(request.variables["nested"]).toBe(100);
+      expect(request.variables["comments"]).toBe(100);
+      for (const [key, value] of Object.entries(request.variables)) {
+        if (key.startsWith("id_")) requested.add(String(value));
+      }
+    }
+    expect(requested.size).toBe(60);
+  });
+
+  test("all pages of every batched connection are collected", async () => {
+    const github: GithubConfig = { ...githubConfig, pullRequestPageSize: 1, nestedPageSize: 100, threadCommentPageSize: 100 };
+    const first = await manyPending(60, "reviewThreads");
+    const responder: Responder = (request, index) => {
+      if (index === 0) return reply(first);
+      const body: Json = { rateLimit: { remaining: 4000 } };
+      for (const alias of aliasKinds(request.query).keys()) {
+        const cursor = request.variables[`after_${alias}`];
+        const last = cursor !== "second";
+        body[alias] = {
+          reviewThreads: {
+            nodes: [{ id: `TH_${String(request.variables[`id_${alias}`])}_${String(cursor)}`, isResolved: true, isOutdated: false, comments: { nodes: [], pageInfo: done } }],
+            pageInfo: last ? { hasNextPage: true, endCursor: "second" } : done,
+          },
+        };
+      }
+      return reply({ data: body });
+    };
+    const { result, requests } = await run(responder, { github });
+    const prs = expectOk(result);
+    expect(prs).toHaveLength(60);
+    // Each pull request keeps its original threads plus two fetched pages.
+    for (const pr of prs.filter((candidate) => candidate.id.startsWith("acme/widgets#1"))) {
+      expect(pr.threads.length).toBe(4);
+    }
+    expect(requests.slice(1).length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("a batch that sums exactly to the node limit is sent as one request, one more alias starts a second", async () => {
+    // reviews cost nested + 3 nodes, so nested=997 gives 1000 per alias and 500 aliases reach the limit.
+    const github: GithubConfig = { ...githubConfig, pullRequestPageSize: 1, nestedPageSize: 997, threadCommentPageSize: 3 };
+    expect(estimateConnectionNodes("reviews", github) * 500).toBe(GITHUB_MAX_NODES);
+
+    const exact = await manyPending(500, "reviews");
+    const atLimit = await run((request, index) => (index === 0 ? reply(exact) : followUpReply(request)), { github });
+    expectOk(atLimit.result);
+    expect(atLimit.requests).toHaveLength(2);
+    expect(requestNodes(atLimit.requests[1] as RecordedRequest, 997, 3)).toBe(GITHUB_MAX_NODES);
+
+    const over = await manyPending(501, "reviews");
+    const beyond = await run((request, index) => (index === 0 ? reply(over) : followUpReply(request)), { github });
+    expectOk(beyond.result);
+    expect(beyond.requests).toHaveLength(3);
+    expect(requestNodes(beyond.requests[1] as RecordedRequest, 997, 3)).toBe(GITHUB_MAX_NODES);
+    expect(requestNodes(beyond.requests[2] as RecordedRequest, 997, 3)).toBe(1000);
+  });
+
+  test("page sizes whose single connection cannot fit the limit fail with not_configured before any request", async () => {
+    const github: GithubConfig = { ...githubConfig, pullRequestPageSize: 1, nestedPageSize: 5, threadCommentPageSize: 100_000 };
+    const first = await manyPending(1, "reviewThreads");
+    const { result, requests } = await run(() => reply(first), { github });
+    expectFailure(result, "not_configured");
+    expect(requests).toHaveLength(0);
+  });
+});
+
 describe("errors", () => {
   test("401 is unauthenticated", async () => {
     const { result } = await run(() => reply({ message: "Bad credentials" }, 401));
@@ -508,11 +643,11 @@ describe("errors", () => {
     expect(expectFailure(result, "rate_limited")).not.toContain("exceeded");
   });
 
-  test("an exhausted rateLimit budget is rate_limited", async () => {
+  test("a complete response with rateLimit.remaining 0 succeeds with its data", async () => {
     const data = await fixture("one-page");
     dig(data, "data", "rateLimit")["remaining"] = 0;
     const { result } = await run(() => reply(data));
-    expectFailure(result, "rate_limited");
+    expect(byId(expectOk(result), "acme/widgets#12").number).toBe(12);
   });
 
   test("GraphQL errors are invalid_response with the error type only", async () => {

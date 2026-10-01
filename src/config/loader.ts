@@ -29,6 +29,7 @@ import {
   readStringMapTable,
   rejectUnknownKeys,
   requireTable,
+  type KeyPath,
   type Table,
 } from "./validate.ts";
 
@@ -61,6 +62,17 @@ function parseIdentity(root: Table, file: string): IdentityConfig {
   };
 }
 
+/** GitHub accepts 1 to 100 for every `first` argument. */
+const GITHUB_MAX_PAGE_SIZE = 100;
+
+function readGithubPageSize(table: Table, key: string, file: string, path: KeyPath): number {
+  const value = readPositiveInt(table, key, file, path);
+  if (value > GITHUB_MAX_PAGE_SIZE) {
+    throw fail(file, [...path, key], `must not exceed ${GITHUB_MAX_PAGE_SIZE.toString()} (GitHub page size limit)`);
+  }
+  return value;
+}
+
 function parseGithub(root: Table, file: string): GithubConfig {
   const table = requireTable(root, "github", file);
   const path = ["github"];
@@ -76,9 +88,9 @@ function parseGithub(root: Table, file: string): GithubConfig {
     endpoint: readHttpsUrl(table, "endpoint", file, path),
     ghBin: readAbsolutePath(table, "gh_bin", file, path),
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
-    pullRequestPageSize: readPositiveInt(table, "pull_request_page_size", file, path),
-    nestedPageSize: readPositiveInt(table, "nested_page_size", file, path),
-    threadCommentPageSize: readPositiveInt(table, "thread_comment_page_size", file, path),
+    pullRequestPageSize: readGithubPageSize(table, "pull_request_page_size", file, path),
+    nestedPageSize: readGithubPageSize(table, "nested_page_size", file, path),
+    threadCommentPageSize: readGithubPageSize(table, "thread_comment_page_size", file, path),
   };
   // The authored and the directly requested searches always run in one request.
   if (estimateRequestNodes(config, 2) > GITHUB_MAX_NODES) {
