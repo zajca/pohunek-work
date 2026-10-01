@@ -134,6 +134,12 @@ max_string_length = 2000
 [watch]
 poll_interval_secs = 300
 
+[actions]
+branch_prefix = "zajca"
+slug_max_length = 40
+launch_timeout_ms = 120000
+launch_kill_margin_ms = 10000
+
 [notify]
 command = "/usr/bin/notify-send"
 

@@ -19,8 +19,9 @@ an explicit policy.
 
 ## Status
 
-Planning. Nothing is implemented yet. Work starts with milestone M0 of the
-implementation plan.
+M0 and M1 are merged: `pohunek-work list` and `doctor`. M2a is in progress:
+`pohunek-work do <key> <implement|babysit> [--dry-run]` launches a linked
+session (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)).
 
 ## Design principles
 

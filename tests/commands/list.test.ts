@@ -48,6 +48,7 @@ function deps(world: World): Parameters<typeof runList>[2] {
     listProjects: () => Promise.resolve(world.registry ?? ok("pohunek", registry)),
     listSessions: () => Promise.resolve(world.sessions ?? ok("pohunek", [])),
     listNotifications: () => Promise.resolve(ok("pohunek", [])),
+    launchSession: () => Promise.reject(new Error("not used")),
   };
   return {
     pohunek,
@@ -136,8 +137,18 @@ test("unknown --project label warns", async () => {
   expect(result.warnings).toEqual(["project nope: no configuration file for this label"]);
 });
 
-test("read-only: the injected pohunek client exposes no mutating call", () => {
-  expect(Object.keys(deps({}).pohunek).sort()).toEqual(["listNotifications", "listProjects", "listSessions"]);
+test("read-only: list never launches a session", async () => {
+  let launches = 0;
+  const base = deps({ prs: ok("github", [draftPr]) });
+  const pohunek: PohunekClient = {
+    ...base.pohunek,
+    launchSession: () => {
+      launches += 1;
+      return Promise.reject(new Error("list never launches a session"));
+    },
+  };
+  await runList(config, { mine: false, json: true, project: "widgets" }, { ...base, pohunek });
+  expect(launches).toBe(0);
 });
 
 test("failed sources are reported regardless of the --mine filter", async () => {

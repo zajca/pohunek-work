@@ -31,6 +31,16 @@ export interface PohunekClient {
   listSessions(): Promise<SourceResult<readonly PohunekSession[]>>;
   /** Unread and read notifications of every kind; rules filter later. */
   listNotifications(): Promise<SourceResult<readonly PohunekNotification[]>>;
+  /** Runs `pohunek session new` with `args` (without the `--json` flag) and returns the created session. */
+  launchSession(request: LaunchRequest): Promise<SourceResult<PohunekSession>>;
+}
+
+export interface LaunchRequest {
+  /** Arguments after `session new`; `--json` is appended by the client. */
+  readonly args: readonly string[];
+  /** Initial text for the session, sent on stdin (`--input-stdin` must be in `args`). */
+  readonly stdin: string;
+  readonly timeoutMs: number;
 }
 
 /** A session is live when it runs and its runtime has not been lost. */
@@ -120,6 +130,7 @@ function parseSession(raw: unknown, path: string): PohunekSession {
     projectLabel: optString(obj, "project_label", path),
     branch: optString(obj, "branch", path),
     worktreePath: optString(obj, "worktree_path", path),
+    cwd: optString(obj, "cwd", path),
     state: reqString(obj, "state", path),
     activity: optString(obj, "activity", path),
     runtimeState,
@@ -248,10 +259,17 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
     };
   }
 
-  async function call(args: readonly string[]): Promise<RunOutcome> {
+  async function call(
+    args: readonly string[],
+    options: { readonly stdin?: string; readonly timeoutMs?: number } = {},
+  ): Promise<RunOutcome> {
+    const timeoutMs = options.timeoutMs ?? config.timeoutMs;
     let result;
     try {
-      result = await run([config.bin, ...args], { timeoutMs: config.timeoutMs });
+      result = await run([config.bin, ...args], {
+        timeoutMs,
+        ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
+      });
     } catch (error) {
       if (error instanceof SpawnError) {
         return fail("unavailable", `cannot start ${config.bin}`);
@@ -259,7 +277,7 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
       throw error;
     }
     if (result.timedOut) {
-      return fail("timeout", `pohunek did not answer within ${String(config.timeoutMs)} ms`);
+      return fail("timeout", `pohunek did not answer within ${String(timeoutMs)} ms`);
     }
     return parseEnvelope(result.stdout, result.exitCode);
   }
@@ -302,6 +320,17 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
   return {
     listProjects: () => listArray(["project", "list", "--json"], parseProject),
     listSessions: () => listArray(["session", "list", "--json"], parseSession),
+    launchSession: (request) =>
+      wrap(async () => {
+        const outcome = await call(["session", "new", ...request.args, "--json"], {
+          stdin: request.stdin,
+          timeoutMs: request.timeoutMs,
+        });
+        if (!outcome.ok) {
+          return outcome;
+        }
+        return { ok: true, data: parseSession(outcome.payload, "$.ok") };
+      }),
     listNotifications: () =>
       wrap(async () => {
         const collected: PohunekNotification[] = [];

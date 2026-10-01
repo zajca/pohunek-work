@@ -49,6 +49,17 @@ export interface NotifyConfig {
   readonly command: string;
 }
 
+export interface ActionsConfig {
+  /** First branch segment of a launched issue branch (`<prefix>/<KEY>/<slug>`). */
+  readonly branchPrefix: string;
+  /** Longest slug taken from the issue title. */
+  readonly slugMaxLength: number;
+  /** Time the daemon may take to answer `pohunek session new`, which creates a worktree. */
+  readonly launchTimeoutMs: number;
+  /** Extra time after `launchTimeoutMs` before the plugin ends the pohunek process itself. */
+  readonly launchKillMarginMs: number;
+}
+
 export interface PolicyConfig {
   readonly delegable: readonly string[];
   readonly maxActiveTasks: number;
@@ -66,6 +77,7 @@ export interface GlobalConfig {
   readonly watch: WatchConfig;
   readonly notify: NotifyConfig;
   readonly log: LogConfig;
+  readonly actions: ActionsConfig;
   readonly policy: PolicyConfig;
   readonly profiles: ProfilesConfig;
 }

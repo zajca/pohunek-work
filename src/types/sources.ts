@@ -109,6 +109,8 @@ export interface PullRequest {
   readonly relation: PullRequestRelation;
   readonly isDraft: boolean;
   readonly headRefName: string;
+  /** Commit SHA of the branch head. */
+  readonly headSha: string;
   readonly baseRefName: string;
   readonly reviewDecision: ReviewDecision | null;
   readonly mergeable: Mergeable;
@@ -167,6 +169,8 @@ export interface PohunekSession {
   readonly projectLabel: string | null;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** Working directory of the session; null when pohunek omits it. */
+  readonly cwd: string | null;
   readonly state: SessionState;
   readonly activity: SessionActivity | null;
   /** `runtime.state` (for example `lost`); null when the runtime block is absent. */

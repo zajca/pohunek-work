@@ -65,6 +65,7 @@ describe("loadConfig valid", () => {
       pohunek: { bin: "/usr/local/bin/pohunek", timeoutMs: 10000, notificationsPageSize: 25 },
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
+      actions: { branchPrefix: "alice", slugMaxLength: 40, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
       notify: { command: "/usr/bin/notify-send" },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
@@ -114,6 +115,9 @@ describe("loadConfig missing keys", () => {
     ["config.toml", 'keyring_service = "test-service"\n', "linear.keyring_service", "[linear] keyring_service is required"],
     ["config.toml", "poll_interval_secs = 300\n", "watch.poll_interval_secs", "[watch] poll_interval_secs is required"],
     ["config.toml", "max_string_length = 2000\n", "log.max_string_length", "[log] max_string_length is required"],
+    ["config.toml", "slug_max_length = 40\n", "actions.slug_max_length", "[actions] slug_max_length is required"],
+    ["config.toml", "launch_timeout_ms = 120000\n", "actions.launch_timeout_ms", "[actions] launch_timeout_ms is required"],
+    ["config.toml", "launch_kill_margin_ms = 10000\n", "actions.launch_kill_margin_ms", "[actions] launch_kill_margin_ms is required"],
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
     ["projects/widgets.toml", 'ignored_checks = ["CI / Flaky"]\n', "project.ignored_checks", "[project] ignored_checks is required"],
     ["projects/widgets.toml", 'ai_reviewers = ["review-bot"]\n', "project.ai_reviewers", "[project] ai_reviewers is required"],
@@ -126,6 +130,13 @@ describe("loadConfig missing keys", () => {
     expect(error.key).toBe(key);
     expect(error.message).toContain(file);
     expect(error.message).toContain(fragment);
+  });
+
+  test("an invalid actions.branch_prefix fails naming the key", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace('branch_prefix = "alice"', 'branch_prefix = "Al/ice"'));
+    const error = await loadError(dir);
+    expect(error.key).toBe("actions.branch_prefix");
   });
 
   test("missing table fails naming the table", async () => {

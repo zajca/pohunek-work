@@ -145,6 +145,7 @@ describe("normalization", () => {
       relation: "authored",
       isDraft: false,
       headRefName: "owner/ABC-1/widget-cache",
+      headSha: "1111111111111111111111111111111111111111",
       baseRefName: "main",
       reviewDecision: "CHANGES_REQUESTED",
       mergeable: "CONFLICTING",

@@ -15,6 +15,7 @@ import type {
   SourceStatus,
   SourceStatuses,
   UnlinkedSession,
+  WorkItem,
 } from "../types/item.ts";
 import type {
   LinearIssue,
@@ -98,11 +99,29 @@ export function selectProjects(
   return { projects, warnings };
 }
 
-export async function runList(
+/** One joined row with the context a later action needs. */
+export interface CollectedRow {
+  readonly item: WorkItem;
+  readonly project: ProjectConfig;
+  readonly listItem: ListItem;
+}
+
+export interface Collected {
+  readonly rows: readonly CollectedRow[];
+  readonly orphans: readonly OrphanedSession[];
+  readonly unlinked: readonly UnlinkedSession[];
+  readonly projectStatuses: readonly ListProjectStatus[];
+  readonly warnings: string[];
+  readonly sourceFailures: readonly string[];
+  readonly sessions: readonly PohunekSession[];
+}
+
+/** Fetches every source once per selected project, joins and evaluates the rules. */
+export async function collectRows(
   config: PluginConfig,
-  options: ListOptions,
-  deps: ListDeps,
-): Promise<ListOutput> {
+  onlyProject: string | null,
+  deps: Omit<ListDeps, "cliVersion">,
+): Promise<Collected> {
   const { logger } = deps;
   const global: GlobalConfig = config.global;
   const [registry, sessionsResult, notificationsResult] = await Promise.all([
@@ -118,13 +137,13 @@ export async function runList(
   const sessions: readonly PohunekSession[] = sessionsResult.ok ? sessionsResult.data : [];
   const notifications: readonly PohunekNotification[] = notificationsResult.ok ? notificationsResult.data : [];
 
-  const { projects, warnings } = selectProjects(config, registry, options.project);
+  const { projects, warnings } = selectProjects(config, registry, onlyProject);
   for (const warning of warnings) logger.info("project_skipped", { warning });
-  if (options.project !== null && projects.length === 0 && warnings.length === 0) {
-    warnings.push(`project ${options.project}: no configuration file for this label`);
+  if (onlyProject !== null && projects.length === 0 && warnings.length === 0) {
+    warnings.push(`project ${onlyProject}: no configuration file for this label`);
   }
 
-  const items: ListItem[] = [];
+  const rows: CollectedRow[] = [];
   const orphans: OrphanedSession[] = [];
   const unlinked: UnlinkedSession[] = [];
   const projectStatuses: ListProjectStatus[] = [];
@@ -155,7 +174,7 @@ export async function runList(
     const issues: readonly LinearIssue[] = linear.ok ? linear.data : [];
     const joined = joinItems({ project, issues, pullRequests, sessions, notifications, sources });
     for (const item of joined.items) {
-      items.push(buildListItem(item, { sources, identity: global.identity, project }));
+      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project }) });
     }
     orphans.push(...joined.orphanedSessions);
     unlinked.push(
@@ -168,9 +187,21 @@ export async function runList(
       })),
     );
   }
+  for (const failure of sourceFailures) logger.error("source_failed", { failure });
+  return { rows, orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions };
+}
+
+export async function runList(
+  config: PluginConfig,
+  options: ListOptions,
+  deps: ListDeps,
+): Promise<ListOutput> {
+  const { logger } = deps;
+  const collected = await collectRows(config, options.project, deps);
+  const { orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions } = collected;
+  const items = collected.rows.map((row) => row.listItem);
 
   const shown = options.mine ? filterMine(items) : items;
-  for (const failure of sourceFailures) logger.error("source_failed", { failure });
   logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine });
   const stdout = options.json
     ? JSON.stringify(buildListEnvelope(

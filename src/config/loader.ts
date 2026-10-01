@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type {
+  ActionsConfig,
   GlobalConfig,
   GithubConfig,
   IdentityConfig,
@@ -155,6 +156,25 @@ function parseLog(root: Table, file: string): LogConfig {
   return { maxStringLength: readPositiveInt(table, "max_string_length", file, path) };
 }
 
+/** Branch prefix is one git ref segment: lowercase letters, digits, `-` and `_`. */
+const BRANCH_PREFIX = /^[a-z0-9][a-z0-9_-]*$/;
+
+function parseActions(root: Table, file: string): ActionsConfig {
+  const table = requireTable(root, "actions", file);
+  const path = ["actions"];
+  rejectUnknownKeys(table, ["branch_prefix", "slug_max_length", "launch_timeout_ms", "launch_kill_margin_ms"], file, path);
+  const branchPrefix = readString(table, "branch_prefix", file, path);
+  if (!BRANCH_PREFIX.test(branchPrefix)) {
+    throw fail(file, [...path, "branch_prefix"], "must be one branch segment of lowercase letters, digits, - and _");
+  }
+  return {
+    branchPrefix,
+    slugMaxLength: readPositiveInt(table, "slug_max_length", file, path),
+    launchTimeoutMs: readPositiveInt(table, "launch_timeout_ms", file, path),
+    launchKillMarginMs: readPositiveInt(table, "launch_kill_margin_ms", file, path),
+  };
+}
+
 function parsePolicy(root: Table, file: string): PolicyConfig {
   const table = requireTable(root, "policy", file);
   const path = ["policy"];
@@ -173,7 +193,7 @@ function parseProfiles(root: Table, file: string): ProfilesConfig {
 function parseGlobal(root: Table, file: string): GlobalConfig {
   rejectUnknownKeys(
     root,
-    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "policy", "profiles"],
+    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles"],
     file,
     [],
   );
@@ -185,6 +205,7 @@ function parseGlobal(root: Table, file: string): GlobalConfig {
     watch: parseWatch(root, file),
     notify: parseNotify(root, file),
     log: parseLog(root, file),
+    actions: parseActions(root, file),
     policy: parsePolicy(root, file),
     profiles: parseProfiles(root, file),
   };

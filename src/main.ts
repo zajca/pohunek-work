@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
-// Command line entry point: `pohunek-work list` and `pohunek-work doctor`.
+// Command line entry point: `pohunek-work list`, `do` and `doctor`.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
+import { ActionError, LAUNCH_ACTIONS, type LaunchAction } from "./actions/types.ts";
+import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createLogger } from "./log.ts";
@@ -14,6 +16,7 @@ import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
   pohunek-work list [--mine] [--json] [--project <label>]
+  pohunek-work do <key> <implement|babysit> [--profile <name>] [--project <label>] [--dry-run] [--yes] [--json]
   pohunek-work doctor
 
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
@@ -82,6 +85,101 @@ async function listCommand(argv: readonly string[]): Promise<number> {
   }
 }
 
+function parseDoArgs(argv: readonly string[]): DoArgs {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...argv],
+      options: {
+        profile: { type: "string" },
+        project: { type: "string" },
+        "dry-run": { type: "boolean", default: false },
+        yes: { type: "boolean", default: false },
+        json: { type: "boolean", default: false },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+    const [key, action, ...extra] = positionals;
+    if (key === undefined || action === undefined) throw new UsageError("do needs a key and an action");
+    if (extra.length > 0) throw new UsageError(`unexpected argument: ${extra.join(" ")}`);
+    const known = LAUNCH_ACTIONS.find((name) => name === action);
+    if (known === undefined) throw new UsageError(`unknown action: ${action} (known: ${LAUNCH_ACTIONS.join(", ")})`);
+    if (values["dry-run"] && values.yes) throw new UsageError("--dry-run and --yes exclude each other");
+    return {
+      key,
+      action: known,
+      profile: values.profile ?? null,
+      project: values.project ?? null,
+      dryRun: values["dry-run"],
+      yes: values.yes,
+      json: values.json,
+    };
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
+  }
+}
+
+interface DoArgs {
+  readonly key: string;
+  readonly action: LaunchAction;
+  readonly profile: string | null;
+  readonly project: string | null;
+  readonly dryRun: boolean;
+  readonly yes: boolean;
+  readonly json: boolean;
+}
+
+/** Reads one answer line from the terminal; null when stdin is not a terminal. */
+function terminalConfirm(): ((question: string) => Promise<boolean>) | null {
+  if (!process.stdin.isTTY) return null;
+  return async (question) => {
+    process.stderr.write(`${question} [y/N] `);
+    for await (const line of console) {
+      return /^y(es)?$/i.test(line.trim());
+    }
+    return false;
+  };
+}
+
+async function doCommand(argv: readonly string[]): Promise<number> {
+  const options = parseDoArgs(argv);
+  let config;
+  try {
+    config = await loadConfig(resolveConfigDir());
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    return reportError(options.json, "configuration", "config_invalid", error.message);
+  }
+
+  const logger = createLogger({
+    logDir: resolveLogDir(),
+    command: "do",
+    maxStringLength: config.global.log.maxStringLength,
+  });
+  try {
+    const output = await runDo(config, options, {
+      pohunek: createPohunekClient(config.global.pohunek),
+      github: createGithubSource(config.global),
+      linear: createLinearSource(config.global.linear),
+      logger,
+      cliVersion: pkg.version,
+      confirm: terminalConfirm(),
+    });
+    for (const warning of output.warnings) console.error(warning);
+    console.log(output.stdout);
+    return 0;
+  } catch (error) {
+    if (error instanceof ActionError) return reportError(options.json, "action", error.code, error.message);
+    logger.error("do_failed", { error: error instanceof Error ? error : String(error) });
+    throw error;
+  } finally {
+    await logger.close();
+    const logFailure = logger.failure();
+    if (logFailure !== null) console.error(`log write failed: ${logFailure.message}`);
+  }
+}
+
 async function doctorCommand(argv: readonly string[]): Promise<number> {
   if (argv.length > 0) throw new UsageError(`doctor takes no arguments: ${argv.join(" ")}`);
   const report = await runDoctor({ configDir: resolveConfigDir() });
@@ -96,6 +194,8 @@ async function main(argv: readonly string[]): Promise<number> {
     switch (command) {
       case "list":
         return await listCommand(rest);
+      case "do":
+        return await doCommand(rest);
       case "doctor":
         return await doctorCommand(rest);
       default:

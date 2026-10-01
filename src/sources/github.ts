@@ -292,6 +292,7 @@ function toPullRequest(pr: JsonObject, relation: PullRequestRelation): PullReque
     relation,
     isDraft: asBoolean(pr["isDraft"], "isDraft"),
     headRefName: asString(pr["headRefName"], "headRefName"),
+    headSha: asString(pr["headRefOid"], "headRefOid"),
     baseRefName: asString(pr["baseRefName"], "baseRefName"),
     reviewDecision:
       decision === null || decision === undefined ? null : asOneOf(decision, REVIEW_DECISIONS, "reviewDecision"),
