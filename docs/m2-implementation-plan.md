@@ -142,6 +142,35 @@ the CLI rejects (`incomplete_origin_environment`); the spikes ran with
   Consequences: step 2.5
   must check `git status --porcelain` itself before `session rm`, and must delete the local
   branch itself (`git branch -d`).
+- **S8 (review of another author's pull request).** Scratch setup: a bare remote, a clone
+  that pushed `feature/fetched` and `feature/unfetched`, and the project clone that had
+  only fetched `feature/fetched`. Results of `session new --project P` with:
+  - A. `--branch feature/unfetched` (not fetched): **no fetch**; a new local branch of
+    that name is created from the base (`main`), no upstream, no warning.
+  - B. `--branch feature/fetched` (only `origin/feature/fetched` exists): same as A, the
+    remote-tracking ref is ignored; the worktree holds `main`.
+  - C. `--branch X` where a local branch X exists: X is checked out as it is.
+  - D/F. `--branch review/x --base-branch <name>`: pohunek **fetches `<name>` from
+    origin** and creates `review/x` from it. When the fetch fails (`origin/feature/fetched`
+    or an unknown name) the session is still created (exit 0) on the default branch, and
+    `ok.warnings[]` carries `{kind: "fetch", message, detail}` and
+    `{kind: "base_branch_fallback", message, detail}`.
+  - E. `--branch review/e --base-branch feature/unfetched`: fetched, `review/e` created at
+    the remote head (a stale local `feature/unfetched` did not win), no warnings.
+  - G. `--branch review/g --base-branch feature/unfetched` where a local `review/g` already
+    exists: the existing branch is checked out as it is, `--base-branch` is ignored, no
+    warning.
+  - `project show <P> --json` lists `ok.worktrees[]` with `path`, `branch`, `head` (full
+    SHA), `owned` and `session_id`, so the head of a created worktree can be re-read.
+
+  Consequences for `review`: launch with a fresh branch per head,
+  `--branch <branch_prefix>/<review_branch_segment>/<number>-<head SHA> --base-branch
+  <head branch>`, so a leftover local branch (S5 keeps it) can only point at the right
+  commit (G). After the launch the plugin treats any `warnings[]` entry as unverified and
+  compares the worktree `head` from `project show` with the pull request head SHA; the
+  prompt also tells the agent to stop when `HEAD` differs, because the session is already
+  running when the plugin checks. A pull request from a fork is refused up front: its
+  head branch is not on origin, and a same-named origin branch would be fetched instead.
 
 ## 4. Architecture additions
 

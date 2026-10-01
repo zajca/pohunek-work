@@ -77,6 +77,7 @@ export function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     author: actor("owner-me"),
     relation: "authored",
     isDraft: false,
+    isCrossRepository: false,
     headRefName: "abc-1-widget-cache",
     headSha: "0123456789abcdef0123456789abcdef01234567",
     baseRefName: "main",

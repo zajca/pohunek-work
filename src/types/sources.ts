@@ -108,6 +108,8 @@ export interface PullRequest {
   readonly author: Actor | null;
   readonly relation: PullRequestRelation;
   readonly isDraft: boolean;
+  /** The head branch lives in a fork, not in `repo`. */
+  readonly isCrossRepository: boolean;
   readonly headRefName: string;
   /** Commit SHA of the branch head. */
   readonly headSha: string;

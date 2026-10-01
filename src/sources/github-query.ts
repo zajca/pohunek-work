@@ -24,7 +24,7 @@ const TIMELINE_ITEM_TYPES = "[PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]"
 
 const PULL_REQUEST_FRAGMENT = `
 fragment PrFields on PullRequest {
-  id number url title isDraft headRefName headRefOid baseRefName reviewDecision mergeable updatedAt
+  id number url title isDraft isCrossRepository headRefName headRefOid baseRefName reviewDecision mergeable updatedAt
   repository { nameWithOwner }
   ${ACTOR}
   reviews(first: $nested) { ${REVIEWS_FIELDS} }
