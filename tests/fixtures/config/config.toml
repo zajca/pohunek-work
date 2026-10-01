@@ -29,6 +29,9 @@ poll_interval_secs = 300
 [notify]
 command = "/usr/bin/notify-send"
 
+[log]
+max_string_length = 2000
+
 [policy]
 delegable = ["review"]
 max_active_tasks = 2

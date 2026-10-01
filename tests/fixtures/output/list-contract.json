@@ -1,0 +1,115 @@
+{
+  "cli_version": "0.1.0",
+  "protocol": {
+    "minimum": 1,
+    "maximum": 1
+  },
+  "ok": {
+    "items": [
+      {
+        "key": "linear:ABC-1",
+        "project": "widgets",
+        "issue": {
+          "id": "ABC-1",
+          "title": "Widget cache",
+          "state": "In Progress",
+          "url": "https://example.invalid/issue/ABC-1"
+        },
+        "pull_request": {
+          "id": "acme/widgets#12",
+          "url": "https://example.invalid/acme/widgets/pull/12",
+          "title": "Add widget cache",
+          "draft": false,
+          "review_decision": "CHANGES_REQUESTED",
+          "checks": "success",
+          "mergeable": "MERGEABLE",
+          "fix_delivered": true,
+          "threads_answered": true,
+          "rerequested": true
+        },
+        "no_issue": false,
+        "sessions": [
+          {
+            "id": "s-1",
+            "name": "impl",
+            "role": "babysit",
+            "state": "running",
+            "activity": "idle"
+          }
+        ],
+        "on_turn": {
+          "actor": "reviewer",
+          "reason": "waiting",
+          "rule": 10
+        },
+        "actions": [],
+        "sources": {
+          "github": "ok",
+          "linear": "ok",
+          "pohunek": "ok"
+        }
+      },
+      {
+        "key": "github:acme/widgets#12",
+        "project": "widgets",
+        "issue": null,
+        "pull_request": {
+          "id": "acme/widgets#12",
+          "url": "https://example.invalid/acme/widgets/pull/12",
+          "title": "Add widget cache",
+          "draft": true,
+          "review_decision": null,
+          "checks": "success",
+          "mergeable": "MERGEABLE",
+          "fix_delivered": null,
+          "threads_answered": null,
+          "rerequested": null
+        },
+        "no_issue": true,
+        "sessions": [],
+        "on_turn": {
+          "actor": "me",
+          "reason": "leave draft",
+          "rule": 6
+        },
+        "actions": [],
+        "sources": {
+          "github": "ok",
+          "linear": "ok",
+          "pohunek": "ok"
+        }
+      },
+      {
+        "key": "linear:ABC-2",
+        "project": "widgets",
+        "issue": {
+          "id": "ABC-2",
+          "title": "Widget cache",
+          "state": "In Progress",
+          "url": "https://example.invalid/issue/ABC-1"
+        },
+        "pull_request": null,
+        "no_issue": false,
+        "sessions": [],
+        "on_turn": {
+          "actor": "me",
+          "reason": "nothing runs",
+          "rule": 8
+        },
+        "actions": [],
+        "sources": {
+          "github": "ok",
+          "linear": "ok",
+          "pohunek": "ok"
+        }
+      }
+    ],
+    "orphaned_sessions": [
+      {
+        "id": "s-9",
+        "name": null,
+        "linkId": "ABC-9"
+      }
+    ]
+  }
+}

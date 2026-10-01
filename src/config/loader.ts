@@ -5,6 +5,7 @@ import type {
   GithubConfig,
   IdentityConfig,
   LinearConfig,
+  LogConfig,
   NotifyConfig,
   PluginConfig,
   PohunekConfig,
@@ -116,6 +117,13 @@ function parseNotify(root: Table, file: string): NotifyConfig {
   return { command: readAbsolutePath(table, "command", file, path) };
 }
 
+function parseLog(root: Table, file: string): LogConfig {
+  const table = requireTable(root, "log", file);
+  const path = ["log"];
+  rejectUnknownKeys(table, ["max_string_length"], file, path);
+  return { maxStringLength: readPositiveInt(table, "max_string_length", file, path) };
+}
+
 function parsePolicy(root: Table, file: string): PolicyConfig {
   const table = requireTable(root, "policy", file);
   const path = ["policy"];
@@ -134,7 +142,7 @@ function parseProfiles(root: Table, file: string): ProfilesConfig {
 function parseGlobal(root: Table, file: string): GlobalConfig {
   rejectUnknownKeys(
     root,
-    ["identity", "github", "linear", "pohunek", "watch", "notify", "policy", "profiles"],
+    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "policy", "profiles"],
     file,
     [],
   );
@@ -145,6 +153,7 @@ function parseGlobal(root: Table, file: string): GlobalConfig {
     pohunek: parsePohunek(root, file),
     watch: parseWatch(root, file),
     notify: parseNotify(root, file),
+    log: parseLog(root, file),
     policy: parsePolicy(root, file),
     profiles: parseProfiles(root, file),
   };

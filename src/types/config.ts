@@ -38,6 +38,11 @@ export interface WatchConfig {
   readonly pollIntervalSecs: number;
 }
 
+export interface LogConfig {
+  /** Longest string value kept in a log line; longer values are truncated. */
+  readonly maxStringLength: number;
+}
+
 export interface NotifyConfig {
   readonly command: string;
 }
@@ -58,6 +63,7 @@ export interface GlobalConfig {
   readonly pohunek: PohunekConfig;
   readonly watch: WatchConfig;
   readonly notify: NotifyConfig;
+  readonly log: LogConfig;
   readonly policy: PolicyConfig;
   readonly profiles: ProfilesConfig;
 }
