@@ -1,5 +1,6 @@
 // Pure selectors over the decoded `list` payload: row identity, order and the
 // client-side filters (the TUI always fetches every row and filters itself).
+import { isIdleDraft } from "../output/drafts.ts";
 import type { ListItem, ListPayload, TurnActor } from "../types/item.ts";
 import { toSafe } from "./safe.ts";
 
@@ -15,6 +16,8 @@ export interface Filters {
   readonly project: string | null;
   /** Case-insensitive substring of the key or the title; empty matches every row. */
   readonly text: string;
+  /** Hides draft pull requests nothing runs for (see `isIdleDraft`). */
+  readonly hideDrafts: boolean;
 }
 
 /** A key is unique per project only, so the project is part of the identity. */
@@ -49,9 +52,23 @@ function matchesBase(item: ListItem, filters: Filters): boolean {
 export function filterRows(payload: ListPayload, filters: Filters): ListItem[] {
   return sortRows(
     payload.items.filter(
-      (item) => matchesBase(item, filters) && (filters.actor === "all" || item.on_turn.actor === filters.actor),
+      (item) =>
+        matchesBase(item, filters) &&
+        (filters.actor === "all" || item.on_turn.actor === filters.actor) &&
+        !(filters.hideDrafts && isIdleDraft(item)),
     ),
   );
+}
+
+/** Rows the draft filter hides on top of the other filters, for the header counter. */
+export function hiddenDraftCount(payload: ListPayload, filters: Filters): number {
+  if (!filters.hideDrafts) return 0;
+  return payload.items.filter(
+    (item) =>
+      matchesBase(item, filters) &&
+      (filters.actor === "all" || item.on_turn.actor === filters.actor) &&
+      isIdleDraft(item),
+  ).length;
 }
 
 /**

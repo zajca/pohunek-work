@@ -1,6 +1,7 @@
 // `pohunek-work list`: fetch every source once per project, join, evaluate
 // the rules and render. Read-only: no pohunek mutation, no provider write.
 import { joinItems } from "../join.ts";
+import { isIdleDraft } from "../output/drafts.ts";
 import {
   buildListEnvelope,
   buildListItem,
@@ -32,6 +33,8 @@ import type { LinearSource } from "../sources/linear.ts";
 
 export interface ListOptions {
   readonly mine: boolean;
+  /** Leaves out draft pull requests nothing runs for. */
+  readonly noDrafts: boolean;
   readonly json: boolean;
   /** Pohunek project label to restrict the listing to; null for every project. */
   readonly project: string | null;
@@ -201,8 +204,9 @@ export async function runList(
   const { orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions } = collected;
   const items = collected.rows.map((row) => row.listItem);
 
-  const shown = options.mine ? filterMine(items) : items;
-  logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine });
+  const mineRows = options.mine ? filterMine(items) : items;
+  const shown = options.noDrafts ? mineRows.filter((item) => !isIdleDraft(item)) : mineRows;
+  logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine, no_drafts: options.noDrafts });
   const stdout = options.json
     ? JSON.stringify(buildListEnvelope(
           deps.cliVersion,

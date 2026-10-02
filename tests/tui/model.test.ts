@@ -172,6 +172,25 @@ describe("keys and filters", () => {
     expect(press(state, ["P", "P", "P"]).state.filters.project).toBeNull();
   });
 
+  test("d hides drafts nothing runs for, keeps drafts with a running session, and counts them in the header (drafts -N)", () => {
+    const draft = RULE_ROWS.find((r) => r.key === "linear:DMD-107")?.pull_request;
+    if (draft === null || draft === undefined) throw new Error("fixture row DMD-107 has no pull request");
+    const running = row("linear:DMD-120", {
+      pull_request: { ...draft, id: "keboola/connection#9020" },
+      sessions: [{ id: "s-20", name: "DMD-120", role: "babysit", state: "running", activity: "idle" }],
+      on_turn: { actor: "me", reason: "check agent", rule: 11 },
+    });
+    const state = loaded(okOutcome(payload([...RULE_ROWS, running])));
+    expect(state.filters.hideDrafts).toBe(false);
+    expect(keysOf(state)).toContain("linear:DMD-107");
+    const hidden = press(state, ["d"]).state;
+    expect(hidden.filters.hideDrafts).toBe(true);
+    expect(keysOf(hidden)).not.toContain("linear:DMD-107");
+    expect(keysOf(hidden)).toContain("linear:DMD-120");
+    expect(view(hidden)[0]).toContain("drafts -1");
+    expect(press(hidden, ["d"]).state.filters.hideDrafts).toBe(false);
+  });
+
   test("/ filters key and title case-insensitively, also through diacritics; Esc clears", () => {
     const base = payload([...RULE_ROWS, row("linear:CZ-1", { issue: { id: "CZ-1", title: "Žluťoučký kůň", state: "x", url: "https://linear.app/x" } })]);
     const state = loaded(okOutcome(base));

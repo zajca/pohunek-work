@@ -20,7 +20,7 @@ import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
-  pohunek-work list [--mine] [--json] [--project <label>]
+  pohunek-work list [--mine] [--no-drafts] [--json] [--project <label>]
   pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--dry-run] [--yes] [--json]
   pohunek-work do <key> ready [--project <label>] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--dry-run [--json]]
@@ -36,12 +36,13 @@ const EXIT_PARTIAL = 3;
 
 class UsageError extends Error {}
 
-function parseListArgs(argv: readonly string[]): { mine: boolean; json: boolean; project: string | null } {
+function parseListArgs(argv: readonly string[]): { mine: boolean; noDrafts: boolean; json: boolean; project: string | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
       options: {
         mine: { type: "boolean", default: false },
+        "no-drafts": { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         project: { type: "string" },
       },
@@ -49,7 +50,7 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; json: boolean;
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { mine: values.mine, json: values.json, project: values.project ?? null };
+    return { mine: values.mine, noDrafts: values["no-drafts"], json: values.json, project: values.project ?? null };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
