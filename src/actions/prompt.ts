@@ -3,15 +3,28 @@
 // cannot contain its own closing line.
 import { createHash } from "node:crypto";
 import { sanitizeCell } from "../output/list.ts";
+import babysit from "../../prompts/work-babysit.tmpl" with { type: "text" };
+import fixCi from "../../prompts/work-fix-ci.tmpl" with { type: "text" };
+import implement from "../../prompts/work-implement.tmpl" with { type: "text" };
+import rebase from "../../prompts/work-rebase.tmpl" with { type: "text" };
+import review from "../../prompts/work-review.tmpl" with { type: "text" };
 
 const FENCE_HASH_LENGTH = 16;
 const PLACEHOLDER = /\$\{([a-z_]+)\}/g;
 
 export type PromptName = "work-implement" | "work-babysit" | "work-fix-ci" | "work-rebase" | "work-review";
 
-export async function readTemplate(name: PromptName): Promise<string> {
-  const file = Bun.file(new URL(`../../prompts/${name}.tmpl`, import.meta.url));
-  return file.text();
+/** Templates are bundled into the program text, so a compiled binary needs no files beside it. */
+const TEMPLATES: Readonly<Record<PromptName, string>> = {
+  "work-implement": implement,
+  "work-babysit": babysit,
+  "work-fix-ci": fixCi,
+  "work-rebase": rebase,
+  "work-review": review,
+};
+
+export function readTemplate(name: PromptName): Promise<string> {
+  return Promise.resolve(TEMPLATES[name]);
 }
 
 /**
