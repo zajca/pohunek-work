@@ -174,7 +174,7 @@ export async function collectRows(
     const issues: readonly LinearIssue[] = linear.ok ? linear.data : [];
     const joined = joinItems({ project, issues, pullRequests, sessions, notifications, sources });
     for (const item of joined.items) {
-      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project }) });
+      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles }) });
     }
     orphans.push(...joined.orphanedSessions);
     unlinked.push(

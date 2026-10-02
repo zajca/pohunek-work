@@ -8,7 +8,7 @@ me 2  agent 0  reviewer 1  unknown 0  data <1m old  view: all
                                                                                                        |  fix_delivered=- threads_answered=- rerequested=-
                                                                                                        |  https://example.invalid/acme/widgets/pull/12
                                                                                                        |sessions: none
-                                                                                                       |actions: none (manual)
+                                                                                                       |actions: ready*
                                                                                                        |sources: github=ok linear=ok pohunek=ok
                                                                                                        |
                                                                                                        |

@@ -1,12 +1,14 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   buildErrorEnvelope,
   buildListEnvelope,
   buildListItem,
   filterMine,
   renderTable,
+  rowActions,
   sanitizeCell,
 } from "../../src/output/list.ts";
+import type { OnTurn, RuleNumber } from "../../src/types/item.ts";
 import { LIST_CONTRACT_VERSION } from "../../src/types/item.ts";
 import {
   allOk,
@@ -21,7 +23,8 @@ import {
   session,
 } from "../rules/builders.ts";
 
-const context = { sources: allOk, identity, project };
+const GLOBAL_PROFILES = { implement: "profile-a", babysit: "profile-b", "fix-ci": "profile-c", rebase: "profile-d", review: "profile-e" };
+const context = { sources: allOk, identity, project: { ...project, profiles: null }, profiles: GLOBAL_PROFILES };
 
 const GOLDEN = new URL("../fixtures/output/list-contract.json", import.meta.url);
 
@@ -81,6 +84,7 @@ test("a row has exactly the contract keys", () => {
   expect(Object.keys(row.pull_request ?? {}).sort()).toEqual(
     ["checks", "draft", "fix_delivered", "id", "mergeable", "rerequested", "review_decision", "threads_answered", "title", "url"].sort(),
   );
+  expect(row.on_turn.rule).toBe(9);
   expect(row.actions).toEqual([]);
 });
 
@@ -125,4 +129,82 @@ test("terminal control sequences in provider text are neutralized", () => {
   expect(sanitizeCell("a\u001b[31mred\u0007\nb")).toBe("a [31mred  b");
   const row = buildListItem(item({ pullRequest: pr({ title: "evil\u001b]0;pwn\u0007" }) }), context);
   expect(renderTable([row], [], [], new Set())).not.toContain("\u001b");
+});
+
+describe("actions per row (docs/tui-plan.md 4.5)", () => {
+  const meTurns: readonly [OnTurn, readonly string[]][] = [
+    [{ actor: "me", reason: "answer agent", rule: 1 }, []],
+    [{ actor: "me", reason: "review", rule: 3 }, ["review"]],
+    [{ actor: "me", reason: "respond", rule: 4 }, ["babysit"]],
+    [{ actor: "me", reason: "fix CI", rule: 5 }, ["fix-ci"]],
+    [{ actor: "me", reason: "rebase", rule: 5 }, ["rebase"]],
+    [{ actor: "me", reason: "leave draft", rule: 6 }, ["ready"]],
+    [{ actor: "me", reason: "merge", rule: 7 }, []],
+    [{ actor: "me", reason: "nothing runs", rule: 8 }, ["implement"]],
+    [{ actor: "me", reason: "request review", rule: 9 }, []],
+    [{ actor: "me", reason: "check agent", rule: 11 }, []],
+    [{ actor: "agent", reason: "working", rule: 2 }, []],
+    [{ actor: "reviewer", reason: "waiting", rule: 10 }, []],
+    [{ actor: "unknown", reason: "github:rate_limited", rule: null }, []],
+  ];
+
+  test.each(meTurns)("%p without a live linked session: %p", (onTurn, names) => {
+    expect(rowActions(item(), onTurn, context).map((action) => action.name)).toEqual([...names]);
+  });
+
+  test.each(meTurns)("%p with a live linked session adds attach last", (onTurn, names) => {
+    const live = item({ sessions: [session()] });
+    expect(rowActions(live, onTurn, context).map((action) => action.name)).toEqual([...names, "attach"]);
+  });
+
+  test("a session that is not live (exited or lost) gives no attach", () => {
+    const onTurn: OnTurn = { actor: "me", reason: "answer agent", rule: 1 };
+    expect(rowActions(item({ sessions: [session({ state: "exited" })] }), onTurn, context)).toEqual([]);
+    expect(rowActions(item({ sessions: [session({ runtimeState: "lost" })] }), onTurn, context)).toEqual([]);
+  });
+
+  test("never delegable; launch actions carry the global profile, ready and attach none", () => {
+    const actions = [
+      ...rowActions(item({ sessions: [session()] }), { actor: "me", reason: "fix CI", rule: 5 }, context),
+      ...rowActions(item(), { actor: "me", reason: "leave draft", rule: 6 }, context),
+    ];
+    expect(actions).toEqual([
+      { name: "fix-ci", delegable: false, profile: "profile-c" },
+      { name: "attach", delegable: false },
+      { name: "ready", delegable: false },
+    ]);
+  });
+
+  test("a project [profiles] table replaces the global one whole; a missing profile is omitted", () => {
+    const own = { ...context, project: { ...project, profiles: { implement: "project-x" } } };
+    expect(rowActions(item(), { actor: "me", reason: "nothing runs", rule: 8 }, own)).toEqual([
+      { name: "implement", delegable: false, profile: "project-x" },
+    ]);
+    expect(rowActions(item(), { actor: "me", reason: "respond", rule: 4 }, own)).toEqual([{ name: "babysit", delegable: false }]);
+  });
+
+  test("property: no rule, reason or session state ever lists merge", () => {
+    const reasons = ["answer agent", "review", "respond", "fix CI", "rebase", "leave draft", "merge", "nothing runs", "check agent", "request review"] as const;
+    const rules: RuleNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    for (const rule of rules) {
+      for (const reason of reasons) {
+        for (const sessions of [[], [session()]]) {
+          const names = rowActions(item({ sessions }), { actor: "me", reason, rule }, context).map((action) => action.name);
+          expect(names).not.toContain("merge");
+        }
+      }
+    }
+  });
+
+  test("end to end through the rules: draft PR, started issue, idle agent, blocked agent", () => {
+    expect(buildListItem(item({ pullRequest: pr({ isDraft: true }) }), context).actions).toEqual([{ name: "ready", delegable: false }]);
+    const started = { key: "linear:ABC-1", issue: issue(), pullRequest: null, noIssue: false };
+    expect(buildListItem(item(started), context).actions).toEqual([{ name: "implement", delegable: false, profile: "profile-a" }]);
+    const idle = buildListItem(item({ ...started, sessions: [session()] }), context);
+    expect(idle.on_turn.rule).toBe(11);
+    expect(idle.actions).toEqual([{ name: "attach", delegable: false }]);
+    const blocked = buildListItem(item({ sessions: [session()], notifications: [notification()] }), context);
+    expect(blocked.on_turn.rule).toBe(1);
+    expect(blocked.actions).toEqual([{ name: "attach", delegable: false }]);
+  });
 });
