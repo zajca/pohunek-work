@@ -236,13 +236,10 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   if (issue !== null) {
     const linearFailure = failedSources(sources, ["linear"]);
     if (linearFailure !== null) return unknown(linearFailure);
-    if (
-      issue.stateType === "started" &&
-      issue.assigneeIsMe &&
-      pr === null &&
-      liveSessions.length === 0
-    ) {
-      return result(me("nothing runs", 8));
+    if (issue.stateType === "started" && issue.assigneeIsMe && pr === null) {
+      if (liveSessions.length === 0) return result(me("nothing runs", 8));
+      // Rule 2 did not hold, so every live session is idle: the agent ended its turn and no PR exists yet.
+      return result(me("check agent", 11));
     }
   }
 

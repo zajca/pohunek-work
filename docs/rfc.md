@@ -235,11 +235,15 @@ Evaluated top to bottom; the first rule that holds decides.
 | 6 | The PR is a draft | me: leave draft | `isDraft` |
 | 7 | Approved, checks green, mergeable | me: merge | `reviewDecision`, checks, `mergeable` |
 | 8 | Linear issue in a started state, assigned to me, with no PR and no live linked session | me: nothing runs | Linear state, assignee, join |
+| 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | Linear state, assignee, join, pohunek session state |
 | 9 | Open non-draft PR with no pending review request and no decision | me: request review | `reviewRequests`, `reviewDecision` |
 | 10 | Otherwise | reviewer | — |
 
 An idle live session without a pending notification does not match rule 2;
-the row falls through and the session is shown in its own column.
+the row falls through and the session is shown in its own column. Rule 11 is numbered
+last to keep rules 1-10 stable but is evaluated right after rule 8: an issue that is
+started, assigned to me and has no PR, with an idle live session, is on my turn because
+the agent ended its turn and nothing else will move the row.
 
 ### 8.2 Rule 4 in detail
 
