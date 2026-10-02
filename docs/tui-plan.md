@@ -267,6 +267,29 @@ installer update (`clients/zajca/pohunek-work/`), and `doctor` reports the missi
 | T4 | Attach handover | M2b b.3 with the 4.4 stdio requirement | from a rule 1 row: attach, answer, Ctrl-], back in the view; after refresh the row has left `me` |
 | T5 | Live refresh from pohunek events, `*` and bell via the shared transition function | M2c c.1 (S4), c.2 | a blocking agent appears as a marked `me` row within seconds; a TUI restart marks nothing |
 
+**T0 result (2026-10-02): A stays, B is not needed.** The driver is `src/tui/terminal.ts`; the spike is
+`scripts/spike-terminal.ts`, built with `bun build --compile` (Bun 1.4.2). It ran in a pseudo-terminal
+(Python `pty`, 80x24, `TERM=xterm-256color`) against a throwaway `shell` session started with
+`pohunek session new --agent shell --cwd <scratch dir>` (pohunek CLI 0.31.6, protocol 3), removed afterwards.
+Verified there:
+
+- Raw mode and the alternate screen on start; arrows (CSI and SS3), PgUp/PgDn, a lone Esc and plain keys
+  decode; a size change redraws at the new size. Bun's `resize` event on stdout reports the new size, while
+  `process.stdout.columns` read inside a `SIGWINCH` handler is still stale, so the driver uses `resize`.
+- `process.stdin.pause()` stops Bun from reading fd 0, so a child spawned with inherited stdin (same process
+  group, not detached) gets every byte. A typed `y` reached a `[y/N]` prompt read the same way as `do`'s
+  `terminalConfirm`; the terminal was in cooked mode with echo during the handover.
+- Ctrl-C at the child prompt ended the child (`signal=SIGINT`) and not the TUI (no-op SIGINT handler).
+- Bytes typed at `press Enter to return` were discarded, never delivered as keys.
+- `pohunek attach <id>`: typed input reached the session shell, Ctrl-] detached back into the view without
+  the Enter prompt, and the next key was the only key delivered (no stray bytes).
+- Terminal restored (cooked mode with echo, main screen, cursor on) after `q`, SIGTERM (exit 143), SIGHUP
+  (exit 129), SIGTERM during a handover, and an uncaught exception.
+
+**Not verified (needs the owner's sway terminal):** the real terminal emulator's key sequences (only xterm
+sequences were sent), real window resizes from sway, keyboard layouts and dead keys, and how the TUI looks.
+These checks are the first thing to do when T1 is deployed.
+
 **Ordering:** T0 and T1 (read-only) run alongside M2b; T2 lands before rofi (c.4) and `/work` (c.5), which
 reuse it; T3 and T4 follow M2b; T5 follows c.2. From M2c the TUI reuses `watch`'s transition function and event source. Nothing comes from rofi or `/work`:
 they remain separate front-ends on the same contract.
