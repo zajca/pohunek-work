@@ -35,6 +35,7 @@ max_string_length = 2000
 
 [actions]
 branch_prefix = "alice"
+review_branch_segment = "review"
 slug_max_length = 40
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000

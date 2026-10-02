@@ -156,19 +156,29 @@ function parseLog(root: Table, file: string): LogConfig {
   return { maxStringLength: readPositiveInt(table, "max_string_length", file, path) };
 }
 
-/** Branch prefix is one git ref segment: lowercase letters, digits, `-` and `_`. */
-const BRANCH_PREFIX = /^[a-z0-9][a-z0-9_-]*$/;
+/** One git ref segment of lowercase letters, digits, `-` and `_` (branch prefix, review segment). */
+const BRANCH_SEGMENT = /^[a-z0-9][a-z0-9_-]*$/;
+
+function readBranchSegment(table: Table, key: string, file: string, path: readonly string[]): string {
+  const value = readString(table, key, file, path);
+  if (!BRANCH_SEGMENT.test(value)) {
+    throw fail(file, [...path, key], "must be one branch segment of lowercase letters, digits, - and _");
+  }
+  return value;
+}
 
 function parseActions(root: Table, file: string): ActionsConfig {
   const table = requireTable(root, "actions", file);
   const path = ["actions"];
-  rejectUnknownKeys(table, ["branch_prefix", "slug_max_length", "launch_timeout_ms", "launch_kill_margin_ms"], file, path);
-  const branchPrefix = readString(table, "branch_prefix", file, path);
-  if (!BRANCH_PREFIX.test(branchPrefix)) {
-    throw fail(file, [...path, "branch_prefix"], "must be one branch segment of lowercase letters, digits, - and _");
-  }
+  rejectUnknownKeys(
+    table,
+    ["branch_prefix", "review_branch_segment", "slug_max_length", "launch_timeout_ms", "launch_kill_margin_ms"],
+    file,
+    path,
+  );
   return {
-    branchPrefix,
+    branchPrefix: readBranchSegment(table, "branch_prefix", file, path),
+    reviewBranchSegment: readBranchSegment(table, "review_branch_segment", file, path),
     slugMaxLength: readPositiveInt(table, "slug_max_length", file, path),
     launchTimeoutMs: readPositiveInt(table, "launch_timeout_ms", file, path),
     launchKillMarginMs: readPositiveInt(table, "launch_kill_margin_ms", file, path),

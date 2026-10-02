@@ -3,9 +3,19 @@
 /** Version of the `do --json` contract; bumped on any incompatible change. */
 export const DO_CONTRACT_VERSION = 1;
 
-export type LaunchAction = "implement" | "babysit";
+/** Actions that start a pohunek session. */
+export type LaunchAction = "implement" | "babysit" | "fix-ci" | "rebase" | "review";
 
-export const LAUNCH_ACTIONS: readonly LaunchAction[] = ["implement", "babysit"];
+export const LAUNCH_ACTIONS: readonly LaunchAction[] = ["implement", "babysit", "fix-ci", "rebase", "review"];
+
+/** Every action `do` accepts; `merge` is only accepted to refuse it (merging stays manual). */
+export type DoAction = LaunchAction | "ready" | "attach" | "merge";
+
+export const DO_ACTIONS: readonly DoAction[] = [...LAUNCH_ACTIONS, "ready", "attach", "merge"];
+
+export function isLaunchAction(action: DoAction): action is LaunchAction {
+  return LAUNCH_ACTIONS.some((name) => name === action);
+}
 
 export type RefusalCode =
   | "unknown_item"
@@ -19,7 +29,16 @@ export type RefusalCode =
   | "confirmation_required"
   | "launch_failed"
   | "launch_timed_out"
-  | "launch_unverified";
+  | "launch_unverified"
+  | "not_supported"
+  | "not_draft"
+  | "no_session"
+  | "ambiguous_session"
+  | "no_terminal"
+  | "command_failed"
+  | "command_timed_out"
+  | "verification_failed"
+  | "command_unverified";
 
 /** A typed refusal or failure; no side effect happened unless the code says otherwise. */
 export class ActionError extends Error {
@@ -38,9 +57,13 @@ export interface ActionPlan {
   readonly key: string;
   readonly project: string;
   readonly profile: string;
-  /** New branch (implement); null when the session starts in an existing worktree. */
+  /** New branch (implement, review); null when the session starts in an existing worktree. */
   readonly branch: string | null;
-  /** Existing worktree (babysit); null when the daemon creates one. */
+  /** Branch the daemon fetches from origin and creates `branch` from (review); null otherwise. */
+  readonly baseBranch: string | null;
+  /** Commit the new worktree must hold after the launch (review); null when it is not checked. */
+  readonly expectedHead: string | null;
+  /** Existing worktree (babysit, fix-ci, rebase); null when the daemon creates one. */
   readonly cwd: string | null;
   readonly name: string;
   readonly metadata: Readonly<Record<string, string>>;
@@ -56,4 +79,26 @@ export interface ActionResult {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly metadata: Readonly<Record<string, string>>;
+  /** Kinds of the daemon's launch warnings; empty when the launch went as requested. */
+  readonly warnings: readonly string[];
+}
+
+/** `gh pr ready` for one draft pull request, and the read that confirms it. */
+export interface ReadyPlan {
+  readonly action: "ready";
+  readonly key: string;
+  readonly project: string;
+  /** `owner/name#number`. */
+  readonly pullRequest: string;
+  readonly argv: readonly string[];
+  readonly verifyArgv: readonly string[];
+}
+
+/** `pohunek attach` to the one live linked session of a row. */
+export interface AttachPlan {
+  readonly action: "attach";
+  readonly key: string;
+  readonly project: string;
+  readonly sessionId: string;
+  readonly argv: readonly string[];
 }

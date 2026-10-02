@@ -11,6 +11,7 @@
           "url": "https://github.example/acme/widgets/pull/50",
           "title": "Check outcome coverage",
           "isDraft": false,
+          "isCrossRepository": false,
           "headRefName": "owner/ABC-2/checks",
           "headRefOid": "1111111111111111111111111111111111111111",
           "baseRefName": "main",

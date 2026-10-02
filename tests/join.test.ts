@@ -53,6 +53,7 @@ function pr(
     author: null,
     relation,
     isDraft: false,
+    isCrossRepository: false,
     headRefName,
     headSha: "0123456789abcdef0123456789abcdef01234567",
     baseRefName: "main",

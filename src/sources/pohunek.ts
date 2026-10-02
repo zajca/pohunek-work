@@ -10,7 +10,13 @@ import type {
   SourceErrorCode,
   SourceResult,
 } from "../types/sources.ts";
-import { exec as defaultExec, SpawnError, type Exec } from "../util/exec.ts";
+import {
+  exec as defaultExec,
+  execInteractive as defaultExecInteractive,
+  SpawnError,
+  type Exec,
+  type InteractiveExec,
+} from "../util/exec.ts";
 
 /** Protocol version this plugin speaks; must lie inside the CLI's [minimum, maximum]. */
 export const SUPPORTED_PROTOCOL_VERSION = 3;
@@ -23,6 +29,7 @@ const KNOWN_NOTIFICATION_STATUSES: readonly string[] = ["unread", "read", "ackno
 
 export interface PohunekClientDeps {
   readonly exec?: Exec;
+  readonly execInteractive?: InteractiveExec;
   readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
@@ -32,7 +39,30 @@ export interface PohunekClient {
   /** Unread and read notifications of every kind; rules filter later. */
   listNotifications(): Promise<SourceResult<readonly PohunekNotification[]>>;
   /** Runs `pohunek session new` with `args` (without the `--json` flag) and returns the created session. */
-  launchSession(request: LaunchRequest): Promise<SourceResult<PohunekSession>>;
+  launchSession(request: LaunchRequest): Promise<SourceResult<LaunchedSession>>;
+  /** Git worktrees of one project as `project show` reports them, with their head commits. */
+  listWorktrees(project: string): Promise<SourceResult<readonly PohunekWorktree[]>>;
+  /** Runs `pohunek attach <id>` on the caller's terminal; resolves with its exit code when the owner detaches. */
+  attach(sessionId: string): Promise<SourceResult<number | null>>;
+}
+
+export interface LaunchedSession {
+  readonly session: PohunekSession;
+  /**
+   * Kinds of the daemon's launch warnings (for example `fetch`,
+   * `base_branch_fallback`): the session was created, but not as requested.
+   */
+  readonly warnings: readonly string[];
+}
+
+export interface PohunekWorktree {
+  readonly path: string;
+  /** Null for a detached head. */
+  readonly branch: string | null;
+  /** Full commit SHA of the worktree head. */
+  readonly head: string;
+  /** Session that owns the worktree; null for worktrees pohunek did not create. */
+  readonly sessionId: string | null;
 }
 
 export interface LaunchRequest {
@@ -135,6 +165,27 @@ function parseSession(raw: unknown, path: string): PohunekSession {
     activity: optString(obj, "activity", path),
     runtimeState,
     metadata,
+  };
+}
+
+/** Only the warning kinds are kept: their messages quote branch names, which can be provider text. */
+function parseLaunchWarnings(obj: Json, path: string): string[] {
+  const raw = obj["warnings"];
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  return asArray(raw, `${path}.warnings`).map((entry, index) =>
+    reqString(asObject(entry, `${path}.warnings[${String(index)}]`), "kind", `${path}.warnings[${String(index)}]`),
+  );
+}
+
+function parseWorktree(raw: unknown, path: string): PohunekWorktree {
+  const obj = asObject(raw, path);
+  return {
+    path: reqString(obj, "path", path),
+    branch: optString(obj, "branch", path),
+    head: reqString(obj, "head", path),
+    sessionId: optString(obj, "session_id", path),
   };
 }
 
@@ -243,6 +294,7 @@ function mapErr(err: Json): RunOutcome {
 
 export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDeps = {}): PohunekClient {
   const run = deps.exec ?? defaultExec;
+  const runInteractive = deps.execInteractive ?? defaultExecInteractive;
   const env = deps.env ?? process.env;
 
   function checkOrigin(): Failure | null {
@@ -329,7 +381,31 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
         if (!outcome.ok) {
           return outcome;
         }
-        return { ok: true, data: parseSession(outcome.payload, "$.ok") };
+        const session = parseSession(outcome.payload, "$.ok");
+        return { ok: true, data: { session, warnings: parseLaunchWarnings(asObject(outcome.payload, "$.ok"), "$.ok") } };
+      }),
+    listWorktrees: (project) =>
+      wrap(async () => {
+        const outcome = await call(["project", "show", project, "--json"]);
+        if (!outcome.ok) {
+          return outcome;
+        }
+        const payload = asObject(outcome.payload, "$.ok");
+        const worktrees = asArray(payload["worktrees"], "$.ok.worktrees").map((raw, index) =>
+          parseWorktree(raw, `$.ok.worktrees[${String(index)}]`),
+        );
+        return { ok: true, data: worktrees };
+      }),
+    attach: (sessionId) =>
+      wrap(async () => {
+        try {
+          return { ok: true, data: await runInteractive([config.bin, "attach", sessionId]) };
+        } catch (error) {
+          if (error instanceof SpawnError) {
+            return fail("unavailable", `cannot start ${config.bin}`);
+          }
+          throw error;
+        }
       }),
     listNotifications: () =>
       wrap(async () => {

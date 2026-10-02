@@ -50,6 +50,8 @@ const implement: ActionPlan = {
   project: label,
   profile: "shell",
   branch,
+  baseBranch: null,
+  expectedHead: null,
   cwd: null,
   name: "SP-1",
   metadata: implementMeta,

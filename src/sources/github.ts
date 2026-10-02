@@ -291,6 +291,7 @@ function toPullRequest(pr: JsonObject, relation: PullRequestRelation): PullReque
     author: toActor(pr["author"], "author"),
     relation,
     isDraft: asBoolean(pr["isDraft"], "isDraft"),
+    isCrossRepository: asBoolean(pr["isCrossRepository"], "isCrossRepository"),
     headRefName: asString(pr["headRefName"], "headRefName"),
     headSha: asString(pr["headRefOid"], "headRefOid"),
     baseRefName: asString(pr["baseRefName"], "baseRefName"),

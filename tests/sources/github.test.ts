@@ -144,6 +144,7 @@ describe("normalization", () => {
       author: { login: "owner-user", isBot: false },
       relation: "authored",
       isDraft: false,
+      isCrossRepository: false,
       headRefName: "owner/ABC-1/widget-cache",
       headSha: "1111111111111111111111111111111111111111",
       baseRefName: "main",
@@ -190,6 +191,7 @@ describe("normalization", () => {
 
     expect(pr.relation).toBe("review_requested");
     expect(pr.isDraft).toBe(true);
+    expect(pr.isCrossRepository).toBe(true);
     expect(pr.author).toEqual({ login: "dep-bot", isBot: true });
     expect(pr.mergeable).toBe("UNKNOWN");
     expect(pr.reviewDecision).toBeNull();

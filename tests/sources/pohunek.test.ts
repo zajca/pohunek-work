@@ -307,3 +307,91 @@ test("parseOriginRepo", () => {
     expect(parseOriginRepo(input)).toBe(expected);
   }
 });
+
+test("launchSession returns the session and only the kinds of the daemon's warnings", async () => {
+  const body = await fixture("session-new-warnings.json");
+  const { exec, calls } = fakeExec(() => reply(body));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).launchSession({
+    args: ["--project", "widgets", "--input-stdin"],
+    stdin: "prompt",
+    timeoutMs: 999,
+  });
+  if (!result.ok) throw new Error("expected ok");
+  expect(calls[0]?.argv).toEqual(["/fake/pohunek", "session", "new", "--project", "widgets", "--input-stdin", "--json"]);
+  expect(calls[0]?.timeoutMs).toBe(999);
+  expect(result.data.session.id).toBe("s-review-1");
+  expect(result.data.session.worktreePath).toBe("/work/wt/s-review-1-widgets-review");
+  expect(result.data.warnings).toEqual(["fetch", "base_branch_fallback"]);
+});
+
+test("launchSession without warnings has none, and a warning without kind is invalid_response", async () => {
+  const body = JSON.parse(await fixture("session-new-warnings.json")) as { ok: Record<string, unknown> };
+  const run = async (warnings: unknown): Promise<SourceResult<unknown>> => {
+    const { exec } = fakeExec(() => reply(JSON.stringify({ ...body, ok: { ...body.ok, warnings } })));
+    return createPohunekClient(CONFIG, { exec, env: {} }).launchSession({ args: [], stdin: "", timeoutMs: 1 });
+  };
+  const none = await run(undefined);
+  expect(none.ok && (none.data as { warnings: string[] }).warnings).toEqual([]);
+  expect(failureOf(await run([{ message: "x" }])).message).toContain("$.ok.warnings[0].kind");
+  expect(failureOf(await run("fetch")).code).toBe("invalid_response");
+});
+
+test("listWorktrees reads project show with heads and owning sessions", async () => {
+  const body = await fixture("project-show.json");
+  const { exec, calls } = fakeExec(() => reply(body));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).listWorktrees("widgets");
+  if (!result.ok) throw new Error("expected ok");
+  expect(calls[0]?.argv).toEqual(["/fake/pohunek", "project", "show", "widgets", "--json"]);
+  expect(result.data).toEqual([
+    { path: "/work/widgets", branch: "main", head: "67d09c29d2b18924b1856540077a7439493db856", sessionId: null },
+    {
+      path: "/work/wt/s-review-1-widgets-review",
+      branch: "alice/review/7-1111111111111111111111111111111111111111",
+      head: "1111111111111111111111111111111111111111",
+      sessionId: "s-review-1",
+    },
+    { path: "/work/wt/detached", branch: null, head: "2222222222222222222222222222222222222222", sessionId: null },
+  ]);
+});
+
+test("listWorktrees without a head or a worktree list is invalid_response", async () => {
+  const body = JSON.parse(await fixture("project-show.json")) as { ok: { worktrees: Record<string, unknown>[] } };
+  const headless = { ...body, ok: { ...body.ok, worktrees: [{ path: "/x", branch: "main" }] } };
+  const a = fakeExec(() => reply(JSON.stringify(headless)));
+  expect(failureOf(await createPohunekClient(CONFIG, { exec: a.exec, env: {} }).listWorktrees("widgets")).message).toContain("head");
+  const listless = { ...body, ok: { project: {} } };
+  const b = fakeExec(() => reply(JSON.stringify(listless)));
+  expect(failureOf(await createPohunekClient(CONFIG, { exec: b.exec, env: {} }).listWorktrees("widgets")).code).toBe("invalid_response");
+});
+
+test("attach runs pohunek attach on the terminal and returns its exit code", async () => {
+  const runs: (readonly string[])[] = [];
+  const client = createPohunekClient(CONFIG, {
+    env: {},
+    execInteractive: (argv) => {
+      runs.push(argv);
+      return Promise.resolve(0);
+    },
+  });
+  const result = await client.attach("s-1");
+  expect(result.ok && result.data).toBe(0);
+  expect(runs).toEqual([["/fake/pohunek", "attach", "s-1"]]);
+});
+
+test("attach refuses a half origin environment and maps a failed start", async () => {
+  const runs: (readonly string[])[] = [];
+  const half = createPohunekClient(CONFIG, {
+    env: { POHUNEK_SESSION_ID: "ses_x" },
+    execInteractive: (argv) => {
+      runs.push(argv);
+      return Promise.resolve(0);
+    },
+  });
+  expect(failureOf(await half.attach("s-1")).code).toBe("origin_environment");
+  expect(runs).toHaveLength(0);
+  const missing = createPohunekClient(CONFIG, {
+    env: {},
+    execInteractive: () => Promise.reject(new SpawnError("/fake/pohunek", new Error("ENOENT"))),
+  });
+  expect(failureOf(await missing.attach("s-1"))).toEqual({ code: "unavailable", message: "cannot start /fake/pohunek" });
+});

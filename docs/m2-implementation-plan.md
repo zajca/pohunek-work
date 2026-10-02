@@ -2,8 +2,10 @@
 
 - **Status:** M2a in progress on branch `zajca/m2a`: spikes S1-S3 and S5 done, tasks
   a.2-a.5 implemented and covered by tests; a.1 (host configuration through the
-  machine-management installer) and the M2a checkpoint on a real issue are open. D8-D14
-  are confirmed as recommended below (decided by delegation, see section 2a).
+  machine-management installer) and the M2a checkpoint on a real issue are open. M2b
+  on branch `zajca/m2b`: spike S8 done, tasks b.1-b.4 implemented and covered by tests;
+  the M2b checkpoint on real pull requests is open. D8-D14 are confirmed as
+  recommended below (decided by delegation, see section 2a).
 - **Date:** 2026-10-01
 - **Builds on:** [`implementation-plan.md`](implementation-plan.md) section 6 (M2 tasks
   2.1-2.10) and [`rfc.md`](rfc.md) sections 7.1, 7.4, 9, 10. This document refines
@@ -107,6 +109,7 @@ Verified on 2026-10-01 against pohunek 0.31.6 (CLI help, daemon source, host fil
 | S5 | What `session rm` leaves behind (worktree, branch, transcript) | scratch session with a bound worktree | recorded; decides what step 2.5 must remove itself |
 | S6 | Can a systemd user service read the Secret Service entry and call `notify-send`? | a oneshot test unit that runs `pohunek-work doctor` and `notify-send` | exit 0 from the unit; the unit imports the session D-Bus environment |
 | S7 | How does connection merge (merge queue, auto-merge) and which `gh` call matches it? | read-only `gh repo view`/branch rules | recorded; only relevant if D10 is reversed |
+| S8 | How does `session new` check out the head branch of someone else's pull request (fetch, local branch, existing branch)? | scratch project with a bare origin and branches that are fetched, not fetched and already local | the working invocation and its failure signals are recorded |
 
 ### Spike results (pohunek 0.31.6, scratch repository, 2026-10-01)
 
@@ -142,6 +145,35 @@ the CLI rejects (`incomplete_origin_environment`); the spikes ran with
   Consequences: step 2.5
   must check `git status --porcelain` itself before `session rm`, and must delete the local
   branch itself (`git branch -d`).
+- **S8 (review of another author's pull request).** Scratch setup: a bare remote, a clone
+  that pushed `feature/fetched` and `feature/unfetched`, and the project clone that had
+  only fetched `feature/fetched`. Results of `session new --project P` with:
+  - A. `--branch feature/unfetched` (not fetched): **no fetch**; a new local branch of
+    that name is created from the base (`main`), no upstream, no warning.
+  - B. `--branch feature/fetched` (only `origin/feature/fetched` exists): same as A, the
+    remote-tracking ref is ignored; the worktree holds `main`.
+  - C. `--branch X` where a local branch X exists: X is checked out as it is.
+  - D/F. `--branch review/x --base-branch <name>`: pohunek **fetches `<name>` from
+    origin** and creates `review/x` from it. When the fetch fails (`origin/feature/fetched`
+    or an unknown name) the session is still created (exit 0) on the default branch, and
+    `ok.warnings[]` carries `{kind: "fetch", message, detail}` and
+    `{kind: "base_branch_fallback", message, detail}`.
+  - E. `--branch review/e --base-branch feature/unfetched`: fetched, `review/e` created at
+    the remote head (a stale local `feature/unfetched` did not win), no warnings.
+  - G. `--branch review/g --base-branch feature/unfetched` where a local `review/g` already
+    exists: the existing branch is checked out as it is, `--base-branch` is ignored, no
+    warning.
+  - `project show <P> --json` lists `ok.worktrees[]` with `path`, `branch`, `head` (full
+    SHA), `owned` and `session_id`, so the head of a created worktree can be re-read.
+
+  Consequences for `review`: launch with a fresh branch per head,
+  `--branch <branch_prefix>/<review_branch_segment>/<number>-<head SHA> --base-branch
+  <head branch>`, so a leftover local branch (S5 keeps it) can only point at the right
+  commit (G). After the launch the plugin treats any `warnings[]` entry as unverified and
+  compares the worktree `head` from `project show` with the pull request head SHA; the
+  prompt also tells the agent to stop when `HEAD` differs, because the session is already
+  running when the plugin checks. A pull request from a fork is refused up front: its
+  head branch is not on origin, and a same-named origin branch would be fetched instead.
 
 ## 4. Architecture additions
 
@@ -218,6 +250,45 @@ this branch. `scripts/spike-launch.ts` is the manual real-daemon check of both l
 
 **Checkpoint M2b:** one `fix-ci` or `rebase` and one `ready` on real PRs of the owner, each
 confirmed afterwards on GitHub.
+
+Implementation notes (M2b):
+
+- `fix-ci` needs rule 5 and a failing check after `ignored_checks` are removed; `rebase`
+  needs rule 5 and `mergeable = CONFLICTING` (also when a failing check gave rule 5 its
+  reason). Both start like `babysit` in the worktree of the owning session (`--cwd`, S2)
+  with the same refusals (`already_running`, `no_worktree`); the failing check names or
+  the base branch go into the prompt's data block. No host actions are added (D15).
+- `review` needs rule 3 (`review_requested`) and launches per S8:
+  `--branch <branch_prefix>/<review_branch_segment>/<number>-<head SHA> --base-branch
+  <head branch>`. It refuses a pull request from a fork (GitHub `isCrossRepository`,
+  now read by the list query), a head branch that is not a plain branch name, a branch
+  that `branch_pattern` would match, and a head whose review branch is still held by a
+  session. After the launch, any daemon warning or a worktree `head` (from
+  `project show`) other than the pull request head is `launch_unverified`; the session
+  keeps running, so the message names the `session rm` and the branch to delete.
+  `scripts/spike-review.ts` is the manual real-daemon check of this shape and of the
+  fallback refusal; it passed against a scratch project on 2026-10-01.
+- `ready` refuses with `not_draft` before the turn check, runs `gh pr ready <number> -R
+  <repo>` with `[github] gh_bin` and `timeout_ms`, then re-reads `gh pr view --json
+  isDraft`: a failed or timed-out `gh pr ready` (`command_failed`,
+  `command_timed_out`), an unreadable re-read (`verification_failed`) and a pull request
+  that is still a draft (`command_unverified`) are distinct codes; messages never echo
+  `gh` output.
+- `attach` needs exactly one live linked session (`no_session`, `ambiguous_session`)
+  and a terminal (`no_terminal`); it runs `pohunek attach <id>` in the foreground
+  process group with inherited stdio and no confirmation, since it writes nothing.
+  Detaching with Ctrl-] exits 0 and an unknown session id exits 1 (pohunek 0.31.6,
+  checked through a pseudo-terminal).
+- `merge` is accepted by the parser only to refuse it with `not_supported` before any
+  source is read.
+- Config adds the required `[actions] review_branch_segment`; `list` and `do` on this
+  branch fail against the installed host config until the installer (a.1) appends it.
+  `scripts/spike-launch.ts` was run again with the launch-warning parsing and both
+  launch shapes still parse. The `do --json` contract
+  stays at version 1: launch plans of `implement`, `babysit`, `fix-ci` and `rebase` keep
+  their shape, a review plan adds `base_branch` and `expected_head`, a launch result adds
+  `warnings` only when the daemon reported some, and `ready` and `attach` have their own
+  `plan`/`result` objects in the same envelope.
 
 ### M2c — Watch, rofi, `/work` (2.6-2.8)
 

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exec, SpawnError } from "../../src/util/exec.ts";
+import { exec, execInteractive, SpawnError } from "../../src/util/exec.ts";
 
 test("captures stdout and exit code", async () => {
   const result = await exec(["/bin/sh", "-c", "printf out; printf err >&2; exit 3"], { timeoutMs: 5000 });
@@ -23,6 +23,19 @@ test("kills the child on timeout", async () => {
 test("does not interpret argv through a shell", async () => {
   const result = await exec(["/bin/echo", "$(echo injected); id"], { timeoutMs: 5000 });
   expect(result.stdout).toBe("$(echo injected); id\n");
+});
+
+test("execInteractive resolves with the child's exit code", async () => {
+  expect(await execInteractive(["/bin/sh", "-c", "exit 3"])).toBe(3);
+  expect(await execInteractive(["/bin/sh", "-c", "exit 0"])).toBe(0);
+});
+
+test("execInteractive reports a missing binary as SpawnError", async () => {
+  const failure = await execInteractive(["/nonexistent/binary"]).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(failure).toBeInstanceOf(SpawnError);
 });
 
 test("reports a missing binary as SpawnError", async () => {
