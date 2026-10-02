@@ -1,0 +1,24 @@
+me 0  agent 0  reviewer 0  unknown 0  data <1m old  view: all
+   KEY          PROJECT TURN       PR    REVIEW CHECKS SESSIONS TITLE           
+no open work items (2 projects polled)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+?:help q:quit m:mine f:actor P:project /:filter s:sessions Tab:detail r:refresh

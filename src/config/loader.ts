@@ -13,6 +13,8 @@ import type {
   PolicyConfig,
   ProfilesConfig,
   ProjectConfig,
+  TuiConfig,
+  TuiInitialView,
   WatchConfig,
 } from "../types/config.ts";
 import { estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
@@ -21,8 +23,11 @@ import {
   fail,
   isTable,
   readAbsolutePath,
+  readBoolean,
+  readEnum,
   readHttpsUrl,
   readNonNegativeInt,
+  readNonEmptyStringArray,
   readNonNegativeNumber,
   readPositiveInt,
   readRepo,
@@ -200,10 +205,53 @@ function parseProfiles(root: Table, file: string): ProfilesConfig {
   return readStringMapTable(requireTable(root, "profiles", file), file, ["profiles"]);
 }
 
+const TUI_INITIAL_VIEWS: readonly TuiInitialView[] = ["mine", "all"];
+
+/** A host name as `URL.hostname` returns it: lowercase labels, no port, no scheme. */
+const HOST_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+
+function parseTui(root: Table, file: string): TuiConfig {
+  const table = requireTable(root, "tui", file);
+  const path = ["tui"];
+  rejectUnknownKeys(
+    table,
+    [
+      "self_bin",
+      "refresh_interval_secs",
+      "list_timeout_ms",
+      "stale_after_secs",
+      "initial_view",
+      "bell_on_transition",
+      "open_command",
+      "open_url_hosts",
+      "stderr_max_lines",
+      "detail_min_width",
+    ],
+    file,
+    path,
+  );
+  const openUrlHosts = readNonEmptyStringArray(table, "open_url_hosts", file, path);
+  if (!openUrlHosts.every((host) => HOST_NAME.test(host))) {
+    throw fail(file, [...path, "open_url_hosts"], "must contain only lowercase host names (no scheme, port or path)");
+  }
+  return {
+    selfBin: readAbsolutePath(table, "self_bin", file, path),
+    refreshIntervalSecs: readPositiveInt(table, "refresh_interval_secs", file, path),
+    listTimeoutMs: readPositiveInt(table, "list_timeout_ms", file, path),
+    staleAfterSecs: readPositiveInt(table, "stale_after_secs", file, path),
+    initialView: readEnum(table, "initial_view", TUI_INITIAL_VIEWS, file, path),
+    bellOnTransition: readBoolean(table, "bell_on_transition", file, path),
+    openCommand: readAbsolutePath(table, "open_command", file, path),
+    openUrlHosts,
+    stderrMaxLines: readPositiveInt(table, "stderr_max_lines", file, path),
+    detailMinWidth: readPositiveInt(table, "detail_min_width", file, path),
+  };
+}
+
 function parseGlobal(root: Table, file: string): GlobalConfig {
   rejectUnknownKeys(
     root,
-    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles"],
+    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui"],
     file,
     [],
   );
@@ -218,6 +266,7 @@ function parseGlobal(root: Table, file: string): GlobalConfig {
     actions: parseActions(root, file),
     policy: parsePolicy(root, file),
     profiles: parseProfiles(root, file),
+    tui: parseTui(root, file),
   };
 }
 

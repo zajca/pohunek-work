@@ -1,0 +1,24 @@
+help
+keys
+  j/k, Down/Up    move            g/G, PgUp/PgDn  jump / page
+  Enter           primary action  a               choose an action
+  p               preview (dry run into the detail pane)
+  t               attach to the linked session (when listed)
+  o               open the pull request or issue URL
+  r               refresh now     m               mine / all
+  f               actor filter    P               project filter
+  /               text filter on key and title; Esc clears
+  s               sessions and list stderr
+  Tab             detail pane (full screen when narrow)
+  ?               this help       q, Ctrl-C       quit
+
+the TUI never confirms a write: do shows the plan and asks y/N itself
+merge is never offered: merge on GitHub yourself
+
+any key closes this help
+
+
+
+
+
+any key closes the help

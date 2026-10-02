@@ -1,0 +1,30 @@
+me 10  agent 1  reviewer 1  unknown 1  data 16m old STALE  view: all
+WARNING: self_bin reports pohunek-work 0.2.0, this TUI is 0.1.0
+list stderr (2 lines, s shows all): source unavailable: ops github: rate_limited
+   KEY                      PROJECT    TURN                       PR      CHECKS  TITLE                |github:keboola/connection#9003  (project connection)  no
+>  github:keboola/connec... connection me: review (r3)            #9003   success Review me please     |Linear issue
+   linear:DMD-101           connection me: answer agent (r1)      -       -       Agent asks a question|turn: me: review (r3)
+   linear:DMD-104           connection me: respond (r4)           #9004   success Changes were reque...|  your review is requested
+   linear:DMD-105           connection me: fix CI (r5)            #9005   failure Red CI               |pr: keboola/connection#9003 Review me please
+   linear:DMD-106           connection me: rebase (r5)            #9006   success Conflicting branch   |  review=- checks=success mergeable=MERGEABLE
+   linear:DMD-107           connection me: leave draft (r6)       #9007 d success Still a draft        |  fix_delivered=- threads_answered=- rerequested=-
+   linear:DMD-108           connection me: merge (r7)             #9008   success Approved and green   |  https://github.com/keboola/connection/pull/9003
+   linear:DMD-109           connection me: nothing runs (r8)      -       -       Nothing runs yet     |sessions: none
+   linear:DMD-110           connection me: request review (r9)    #9010   success Nobody asked to re...|actions: review* (codex-pr-review)
+   linear:DMD-112           connection me: check agent (r11)      -       -       Agent went idle      |sources: github=ok linear=ok pohunek=ok
+   linear:OPS-7             ops        unknown: github:rate_li... -       -       Rate limited source  |
+   linear:DMD-102           connection agent (r2)                 -       -       Agent is working     |
+   linear:DMD-111           connection reviewer (r10)             #9011   success Waiting for reviewers|
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+?:help q:quit m:mine f:actor P:project /:filter s:sessions Tab:detail r:refresh

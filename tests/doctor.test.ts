@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { ConfigError } from "../src/config/index.ts";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ConfigError, loadConfig } from "../src/config/index.ts";
 import { DOCTOR_EXIT_CODES, formatDoctorReport, runDoctor, type DoctorDeps } from "../src/doctor.ts";
 import type { KeyringPresence } from "../src/sources/keyring.ts";
 import type { PohunekClient } from "../src/sources/pohunek.ts";
@@ -301,4 +304,21 @@ test("an unreadable notification list is a pohunek failure even when project lis
   const report = await runDoctor(deps);
   expect(report.exitCode).toBe(DOCTOR_EXIT_CODES.pohunek_unreachable);
   expect(report.checks.find((c) => c.name === "pohunek")?.message).toContain("unavailable");
+});
+
+test("a config without the [tui] table fails the config check naming the table", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pohunek-work-doctor-"));
+  try {
+    await cp(join(import.meta.dir, "fixtures", "config"), dir, { recursive: true });
+    const file = join(dir, "config.toml");
+    const text = await readFile(file, "utf8");
+    await writeFile(file, text.slice(0, text.indexOf("[tui]")));
+    const { deps, calls } = makeDeps();
+    const report = await runDoctor({ ...deps, configDir: dir, loadConfig });
+    expect(report.exitCode).toBe(DOCTOR_EXIT_CODES.config_invalid);
+    expect(report.checks[0]?.message).toContain("config.toml: tui is required");
+    expect(calls.client).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

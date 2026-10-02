@@ -1,0 +1,24 @@
+incompatible pohunek-work at /opt/bin/pohunek-work
+protocol 2-3 does not include version 1
+no rows are shown: the TUI never guesses another contract version
+update self_bin or this TUI; q quits
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+q:quit

@@ -1,0 +1,30 @@
+pohunek-work list failed
+class: configuration
+code: config_invalid
+message:
+  config.toml: tui is required
+
+last good data kept (2m old, STALE)
+r retries, q quits
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+r:retry q:quit ?:help

@@ -155,6 +155,19 @@ babysit = "claude-otel"
 fix-ci = "claude-otel"
 rebase = "claude-otel"
 review = "codex-pr-review"
+
+# pohunek-work tui (docs/tui-plan.md section 7); every key is required.
+[tui]
+self_bin = "/home/zajca/.local/bin/pohunek-work"
+refresh_interval_secs = 300
+list_timeout_ms = 60000
+stale_after_secs = 900
+initial_view = "mine"
+bell_on_transition = false
+open_command = "/usr/bin/xdg-open"
+open_url_hosts = ["github.com", "linear.app"]
+stderr_max_lines = 10
+detail_min_width = 120
 ```
 
 ```toml

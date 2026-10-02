@@ -48,3 +48,15 @@ daily_cost_ceiling_usd = 12.5
 [profiles]
 implement = "profile-a"
 review = "profile-b"
+
+[tui]
+self_bin = "/usr/local/bin/pohunek-work"
+refresh_interval_secs = 300
+list_timeout_ms = 60000
+stale_after_secs = 900
+initial_view = "mine"
+bell_on_transition = false
+open_command = "/usr/bin/xdg-open"
+open_url_hosts = ["github.com", "linear.app"]
+stderr_max_lines = 10
+detail_min_width = 120

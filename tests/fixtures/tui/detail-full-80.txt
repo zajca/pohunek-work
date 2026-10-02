@@ -1,0 +1,24 @@
+detail  (Tab or Esc closes)
+linear:DMD-105  (project connection)
+turn: me: fix CI (r5)
+  a check failed on the pull request
+issue: DMD-105 [In Progress] Red CI
+  https://linear.app/acme/issue/DMD-105
+pr: keboola/connection#9005 PR 9005
+  review=- checks=failure mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9005
+sessions: none
+actions: fix-ci* (claude-otel)
+sources: github=ok linear=ok pohunek=ok
+
+
+
+
+
+
+
+
+
+
+?:help q:quit m:mine f:actor P:project /:filter s:sessions Tab:detail r:refresh

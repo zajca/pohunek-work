@@ -69,6 +69,18 @@ describe("loadConfig valid", () => {
       notify: { command: "/usr/bin/notify-send" },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
+      tui: {
+        selfBin: "/usr/local/bin/pohunek-work",
+        refreshIntervalSecs: 300,
+        listTimeoutMs: 60000,
+        staleAfterSecs: 900,
+        initialView: "mine",
+        bellOnTransition: false,
+        openCommand: "/usr/bin/xdg-open",
+        openUrlHosts: ["github.com", "linear.app"],
+        stderrMaxLines: 10,
+        detailMinWidth: 120,
+      },
     });
     expect(config.projects.map((p) => p.name)).toEqual(["gadgets", "widgets"]);
     const widgets = config.projects[1];
@@ -383,5 +395,74 @@ describe("error messages never carry values", () => {
     expect((await loadError(dir)).message).not.toContain(fake);
     await writeFile(join(dir, "config.toml"), `[identity\n${fake} = `);
     expect((await loadError(dir)).message).not.toContain(fake);
+  });
+});
+
+describe("loadConfig [tui]", () => {
+  test.each([
+    ['self_bin = "/usr/local/bin/pohunek-work"\n', "tui.self_bin"],
+    ["refresh_interval_secs = 300\n", "tui.refresh_interval_secs"],
+    ["list_timeout_ms = 60000\n", "tui.list_timeout_ms"],
+    ["stale_after_secs = 900\n", "tui.stale_after_secs"],
+    ['initial_view = "mine"\n', "tui.initial_view"],
+    ["bell_on_transition = false\n", "tui.bell_on_transition"],
+    ['open_command = "/usr/bin/xdg-open"\n', "tui.open_command"],
+    ['open_url_hosts = ["github.com", "linear.app"]\n', "tui.open_url_hosts"],
+    ["stderr_max_lines = 10\n", "tui.stderr_max_lines"],
+    ["detail_min_width = 120\n", "tui.detail_min_width"],
+  ])("without %p fails naming config.toml and the key", async (line, key) => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace(line, ""));
+    const error = await loadError(dir);
+    expect(error.file).toBe("config.toml");
+    expect(error.key).toBe(key);
+    expect(error.message).toContain(`config.toml: [tui] ${key.slice("tui.".length)} is required`);
+  });
+
+  test("a missing [tui] table fails naming the table", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.slice(0, t.indexOf("[tui]")));
+    const error = await loadError(dir);
+    expect(error.key).toBe("tui");
+    expect(error.message).toBe("config.toml: tui is required");
+  });
+
+  test.each([
+    ["relative self_bin", 'self_bin = "/usr/local/bin/pohunek-work"', 'self_bin = "pohunek-work"', "tui.self_bin", "must be an absolute path"],
+    ["relative open_command", 'open_command = "/usr/bin/xdg-open"', 'open_command = "xdg-open"', "tui.open_command", "must be an absolute path"],
+    ["zero refresh interval", "refresh_interval_secs = 300", "refresh_interval_secs = 0", "tui.refresh_interval_secs", "must be a positive integer"],
+    ["fractional list timeout", "list_timeout_ms = 60000", "list_timeout_ms = 1.5", "tui.list_timeout_ms", "must be a positive integer"],
+    ["negative stale age", "stale_after_secs = 900", "stale_after_secs = -1", "tui.stale_after_secs", "must be a positive integer"],
+    ["zero stderr lines", "stderr_max_lines = 10", "stderr_max_lines = 0", "tui.stderr_max_lines", "must be a positive integer"],
+    ["string detail width", "detail_min_width = 120", 'detail_min_width = "120"', "tui.detail_min_width", "must be an integer"],
+    ["unknown initial view", 'initial_view = "mine"', 'initial_view = "unknown"', "tui.initial_view", 'must be one of "mine", "all"'],
+    ["string bell flag", "bell_on_transition = false", 'bell_on_transition = "false"', "tui.bell_on_transition", "must be true or false"],
+    ["empty host list", 'open_url_hosts = ["github.com", "linear.app"]', "open_url_hosts = []", "tui.open_url_hosts", "must not be empty"],
+    ["host with a scheme", 'open_url_hosts = ["github.com", "linear.app"]', 'open_url_hosts = ["https://github.com"]', "tui.open_url_hosts", "lowercase host names"],
+    ["host with a port", 'open_url_hosts = ["github.com", "linear.app"]', 'open_url_hosts = ["github.com:443"]', "tui.open_url_hosts", "lowercase host names"],
+    ["uppercase host", 'open_url_hosts = ["github.com", "linear.app"]', 'open_url_hosts = ["GitHub.com"]', "tui.open_url_hosts", "lowercase host names"],
+  ])("%s is rejected naming the key", async (_name, from, to, key, fragment) => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace(from, to));
+    const error = await loadError(dir);
+    expect(error.key).toBe(key);
+    expect(error.message).toContain(fragment);
+  });
+
+  test("an unknown key in [tui] is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace("detail_min_width = 120", "detail_min_width = 120\nrefresh_jitter = 3"));
+    const error = await loadError(dir);
+    expect(error.key).toBe("tui.refresh_jitter");
+  });
+
+  test('initial_view "all" and bell_on_transition true are accepted', async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) =>
+      t.replace('initial_view = "mine"', 'initial_view = "all"').replace("bell_on_transition = false", "bell_on_transition = true"),
+    );
+    const config = await loadConfig(dir);
+    expect(config.global.tui.initialView).toBe("all");
+    expect(config.global.tui.bellOnTransition).toBe(true);
   });
 });

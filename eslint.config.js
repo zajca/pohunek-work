@@ -26,6 +26,26 @@ export default tseslint.config(
     },
   },
   {
+    // The TUI consumes the list/do contracts through child processes only
+    // (docs/tui-plan.md 4.1): no pipeline, source or action module may be imported.
+    files: ["src/tui/**/*.ts", "src/commands/tui.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex:
+                "^\\.\\./(?!(types/item|types/config|actions/types|log|util/exec|paths|output/sanitize)\\.ts$|config/|tui/)",
+              message:
+                "the TUI may import only types/item.ts, types/config.ts, actions/types.ts, log.ts, util/exec.ts, paths.ts, output/sanitize.ts, config/ and tui/",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["eslint.config.js"],
     extends: [tseslint.configs.disableTypeChecked],
   },

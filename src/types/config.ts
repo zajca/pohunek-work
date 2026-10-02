@@ -71,6 +71,30 @@ export interface PolicyConfig {
 /** Action name to pohunek agent profile name. */
 export type ProfilesConfig = Readonly<Record<string, string>>;
 
+export type TuiInitialView = "mine" | "all";
+
+export interface TuiConfig {
+  /** Absolute path of the `pohunek-work` binary the TUI runs `list` and `do` with. */
+  readonly selfBin: string;
+  /** Pause between the end of one refresh and the start of the next. */
+  readonly refreshIntervalSecs: number;
+  /** Timeout of the `list` and preview children; their process group is killed. */
+  readonly listTimeoutMs: number;
+  /** Data age that is shown as `STALE`. */
+  readonly staleAfterSecs: number;
+  readonly initialView: TuiInitialView;
+  /** Terminal bell when a row becomes the owner's turn. */
+  readonly bellOnTransition: boolean;
+  /** Absolute path of the URL opener (`o`). */
+  readonly openCommand: string;
+  /** Hosts `o` may open; compared exactly against the URL host name. */
+  readonly openUrlHosts: readonly string[];
+  /** Child stderr lines kept for display. */
+  readonly stderrMaxLines: number;
+  /** Columns below which the detail pane is shown full screen on Tab. */
+  readonly detailMinWidth: number;
+}
+
 export interface GlobalConfig {
   readonly identity: IdentityConfig;
   readonly github: GithubConfig;
@@ -82,6 +106,7 @@ export interface GlobalConfig {
   readonly actions: ActionsConfig;
   readonly policy: PolicyConfig;
   readonly profiles: ProfilesConfig;
+  readonly tui: TuiConfig;
 }
 
 export interface ProjectConfig {
