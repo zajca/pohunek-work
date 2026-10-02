@@ -2,6 +2,7 @@
 // fresh data, refuse when the precondition no longer holds, run it and check
 // the daemon's answer.
 import type { CollectedRow } from "../commands/list.ts";
+import { configuredProfile } from "../config/profiles.ts";
 import { keyFromBranch } from "../join.ts";
 import { summarizeChecks } from "../rules.ts";
 import { isLiveSession, type PohunekClient } from "../sources/pohunek.ts";
@@ -36,7 +37,7 @@ export interface PlanOptions {
 }
 
 function profileFor(action: LaunchAction, row: CollectedRow, config: PluginConfig, override: string | null): string {
-  const profile = override ?? (row.project.profiles ?? config.global.profiles)[action];
+  const profile = override ?? configuredProfile(action, row.project.profiles, config.global.profiles);
   if (profile === undefined) {
     throw new ActionError("no_profile", `no agent profile for ${action}: set [profiles] ${action} or pass --profile`);
   }

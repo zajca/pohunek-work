@@ -1,15 +1,20 @@
 // Row building and rendering for `pohunek-work list`: the list --json contract
 // (RFC 9.1) and the terminal table.
+import { configuredProfile } from "../config/profiles.ts";
 import { evaluateOnTurn, summarizeChecks } from "../rules.ts";
-import type { IdentityConfig, ProjectConfig } from "../types/config.ts";
+import { isLiveSession } from "../sources/pohunek.ts";
+import { toAscii } from "./sanitize.ts";
+import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
 import {
   LIST_CONTRACT_VERSION,
+  type ListAction,
   type ListEnvelope,
   type ListError,
   type ListItem,
   type ListPayload,
   type ListProjectStatus,
   type ListPullRequest,
+  type OnTurn,
   type OrphanedSession,
   type SourceStatuses,
   type UnlinkedSession,
@@ -19,13 +24,50 @@ import {
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "aiReviewers">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "aiReviewers" | "profiles">;
+  /** Global [profiles]; a project's own table replaces it whole. */
+  readonly profiles: ProfilesConfig;
 }
 
+/** The `do` action that moves a row on the owner's turn forward; null when the step is manual (7, 9). */
+function ruleAction(onTurn: OnTurn): string | null {
+  if (onTurn.actor !== "me") return null;
+  switch (onTurn.rule) {
+    case 3:
+      return "review";
+    case 4:
+      return "babysit";
+    case 5:
+      return onTurn.reason === "fix CI" ? "fix-ci" : "rebase";
+    case 6:
+      return "ready";
+    case 8:
+      return "implement";
+    default:
+      return null;
+  }
+}
+
+/** Actions that start a session carry the agent profile `do` would use. */
+const PROFILED_ACTIONS: readonly string[] = ["implement", "babysit", "fix-ci", "rebase", "review"];
+
 /**
- * Builds one contract row. `actions` is empty: named actions and their
- * delegation policy are not part of the read-only overview.
+ * Named actions of a row, the primary first (docs/tui-plan.md 4.5). `attach`
+ * is listed whenever a live linked session exists, which covers rules 1 and 11.
+ * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
  */
+export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles">): ListAction[] {
+  const names: string[] = [];
+  const primary = ruleAction(onTurn);
+  if (primary !== null) names.push(primary);
+  if (item.sessions.some(isLiveSession)) names.push("attach");
+  return names.map((name) => {
+    const profile = PROFILED_ACTIONS.includes(name) ? configuredProfile(name, context.project.profiles, context.profiles) : undefined;
+    return profile === undefined ? { name, delegable: false } : { name, delegable: false, profile };
+  });
+}
+
+/** Builds one contract row. */
 export function buildListItem(item: WorkItem, context: RowContext): ListItem {
   const { onTurn, progress } = evaluateOnTurn({ item, ...context });
   const pr = item.pullRequest;
@@ -62,7 +104,7 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
       activity: session.activity,
     })),
     on_turn: { actor: onTurn.actor, reason: onTurn.reason, rule: onTurn.rule },
-    actions: [],
+    actions: rowActions(item, onTurn, context),
     sources: context.sources,
   };
 }
@@ -100,12 +142,6 @@ export function buildErrorEnvelope(cliVersion: string, err: ListError): ListEnve
   };
 }
 
-/** Provider text is untrusted: control characters (terminal escapes) become spaces. */
-export function sanitizeCell(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-}
-
 const HEADER = ["KEY", "ON TURN", "PR", "REVIEW", "CHECKS", "SESSIONS", "TITLE"] as const;
 
 function onTurnCell(item: ListItem): string {
@@ -121,7 +157,7 @@ function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
     .join(",");
 }
 
-/** Plain-text table, one row per item; `liveSessionIds` marks sessions that are live right now. */
+/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now. */
 export function renderTable(
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
@@ -138,7 +174,7 @@ export function renderTable(
       pr?.checks ?? "-",
       sessionsCell(item, liveSessionIds),
       item.issue?.title ?? pr?.title ?? "",
-    ].map(sanitizeCell);
+    ].map(toAscii);
   });
   const table: string[][] = [[...HEADER], ...rows];
   const widths = HEADER.map((_, col) => Math.max(...table.map((row) => (row[col] ?? "").length)));
@@ -149,11 +185,11 @@ export function renderTable(
       .trimEnd(),
   );
   for (const orphan of orphanedSessions) {
-    lines.push(sanitizeCell(`orphaned session ${orphan.id} (${orphan.name ?? "unnamed"}) links ${orphan.linkId}`));
+    lines.push(toAscii(`orphaned session ${orphan.id} (${orphan.name ?? "unnamed"}) links ${orphan.linkId}`));
   }
   for (const session of unlinkedSessions) {
     lines.push(
-      sanitizeCell(
+      toAscii(
         `unlinked session ${session.id} (${session.name ?? "unnamed"}) in ${session.project}: ${session.activity ?? session.state}`,
       ),
     );

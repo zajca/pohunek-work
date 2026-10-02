@@ -5,7 +5,10 @@ import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
+import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
+import { createTerminal } from "./tui/terminal.ts";
+import { spawnDetached, spawnForeground } from "./tui/children.ts";
 import { createLogger } from "./log.ts";
 import { reportError, EXIT_ERROR } from "./cli-errors.ts";
 import { resolveConfigDir, resolveLogDir } from "./paths.ts";
@@ -13,6 +16,7 @@ import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
 import { createPohunekClient } from "./sources/pohunek.ts";
 import { exec } from "./util/exec.ts";
+import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
@@ -21,6 +25,7 @@ const USAGE = `usage:
   pohunek-work do <key> ready [--project <label>] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--dry-run [--json]]
   pohunek-work doctor
+  pohunek-work tui
 
 merge is not an action: merging stays manual.
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
@@ -75,7 +80,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
       logger,
       cliVersion: pkg.version,
     });
-    for (const warning of output.warnings) console.error(warning);
+    for (const warning of output.warnings) console.error(toAscii(warning));
     for (const failure of output.sourceFailures) console.error(`source unavailable: ${failure}`);
     console.log(output.stdout);
     return output.sourceFailures.length > 0 ? EXIT_PARTIAL : 0;
@@ -175,7 +180,7 @@ async function doCommand(argv: readonly string[]): Promise<number> {
       exec,
       terminal: process.stdin.isTTY && process.stdout.isTTY,
     });
-    for (const warning of output.warnings) console.error(warning);
+    for (const warning of output.warnings) console.error(toAscii(warning));
     console.log(output.stdout);
     return 0;
   } catch (error) {
@@ -196,6 +201,55 @@ async function doctorCommand(argv: readonly string[]): Promise<number> {
   return report.exitCode;
 }
 
+async function tuiCommand(argv: readonly string[]): Promise<number> {
+  if (argv.length > 0) throw new UsageError(`tui takes no arguments: ${argv.join(" ")}`);
+  let config;
+  try {
+    config = await loadConfig(resolveConfigDir());
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    return reportError(false, "configuration", "config_invalid", error.message);
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return reportError(false, "usage", "no_terminal", "tui needs a terminal on stdin and stdout");
+  }
+  const logger = createLogger({
+    logDir: resolveLogDir(),
+    command: "tui",
+    maxStringLength: config.global.log.maxStringLength,
+  });
+  const terminal = createTerminal(process.stdin, process.stdout, process);
+  // Safety net for an error outside the reducer's own handling: the terminal must never stay in raw mode.
+  const onFatal = (error: unknown): void => {
+    terminal.restore();
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(`pohunek-work tui: internal error: ${toAscii(message)}`);
+    process.exit(EXIT_TUI_ERROR);
+  };
+  process.on("uncaughtException", onFatal);
+  process.on("unhandledRejection", onFatal);
+  try {
+    return await runTui({
+      config: config.global.tui,
+      cliVersion: pkg.version,
+      logger,
+      terminal,
+      exec,
+      spawnForeground,
+      spawnDetached,
+      now: () => Date.now(),
+      timers: { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>); } },
+      report: (message) => {
+        console.error(message);
+      },
+    });
+  } finally {
+    await logger.close();
+    const logFailure = logger.failure();
+    if (logFailure !== null) console.error(`log write failed: ${logFailure.message}`);
+  }
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv;
   const json = argv.includes("--json");
@@ -207,6 +261,8 @@ async function main(argv: readonly string[]): Promise<number> {
         return await doCommand(rest);
       case "doctor":
         return await doctorCommand(rest);
+      case "tui":
+        return await tuiCommand(rest);
       default:
         throw new UsageError(command === undefined ? "missing command" : `unknown command: ${command}`);
     }
@@ -221,4 +277,8 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-process.exitCode = await main(process.argv.slice(2));
+const exitCode = await main(process.argv.slice(2));
+// A list child still running when the owner quits the TUI must not keep the
+// process alive until its timeout; it runs in its own process group and ends on its own.
+if (process.argv[2] === "tui") process.exit(exitCode);
+process.exitCode = exitCode;

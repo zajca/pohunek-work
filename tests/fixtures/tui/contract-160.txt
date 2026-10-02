@@ -1,0 +1,30 @@
+me 2  agent 0  reviewer 1  unknown 0  data <1m old  view: all
+   KEY                    TURN                  PR    REVIEW  CHECKS  SESSIONS     TITLE               |github:acme/widgets#12  (project widgets)  no Linear
+>  github:acme/widgets#12 me: leave draft (r6)  #12 d -       success -            Add widget cache    |issue
+   linear:ABC-2           me: nothing runs (r8) -     -       -       -            Widget cache        |turn: me: leave draft (r6)
+   linear:ABC-1           reviewer (r10)        #12   changes success babysit:idle Widget cache        |  the pull request is a draft: mark it ready when done
+                                                                                                       |pr: acme/widgets#12 (draft) Add widget cache
+                                                                                                       |  review=- checks=success mergeable=MERGEABLE
+                                                                                                       |  fix_delivered=- threads_answered=- rerequested=-
+                                                                                                       |  https://example.invalid/acme/widgets/pull/12
+                                                                                                       |sessions: none
+                                                                                                       |actions: ready*
+                                                                                                       |sources: github=ok linear=ok pohunek=ok
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+                                                                                                       |
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r:refresh

@@ -1,0 +1,24 @@
+me 10  agent 1  reviewer 1  unknown 1  data <1m old  view: mine
+PARTIAL DATA ops: github=rate_limited
+1 unknown rows hidden (f)
+   KEY                      TURN                    PR      TITLE               
+>  github:keboola/connec... me: review (r3)         #9003   Review me please    
+   linear:DMD-101           me: answer agent (r1)   -       Agent asks a ques...
+   linear:DMD-104           me: respond (r4)        #9004   Changes were requ...
+   linear:DMD-105           me: fix CI (r5)         #9005   Red CI              
+   linear:DMD-106           me: rebase (r5)         #9006   Conflicting branch  
+   linear:DMD-107           me: leave draft (r6)    #9007 d Still a draft       
+   linear:DMD-108           me: merge (r7)          #9008   Approved and green  
+   linear:DMD-109           me: nothing runs (r8)   -       Nothing runs yet    
+   linear:DMD-110           me: request review (r9) #9010   Nobody asked to r...
+   linear:DMD-112           me: check agent (r11)   -       Agent went idle     
+
+
+
+
+
+
+
+
+
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r...

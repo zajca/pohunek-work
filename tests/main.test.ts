@@ -84,6 +84,46 @@ test("a missing config exits 2 with a JSON error envelope under --json", async (
   expect(envelope.err.msg).toContain("config.toml");
 });
 
+test("tui: arguments are a usage error, a missing config names the file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const usage = await run(["tui", "--all"], dir);
+  expect(usage.code).toBe(2);
+  expect(usage.err).toContain("tui takes no arguments");
+  const missing = await run(["tui"], dir);
+  expect(missing.code).toBe(2);
+  expect(missing.err).toContain("config.toml");
+});
+
+test("tui refuses without a terminal and leaves the screen alone", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await exec(["bun", MAIN, "tui"], {
+    timeoutMs: 20_000,
+    env: {
+      PATH: process.env["PATH"] ?? "",
+      HOME: dir,
+      POHUNEK_WORK_CONFIG_DIR: new URL("fixtures/config", import.meta.url).pathname,
+      POHUNEK_WORK_STATE_DIR: join(dir, "state"),
+    },
+  });
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr).toContain("tui needs a terminal on stdin and stdout");
+  expect(result.stdout).toBe("");
+});
+
+test("reportError without --json prints strict ASCII on stderr", () => {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (line: string): void => {
+    lines.push(line);
+  };
+  try {
+    reportError(false, "action", "command_failed", "pohunek attach failed (\u001b]0;x\u0007 \u017elu\u0165ou\u010dk\u00fd)\nsecond line");
+  } finally {
+    console.error = original;
+  }
+  expect(lines).toEqual(["pohunek attach failed (?]0;x? zlutoucky)\nsecond line"]);
+});
+
 test("reportError prints the given class in the JSON envelope and returns exit 2", () => {
   const lines: string[] = [];
   const original = console.log;

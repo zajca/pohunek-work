@@ -1,0 +1,149 @@
+linear:DMD-101  (project connection)
+turn: me: answer agent (r1)
+  a linked agent is blocked or asks for approval: answer it (attach)
+issue: DMD-101 [In Progress] Agent asks a question
+  https://linear.app/acme/issue/DMD-101
+sessions:
+  s-01ABC DMD-101 role=implement state=running activity=idle
+actions: attach*
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-102  (project connection)
+turn: agent (r2)
+  a linked agent is working
+issue: DMD-102 [In Progress] Agent is working
+  https://linear.app/acme/issue/DMD-102
+sessions:
+  s-02 DMD-101 role=implement state=running activity=working
+actions: attach*
+sources: github=ok linear=ok pohunek=ok
+
+github:keboola/connection#9003  (project connection)  no Linear issue
+turn: me: review (r3)
+  your review is requested
+pr: keboola/connection#9003 Review me please
+  review=- checks=success mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9003
+sessions: none
+actions: review* (codex-pr-review)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-104  (project connection)
+turn: me: respond (r4)
+  changes requested: deliver a fix, answer every thread, re-request review
+issue: DMD-104 [In Progress] Changes were requested
+  https://linear.app/acme/issue/DMD-104
+pr: keboola/connection#9004 PR 9004
+  review=CHANGES_REQUESTED checks=success mergeable=MERGEABLE
+  fix_delivered=yes threads_answered=no rerequested=no
+  https://github.com/keboola/connection/pull/9004
+sessions: none
+actions: babysit* (claude-otel)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-105  (project connection)
+turn: me: fix CI (r5)
+  a check failed on the pull request
+issue: DMD-105 [In Progress] Red CI
+  https://linear.app/acme/issue/DMD-105
+pr: keboola/connection#9005 PR 9005
+  review=- checks=failure mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9005
+sessions: none
+actions: fix-ci* (claude-otel)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-106  (project connection)
+turn: me: rebase (r5)
+  the pull request conflicts with its base branch
+issue: DMD-106 [In Progress] Conflicting branch
+  https://linear.app/acme/issue/DMD-106
+pr: keboola/connection#9006 PR 9006
+  review=- checks=success mergeable=CONFLICTING
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9006
+sessions: none
+actions: rebase* (claude-otel)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-107  (project connection)
+turn: me: leave draft (r6)
+  the pull request is a draft: mark it ready when done
+issue: DMD-107 [In Progress] Still a draft
+  https://linear.app/acme/issue/DMD-107
+pr: keboola/connection#9007 (draft) PR 9007
+  review=- checks=success mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9007
+sessions: none
+actions: ready*
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-108  (project connection)
+turn: me: merge (r7)
+  approved, checks green, mergeable: merge on GitHub (manual)
+issue: DMD-108 [In Progress] Approved and green
+  https://linear.app/acme/issue/DMD-108
+pr: keboola/connection#9008 PR 9008
+  review=APPROVED checks=success mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9008
+sessions: none
+actions: none (manual)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-109  (project connection)
+turn: me: nothing runs (r8)
+  issue started and assigned to you, no pull request, nothing runs
+issue: DMD-109 [In Progress] Nothing runs yet
+  https://linear.app/acme/issue/DMD-109
+sessions: none
+actions: implement* (claude-otel)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-110  (project connection)
+turn: me: request review (r9)
+  no review requested and no decision: request a review on GitHub (manual)
+issue: DMD-110 [In Progress] Nobody asked to review
+  https://linear.app/acme/issue/DMD-110
+pr: keboola/connection#9010 PR 9010
+  review=- checks=success mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9010
+sessions: none
+actions: none (manual)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-111  (project connection)
+turn: reviewer (r10)
+  waiting for reviewers
+issue: DMD-111 [In Progress] Waiting for reviewers
+  https://linear.app/acme/issue/DMD-111
+pr: keboola/connection#9011 PR 9011
+  review=REVIEW_REQUIRED checks=success mergeable=MERGEABLE
+  fix_delivered=- threads_answered=- rerequested=-
+  https://github.com/keboola/connection/pull/9011
+sessions: none
+actions: none (manual)
+sources: github=ok linear=ok pohunek=ok
+
+linear:DMD-112  (project connection)
+turn: me: check agent (r11)
+  issue started and assigned to you, no pull request, the linked agent is idle: check it
+issue: DMD-112 [In Progress] Agent went idle
+  https://linear.app/acme/issue/DMD-112
+sessions:
+  s-12 DMD-101 role=implement state=running activity=idle
+actions: attach*
+sources: github=ok linear=ok pohunek=ok
+
+linear:OPS-7  (project ops)
+turn: unknown: github:rate_limited
+  a source did not answer (github:rate_limited); the row may be your turn
+issue: OPS-7 [In Progress] Rate limited source
+  https://linear.app/acme/issue/OPS-7
+sessions: none
+actions: none (manual)
+sources: github=rate_limited linear=ok pohunek=ok

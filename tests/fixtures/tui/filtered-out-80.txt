@@ -1,0 +1,24 @@
+me 10  agent 1  reviewer 1  unknown 1  data <1m old  view: all  /zzz
+   KEY          PROJECT TURN       PR    REVIEW CHECKS SESSIONS TITLE           
+no rows match actor=all text=zzz (13 hidden)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r...

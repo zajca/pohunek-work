@@ -30,6 +30,14 @@ test("execInteractive resolves with the child's exit code", async () => {
   expect(await execInteractive(["/bin/sh", "-c", "exit 0"])).toBe(0);
 });
 
+test("execInteractive hands all three stdio streams to the child (do attach, docs/tui-plan.md 4.4)", async () => {
+  const script = new URL("../fixtures/interactive-child.ts", import.meta.url).pathname;
+  const result = await exec(["bun", script], { timeoutMs: 20_000, stdin: "typed\n" });
+  expect(result.stdout).toBe("out:typed\n");
+  expect(result.stderr).toBe("err:typed\n");
+  expect(result.exitCode).toBe(4);
+});
+
 test("execInteractive reports a missing binary as SpawnError", async () => {
   const failure = await execInteractive(["/nonexistent/binary"]).then(
     () => null,

@@ -1,0 +1,24 @@
+sessions  (s or Esc closes)
+orphaned sessions (1): linked to an item no source returns
+  s-orphan old work links DMD-1
+
+unlinked sessions (1): live, without a work link
+  s-loose (unnamed) in connection: idle
+
+list stderr (1 lines)
+  warning one
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r...

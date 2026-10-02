@@ -104,6 +104,33 @@ export function readStringArray(table: Table, name: string, file: string, path: 
   });
 }
 
+export function readBoolean(table: Table, name: string, file: string, path: KeyPath): boolean {
+  const value = requireKey(table, name, file, path);
+  if (typeof value !== "boolean") throw fail(file, [...path, name], "must be true or false");
+  return value;
+}
+
+export function readEnum<T extends string>(
+  table: Table,
+  name: string,
+  allowed: readonly T[],
+  file: string,
+  path: KeyPath,
+): T {
+  const value = readString(table, name, file, path);
+  const match = allowed.find((option) => option === value);
+  if (match === undefined) {
+    throw fail(file, [...path, name], `must be one of ${allowed.map((option) => JSON.stringify(option)).join(", ")}`);
+  }
+  return match;
+}
+
+export function readNonEmptyStringArray(table: Table, name: string, file: string, path: KeyPath): readonly string[] {
+  const value = readStringArray(table, name, file, path);
+  if (value.length === 0) throw fail(file, [...path, name], "must not be empty");
+  return value;
+}
+
 export function readRepo(table: Table, name: string, file: string, path: KeyPath): string {
   const value = readString(table, name, file, path);
   if (!REPO_PATTERN.test(value)) throw fail(file, [...path, name], "must have the form owner/name");
