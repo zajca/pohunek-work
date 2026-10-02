@@ -7,6 +7,7 @@ keys
   o               open the pull request or issue URL
   r               refresh now     m               mine / all
   f               actor filter    P               project filter
+  d               hide drafts nothing runs for (toggle)
   /               text filter on key and title; Esc clears
   s               sessions and list stderr
   Tab             detail pane (full screen when narrow)
@@ -16,7 +17,6 @@ the TUI never confirms a write: do shows the plan and asks y/N itself
 merge is never offered: merge on GitHub yourself
 
 any key closes this help
-
 
 
 

@@ -147,7 +147,7 @@ export function initialState(settings: Settings, size: Size, now: number): State
     refreshing: false,
     refreshQueued: false,
     status: null,
-    filters: { actor: settings.initialView === "mine" ? "me" : "all", project: null, text: "" },
+    filters: { actor: settings.initialView === "mine" ? "me" : "all", project: null, text: "", hideDrafts: false },
     editingFilter: false,
     selected: null,
     top: 0,
@@ -420,6 +420,8 @@ function listKey(state: State, key: Key): Update {
       return startRefresh(state);
     case "m":
       return [setFilters(state, { actor: state.filters.actor === "me" ? "all" : "me" }), []];
+    case "d":
+      return [setFilters(state, { hideDrafts: !state.filters.hideDrafts }), []];
     case "f":
       return [setFilters(state, { actor: cycle<ActorFilter>(ACTOR_FILTERS, state.filters.actor) }), []];
     case "P": {

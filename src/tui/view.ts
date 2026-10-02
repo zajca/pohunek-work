@@ -5,7 +5,7 @@ import type { ListAction, ListItem, ListPayload } from "../types/item.ts";
 import { isTuiAction } from "./actions.ts";
 import { columnsFor, overlayHeight, tableWidthOf, COLUMN_GAP, DROP_ORDER, type ColumnId, type ColumnSpec, type Layout } from "./layout.ts";
 import { isStale, layoutOf, selectedRow, visibleRows, MS_PER_MINUTE, type State } from "./model.ts";
-import { actorCounts, hiddenUnknownCount, rowId, rowTitle } from "./rows.ts";
+import { actorCounts, hiddenDraftCount, hiddenUnknownCount, rowId, rowTitle } from "./rows.ts";
 import { concat, fit, join, toSafe, toSafeLines, truncate, wrap, type SafeText } from "./safe.ts";
 
 export type Frame = readonly SafeText[];
@@ -155,6 +155,7 @@ function describeFilters(state: State): string {
   const parts = [`actor=${state.filters.actor}`];
   if (state.filters.project !== null) parts.push(`project=${state.filters.project}`);
   if (state.filters.text !== "") parts.push(`text=${state.filters.text}`);
+  if (state.filters.hideDrafts) parts.push("drafts=hidden");
   return parts.join(" ");
 }
 
@@ -171,6 +172,7 @@ function headerLine(state: State, payload: ListPayload, receivedAt: number): Saf
     `view: ${state.filters.actor === "me" ? "mine" : state.filters.actor}`,
     ...(state.filters.project === null ? [] : [`project: ${state.filters.project}`]),
     ...(state.filters.text === "" ? [] : [`/${state.filters.text}`]),
+    ...(state.filters.hideDrafts ? [`drafts -${hiddenDraftCount(payload, state.filters).toString()}`] : []),
   ];
   return toSafe(parts.join("  "));
 }
@@ -264,6 +266,7 @@ const HELP = [
   "  o               open the pull request or issue URL",
   "  r               refresh now     m               mine / all",
   "  f               actor filter    P               project filter",
+  "  d               hide drafts nothing runs for (toggle)",
   "  /               text filter on key and title; Esc clears",
   "  s               sessions and list stderr",
   "  Tab             detail pane (full screen when narrow)",
