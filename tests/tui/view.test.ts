@@ -157,8 +157,8 @@ const HOSTILE_TITLES = [
   `${ESC}[2J${ESC}[31mred${ESC}[0m`,
   `${ESC}]8;;https://evil.example${ESC}\\link${ESC}]8;;${ESC}\\`,
   `${ESC}]52;c;cHduZWQ=\u0007clipboard`,
-  "rtl ‮evil‬ override",
-  "zero​width‍ joiner﻿",
+  "rtl \u202Eevil\u202C override",
+  "zero\u200Bwidth\u200D joiner\uFEFF",
   "line\nbreak\r\nand\ttab",
   "x".repeat(10_000),
   "Příliš žluťoučký kůň úpěl ďábelské ódy",
@@ -175,7 +175,7 @@ describe("hostile text through toSafe", () => {
   const hostile = payload(rows);
 
   test.each(SIZES)("frames stay ASCII and within the width at %s", (_width, size) => {
-    const state = loaded(okOutcome(hostile), { size, stderr: [`${ESC}[2Jcleared`, "‮bidi stderr"] });
+    const state = loaded(okOutcome(hostile), { size, stderr: [`${ESC}[2Jcleared`, "\u202Ebidi stderr"] });
     for (const spec of [[], ["<tab>"], ["s"], ["j", "j", "j", "j", "j", "j", "j"]]) {
       const frame = render(`hostile-${spec.join("")}`, press(state, spec).state);
       expect(frame.join("")).not.toContain(ESC);

@@ -3,6 +3,7 @@
 import { configuredProfile } from "../config/profiles.ts";
 import { evaluateOnTurn, summarizeChecks } from "../rules.ts";
 import { isLiveSession } from "../sources/pohunek.ts";
+import { toAscii } from "./sanitize.ts";
 import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
 import {
   LIST_CONTRACT_VERSION,
@@ -141,12 +142,6 @@ export function buildErrorEnvelope(cliVersion: string, err: ListError): ListEnve
   };
 }
 
-/** Provider text is untrusted: control characters (terminal escapes) become spaces. */
-export function sanitizeCell(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-}
-
 const HEADER = ["KEY", "ON TURN", "PR", "REVIEW", "CHECKS", "SESSIONS", "TITLE"] as const;
 
 function onTurnCell(item: ListItem): string {
@@ -162,7 +157,7 @@ function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
     .join(",");
 }
 
-/** Plain-text table, one row per item; `liveSessionIds` marks sessions that are live right now. */
+/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now. */
 export function renderTable(
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
@@ -179,7 +174,7 @@ export function renderTable(
       pr?.checks ?? "-",
       sessionsCell(item, liveSessionIds),
       item.issue?.title ?? pr?.title ?? "",
-    ].map(sanitizeCell);
+    ].map(toAscii);
   });
   const table: string[][] = [[...HEADER], ...rows];
   const widths = HEADER.map((_, col) => Math.max(...table.map((row) => (row[col] ?? "").length)));
@@ -190,11 +185,11 @@ export function renderTable(
       .trimEnd(),
   );
   for (const orphan of orphanedSessions) {
-    lines.push(sanitizeCell(`orphaned session ${orphan.id} (${orphan.name ?? "unnamed"}) links ${orphan.linkId}`));
+    lines.push(toAscii(`orphaned session ${orphan.id} (${orphan.name ?? "unnamed"}) links ${orphan.linkId}`));
   }
   for (const session of unlinkedSessions) {
     lines.push(
-      sanitizeCell(
+      toAscii(
         `unlinked session ${session.id} (${session.name ?? "unnamed"}) in ${session.project}: ${session.activity ?? session.state}`,
       ),
     );

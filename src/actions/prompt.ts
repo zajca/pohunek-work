@@ -2,7 +2,7 @@
 // fenced data block; the fence carries a hash of the block text, so the text
 // cannot contain its own closing line.
 import { createHash } from "node:crypto";
-import { sanitizeCell } from "../output/list.ts";
+import { sanitizeCell } from "../output/sanitize.ts";
 import babysit from "../../prompts/work-babysit.tmpl" with { type: "text" };
 import fixCi from "../../prompts/work-fix-ci.tmpl" with { type: "text" };
 import implement from "../../prompts/work-implement.tmpl" with { type: "text" };

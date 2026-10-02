@@ -2,6 +2,15 @@
 // output) on its way to a terminal. A leaf module: no pipeline imports, so the
 // TUI may use it.
 
+/**
+ * C0 and C1 control characters become spaces; everything else is kept. Used
+ * for provider text inside the prompt, which an agent reads, not a terminal.
+ */
+export function sanitizeCell(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+}
+
 const PRINTABLE_LOW = 0x20;
 const PRINTABLE_HIGH = 0x7e;
 const REPLACEMENT = "?";

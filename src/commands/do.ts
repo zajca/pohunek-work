@@ -15,6 +15,7 @@ import {
   type ReadyPlan,
 } from "../actions/types.ts";
 import type { Logger } from "../log.ts";
+import { toAsciiLines } from "../output/sanitize.ts";
 import type { Exec } from "../util/exec.ts";
 import type { ListDeps } from "./list.ts";
 import type { PluginConfig } from "../types/config.ts";
@@ -70,6 +71,15 @@ function planText(plan: ActionPlan, argv: readonly string[]): string {
     "prompt (stdin):",
     ...plan.prompt.split("\n").map((line) => `  ${line}`),
   ].join("\n");
+}
+
+/**
+ * Text for the terminal in strict ASCII: the plan carries provider text (titles
+ * in the prompt, branch names, session names). JSON output and the prompt sent
+ * on stdin stay unchanged.
+ */
+function display(text: string): string {
+  return toAsciiLines(text).join("\n");
 }
 
 function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unknown> {
@@ -132,7 +142,7 @@ async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Prom
   if (deps.confirm === null) {
     throw new ActionError("confirmation_required", "no terminal to confirm on: pass --yes after reviewing --dry-run");
   }
-  console.error(text);
+  console.error(display(text));
   if (!(await deps.confirm("Run this command?"))) {
     throw new ActionError("confirmation_required", "not confirmed; nothing was executed");
   }
@@ -148,7 +158,7 @@ async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps,
   if (options.dryRun) {
     const stdout = options.json
       ? envelope(deps.cliVersion, { dry_run: true, plan: planJson(plan, argv) })
-      : `dry run: nothing was executed\n${planText(plan, argv)}`;
+      : display(`dry run: nothing was executed\n${planText(plan, argv)}`);
     return { stdout, warnings };
   }
   await confirmPlan(options, deps, planText(plan, argv));
@@ -156,7 +166,7 @@ async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps,
   logger.info("do_done", { key: plan.key, action: plan.action, profile: plan.profile, session_id: result.sessionId, warnings: [...result.warnings] });
   const stdout = options.json
     ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
-    : `started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`;
+    : display(`started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`);
   return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`)] };
 }
 
@@ -190,7 +200,7 @@ async function runReady(config: PluginConfig, options: DoOptions, deps: DoDeps):
   if (options.dryRun) {
     const stdout = options.json
       ? envelope(deps.cliVersion, { dry_run: true, plan: readyJson(plan) })
-      : `dry run: nothing was executed\n${readyText(plan)}`;
+      : display(`dry run: nothing was executed\n${readyText(plan)}`);
     return { stdout, warnings };
   }
   await confirmPlan(options, deps, readyText(plan));
@@ -198,7 +208,7 @@ async function runReady(config: PluginConfig, options: DoOptions, deps: DoDeps):
   logger.info("do_done", { key: plan.key, action: plan.action, pull_request: plan.pullRequest, is_draft: false });
   const stdout = options.json
     ? envelope(deps.cliVersion, { dry_run: false, plan: readyJson(plan), result: { pull_request: plan.pullRequest, is_draft: false } })
-    : `${plan.pullRequest} is ready for review (re-read: not a draft)`;
+    : display(`${plan.pullRequest} is ready for review (re-read: not a draft)`);
   return { stdout, warnings };
 }
 
@@ -224,7 +234,7 @@ async function runAttach(config: PluginConfig, options: DoOptions, deps: DoDeps)
           dry_run: true,
           plan: { action: plan.action, key: plan.key, project: plan.project, session_id: plan.sessionId, argv: plan.argv },
         })
-      : `dry run: nothing was executed\n${attachText(plan)}`;
+      : display(`dry run: nothing was executed\n${attachText(plan)}`);
     return { stdout, warnings };
   }
   if (!deps.terminal) {
@@ -233,7 +243,7 @@ async function runAttach(config: PluginConfig, options: DoOptions, deps: DoDeps)
   for (const warning of warnings) console.error(warning);
   await executeAttach(plan, deps.pohunek);
   logger.info("do_done", { key: plan.key, action: plan.action, session_id: plan.sessionId });
-  return { stdout: `detached from session ${plan.sessionId}`, warnings: [] };
+  return { stdout: display(`detached from session ${plan.sessionId}`), warnings: [] };
 }
 
 /** Throws `ActionError` for every refusal; returns the text for stdout otherwise. */

@@ -6,8 +6,8 @@ import {
   filterMine,
   renderTable,
   rowActions,
-  sanitizeCell,
 } from "../../src/output/list.ts";
+import { sanitizeCell } from "../../src/output/sanitize.ts";
 import type { OnTurn, RuleNumber } from "../../src/types/item.ts";
 import { LIST_CONTRACT_VERSION } from "../../src/types/item.ts";
 import {
@@ -125,10 +125,25 @@ test("table renders rows, no-issue marker and orphans", () => {
   expect(text).toContain("unlinked session s-8 (scratch) in widgets: idle");
 });
 
-test("terminal control sequences in provider text are neutralized", () => {
-  expect(sanitizeCell("a\u001b[31mred\u0007\nb")).toBe("a [31mred  b");
-  const row = buildListItem(item({ pullRequest: pr({ title: "evil\u001b]0;pwn\u0007" }) }), context);
-  expect(renderTable([row], [], [], new Set())).not.toContain("\u001b");
+test("sanitizeCell turns control characters into spaces and keeps the rest", () => {
+  expect(sanitizeCell("a\u001b[31mred\u0007\nb \u017e")).toBe("a [31mred  b \u017e");
+});
+
+test("the table is strict ASCII: escapes, bidi and zero-width characters become ?, diacritics are dropped", () => {
+  const row = buildListItem(
+    item({ pullRequest: pr({ title: "evil\u001b]0;pwn\u0007 \u202Ertl\u200B \u017dlu\u0165ou\u010dk\u00fd" }) }),
+    context,
+  );
+  const text = renderTable(
+    [row],
+    [{ id: "s-9", name: "o\u001b[2J", linkId: "ABC-9" }],
+    [{ id: "s-8", name: "\u202Ename", project: "widgets", state: "running", activity: "idle" }],
+    new Set(),
+  );
+  expect(/^[\x20-\x7e\n]*$/.test(text)).toBe(true);
+  expect(text).toContain("evil?]0;pwn? ?rtl? Zlutoucky");
+  expect(text).toContain("orphaned session s-9 (o?[2J) links ABC-9");
+  expect(text).toContain("unlinked session s-8 (?name)");
 });
 
 describe("actions per row (docs/tui-plan.md 4.5)", () => {
