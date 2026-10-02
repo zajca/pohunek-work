@@ -1,6 +1,6 @@
 # pohunek-work TUI: Plan
 
-- **Status:** proposal, nothing implemented (2026-10-01). **Builds on:** [`rfc.md`](rfc.md) sections 9, 10, 14; [`m2-implementation-plan.md`](m2-implementation-plan.md)
+- **Status:** T0 to T4 implemented (2026-10-02); T5 waits for M2c. Open questions decided (section 11). **Builds on:** [`rfc.md`](rfc.md) sections 9, 10, 14; [`m2-implementation-plan.md`](m2-implementation-plan.md)
   sections 2a (D8-D15), 4 (rules of every write action), 5 (M2b, M2c).
 - **Constraints:** no change in `zajca/pohunek`, installed pohunek CLI only; no new state (memory only).
 
@@ -133,18 +133,22 @@ typed refusal (`RefusalCode`, exit 2) to the detail pane, and `confirmation_requ
 "cancelled". A child killed by a signal (Ctrl-C after `y`: `do`'s detached `session new` may survive) or
 without a decodable envelope shows "interrupted, outcome unknown: check `pohunek session list`", then refreshes.
 
-**Requirements on M2b** (b.3 not built yet): (1) `do <key> attach` runs `pohunek attach <id>` with all three
-stdio streams inherited and reports by exit code (0 after a detach, 2 with the refusal on stderr); (2) every
-`do --json` ok payload carries `action` and a per-action `result`, decoded by `DO_CONTRACT_VERSION`; an
-unknown version is refused, never guessed.
+**Requirements on M2b, both met without a contract change:** (1) `do <key> attach` runs `pohunek attach <id>`
+through `execInteractive` with all three stdio streams inherited, in the same process group, and reports by exit
+code (0 after a detach, 2 with the refusal on stderr); `tests/util/exec.test.ts` drives a grandchild through it.
+(2) Every `do --json` ok payload carries the action at `ok.plan.action` and, after a run, a per-action `result`
+(`dry_run: true` has none; attach outside a dry run prints no JSON). The TUI decodes it by `DO_CONTRACT_VERSION`
+and refuses an unknown version; `tests/tui/do-contract.test.ts` decodes real `runDo` output.
 
 ### 4.5 Actions per row
 
-`ListItem.actions` is hardcoded to `[]` (`src/output/list.ts:65`). **T2 fills it in `list --json`**, a
-pohunek-work change only: r1 `attach`, r3 `review`, r4 `babysit`, r5 `fix-ci` (failed check) or `rebase`
-(conflict), r6 `ready`, r8 `implement`, r7 and r9 none (manual); any row with a live linked session also
-gets `attach`. Every action carries `delegable: false` (empty policy) and its `profile` from `[profiles]`. One
-implementation serves the TUI, rofi (c.4) and `/work` (c.5); `do` stays the authority and can still refuse.
+`list --json` fills `ListItem.actions` (`rowActions` in `src/output/list.ts`): r3 `review`, r4 `babysit`, r5
+`fix-ci` (failed check) or `rebase` (conflict), r6 `ready`, r8 `implement`, r7 and r9 none (manual), and
+`attach` last on every row with a live linked session, which covers r1 and r11 (a row without one gets no
+`attach`, because `do` would refuse it). `merge` is never listed. Every action carries `delegable: false`
+(empty policy); launch actions carry the `profile` `do` would use (project `[profiles]` replacing the global
+table), omitted when none is configured. One implementation serves the TUI, rofi (c.4) and `/work` (c.5);
+`do` stays the authority and can still refuse.
 
 The TUI checks independently:
 
@@ -202,8 +206,10 @@ marked; the row's `sources`; the last preview, refusal or child stderr. `s` show
 - **Strict ASCII.** `toSafe()` applies NFKD, drops combining marks (Czech titles stay readable) and maps
   any other character outside 0x20-0x7E to `?`, removing ESC, OSC 8, OSC 52 (clipboard write), bidi
   overrides and zero-width characters. `view.ts` accepts only the branded `SafeText`, so titles, URLs,
-  session names, `err.msg` and child stderr cannot reach a frame unsanitized. `do`'s handover screen uses
-  the weaker `sanitizeCell` (C0/C1 only) and is outside the TUI (Q4).
+  session names, `err.msg` and child stderr cannot reach a frame unsanitized. The same `toAscii`
+  (`src/output/sanitize.ts`) renders the `list` table and every plan or result line `do` prints for a
+  terminal, so `do`'s handover screen is strict ASCII too (Q4); the prompt sent on stdin keeps `sanitizeCell`
+  (C0/C1 only), so an agent still reads diacritics.
 - **No shell.** Argv arrays only. Key, project and action are validated (4.5). The prompt never passes
   through the TUI.
 - **No secrets.** The TUI never calls `gh auth token` or `secret-tool`. Children inherit the environment
@@ -290,6 +296,17 @@ Verified there:
 sequences were sent), real window resizes from sway, keyboard layouts and dead keys, and how the TUI looks.
 These checks are the first thing to do when T1 is deployed.
 
+**T1-T4 pseudo-terminal check (2026-10-02).** The compiled `pohunek-work tui` ran in the same harness with a
+scratch config whose `self_bin` was a script printing fixture envelopes and imitating `do`'s plan and `[y/N]`
+prompt (no real item, no write). Passed: refresh, partial banner, list stderr, mine/all, text filter, sessions
+view, full-screen detail at 80 columns, detail pane after a resize to 160, help; Enter with `y` (done, exact
+argv, refresh after), with `n` (cancelled) and with Ctrl-C at the prompt (TUI survives, "interrupted, outcome
+unknown"); a refusal in the detail pane; `p` preview; `o` (one argv element, opener output kept off the screen);
+attach to the scratch shell session with typed input and Ctrl-] back without the Enter prompt; restore after
+`q` and SIGTERM. **Not verified:** the T1-T4 "done when" checks against the owner's real rows (one working day,
+the GraphQL cost of one `list` run, one real `babysit` and `ready`, a rule 1 attach), which need the deployed
+binary and config.
+
 **Ordering:** T0 and T1 (read-only) run alongside M2b; T2 lands before rofi (c.4) and `/work` (c.5), which
 reuse it; T3 and T4 follow M2b; T5 follows c.2. From M2c the TUI reuses `watch`'s transition function and event source. Nothing comes from rofi or `/work`:
 they remain separate front-ends on the same contract.
@@ -304,6 +321,11 @@ they remain separate front-ends on the same contract.
 | R4 Contract drift between `self_bin` and the TUI build | protocol range check, full-screen refusal, never a guess; non-ASCII on `do`'s handover screen: Q4 |
 
 ## 11. Open questions for the owner
+
+**Decided 2026-10-02: every recommended answer** (1 A, B only as the fallback, which T0 did not need; 2 the
+handover; 3 yes; 4 yes; 5 `[watch] poll_interval_secs`, i.e. `refresh_interval_secs = 300` in the installed
+config). Until c.2 exists, the `*` marker and the bell run on the TUI's own polls through
+`transitionsToMe` in `src/tui/rows.ts`, a pure function over `ListItem[]` that `watch` can reuse (4.3).
 
 1. **Renderer: in-house driver (A) or OpenTUI core (B) from the start?**
    *Recommended:* A, decided finally at T0, with B as the fallback.
