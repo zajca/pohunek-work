@@ -79,6 +79,7 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
           url: pr.url,
           title: pr.title,
           draft: pr.isDraft,
+          updated_at: pr.updatedAt,
           review_decision: pr.reviewDecision,
           checks: summarizeChecks(pr.checks, context.project.ignoredChecks),
           mergeable: pr.mergeable,

@@ -82,7 +82,7 @@ test("a row has exactly the contract keys", () => {
     ["actions", "issue", "key", "no_issue", "on_turn", "project", "pull_request", "sessions", "sources"].sort(),
   );
   expect(Object.keys(row.pull_request ?? {}).sort()).toEqual(
-    ["checks", "draft", "fix_delivered", "id", "mergeable", "rerequested", "review_decision", "threads_answered", "title", "url"].sort(),
+    ["checks", "draft", "fix_delivered", "id", "mergeable", "rerequested", "review_decision", "threads_answered", "title", "updated_at", "url"].sort(),
   );
   expect(row.on_turn.rule).toBe(9);
   expect(row.actions).toEqual([]);

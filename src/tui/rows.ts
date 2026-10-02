@@ -1,6 +1,6 @@
 // Pure selectors over the decoded `list` payload: row identity, order and the
 // client-side filters (the TUI always fetches every row and filters itself).
-import { isIdleDraft } from "../output/drafts.ts";
+import { isStalePullRequest } from "../output/stale.ts";
 import type { ListItem, ListPayload, TurnActor } from "../types/item.ts";
 import { toSafe } from "./safe.ts";
 
@@ -16,8 +16,8 @@ export interface Filters {
   readonly project: string | null;
   /** Case-insensitive substring of the key or the title; empty matches every row. */
   readonly text: string;
-  /** Hides draft pull requests nothing runs for (see `isIdleDraft`). */
-  readonly hideDrafts: boolean;
+  /** Hides pull requests not updated for `stale_pr_days` that nothing runs for. */
+  readonly hideStale: boolean;
 }
 
 /** A key is unique per project only, so the project is part of the identity. */
@@ -49,25 +49,26 @@ function matchesBase(item: ListItem, filters: Filters): boolean {
   return (filters.project === null || item.project === filters.project) && matchesText(item, filters.text);
 }
 
-export function filterRows(payload: ListPayload, filters: Filters): ListItem[] {
+/** `staleBefore` is the instant before which a pull request counts as stale (`staleCutoff`). */
+export function filterRows(payload: ListPayload, filters: Filters, staleBefore: number): ListItem[] {
   return sortRows(
     payload.items.filter(
       (item) =>
         matchesBase(item, filters) &&
         (filters.actor === "all" || item.on_turn.actor === filters.actor) &&
-        !(filters.hideDrafts && isIdleDraft(item)),
+        !(filters.hideStale && isStalePullRequest(item, staleBefore)),
     ),
   );
 }
 
-/** Rows the draft filter hides on top of the other filters, for the header counter. */
-export function hiddenDraftCount(payload: ListPayload, filters: Filters): number {
-  if (!filters.hideDrafts) return 0;
+/** Rows the stale filter hides on top of the other filters, for the header counter. */
+export function hiddenStaleCount(payload: ListPayload, filters: Filters, staleBefore: number): number {
+  if (!filters.hideStale) return 0;
   return payload.items.filter(
     (item) =>
       matchesBase(item, filters) &&
       (filters.actor === "all" || item.on_turn.actor === filters.actor) &&
-      isIdleDraft(item),
+      isStalePullRequest(item, staleBefore),
   ).length;
 }
 

@@ -172,23 +172,26 @@ describe("keys and filters", () => {
     expect(press(state, ["P", "P", "P"]).state.filters.project).toBeNull();
   });
 
-  test("d hides drafts nothing runs for, keeps drafts with a running session, and counts them in the header (drafts -N)", () => {
-    const draft = RULE_ROWS.find((r) => r.key === "linear:DMD-107")?.pull_request;
-    if (draft === null || draft === undefined) throw new Error("fixture row DMD-107 has no pull request");
-    const running = row("linear:DMD-120", {
-      pull_request: { ...draft, id: "keboola/connection#9020" },
-      sessions: [{ id: "s-20", name: "DMD-120", role: "babysit", state: "running", activity: "idle" }],
+  test("h hides stale pull requests nothing runs for, keeps stale ones with a running session, and counts them (stale -N)", () => {
+    const base = RULE_ROWS.find((r) => r.key === "linear:DMD-107")?.pull_request;
+    if (base === null || base === undefined) throw new Error("fixture row DMD-107 has no pull request");
+    const old = "2026-01-01T00:00:00Z";
+    const stale = row("linear:DMD-130", { pull_request: { ...base, id: "keboola/connection#9030", updated_at: old } });
+    const running = row("linear:DMD-131", {
+      pull_request: { ...base, id: "keboola/connection#9031", updated_at: old },
+      sessions: [{ id: "s-31", name: "DMD-131", role: "babysit", state: "running", activity: "idle" }],
       on_turn: { actor: "me", reason: "check agent", rule: 11 },
     });
-    const state = loaded(okOutcome(payload([...RULE_ROWS, running])));
-    expect(state.filters.hideDrafts).toBe(false);
-    expect(keysOf(state)).toContain("linear:DMD-107");
-    const hidden = press(state, ["d"]).state;
-    expect(hidden.filters.hideDrafts).toBe(true);
-    expect(keysOf(hidden)).not.toContain("linear:DMD-107");
-    expect(keysOf(hidden)).toContain("linear:DMD-120");
-    expect(view(hidden)[0]).toContain("drafts -1");
-    expect(press(hidden, ["d"]).state.filters.hideDrafts).toBe(false);
+    const state = loaded(okOutcome(payload([...RULE_ROWS, stale, running])));
+    expect(state.filters.hideStale).toBe(false);
+    expect(keysOf(state)).toContain("linear:DMD-130");
+    const hidden = press(state, ["h"]).state;
+    expect(hidden.filters.hideStale).toBe(true);
+    expect(keysOf(hidden)).not.toContain("linear:DMD-130");
+    expect(keysOf(hidden)).toContain("linear:DMD-131");
+    expect(keysOf(hidden)).toContain("linear:DMD-107");
+    expect(view(hidden)[0]).toContain("stale -1");
+    expect(press(hidden, ["h"]).state.filters.hideStale).toBe(false);
   });
 
   test("/ filters key and title case-insensitively, also through diacritics; Esc clears", () => {

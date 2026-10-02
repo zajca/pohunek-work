@@ -96,6 +96,8 @@ export interface ListPullRequest {
   readonly url: string;
   readonly title: string;
   readonly draft: boolean;
+  /** ISO-8601 time of the last change on GitHub. */
+  readonly updated_at: string;
   readonly review_decision: ReviewDecision | null;
   /** `success`, `failure`, `pending` or `none` after ignored checks are removed. */
   readonly checks: "success" | "failure" | "pending" | "none";
