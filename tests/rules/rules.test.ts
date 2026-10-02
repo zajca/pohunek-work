@@ -176,9 +176,22 @@ describe("rules one per rule", () => {
     expect(onTurn(it)).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
   });
 
-  test("rule 8: idle live session, a PR, other state or other assignee block it", () => {
+  test("rule 11: started issue assigned to me with an idle live session and no PR", () => {
     const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null };
-    expect(onTurn(item({ ...base, sessions: [session()] })).rule).toBe(10);
+    expect(onTurn(item({ ...base, sessions: [session()] }))).toEqual({ actor: "me", reason: "check agent", rule: 11 });
+    expect(onTurn(item({ ...base, sessions: [session({ activity: "working" })] })).rule).toBe(2);
+    expect(onTurn(item({ ...base, sessions: [session({ state: "stopped" })] })).rule).toBe(8);
+  });
+
+  test("rule 11: needs a started issue assigned to me and no PR", () => {
+    const base = { key: "linear:ABC-1", issue: issue(), sessions: [session()] };
+    expect(onTurn(item({ ...base, pullRequest: null, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, pullRequest: null, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, pullRequest: pr({ reviewRequests: [user("x")] }) })).rule).toBe(10);
+  });
+
+  test("rule 8: a lost session, a PR, other state or other assignee do not block or give it", () => {
+    const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null };
     expect(onTurn(item({ ...base, sessions: [session({ runtimeState: "lost" })] })).rule).toBe(8);
     expect(onTurn(item({ ...base, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
     expect(onTurn(item({ ...base, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);

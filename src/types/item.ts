@@ -20,7 +20,7 @@ export type SourceStatuses = Readonly<Record<SourceName, SourceStatus>>;
 export type TurnActor = "me" | "agent" | "reviewer" | "unknown";
 
 /** Rule numbers of RFC section 8.1. */
-export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
 
 export type MeReason =
   | "answer agent"
@@ -31,6 +31,7 @@ export type MeReason =
   | "leave draft"
   | "merge"
   | "nothing runs"
+  | "check agent"
   | "request review";
 
 export type OnTurn =
