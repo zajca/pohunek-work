@@ -33,6 +33,12 @@ command = "/usr/bin/notify-send"
 [log]
 max_string_length = 2000
 
+[actions]
+branch_prefix = "alice"
+slug_max_length = 40
+launch_timeout_ms = 120000
+launch_kill_margin_ms = 10000
+
 [policy]
 delegable = ["review"]
 max_active_tasks = 2

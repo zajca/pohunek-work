@@ -77,6 +77,7 @@ test("listSessions normalizes metadata, runtime state and activity", async () =>
     projectLabel: "widgets",
     branch: "abc-1-add-widget-cache",
     worktreePath: "/work/widgets-wt/abc-1",
+    cwd: "/work/widgets",
     state: "running",
     activity: "working",
     runtimeState: "connected",
@@ -99,7 +100,7 @@ test("isLiveSession: running with a lost runtime is not live", async () => {
 
 test("isLiveSession: absent runtime counts as not lost", () => {
   const session: PohunekSession = {
-    id: "s", name: null, projectLabel: null, branch: null, worktreePath: null,
+    id: "s", name: null, projectLabel: null, branch: null, worktreePath: null, cwd: null,
     state: "running", activity: null, runtimeState: null, metadata: {},
   };
   expect(isLiveSession(session)).toBe(true);

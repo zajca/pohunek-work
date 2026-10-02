@@ -12,6 +12,7 @@
           "title": "Check outcome coverage",
           "isDraft": false,
           "headRefName": "owner/ABC-2/checks",
+          "headRefOid": "1111111111111111111111111111111111111111",
           "baseRefName": "main",
           "reviewDecision": "APPROVED",
           "mergeable": "MERGEABLE",

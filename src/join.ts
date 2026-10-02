@@ -81,7 +81,7 @@ function linkedSessionsOf(
 }
 
 /** Group `key` of the branch pattern; the regex is reset so a global or sticky flag cannot skip matches. */
-function keyFromBranch(pattern: RegExp, headRefName: string): string | null {
+export function keyFromBranch(pattern: RegExp, headRefName: string): string | null {
   pattern.lastIndex = 0;
   const match = pattern.exec(headRefName);
   pattern.lastIndex = 0;
