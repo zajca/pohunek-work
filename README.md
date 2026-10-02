@@ -44,6 +44,7 @@ implementation plan.
 | Document | Content |
 | --- | --- |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | The complete plan before the next pohunek release: verified pohunek CLI surface, decisions, architecture, configuration, milestones M0–M3 with definitions of done, testing, risks |
+| [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md) | Refined plan for M2 (links and actions): decisions, verified pohunek facts, spikes, steps M2a-M2d with definitions of done, risks |
 | [docs/rfc.md](docs/rfc.md) | Target design: joining rules, the ten `on_turn` rules, interfaces, actions, storage, per-project configuration, autonomy levels, full 28-step roadmap including the pohunek release, task layer and relay stages |
 | [docs/work-overview.html](docs/work-overview.html) | Visual summary with diagrams (open in a browser) |
 
