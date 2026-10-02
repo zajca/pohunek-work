@@ -298,12 +298,3 @@ test("a status message lasts until the next key", () => {
   expect(state.status?.text).toBe("refresh already running");
   expect(press(state, ["j"]).state.status).toBeNull();
 });
-
-test("read-only keys explain where the actions are", () => {
-  const state = loaded(okOutcome(payload(RULE_ROWS)));
-  for (const spec of ["<enter>", "a", "p", "t", "o"]) {
-    const result = press(state, [spec]);
-    expect(result.effects).toEqual([]);
-    expect(result.state.status?.text).toContain("pohunek-work do");
-  }
-});

@@ -8,6 +8,7 @@ import { runList } from "./commands/list.ts";
 import { runTui } from "./commands/tui.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
+import { spawnDetached, spawnForeground } from "./tui/children.ts";
 import { createLogger } from "./log.ts";
 import { reportError, EXIT_ERROR } from "./cli-errors.ts";
 import { resolveConfigDir, resolveLogDir } from "./paths.ts";
@@ -223,6 +224,8 @@ async function tuiCommand(argv: readonly string[]): Promise<number> {
       logger,
       terminal: createTerminal(process.stdin, process.stdout, process),
       exec,
+      spawnForeground,
+      spawnDetached,
       now: () => Date.now(),
       timers: { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>); } },
       report: (message) => {

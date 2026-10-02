@@ -26,9 +26,17 @@ interface Harness {
   readonly events: string[];
   readonly logged: { event: string; fields: unknown }[];
   readonly timers: { ms: number; callback: () => void; cleared: boolean }[];
+  readonly spawned: { argv: readonly string[]; stdout: string }[];
+  readonly opened: (readonly string[])[];
   press(key: Key): void;
   settle(): Promise<void>;
 }
+
+const handoverStdout = JSON.stringify({
+  cli_version: "0.1.0",
+  protocol: { minimum: 1, maximum: 1 },
+  err: { class: "action", code: "confirmation_required", msg: "not confirmed; nothing was executed" },
+});
 
 function harness(results: (ExecResult | Error)[], size: Size = { columns: 80, rows: 24 }): Harness {
   const frames: string[][] = [];
@@ -36,6 +44,8 @@ function harness(results: (ExecResult | Error)[], size: Size = { columns: 80, ro
   const events: string[] = [];
   const logged: { event: string; fields: unknown }[] = [];
   const timers: { ms: number; callback: () => void; cleared: boolean }[] = [];
+  const spawned: { argv: readonly string[]; stdout: string }[] = [];
+  const opened: (readonly string[])[] = [];
   let handlers: TerminalHandlers | null = null;
   const terminal: Terminal = {
     start: (next) => {
@@ -45,8 +55,14 @@ function harness(results: (ExecResult | Error)[], size: Size = { columns: 80, ro
     size: () => size,
     draw: (lines) => frames.push([...lines]),
     bell: () => events.push("bell"),
-    handover: (body) => body(),
-    awaitEnter: () => Promise.resolve(),
+    handover: (body) => {
+      events.push("handover");
+      return body();
+    },
+    awaitEnter: () => {
+      events.push("awaitEnter");
+      return Promise.resolve();
+    },
     resume: () => events.push("resume"),
     restore: () => events.push("restore"),
   };
@@ -82,6 +98,13 @@ function harness(results: (ExecResult | Error)[], size: Size = { columns: 80, ro
       exec,
       now: () => 1_000_000,
       timers: fakeTimers,
+      spawnForeground: (argv, stdout) => {
+        spawned.push({ argv, stdout });
+        return Promise.resolve({ exitCode: 2, signal: null, stdout: handoverStdout });
+      },
+      spawnDetached: (argv) => {
+        opened.push(argv);
+      },
       report: (message) => events.push(`report:${message}`),
     },
     frames,
@@ -89,6 +112,8 @@ function harness(results: (ExecResult | Error)[], size: Size = { columns: 80, ro
     events,
     logged,
     timers,
+    spawned,
+    opened,
     press: (key) => handlers?.onKey(key),
     settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
   };
@@ -158,4 +183,70 @@ test("titles, bodies and child stdout are never logged", async () => {
   for (const item of RULE_ROWS) {
     if (item.issue !== null) expect(text).not.toContain(item.issue.title);
   }
+});
+
+test("Enter hands over to do with the exact argv, logs start and end, then refreshes", async () => {
+  const h = harness([LIST_OK, LIST_OK]);
+  const running = runTui(h.deps);
+  await h.settle();
+  // initial_view mine: the first row is github:keboola/connection#9003 (review).
+  h.press({ kind: "enter" });
+  await h.settle();
+  expect(h.spawned).toEqual([
+    {
+      argv: ["/opt/bin/pohunek-work", "do", "github:keboola/connection#9003", "review", "--project", "connection", "--json"],
+      stdout: "pipe",
+    },
+  ]);
+  expect(h.events).toEqual(["start", "handover", "awaitEnter", "resume"]);
+  expect(h.calls).toHaveLength(2);
+  const events = h.logged.map((entry) => entry.event);
+  expect(events).toContain("handover_start");
+  expect(h.logged.find((entry) => entry.event === "handover_end")?.fields).toEqual({
+    key: "github:keboola/connection#9003",
+    action: "review",
+    exit_code: 2,
+    signal: null,
+    spawn_error: null,
+    refusal: "confirmation_required",
+  });
+  expect(h.frames.at(-1)?.join("\n")).toContain("cancelled, nothing was executed");
+  h.press({ kind: "char", char: "q" });
+  expect(await running).toBe(0);
+});
+
+test("o opens the PR URL through open_command and logs only key and host", async () => {
+  const h = harness([LIST_OK]);
+  const running = runTui(h.deps);
+  await h.settle();
+  h.press({ kind: "char", char: "o" });
+  expect(h.opened).toEqual([["/usr/bin/xdg-open", "https://github.com/keboola/connection/pull/9003"]]);
+  expect(h.logged.find((entry) => entry.event === "open_url")?.fields).toEqual({
+    key: "github:keboola/connection#9003",
+    host: "github.com",
+    error: null,
+  });
+  h.press({ kind: "char", char: "q" });
+  await running;
+});
+
+test("p runs the preview child piped with the list timeout", async () => {
+  const preview: ExecResult = {
+    exitCode: 0,
+    stdout: JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 1, maximum: 1 }, ok: { dry_run: true, plan: { action: "review", key: "k", argv: ["/bin/pohunek"] } } }),
+    stderr: "",
+    timedOut: false,
+  };
+  const h = harness([LIST_OK, preview], { columns: 160, rows: 30 });
+  const running = runTui(h.deps);
+  await h.settle();
+  h.press({ kind: "char", char: "p" });
+  await h.settle();
+  expect(h.calls[1]).toEqual({
+    argv: ["/opt/bin/pohunek-work", "do", "github:keboola/connection#9003", "review", "--project", "connection", "--dry-run", "--json"],
+    options: { timeoutMs: 60_000 },
+  });
+  expect(h.frames.at(-1)?.join("\n")).toContain("--- preview: review (dry run, nothing executed)");
+  h.press({ kind: "char", char: "q" });
+  await running;
 });

@@ -27,4 +27,4 @@ list stderr (1 lines)
 
 
 
-?:help q:quit m:mine f:actor P:project /:filter s:sessions Tab:detail r:refresh
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r:refresh

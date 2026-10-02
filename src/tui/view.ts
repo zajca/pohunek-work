@@ -1,7 +1,8 @@
 // view(state) -> Frame: the whole screen as lines of SafeText, at most
 // `size.rows` lines of at most `size.columns` characters. Pure; every piece of
 // contract text goes through toSafe before it is placed.
-import type { ListItem, ListPayload } from "../types/item.ts";
+import type { ListAction, ListItem, ListPayload } from "../types/item.ts";
+import { isTuiAction } from "./actions.ts";
 import { columnsFor, overlayHeight, tableWidthOf, COLUMN_GAP, DROP_ORDER, type ColumnId, type ColumnSpec, type Layout } from "./layout.ts";
 import { isStale, layoutOf, selectedRow, visibleRows, MS_PER_MINUTE, type State } from "./model.ts";
 import { actorCounts, hiddenUnknownCount, rowId, rowTitle } from "./rows.ts";
@@ -197,6 +198,12 @@ function onOff(value: boolean | null): string {
   return value === null ? "-" : value ? "yes" : "no";
 }
 
+/** `*` marks the primary action (Enter). */
+function actionLabel(action: ListAction, primary: boolean): string {
+  const profile = action.profile === undefined ? "" : ` (${action.profile})`;
+  return `${action.name}${primary ? "*" : ""}${profile}${isTuiAction(action.name) ? "" : " [not run by the TUI]"}`;
+}
+
 /** Detail of one row, unwrapped; the caller wraps to the pane width. */
 export function detailLines(state: State, item: ListItem): SafeText[] {
   const lines: string[] = [
@@ -219,11 +226,12 @@ export function detailLines(state: State, item: ListItem): SafeText[] {
   for (const s of item.sessions) {
     lines.push(`  ${s.id} ${s.name ?? "(unnamed)"} role=${s.role ?? "-"} state=${s.state} activity=${s.activity ?? "-"}`);
   }
-  const actions = item.actions.map(
-    (action, index) => `${action.name}${index === 0 ? "*" : ""}${action.profile === undefined ? "" : ` (${action.profile})`}`,
-  );
+  const actions = item.actions.map((action, index) => actionLabel(action, index === 0));
   lines.push(`actions: ${actions.length === 0 ? "none (manual)" : actions.join(", ")}`);
   lines.push(`sources: ${Object.entries(item.sources).map(([source, code]) => `${source}=${code}`).join(" ")}`);
+  const note = state.notes.get(rowId(item));
+  if (note !== undefined) lines.push("", `--- ${note.title}`, ...note.lines);
+  if (state.previewing === rowId(item)) lines.push("", "--- preview running");
   return lines.flatMap((line) => toSafeLines(line));
 }
 
@@ -234,7 +242,7 @@ function paneLines(state: State, width: number, height: number): SafeText[] {
   return wrapped.slice(state.detailTop, state.detailTop + height);
 }
 
-const HINTS = "?:help q:quit m:mine f:actor P:project /:filter s:sessions Tab:detail r:refresh";
+const HINTS = "?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r:refresh";
 
 function statusLine(state: State): SafeText {
   if (state.editingFilter) return toSafe(`/${state.filters.text}_  (Enter keeps, Esc clears)`);
@@ -290,6 +298,13 @@ function sessionsScreen(state: State): SafeText[] {
   return screen("sessions  (s or Esc closes)", body, state, state.sessionsTop);
 }
 
+function chooserScreen(state: State, item: ListItem): SafeText[] {
+  const body = item.actions.map(
+    (action, index) => `${index === state.chooserIndex ? ">" : " "} ${(index + 1).toString()}. ${actionLabel(action, index === 0)}`,
+  );
+  return screen(`actions for ${item.key}  (j/k and Enter or 1-9 run, Esc closes)`, body, state);
+}
+
 function fatalScreen(state: State): SafeText[] {
   const fatal = state.fatal;
   if (fatal === null) return [];
@@ -329,6 +344,7 @@ export function view(state: State): Frame {
   }
   if (state.overlay === "sessions") return clip(sessionsScreen(state), state);
   const item = selectedRow(state);
+  if (state.overlay === "chooser" && item !== null) return clip(chooserScreen(state, item), state);
   if (state.overlay === "detail" && item !== null) {
     const body = detailLines(state, item).flatMap((line) => wrap(line, state.size.columns));
     return clip(screen("detail  (Tab or Esc closes)", body, state, state.detailTop), state);

@@ -1,0 +1,24 @@
+actions for linear:DMD-105  (j/k and Enter or 1-9 run, Esc closes)
+> 1. fix-ci* (claude-otel)
+  2. merge [not run by the TUI]
+  3. attach
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r...

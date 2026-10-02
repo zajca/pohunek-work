@@ -103,6 +103,30 @@ describe.each(SIZES)("golden frames at width %s", (width, size) => {
     golden(`contract-${width}`, loaded(decodeListEnvelope(text), { size }));
   });
 
+  test("action chooser and a refusal note in the detail pane", () => {
+    const withMerge = RULE_ROWS.map((item) =>
+      item.key === "linear:DMD-105" ? { ...item, actions: [...item.actions, { name: "merge", delegable: false }, { name: "attach", delegable: false }] } : item,
+    );
+    const state = loaded(okOutcome(payload(withMerge)), { size });
+    const onRow = press(state, ["/", "1", "0", "5", "<enter>"]).state;
+    golden(`chooser-${width}`, press(onRow, ["a"]).state);
+    const refusal = JSON.stringify({
+      cli_version: "0.1.0",
+      protocol: { minimum: 1, maximum: 1 },
+      err: { class: "action", code: "precondition_failed", msg: "fix-ci refused: no check fails any more" },
+    });
+    const [refused] = update(onRow, {
+      kind: "handoverDone",
+      mode: "write",
+      row: "connection linear:DMD-105",
+      key: "linear:DMD-105",
+      action: "fix-ci",
+      exit: { exitCode: 2, signal: null, stdout: refusal, spawnError: null },
+      now: T0 + 1,
+    });
+    golden(`refused-${width}`, refused);
+  });
+
   test("help and sessions overlays", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)), { size, stderr: ["warning one"] });
     golden(`help-${width}`, press(state, ["?"]).state);

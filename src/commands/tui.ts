@@ -5,7 +5,8 @@ import type { Logger } from "../log.ts";
 import { toAscii } from "../output/sanitize.ts";
 import type { TuiConfig } from "../types/config.ts";
 import type { Exec } from "../util/exec.ts";
-import { runList } from "../tui/children.ts";
+import { openUrl, runHandover, runList, runPreview, type DetachedSpawn, type ForegroundSpawn } from "../tui/children.ts";
+import { decodeDoEnvelope } from "../tui/decode.ts";
 import { initialState, start, update, MS_PER_SECOND, type Effect, type Event, type Settings, type State } from "../tui/model.ts";
 import type { Terminal } from "../tui/terminal.ts";
 import { view } from "../tui/view.ts";
@@ -23,6 +24,10 @@ export interface TuiDeps {
   readonly exec: Exec;
   readonly now: () => number;
   readonly timers: Timers;
+  /** Runs `do` children on the terminal (handover). */
+  readonly spawnForeground: ForegroundSpawn;
+  /** Starts the URL opener. */
+  readonly spawnDetached: DetachedSpawn;
   /** Prints an internal error after the terminal is restored. */
   readonly report: (message: string) => void;
 }
@@ -106,6 +111,39 @@ export async function runTui(deps: TuiDeps): Promise<number> {
           });
           dispatch(event);
         }, fail);
+        return;
+      }
+      case "preview":
+        runPreview(deps.exec, effect.argv, deps.config.listTimeoutMs).then(({ run, outcome }) => {
+          logger.info("preview", {
+            action: effect.action,
+            argv: [...effect.argv],
+            exit_code: run.exitCode,
+            timed_out: run.timedOut,
+            outcome: outcome?.kind ?? (run.spawnError === null ? "no_output" : "spawn_failed"),
+          });
+          dispatch({ kind: "previewDone", row: effect.row, action: effect.action, run, outcome });
+        }, fail);
+        return;
+      case "handover":
+        logger.info("handover_start", { key: effect.key, action: effect.action, mode: effect.mode, argv: [...effect.argv] });
+        runHandover(terminal, deps.spawnForeground, effect.mode, effect.argv).then((exit) => {
+          const decoded = effect.mode === "write" && exit.stdout.trim() !== "" ? decodeDoEnvelope(exit.stdout) : null;
+          logger.info("handover_end", {
+            key: effect.key,
+            action: effect.action,
+            exit_code: exit.exitCode,
+            signal: exit.signal,
+            spawn_error: exit.spawnError,
+            refusal: decoded?.kind === "error" ? decoded.err.code : null,
+          });
+          dispatch({ kind: "handoverDone", mode: effect.mode, row: effect.row, key: effect.key, action: effect.action, exit, now: now() });
+        }, fail);
+        return;
+      case "open": {
+        const error = openUrl(deps.spawnDetached, deps.config.openCommand, effect.href);
+        logger.info("open_url", { key: effect.key, host: effect.host, error });
+        dispatch({ kind: "openDone", error });
         return;
       }
       case "schedule":

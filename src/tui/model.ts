@@ -2,8 +2,8 @@
 // Every side effect (children, timers, bell, quit) is returned as data and run
 // by src/commands/tui.ts, so the whole interaction is testable without a TTY.
 import type { ListError, ListItem, ListPayload, TurnActor } from "../types/item.ts";
-import { listArgv, type Argv } from "./actions.ts";
-import type { ListOutcome } from "./decode.ts";
+import { attachArgv, checkOpenUrl, isTuiAction, listArgv, previewArgv, writeArgv, type Argv } from "./actions.ts";
+import { decodeDoEnvelope, type DoField, type DoOutcome, type ListOutcome } from "./decode.ts";
 import { columnsFor, computeLayout, headerFlags, overlayHeight, type Layout } from "./layout.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, transitionsToMe, type ActorFilter, type Filters } from "./rows.ts";
 import type { Key, Size } from "./terminal.ts";
@@ -33,7 +33,13 @@ export interface Data {
 /** Full-screen states: an `err` envelope (data kept) or an incompatible `self_bin` (data dropped). */
 export type Fatal = { readonly kind: "error"; readonly err: ListError } | { readonly kind: "incompatible"; readonly message: string };
 
-export type Overlay = "none" | "help" | "sessions" | "detail";
+/** The last preview, refusal or child output of a row; raw text, sanitized by the view. */
+export interface Note {
+  readonly title: string;
+  readonly lines: readonly string[];
+}
+
+export type Overlay = "none" | "help" | "sessions" | "chooser" | "detail";
 
 export interface Status {
   readonly text: string;
@@ -49,6 +55,8 @@ export interface State {
   /** Last `list` stderr lines (warnings, `source unavailable:`), at most `stderr_max_lines`. */
   readonly listStderr: readonly string[];
   readonly refreshing: boolean;
+  /** A refresh was asked for while one ran (after a handover); it starts when the running one ends. */
+  readonly refreshQueued: boolean;
   readonly status: Status | null;
   readonly filters: Filters;
   readonly editingFilter: boolean;
@@ -59,14 +67,30 @@ export interface State {
   readonly detailFocus: boolean;
   readonly detailTop: number;
   readonly sessionsTop: number;
+  readonly chooserIndex: number;
   /** Last known non-unknown actor per row; null until the first good data. */
   readonly baseline: ReadonlyMap<string, TurnActor> | null;
   /** Rows that became the owner's turn while the TUI ran (`*`). */
   readonly marked: ReadonlySet<string>;
+  readonly notes: ReadonlyMap<string, Note>;
+  /** Row whose preview child runs; one preview at a time. */
+  readonly previewing: string | null;
 }
+
+export type HandoverMode = "write" | "attach";
 
 export type Effect =
   | { readonly kind: "list"; readonly argv: Argv }
+  | { readonly kind: "preview"; readonly row: string; readonly action: string; readonly argv: Argv }
+  | {
+      readonly kind: "handover";
+      readonly mode: HandoverMode;
+      readonly row: string;
+      readonly key: string;
+      readonly action: string;
+      readonly argv: Argv;
+    }
+  | { readonly kind: "open"; readonly key: string; readonly host: string; readonly href: string }
   /** Next timer refresh; replaces any pending one. */
   | { readonly kind: "schedule"; readonly delayMs: number }
   /** Redraw at this time (data age, STALE); replaces any pending one. */
@@ -82,13 +106,35 @@ export interface ChildRun {
   readonly stderr: readonly string[];
 }
 
+export interface HandoverExit {
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  /** Piped stdout of a write child; empty for attach. */
+  readonly stdout: string;
+  readonly spawnError: string | null;
+}
+
 export type Event =
   | { readonly kind: "key"; readonly key: Key; readonly now: number }
   | { readonly kind: "resize"; readonly size: Size }
   | { readonly kind: "tick"; readonly now: number }
   | { readonly kind: "timer"; readonly now: number }
-  | { readonly kind: "listDone"; readonly run: ChildRun; readonly outcome: ListOutcome | null; readonly now: number };
+  | { readonly kind: "listDone"; readonly run: ChildRun; readonly outcome: ListOutcome | null; readonly now: number }
+  | { readonly kind: "previewDone"; readonly row: string; readonly action: string; readonly run: ChildRun; readonly outcome: DoOutcome | null }
+  | {
+      readonly kind: "handoverDone";
+      readonly mode: HandoverMode;
+      readonly row: string;
+      readonly key: string;
+      readonly action: string;
+      readonly exit: HandoverExit;
+      readonly now: number;
+    }
+  | { readonly kind: "openDone"; readonly error: string | null };
+
 export type Update = readonly [State, readonly Effect[]];
+
+export const INTERRUPTED = "interrupted, outcome unknown: check `pohunek session list`";
 
 export function initialState(settings: Settings, size: Size, now: number): State {
   return {
@@ -99,6 +145,7 @@ export function initialState(settings: Settings, size: Size, now: number): State
     fatal: null,
     listStderr: [],
     refreshing: false,
+    refreshQueued: false,
     status: null,
     filters: { actor: settings.initialView === "mine" ? "me" : "all", project: null, text: "" },
     editingFilter: false,
@@ -108,8 +155,11 @@ export function initialState(settings: Settings, size: Size, now: number): State
     detailFocus: false,
     detailTop: 0,
     sessionsTop: 0,
+    chooserIndex: 0,
     baseline: null,
     marked: new Set(),
+    notes: new Map(),
+    previewing: null,
   };
 }
 
@@ -174,9 +224,15 @@ function moveSelection(state: State, delta: number): State {
   return normalize({ ...state, selected: rowId(rows[index] ?? rows[0] as ListItem) });
 }
 
+function withNote(state: State, row: string, note: Note): State {
+  const notes = new Map(state.notes);
+  notes.set(row, note);
+  return { ...state, notes, detailTop: state.selected === row ? 0 : state.detailTop };
+}
+
 function startRefresh(state: State): Update {
   if (state.refreshing) return [{ ...state, status: status("refresh already running") }, []];
-  return [{ ...state, refreshing: true }, [{ kind: "list", argv: listArgv(state.settings.selfBin) }]];
+  return [{ ...state, refreshing: true, refreshQueued: false }, [{ kind: "list", argv: listArgv(state.settings.selfBin) }]];
 }
 
 function nextWake(state: State): Effect[] {
@@ -192,9 +248,72 @@ function stderrTail(lines: readonly string[], max: number): string[] {
   return lines.filter((line) => line.trim() !== "").slice(-max);
 }
 
-// ------------------------------------------------------------------ keys
+// ------------------------------------------------------------ row actions
 
-const READ_ONLY = "read-only view: run actions with pohunek-work do <key> <action>";
+function primaryAction(item: ListItem): string | null {
+  return item.actions[0]?.name ?? null;
+}
+
+function runAction(state: State, item: ListItem, action: string): Update {
+  const { selfBin } = state.settings;
+  const row = rowId(item);
+  if (!isTuiAction(action)) return [{ ...state, status: status(`${action} is not supported in the TUI`, true) }, []];
+  const mode: HandoverMode = action === "attach" ? "attach" : "write";
+  const argv = mode === "attach" ? attachArgv(selfBin, item.key, item.project) : writeArgv(selfBin, item.key, action, item.project);
+  if (!argv.ok) return [{ ...state, status: status(argv.reason, true) }, []];
+  return [
+    { ...state, overlay: "none", status: status(`${action} ${item.key}: handed over to do`) },
+    [{ kind: "handover", mode, row, key: item.key, action, argv: argv.argv }],
+  ];
+}
+
+function runPrimary(state: State): Update {
+  const item = selectedRow(state);
+  if (item === null) return [state, []];
+  const action = primaryAction(item);
+  if (action === null) return [{ ...state, status: status("no action for this row: the next step is manual (o opens it)") }, []];
+  return runAction(state, item, action);
+}
+
+function preview(state: State): Update {
+  const item = selectedRow(state);
+  if (item === null) return [state, []];
+  const action = primaryAction(item);
+  if (action === null) return [{ ...state, status: status("no action to preview for this row") }, []];
+  if (state.previewing !== null) return [{ ...state, status: status("a preview is already running") }, []];
+  const argv = previewArgv(state.settings.selfBin, item.key, action, item.project);
+  if (!argv.ok) return [{ ...state, status: status(argv.reason, true) }, []];
+  const row = rowId(item);
+  return [
+    { ...state, previewing: row, status: status(`preview of ${action} ${item.key} running`) },
+    [{ kind: "preview", row, action, argv: argv.argv }],
+  ];
+}
+
+function attach(state: State): Update {
+  const item = selectedRow(state);
+  if (item === null) return [state, []];
+  if (!item.actions.some((action) => action.name === "attach")) {
+    return [{ ...state, status: status("no live linked session to attach to") }, []];
+  }
+  return runAction(state, item, "attach");
+}
+
+function openUrl(state: State): Update {
+  const item = selectedRow(state);
+  if (item === null) return [state, []];
+  const url = item.pull_request?.url ?? item.issue?.url ?? null;
+  if (url === null) return [{ ...state, status: status("this row has no URL") }, []];
+  const checked = checkOpenUrl(url, state.settings.openUrlHosts);
+  if (!checked.ok) return [{ ...state, status: status(`not opened: ${checked.reason}`, true) }, []];
+  return [{ ...state, status: status(`opening ${checked.host}`) }, [{ kind: "open", key: item.key, host: checked.host, href: checked.href }]];
+}
+
+function chooserActions(state: State): readonly string[] {
+  return selectedRow(state)?.actions.map((action) => action.name) ?? [];
+}
+
+// ------------------------------------------------------------------ keys
 
 function cycle<T>(values: readonly T[], current: T): T {
   const next = (values.indexOf(current) + 1) % values.length;
@@ -243,6 +362,21 @@ function overlayKey(state: State, key: Key): Update {
       if (key.kind === "escape" || key.kind === "tab" || isChar(key, "q")) return [{ ...state, overlay: "none" }, []];
       return [state, []];
     }
+    case "chooser": {
+      const actions = chooserActions(state);
+      const item = selectedRow(state);
+      if (key.kind === "escape" || isChar(key, "q") || item === null) return [{ ...state, overlay: "none" }, []];
+      const delta = scrollBy(key, 1);
+      if (delta !== null) {
+        const index = Math.max(0, Math.min(actions.length - 1, state.chooserIndex + delta));
+        return [{ ...state, chooserIndex: index }, []];
+      }
+      let chosen: string | undefined;
+      if (key.kind === "enter") chosen = actions[state.chooserIndex];
+      if (key.kind === "char" && /^[1-9]$/.test(key.char)) chosen = actions[Number(key.char) - 1];
+      if (chosen === undefined) return [state, []];
+      return runAction({ ...state, overlay: "none" }, item, chosen);
+    }
     case "none":
       return [state, []];
   }
@@ -260,7 +394,7 @@ function listKey(state: State, key: Key): Update {
   if (delta !== null) return [moveSelection(state, delta), []];
   if (key.kind === "home" || isChar(key, "g")) return [moveSelection(state, -Number.MAX_SAFE_INTEGER), []];
   if (key.kind === "end" || isChar(key, "G")) return [moveSelection(state, Number.MAX_SAFE_INTEGER), []];
-  if (key.kind === "enter") return [{ ...state, status: status(READ_ONLY) }, []];
+  if (key.kind === "enter") return runPrimary(state);
   if (key.kind === "tab") {
     if (selectedRow(state) === null) return [state, []];
     return layout.wide ? [{ ...state, detailFocus: true }, []] : [{ ...state, overlay: "detail" }, []];
@@ -270,11 +404,18 @@ function listKey(state: State, key: Key): Update {
   }
   if (key.kind !== "char") return [state, []];
   switch (key.char) {
-    case "a":
+    case "a": {
+      const item = selectedRow(state);
+      if (item === null) return [state, []];
+      if (item.actions.length === 0) return [{ ...state, status: status("no action for this row: the next step is manual (o opens it)") }, []];
+      return [{ ...state, overlay: "chooser", chooserIndex: 0 }, []];
+    }
     case "p":
+      return preview(state);
     case "t":
+      return attach(state);
     case "o":
-      return [{ ...state, status: status(READ_ONLY) }, []];
+      return openUrl(state);
     case "r":
       return startRefresh(state);
     case "m":
@@ -348,7 +489,84 @@ function listDone(state: State, run: ChildRun, outcome: ListOutcome | null, now:
     if (transitions.marked.size > 0 && settings.bellOnTransition) effects.push({ kind: "bell" });
   }
   next = normalize(next, keptIndex);
+  if (next.refreshQueued) {
+    const [started, startEffects] = startRefresh(next);
+    return [started, [...effects, ...startEffects, ...nextWake(started)]];
+  }
   return [next, [...effects, { kind: "schedule", delayMs: settings.refreshIntervalMs }, ...nextWake(next)]];
+}
+
+function fieldLines(fields: readonly DoField[]): string[] {
+  return fields.flatMap((field) =>
+    field.label === "prompt"
+      ? ["prompt (stdin):", ...field.value.split("\n").map((line) => `  ${line}`)]
+      : [`${field.label}: ${field.value}`],
+  );
+}
+
+function errorNote(err: ListError): Note {
+  return { title: `refused: ${err.code}`, lines: [err.msg, ...(err.recover === undefined ? [] : [err.recover])] };
+}
+
+function previewDone(state: State, row: string, action: string, run: ChildRun, outcome: DoOutcome | null): Update {
+  const stderr = stderrTail(run.stderr, state.settings.stderrMaxLines);
+  const withStderr = (note: Note): Note =>
+    stderr.length === 0 ? note : { title: note.title, lines: [...note.lines, "stderr:", ...stderr] };
+  let note: Note;
+  if (run.spawnError !== null) note = { title: `preview of ${action} failed`, lines: [run.spawnError] };
+  else if (run.timedOut) note = { title: `preview of ${action} timed out`, lines: [] };
+  else if (outcome === null || outcome.kind === "malformed") {
+    note = { title: `preview of ${action}: unusable output`, lines: [outcome === null ? "no output" : outcome.message] };
+  } else if (outcome.kind === "incompatible") note = { title: "incompatible do output", lines: [outcome.message] };
+  else if (outcome.kind === "error") note = errorNote(outcome.err);
+  else note = { title: `preview: ${outcome.action} (dry run, nothing executed)`, lines: fieldLines(outcome.plan) };
+  const next = withNote({ ...state, previewing: null, status: null }, row, withStderr(note));
+  return [next, []];
+}
+
+function handoverDone(state: State, event: Extract<Event, { kind: "handoverDone" }>): Update {
+  const { mode, row, key, action, exit } = event;
+  let next: State = { ...state, now: event.now };
+  if (exit.spawnError !== null) {
+    next = { ...next, status: status(`${action} ${key}: ${exit.spawnError}`, true) };
+  } else if (mode === "attach") {
+    if (exit.exitCode === 0) next = { ...next, status: status(`detached from ${key}`) };
+    else if (exit.exitCode === null) next = { ...next, status: status(`attach to ${key} ended by ${exit.signal ?? "a signal"}`, true) };
+    else next = { ...next, status: status(`attach to ${key} failed (exit ${exit.exitCode.toString()}); do printed the reason before the return prompt`, true) };
+  } else if (exit.exitCode === null) {
+    next = withNote({ ...next, status: status(`${action} ${key}: ${INTERRUPTED}`, true) }, row, { title: `${action}: ${INTERRUPTED}`, lines: [] });
+  } else {
+    next = writeResult(next, row, key, action, exit);
+  }
+  next = { ...next, refreshQueued: true };
+  const [refreshed, effects] = next.refreshing ? [next, []] : startRefresh(next);
+  return [refreshed, effects];
+}
+
+function writeResult(state: State, row: string, key: string, action: string, exit: HandoverExit): State {
+  const outcome = exit.stdout.trim() === "" ? null : decodeDoEnvelope(exit.stdout);
+  if (outcome === null || outcome.kind === "malformed") {
+    return withNote({ ...state, status: status(`${action} ${key}: ${INTERRUPTED}`, true) }, row, {
+      title: `${action}: ${INTERRUPTED}`,
+      lines: [`exit ${String(exit.exitCode)}, no decodable do output`],
+    });
+  }
+  if (outcome.kind === "incompatible") {
+    return withNote({ ...state, status: status(`${action} ${key}: incompatible do output`, true) }, row, {
+      title: "incompatible do output",
+      lines: [outcome.message],
+    });
+  }
+  if (outcome.kind === "error") {
+    if (outcome.err.code === "confirmation_required") {
+      return { ...state, status: status(`${action} ${key}: cancelled, nothing was executed`) };
+    }
+    return withNote({ ...state, status: status(`${action} ${key}: refused (${outcome.err.code})`, true) }, row, errorNote(outcome.err));
+  }
+  return withNote({ ...state, status: status(`${action} ${key}: done`) }, row, {
+    title: `done: ${outcome.action}`,
+    lines: fieldLines(outcome.result ?? []),
+  });
 }
 
 // ---------------------------------------------------------------- update
@@ -365,5 +583,11 @@ export function update(state: State, event: Event): Update {
       return state.refreshing ? [state, []] : startRefresh({ ...state, now: event.now });
     case "listDone":
       return listDone(state, event.run, event.outcome, event.now);
+    case "previewDone":
+      return previewDone(state, event.row, event.action, event.run, event.outcome);
+    case "handoverDone":
+      return handoverDone(state, event);
+    case "openDone":
+      return [event.error === null ? state : { ...state, status: status(`open failed: ${event.error}`, true) }, []];
   }
 }

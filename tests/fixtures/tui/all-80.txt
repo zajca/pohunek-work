@@ -21,4 +21,4 @@ me 10  agent 1  reviewer 1  unknown 1  data <1m old  view: all
 
 
 
-?:help q:quit m:mine f:actor P:project /:filter s:sessions Tab:detail r:refresh
+?:help q:quit Enter:run a:actions p:preview t:attach o:open m:mine /:filter r...
