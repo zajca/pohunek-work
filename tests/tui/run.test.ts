@@ -173,6 +173,21 @@ test("an internal error restores the terminal first, then reports and exits 2", 
   expect(h.logged.some((entry) => entry.event === "tui_error")).toBe(true);
 });
 
+test("a throw while handling a finished child ends the TUI through the error path", async () => {
+  const h = harness([LIST_OK]);
+  const failing = {
+    ...h.deps,
+    logger: {
+      ...h.deps.logger,
+      info: (event: string): void => {
+        if (event === "refresh_done") throw new RangeError("log exploded");
+      },
+    },
+  };
+  expect(await runTui(failing)).toBe(2);
+  expect(h.events).toEqual(["start", "restore", "report:pohunek-work tui: internal error: RangeError: log exploded"]);
+});
+
 test("titles, bodies and child stdout are never logged", async () => {
   const h = harness([LIST_OK]);
   const running = runTui(h.deps);

@@ -205,6 +205,18 @@ function parseProfiles(root: Table, file: string): ProfilesConfig {
   return readStringMapTable(requireTable(root, "profiles", file), file, ["profiles"]);
 }
 
+/** Longest delay setTimeout honours; a longer one fires at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+const MS_PER_SECOND = 1000;
+
+function readTimerValue(table: Table, key: string, unitMs: number, file: string, path: KeyPath): number {
+  const value = readPositiveInt(table, key, file, path);
+  if (value * unitMs > MAX_TIMER_MS) {
+    throw fail(file, [...path, key], `must not exceed ${Math.floor(MAX_TIMER_MS / unitMs).toString()} (timer limit)`);
+  }
+  return value;
+}
+
 const TUI_INITIAL_VIEWS: readonly TuiInitialView[] = ["mine", "all"];
 
 /** A host name as `URL.hostname` returns it: lowercase labels, no port, no scheme. */
@@ -236,9 +248,9 @@ function parseTui(root: Table, file: string): TuiConfig {
   }
   return {
     selfBin: readAbsolutePath(table, "self_bin", file, path),
-    refreshIntervalSecs: readPositiveInt(table, "refresh_interval_secs", file, path),
-    listTimeoutMs: readPositiveInt(table, "list_timeout_ms", file, path),
-    staleAfterSecs: readPositiveInt(table, "stale_after_secs", file, path),
+    refreshIntervalSecs: readTimerValue(table, "refresh_interval_secs", MS_PER_SECOND, file, path),
+    listTimeoutMs: readTimerValue(table, "list_timeout_ms", 1, file, path),
+    staleAfterSecs: readTimerValue(table, "stale_after_secs", MS_PER_SECOND, file, path),
     initialView: readEnum(table, "initial_view", TUI_INITIAL_VIEWS, file, path),
     bellOnTransition: readBoolean(table, "bell_on_transition", file, path),
     openCommand: readAbsolutePath(table, "open_command", file, path),

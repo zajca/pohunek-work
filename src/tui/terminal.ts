@@ -148,8 +148,8 @@ export interface ProcessHooks {
 export interface TerminalHandlers {
   readonly onKey: (key: Key) => void;
   readonly onResize: (size: Size) => void;
-  /** Called after the restore when SIGTERM or SIGHUP ends the TUI, before the exit. */
-  readonly onSignal: (signal: TerminatingSignal) => void;
+  /** Called after the restore when SIGTERM or SIGHUP ends the TUI; the exit waits for its promise. */
+  readonly onSignal: (signal: TerminatingSignal) => Promise<void> | void;
 }
 
 export interface Terminal {
@@ -282,19 +282,19 @@ export function createTerminal(input: TtyInput, output: TtyOutput, hooks: Proces
     },
   };
 
-  function terminate(signal: TerminatingSignal): void {
+  async function terminate(signal: TerminatingSignal): Promise<void> {
     try {
       terminal.restore();
+      await handlers?.onSignal(signal);
     } finally {
-      handlers?.onSignal(signal);
       hooks.exit(signalExitCode(signal));
     }
   }
   function onSigterm(): void {
-    terminate("SIGTERM");
+    void terminate("SIGTERM");
   }
   function onSighup(): void {
-    terminate("SIGHUP");
+    void terminate("SIGHUP");
   }
 
   return terminal;

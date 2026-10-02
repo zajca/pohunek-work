@@ -449,6 +449,18 @@ describe("loadConfig [tui]", () => {
     expect(error.message).toContain(fragment);
   });
 
+  test.each([
+    ["refresh_interval_secs = 300", "refresh_interval_secs = 2147484", "tui.refresh_interval_secs", "must not exceed 2147483 (timer limit)"],
+    ["stale_after_secs = 900", "stale_after_secs = 9999999", "tui.stale_after_secs", "must not exceed 2147483 (timer limit)"],
+    ["list_timeout_ms = 60000", "list_timeout_ms = 2147483648", "tui.list_timeout_ms", "must not exceed 2147483647 (timer limit)"],
+  ])("%p beyond the setTimeout limit is rejected", async (from, to, key, fragment) => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace(from, to));
+    const error = await loadError(dir);
+    expect(error.key).toBe(key);
+    expect(error.message).toContain(fragment);
+  });
+
   test("an unknown key in [tui] is rejected", async () => {
     const dir = await copyFixture();
     await editFile(dir, "config.toml", (t) => t.replace("detail_min_width = 120", "detail_min_width = 120\nrefresh_jitter = 3"));

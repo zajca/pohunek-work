@@ -204,6 +204,22 @@ describe("handover results", () => {
     expect(state.notes.get(`connection ${key}`)).toEqual({ title: "refused: already_running", lines: ["a live session runs", "attach to it"] });
   });
 
+  test.each(["launch_unverified", "launch_timed_out", "command_timed_out", "verification_failed", "command_unverified"])(
+    "%s after the write ran is never shown as refused",
+    (code) => {
+      const stdout = envelope({ err: { class: "action", code, msg: "the session started but its HEAD differs" } });
+      const [state] = done(at(key), "write", key, "implement", { exitCode: 2, stdout });
+      expect(state.status).toEqual({ text: `implement ${key}: executed, outcome unverified (${code})`, error: true });
+      expect(state.notes.get(`connection ${key}`)?.title).toBe(`ran, unverified: ${code}`);
+    },
+  );
+
+  test("an incompatible write envelope is an unknown outcome", () => {
+    const stdout = JSON.stringify({ cli_version: "9", protocol: { minimum: 2, maximum: 2 }, ok: {} });
+    const [state] = done(at(key), "write", key, "implement", { stdout });
+    expect(state.status).toEqual({ text: `implement ${key}: ${INTERRUPTED}`, error: true });
+  });
+
   test("killed by a signal or without a decodable envelope: interrupted, outcome unknown", () => {
     for (const exit of [{ exitCode: null, signal: "SIGINT" }, { exitCode: 1, stdout: "garbage" }, { exitCode: 0, stdout: "" }]) {
       const [state, effects] = done(at(key), "write", key, "implement", exit);

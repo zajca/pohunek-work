@@ -240,7 +240,7 @@ async function runAttach(config: PluginConfig, options: DoOptions, deps: DoDeps)
   if (!deps.terminal) {
     throw new ActionError("no_terminal", "attach needs a terminal on stdin and stdout");
   }
-  for (const warning of warnings) console.error(warning);
+  for (const warning of warnings) console.error(display(warning));
   await executeAttach(plan, deps.pohunek);
   logger.info("do_done", { key: plan.key, action: plan.action, session_id: plan.sessionId });
   return { stdout: display(`detached from session ${plan.sessionId}`), warnings: [] };

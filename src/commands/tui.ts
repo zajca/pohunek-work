@@ -110,7 +110,7 @@ export async function runTui(deps: TuiDeps): Promise<number> {
             source_failures: sourceFailures(event),
           });
           dispatch(event);
-        }, fail);
+        }).catch(fail);
         return;
       }
       case "preview":
@@ -123,7 +123,7 @@ export async function runTui(deps: TuiDeps): Promise<number> {
             outcome: outcome?.kind ?? (run.spawnError === null ? "no_output" : "spawn_failed"),
           });
           dispatch({ kind: "previewDone", row: effect.row, action: effect.action, run, outcome });
-        }, fail);
+        }).catch(fail);
         return;
       case "handover":
         logger.info("handover_start", { key: effect.key, action: effect.action, mode: effect.mode, argv: [...effect.argv] });
@@ -138,7 +138,7 @@ export async function runTui(deps: TuiDeps): Promise<number> {
             refusal: decoded?.kind === "error" ? decoded.err.code : null,
           });
           dispatch({ kind: "handoverDone", mode: effect.mode, row: effect.row, key: effect.key, action: effect.action, exit, now: now() });
-        }, fail);
+        }).catch(fail);
         return;
       case "open": {
         const error = openUrl(deps.spawnDetached, deps.config.openCommand, effect.href);
@@ -179,6 +179,8 @@ export async function runTui(deps: TuiDeps): Promise<number> {
     },
     onSignal: (signal) => {
       logger.info("terminal_restore", { reason: signal });
+      // The process exits right after this; queued log lines are written first.
+      return logger.close();
     },
   });
   try {

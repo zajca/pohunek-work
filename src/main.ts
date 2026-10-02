@@ -5,7 +5,7 @@ import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
-import { runTui } from "./commands/tui.ts";
+import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
@@ -16,6 +16,7 @@ import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
 import { createPohunekClient } from "./sources/pohunek.ts";
 import { exec } from "./util/exec.ts";
+import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
@@ -79,7 +80,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
       logger,
       cliVersion: pkg.version,
     });
-    for (const warning of output.warnings) console.error(warning);
+    for (const warning of output.warnings) console.error(toAscii(warning));
     for (const failure of output.sourceFailures) console.error(`source unavailable: ${failure}`);
     console.log(output.stdout);
     return output.sourceFailures.length > 0 ? EXIT_PARTIAL : 0;
@@ -179,7 +180,7 @@ async function doCommand(argv: readonly string[]): Promise<number> {
       exec,
       terminal: process.stdin.isTTY && process.stdout.isTTY,
     });
-    for (const warning of output.warnings) console.error(warning);
+    for (const warning of output.warnings) console.error(toAscii(warning));
     console.log(output.stdout);
     return 0;
   } catch (error) {
@@ -217,12 +218,22 @@ async function tuiCommand(argv: readonly string[]): Promise<number> {
     command: "tui",
     maxStringLength: config.global.log.maxStringLength,
   });
+  const terminal = createTerminal(process.stdin, process.stdout, process);
+  // Safety net for an error outside the reducer's own handling: the terminal must never stay in raw mode.
+  const onFatal = (error: unknown): void => {
+    terminal.restore();
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(`pohunek-work tui: internal error: ${toAscii(message)}`);
+    process.exit(EXIT_TUI_ERROR);
+  };
+  process.on("uncaughtException", onFatal);
+  process.on("unhandledRejection", onFatal);
   try {
     return await runTui({
       config: config.global.tui,
       cliVersion: pkg.version,
       logger,
-      terminal: createTerminal(process.stdin, process.stdout, process),
+      terminal,
       exec,
       spawnForeground,
       spawnDetached,

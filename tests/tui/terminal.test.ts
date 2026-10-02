@@ -130,7 +130,7 @@ function fake(): Fake {
       },
       exit: (code) => {
         events.push(`exit:${code.toString()}`);
-        throw new Error(`exit ${code.toString()}`);
+        return undefined as never;
       },
       fire: (signal) => {
         for (const listener of [...(signalListeners.get(signal) ?? [])]) listener();
@@ -148,7 +148,13 @@ function started(f: Fake, keys: string[] = [], signals: string[] = []): ReturnTy
   terminal.start({
     onKey: (key) => keys.push(key.kind === "char" ? key.char : key.kind),
     onResize: (size) => keys.push(`resize:${size.columns.toString()}x${size.rows.toString()}`),
-    onSignal: (signal) => signals.push(signal),
+    onSignal: (signal) => {
+      signals.push(signal);
+      // The exit must wait for this promise (the logger flush).
+      return Promise.resolve().then(() => {
+        signals.push(`${signal} flushed`);
+      });
+    },
   });
   return terminal;
 }
@@ -249,17 +255,17 @@ describe("terminal driver", () => {
     expect(f.events).toEqual(["off:SIGTERM", "off:SIGHUP", "raw:false", "pause", "off:SIGINT"]);
   });
 
-  test.each(["SIGTERM", "SIGHUP"] as const)("%s restores the terminal, reports and exits with 128+n", (signal) => {
+  test.each(["SIGTERM", "SIGHUP"] as const)("%s restores the terminal, flushes, then exits with 128+n", async (signal) => {
     const f = fake();
     const signals: string[] = [];
     started(f, [], signals);
     f.events.length = 0;
-    expect(() => {
-      f.hooks.fire(signal);
-    }).toThrow("exit");
+    f.hooks.fire(signal);
     expect(f.events.slice(0, 5)).toEqual(["off:SIGTERM", "off:SIGHUP", "pause", "raw:false", LEAVE]);
+    expect(f.events.some((event) => event.startsWith("exit:"))).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(signals).toEqual([signal, `${signal} flushed`]);
     expect(f.events.at(-1)).toBe(`exit:${signalExitCode(signal).toString()}`);
-    expect(signals).toEqual([signal]);
   });
 
   test("signal exit codes follow the shell convention", () => {

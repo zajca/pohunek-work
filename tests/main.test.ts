@@ -110,6 +110,20 @@ test("tui refuses without a terminal and leaves the screen alone", async () => {
   expect(result.stdout).toBe("");
 });
 
+test("reportError without --json prints strict ASCII on stderr", () => {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (line: string): void => {
+    lines.push(line);
+  };
+  try {
+    reportError(false, "action", "command_failed", "pohunek attach failed (\u001b]0;x\u0007 \u017elu\u0165ou\u010dk\u00fd)\nsecond line");
+  } finally {
+    console.error = original;
+  }
+  expect(lines).toEqual(["pohunek attach failed (?]0;x? zlutoucky)\nsecond line"]);
+});
+
 test("reportError prints the given class in the JSON envelope and returns exit 2", () => {
   const lines: string[] = [];
   const original = console.log;

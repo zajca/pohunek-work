@@ -543,6 +543,18 @@ function handoverDone(state: State, event: Extract<Event, { kind: "handoverDone"
   return [refreshed, effects];
 }
 
+/**
+ * Refusal codes `do` raises after the write ran or may have run
+ * (src/actions/launch.ts, src/actions/github.ts): never shown as refused.
+ */
+const RAN_UNVERIFIED_CODES: readonly string[] = [
+  "launch_unverified",
+  "launch_timed_out",
+  "command_timed_out",
+  "verification_failed",
+  "command_unverified",
+];
+
 function writeResult(state: State, row: string, key: string, action: string, exit: HandoverExit): State {
   const outcome = exit.stdout.trim() === "" ? null : decodeDoEnvelope(exit.stdout);
   if (outcome === null || outcome.kind === "malformed") {
@@ -552,14 +564,21 @@ function writeResult(state: State, row: string, key: string, action: string, exi
     });
   }
   if (outcome.kind === "incompatible") {
-    return withNote({ ...state, status: status(`${action} ${key}: incompatible do output`, true) }, row, {
-      title: "incompatible do output",
-      lines: [outcome.message],
+    // The write may have run before the incompatible envelope was printed.
+    return withNote({ ...state, status: status(`${action} ${key}: ${INTERRUPTED}`, true) }, row, {
+      title: `${action}: ${INTERRUPTED}`,
+      lines: [`incompatible do output: ${outcome.message}`],
     });
   }
   if (outcome.kind === "error") {
     if (outcome.err.code === "confirmation_required") {
       return { ...state, status: status(`${action} ${key}: cancelled, nothing was executed`) };
+    }
+    if (RAN_UNVERIFIED_CODES.includes(outcome.err.code)) {
+      return withNote({ ...state, status: status(`${action} ${key}: executed, outcome unverified (${outcome.err.code})`, true) }, row, {
+        ...errorNote(outcome.err),
+        title: `ran, unverified: ${outcome.err.code}`,
+      });
     }
     return withNote({ ...state, status: status(`${action} ${key}: refused (${outcome.err.code})`, true) }, row, errorNote(outcome.err));
   }
