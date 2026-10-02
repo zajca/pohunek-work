@@ -41,6 +41,7 @@ export function settingsFrom(config: TuiConfig, cliVersion: string): Settings {
     cliVersion,
     refreshIntervalMs: config.refreshIntervalSecs * MS_PER_SECOND,
     staleAfterMs: config.staleAfterSecs * MS_PER_SECOND,
+    stalePrDays: config.stalePrDays,
     initialView: config.initialView,
     bellOnTransition: config.bellOnTransition,
     stderrMaxLines: config.stderrMaxLines,

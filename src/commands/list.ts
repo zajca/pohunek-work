@@ -1,7 +1,7 @@
 // `pohunek-work list`: fetch every source once per project, join, evaluate
 // the rules and render. Read-only: no pohunek mutation, no provider write.
 import { joinItems } from "../join.ts";
-import { isIdleDraft } from "../output/drafts.ts";
+import { isStalePullRequest, staleCutoff } from "../output/stale.ts";
 import {
   buildListEnvelope,
   buildListItem,
@@ -33,8 +33,8 @@ import type { LinearSource } from "../sources/linear.ts";
 
 export interface ListOptions {
   readonly mine: boolean;
-  /** Leaves out draft pull requests nothing runs for. */
-  readonly noDrafts: boolean;
+  /** Leaves out pull requests not updated for this many days that nothing runs for; null keeps all. */
+  readonly staleDays: number | null;
   readonly json: boolean;
   /** Pohunek project label to restrict the listing to; null for every project. */
   readonly project: string | null;
@@ -46,6 +46,8 @@ export interface ListDeps {
   readonly linear: LinearSource;
   readonly logger: Logger;
   readonly cliVersion: string;
+  /** Clock for `staleDays`; the system clock when absent. */
+  readonly now?: () => number;
 }
 
 export interface ListOutput {
@@ -205,8 +207,9 @@ export async function runList(
   const items = collected.rows.map((row) => row.listItem);
 
   const mineRows = options.mine ? filterMine(items) : items;
-  const shown = options.noDrafts ? mineRows.filter((item) => !isIdleDraft(item)) : mineRows;
-  logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine, no_drafts: options.noDrafts });
+  const cutoff = options.staleDays === null ? null : staleCutoff((deps.now ?? Date.now)(), options.staleDays);
+  const shown = cutoff === null ? mineRows : mineRows.filter((item) => !isStalePullRequest(item, cutoff));
+  logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine, stale_days: options.staleDays });
   const stdout = options.json
     ? JSON.stringify(buildListEnvelope(
           deps.cliVersion,

@@ -82,6 +82,8 @@ export interface TuiConfig {
   readonly listTimeoutMs: number;
   /** Data age that is shown as `STALE`. */
   readonly staleAfterSecs: number;
+  /** Days without a change after which a pull request nothing runs for can be hidden (`h`). */
+  readonly stalePrDays: number;
   readonly initialView: TuiInitialView;
   /** Terminal bell when a row becomes the owner's turn. */
   readonly bellOnTransition: boolean;

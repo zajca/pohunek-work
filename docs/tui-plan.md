@@ -232,6 +232,7 @@ startup with the file and key named. There are no per-project overrides.
 | `refresh_interval_secs` | int > 0 | pause between the end of one refresh and the next |
 | `list_timeout_ms` | int > 0 | timeout of `list` and preview children; process group killed |
 | `stale_after_secs` | int > 0 | data age that shows `STALE` |
+| `stale_pr_days` | int > 0 | days without a change after which `h` hides a pull request nothing runs for |
 | `initial_view` | `"mine"` / `"all"` | view on start |
 | `bell_on_transition` | bool | terminal bell when a row becomes `me` |
 | `open_command` | absolute path | e.g. `/usr/bin/xdg-open` |

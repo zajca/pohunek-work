@@ -162,6 +162,7 @@ self_bin = "/home/zajca/.local/bin/pohunek-work"
 refresh_interval_secs = 300
 list_timeout_ms = 60000
 stale_after_secs = 900
+stale_pr_days = 30
 initial_view = "mine"
 bell_on_transition = false
 open_command = "/usr/bin/xdg-open"

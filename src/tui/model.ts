@@ -5,6 +5,7 @@ import type { ListError, ListItem, ListPayload, TurnActor } from "../types/item.
 import { attachArgv, checkOpenUrl, isTuiAction, listArgv, previewArgv, writeArgv, type Argv } from "./actions.ts";
 import { decodeDoEnvelope, type DoField, type DoOutcome, type ListOutcome } from "./decode.ts";
 import { columnsFor, computeLayout, headerFlags, overlayHeight, type Layout } from "./layout.ts";
+import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, transitionsToMe, type ActorFilter, type Filters } from "./rows.ts";
 import type { Key, Size } from "./terminal.ts";
 
@@ -17,6 +18,8 @@ export interface Settings {
   readonly cliVersion: string;
   readonly refreshIntervalMs: number;
   readonly staleAfterMs: number;
+  /** Days without a change after which `h` hides a pull request nothing runs for. */
+  readonly stalePrDays: number;
   readonly initialView: "mine" | "all";
   readonly bellOnTransition: boolean;
   readonly stderrMaxLines: number;
@@ -147,7 +150,7 @@ export function initialState(settings: Settings, size: Size, now: number): State
     refreshing: false,
     refreshQueued: false,
     status: null,
-    filters: { actor: settings.initialView === "mine" ? "me" : "all", project: null, text: "", hideDrafts: false },
+    filters: { actor: settings.initialView === "mine" ? "me" : "all", project: null, text: "", hideStale: false },
     editingFilter: false,
     selected: null,
     top: 0,
@@ -171,7 +174,7 @@ export function start(state: State): Update {
 // ------------------------------------------------------------- selectors
 
 export function visibleRows(state: State): ListItem[] {
-  return state.data === null ? [] : filterRows(state.data.payload, state.filters);
+  return state.data === null ? [] : filterRows(state.data.payload, state.filters, staleBefore(state));
 }
 
 export function selectedRow(state: State): ListItem | null {
@@ -320,6 +323,11 @@ function cycle<T>(values: readonly T[], current: T): T {
   return next < values.length ? (values[next] as T) : current;
 }
 
+/** Instant before which a pull request counts as stale in this state. */
+export function staleBefore(state: State): number {
+  return staleCutoff(state.now, state.settings.stalePrDays);
+}
+
 function setFilters(state: State, filters: Partial<Filters>): State {
   const index = visibleRows(state).findIndex((item) => rowId(item) === state.selected);
   return normalize({ ...state, filters: { ...state.filters, ...filters } }, index);
@@ -420,8 +428,8 @@ function listKey(state: State, key: Key): Update {
       return startRefresh(state);
     case "m":
       return [setFilters(state, { actor: state.filters.actor === "me" ? "all" : "me" }), []];
-    case "d":
-      return [setFilters(state, { hideDrafts: !state.filters.hideDrafts }), []];
+    case "h":
+      return [setFilters(state, { hideStale: !state.filters.hideStale }), []];
     case "f":
       return [setFilters(state, { actor: cycle<ActorFilter>(ACTOR_FILTERS, state.filters.actor) }), []];
     case "P": {

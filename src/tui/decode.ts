@@ -104,6 +104,7 @@ function pullRequest(value: unknown, path: string): ListPullRequest | null {
     url: string(fields["url"], `${path}.url`),
     title: string(fields["title"], `${path}.title`),
     draft: boolean(fields["draft"], `${path}.draft`),
+    updated_at: string(fields["updated_at"], `${path}.updated_at`),
     review_decision: nullableString(fields["review_decision"], `${path}.review_decision`) as ListPullRequest["review_decision"],
     checks: oneOf(fields["checks"], CHECKS, `${path}.checks`),
     mergeable: string(fields["mergeable"], `${path}.mergeable`) as ListPullRequest["mergeable"],
