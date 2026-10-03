@@ -132,13 +132,18 @@ done < "$manifest"
 # Symbolic links were refused above; any other non-regular entry is refused here.
 special_entry=$(find "$archive_dir" ! -type f ! -type d -print | head -n 1)
 [ -z "$special_entry" ] || refuse_archive "the archive holds a special file: $special_entry"
-unlisted=$(find "$archive_dir" -type f ! -path "$archive_dir/MANIFEST" -print | while IFS= read -r present; do
-    relative=${present#"$archive_dir"/}
-    case "$manifest_members" in
-        *" $relative "*) ;;
-        *) printf '%s\n' "$relative"; break ;;
-    esac
-done)
+# The case patterns live in a function: bash 3.2 (the macOS /bin/sh) cannot parse
+# an unbalanced `)` of a case pattern inside a command substitution.
+first_unlisted_file() {
+    find "$archive_dir" -type f ! -path "$archive_dir/MANIFEST" -print | while IFS= read -r present; do
+        relative=${present#"$archive_dir"/}
+        case "$manifest_members" in
+            *" $relative "*) ;;
+            *) printf '%s\n' "$relative"; break ;;
+        esac
+    done
+}
+unlisted=$(first_unlisted_file)
 [ -z "$unlisted" ] || refuse_archive "the archive holds a file the MANIFEST does not list: $unlisted"
 [ "$manifest_component" = "$component" ] \
     || refuse_archive "this is the ${manifest_component:-unknown} archive; this installer needs the $component archive"

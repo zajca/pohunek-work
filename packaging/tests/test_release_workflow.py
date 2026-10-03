@@ -71,7 +71,7 @@ class ReleaseTriggerTest(unittest.TestCase):
             job = RELEASE_JOBS[name]
             self.assertIn("POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}", job, name)
             self.assertIn("packaging/check-archive", job, name)
-        self.assertIn("packaging/core-pin --expect-version", RELEASE_JOBS["prepare"])
+        self.assertIn("packaging/core-pin --require-web --expect-version", RELEASE_JOBS["prepare"])
         self.assertIn("pipefail", RELEASE_JOBS["prepare"].split("Resolve the core pin", 1)[1])
 
 
