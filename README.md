@@ -61,9 +61,10 @@ surface adds a filter entry, a job and an entry in the `ci` job's `needs`.
 Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it calls the CI
 workflow as its gate, then builds the Linux `pohunek-gui` archive (with a
 headless Wayland smoke test), the web control center archives, the launchers
-archive and the signed, notarized macOS `Pohunek.app` and web archives, and
-attaches them to a GitHub release. Every archive has a `.sha256` file and a
-`MANIFEST` that records the pinned core version; `packaging/core-pin` reads it
+archive and the ad-hoc signed macOS `Pohunek.app` and web archives
+(aarch64-apple-darwin), and attaches them to a GitHub release once every
+archive and checksum has a build-provenance attestation. Every archive has a
+`.sha256` file and a `MANIFEST` that records the pinned core version; `packaging/core-pin` reads it
 from `native/Cargo.toml` and fails the release when `web/core-sdk.json` or the
 GUI version disagrees. Core ships the CLI, daemon and worker archives; this
 repository builds none of them.
@@ -72,14 +73,38 @@ Download an archive with `gh release download vX.Y.Z -R zajca/pohunek-work -p
 '<archive>*'` (needs `gh auth login`), or, while the repository is public, from
 the asset URL with `curl -LO`. Verify it with `sha256sum -c <archive>.sha256`.
 
+Every archive and checksum carries a GitHub build-provenance attestation made
+by the `attest` job of the release workflow; check a download with
+`gh attestation verify <archive> --repo zajca/pohunek-work`.
+
 A manual run of the workflow (Actions, Release, version `X.Y.Z`) builds
-everything and publishes nothing. The macOS signing job needs the secrets
-`MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`,
-`APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID` and
-`APPLE_NOTARY_ISSUER_ID` in the `macos-signing` environment and the repository
-variable `MACOS_TEAM_ID`; without them the job fails before any work and no
-macOS archive is published. A dry run without credentials sets
-`skip_macos_signing`. A tag release without macOS archives needs the explicit
-repository variable `RELEASE_WITHOUT_MACOS=true`; with any other value or none,
-a missing credential stops the release. The packaging scripts and their tests live in
+everything, including the macOS archives, and publishes and attests nothing.
+
+### macOS archives
+
+The macOS archives are signed ad hoc with no Apple account: the workflow has
+no signing secret, environment or repository variable. Provenance comes from the attestation above, not from a signer
+identity. The `Pohunek.app` bundle and the `pohunek-web` binary are signed
+inside-out with the ad-hoc identity, without the hardened runtime and without
+entitlements, and `packaging/macos/verify-signed --adhoc` checks the shipped
+bytes in the `verify-macos` job and in the `macos-package` CI job.
+
+Install with Homebrew from the shared tap `zajca/homebrew-pohunek`:
+
+```bash
+brew install zajca/pohunek/pohunek-gui   # Pohunek.app
+brew install zajca/pohunek/pohunek-web   # web control center
+```
+
+Homebrew downloads do not carry the quarantine attribute, so Gatekeeper does not
+block them. An archive downloaded in a browser is quarantined and Gatekeeper
+refuses an app that Apple has not vetted: open it once from Finder with Control-click, Open
+(or remove the attribute with `xattr -dr com.apple.quarantine Pohunek.app`)
+after verifying the attestation. The ad-hoc signature has no stable signer
+identity, so macOS treats a new version of the app as a new program: after an
+upgrade the Keychain asks once more for permission to use the stored
+credentials; choose Always Allow again.
+
+The packaging scripts and their tests live in `packaging/`, shared by `native/`
+and `web/`. The packaging scripts and their tests live in
 `packaging/`, shared by `native/` and `web/`.

@@ -34,6 +34,7 @@ jobs:
       native: ${{ steps.filter.outputs.native }}
       web: ${{ steps.filter.outputs.web }}
       packaging: ${{ steps.filter.outputs.packaging }}
+      macos_package: ${{ steps.filter.outputs.macos_package }}
     steps:
       # Only pull requests read the filter outputs; every other event runs all
       # jobs, so a tag push (the release gate) needs no path comparison.
@@ -66,6 +67,12 @@ jobs:
               - 'native/scripts/**'
               - 'web/release/**'
               - '.github/workflows/**'
+            macos_package:
+              - 'packaging/**'
+              - 'native/packaging/**'
+              - 'web/packaging/**'
+              - 'web/release/**'
+              - '.github/workflows/ci.yml'
 
   plugin:
     needs: changes
@@ -556,9 +563,123 @@ jobs:
           fi
           exit "$failures"
 
+  # The macOS release packaging path with the real codesign: each component is
+  # staged, ad-hoc signed by `package --adhoc-release`, and the archive is
+  # checked and extracted so `verify-signed --adhoc` inspects the shipped bytes.
+  # The path filter is wider than the surface jobs because the signing scripts
+  # only run for real here.
+  macos-package:
+    name: macOS ad-hoc signing (${{ matrix.component }})
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.macos_package == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -D warnings
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gui, web]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        run: test "$(uname -m)" = "arm64"
+
+      - name: Resolve the version and the core pin
+        id: pin
+        run: |
+          set -euo pipefail
+          packaging/core-pin --require-web | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        if: matrix.component == 'gui'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        if: matrix.component == 'gui'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: native
+          shared-key: release-macos-gui
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the GUI
+        if: matrix.component == 'gui'
+        id: build
+        run: |
+          set -euo pipefail
+          bindir="$(native/packaging/macos/build-release)"
+          echo "bindir=$bindir" >> "$GITHUB_OUTPUT"
+
+      - name: Install Bun
+        if: matrix.component == 'web'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+
+      - name: Pack the core SDK tarballs
+        if: matrix.component == 'web'
+        working-directory: web
+        run: bun scripts/pack-core-sdk.ts
+
+      - name: Install web dependencies
+        if: matrix.component == 'web'
+        working-directory: web
+        run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
+
+      - name: Build the web control center input tree
+        if: matrix.component == 'web'
+        id: webinput
+        env:
+          VERSION: ${{ steps.pin.outputs.native_version }}
+        run: bash web/release/package.sh "$VERSION" aarch64-apple-darwin --input-only
+
+      - name: Stage, ad-hoc sign, and verify
+        id: package
+        env:
+          COMPONENT: ${{ matrix.component }}
+          VERSION: ${{ steps.pin.outputs.native_version }}
+          POHUNEK_CORE_REF: ${{ steps.pin.outputs.core_ref }}
+          GUI_BINDIR: ${{ steps.build.outputs.bindir }}
+          WEB_INPUT: ${{ steps.webinput.outputs.input }}
+        run: |
+          set -euo pipefail
+          if [ "$COMPONENT" = web ]; then
+            input="$WEB_INPUT"
+          else
+            input="$GUI_BINDIR"
+          fi
+          mkdir -p dist
+          staging="$(packaging/macos/package --stage-release "$COMPONENT" "$VERSION" "$input" dist)"
+          archive="$(packaging/macos/package --adhoc-release "$COMPONENT" "$VERSION" "$staging")"
+          packaging/macos/verify-signed --adhoc "$staging"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Check the archive and verify the extracted signatures
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          COMPONENT: ${{ matrix.component }}
+          VERSION: ${{ steps.pin.outputs.native_version }}
+          POHUNEK_CORE_REF: ${{ steps.pin.outputs.core_ref }}
+        run: |
+          set -euo pipefail
+          packaging/check-archive "$ARCHIVE" --component "$COMPONENT" --version "$VERSION" \
+            --target aarch64-apple-darwin --signing adhoc --core "$POHUNEK_CORE_REF"
+          extract_dir="$(mktemp -d)"
+          trap 'rm -rf "$extract_dir"' EXIT
+          tar -xzf "$ARCHIVE" -C "$extract_dir"
+          root="$extract_dir/$(basename "$ARCHIVE" .tar.gz)"
+          grep -q '^signing adhoc$' "$root/MANIFEST"
+          packaging/macos/verify-signed --adhoc "$root"
+
   ci:
     if: ${{ always() }}
-    needs: [changes, plugin, launchers, native, native-macos, web, web-macos, packaging]
+    needs: [changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package]
     runs-on: ubuntu-latest
     steps:
       # A skipped surface job is a pass; a failed or cancelled one is not.

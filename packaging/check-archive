@@ -2,7 +2,7 @@
 """Verify a release archive and its checksum file without running anything in it.
 
 usage: check-archive <archive.tar.gz> --component C --version X.Y.Z [--target T]
-                     [--signing none|developer-id] [--core REF]
+                     [--signing none|adhoc] [--core REF]
 
 Checks, in order, and exits 1 at the first failure:
   - `<archive>.sha256` holds exactly `<sha256>  <file name>` for the archive;
@@ -125,7 +125,7 @@ def main(argv: list) -> int:
     parser.add_argument("--component", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--target")
-    parser.add_argument("--signing", default="none", choices=["none", "developer-id"])
+    parser.add_argument("--signing", default="none", choices=["none", "adhoc"])
     parser.add_argument("--core")
     args = parser.parse_args(argv)
     try:

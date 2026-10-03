@@ -257,8 +257,8 @@ environment file, so the agent is registered only once the bind host and port ar
 set, and `./install.sh` is re-run after each edit of `backend.env`. Logs go to the
 bounded owner-private `~/.local/state/pohunek/web-logs/pohunek-backend.jsonl`
 family; a failure before the configuration loads lands in `launchd.stderr` in the
-same directory. The signed executable carries the JIT entitlements Bun documents
-for standalone executables.
+same directory. The executable is ad-hoc signed without the hardened runtime, so
+the Bun runtime needs no JIT entitlements.
 
 ## Release archives
 

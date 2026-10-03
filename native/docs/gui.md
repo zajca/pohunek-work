@@ -233,12 +233,12 @@ and a native `UNUserNotificationCenter` call, which the GUI does not make yet
 ## macOS app bundle
 
 The release workflow builds the macOS GUI archive
-`pohunek-gui-<version>-aarch64-apple-darwin.tar.gz` around `Pohunek.app` when
-the repository's `macos-signing` credentials exist: signed with a Developer ID
-Application certificate (hardened runtime, secure timestamp), notarized, ticket
-stapled. macOS is not yet a published platform (see the README); once an archive
-is published, copy `Pohunek.app` to `~/Applications` (or `/Applications`) and
-open it from Finder.
+`pohunek-gui-<version>-aarch64-apple-darwin.tar.gz` around `Pohunek.app`. The
+bundle is ad-hoc signed (no Developer ID, no notarization) and carries a GitHub
+build-provenance attestation. Install it with `brew install
+zajca/pohunek/pohunek-gui`, which does not quarantine the app, or download the
+archive, verify it with `gh attestation verify <archive> --repo
+zajca/pohunek-work`, and copy `Pohunek.app` to `~/Applications`.
 
 - Bundle identifier `io.github.zajca.pohunek.gui`, executable `pohunek-gui`,
   minimum macOS 14.0, Apple Silicon only.
@@ -250,10 +250,14 @@ open it from Finder.
   the unbundled binary.
 - A development build (`packaging/macos/package --development gui <version>
   <bindir> <output-dir>`) is unsigned, named `...-unsigned-development`, and never released.
-- If Gatekeeper refuses an app that was downloaded with a browser, verify it
-  with `spctl --assess --type execute --verbose=4 Pohunek.app` and
-  `codesign --verify --deep --strict Pohunek.app`; do not disable Gatekeeper or
-  strip quarantine from other files. A signed and notarized app needs neither.
+- Gatekeeper refuses an app that was downloaded with a browser, because the
+  ad-hoc signature is not notarized. Verify the archive with `gh attestation
+  verify` and `codesign --verify --deep --strict Pohunek.app`, then remove the
+  quarantine attribute from that one app (`xattr -dr com.apple.quarantine
+  Pohunek.app`); do not disable Gatekeeper. A Homebrew formula install needs no
+  such step.
+- Every upgrade changes the ad-hoc code identity, so macOS may ask again for
+  Keychain access to the items the app reads.
 - The release's `Pohunek.app` has the bundle identity a notification
   authorization check needs, but the GUI does not call
   `UNUserNotificationCenter` yet (see the notification limits above).
