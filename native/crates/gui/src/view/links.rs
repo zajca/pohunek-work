@@ -43,9 +43,14 @@ impl Targets {
             .filter(|branch| !branch.is_empty())
             .or_else(|| link.and_then(|link| link.branch.as_deref()))
             .map(str::to_owned);
+        // The provider's branch names the pull request head; the session branch
+        // can be a local helper branch (a review checkout) that GitHub lacks.
         let branch_page = link
-            .and_then(|link| link.url.as_ref())
-            .zip(branch.as_deref())
+            .and_then(|link| link.url.as_ref().zip(link.branch.as_deref()))
+            .or_else(|| {
+                link.and_then(|link| link.url.as_ref())
+                    .zip(branch.as_deref())
+            })
             .and_then(|(url, branch)| url.github_branch_url(branch));
         Self {
             item: link.and_then(|link| link.url.clone()),
@@ -237,6 +242,19 @@ mod tests {
                 .branch
                 .as_deref(),
             Some("from-link")
+        );
+    }
+
+    #[test]
+    fn the_branch_page_uses_the_pull_request_head_not_the_local_branch() {
+        let link = link(Some("https://github.com/o/r/pull/7"), Some("feat/x"));
+
+        let targets = Targets::new(Some(&link), Some("review/7-abc123"), None, Some(true));
+
+        assert_eq!(targets.branch.as_deref(), Some("review/7-abc123"));
+        assert_eq!(
+            targets.branch_page.expect("branch page").as_str(),
+            "https://github.com/o/r/tree/feat/x"
         );
     }
 
