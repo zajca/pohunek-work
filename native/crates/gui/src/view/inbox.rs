@@ -124,7 +124,16 @@ fn notification_policy_card(app: &PohunekApp) -> Element<'_, Message> {
         .on_press(Message::LoadNotificationPolicy(host_id.clone()))
         .style(iced::widget::button::secondary);
     let Some(policy) = app.workspace.notification_policy(&host_id) else {
-        return card(column![text(format!("Activity policy · {host_id}")), load].spacing(6));
+        return card(
+            column![
+                text(format!(
+                    "Activity policy · {}",
+                    app.workspace.host_label(&host_id)
+                )),
+                load
+            ]
+            .spacing(6),
+        );
     };
 
     let mut providers = BTreeSet::new();
@@ -135,7 +144,7 @@ fn notification_policy_card(app: &PohunekApp) -> Element<'_, Message> {
 
     let mut rows = column![
         row![
-            text(format!("Activity policy · {host_id}")).size(14),
+            text(format!("Activity policy · {}", app.workspace.host_label(&host_id))).size(14),
             iced::widget::space().width(Fill),
             load,
             button("Save")
@@ -278,18 +287,26 @@ fn inbox_host_picker(app: &PohunekApp) -> Option<Element<'_, Message>> {
     if app.workspace.hosts.len() < 2 {
         return None;
     }
+    // Labels are unique per host, so a picked label identifies exactly one host.
+    let hosts: Vec<(HostId, String)> = app
+        .workspace
+        .hosts
+        .keys()
+        .map(|host_id| (host_id.clone(), app.workspace.host_label(host_id)))
+        .collect();
     let mut options = vec![INBOX_ALL_HOSTS_LABEL.to_owned()];
-    options.extend(app.workspace.hosts.keys().map(HostId::to_string));
-    let selected = app
-        .notification_filter
-        .host_id
-        .as_ref()
-        .map_or_else(|| INBOX_ALL_HOSTS_LABEL.to_owned(), HostId::to_string);
+    options.extend(hosts.iter().map(|(_, label)| label.clone()));
+    let selected = app.notification_filter.host_id.as_ref().map_or_else(
+        || INBOX_ALL_HOSTS_LABEL.to_owned(),
+        |host_id| app.workspace.host_label(host_id),
+    );
     Some(
-        pick_list(options, Some(selected), |value| {
-            Message::FilterNotificationHost(
-                (value != INBOX_ALL_HOSTS_LABEL).then(|| HostId::new(value)),
-            )
+        pick_list(options, Some(selected), move |value| {
+            let host_id = hosts
+                .iter()
+                .find(|(_, label)| *label == value)
+                .map(|(host_id, _)| host_id.clone());
+            Message::FilterNotificationHost(host_id)
         })
         .into(),
     )
@@ -318,7 +335,7 @@ fn notification_row(
         .map(|session_id| session_display_label(app, &host_id, session_id));
 
     let mut meta = String::new();
-    push_meta(&mut meta, &host_id.to_string());
+    push_meta(&mut meta, &app.workspace.host_label(&host_id));
     push_meta(&mut meta, session_label.as_deref().unwrap_or("no session"));
     push_meta(&mut meta, notification_kind_label(record.kind));
 
@@ -388,7 +405,7 @@ fn inbox_message_content<'a>(
         .as_ref()
         .map(|session_id| session_display_label(app, host_id, session_id));
     let mut meta = String::new();
-    push_meta(&mut meta, &host_id.to_string());
+    push_meta(&mut meta, &app.workspace.host_label(host_id));
     push_meta(&mut meta, session_label.as_deref().unwrap_or("no session"));
     push_meta(&mut meta, notification_kind_label(record.kind));
     push_meta(&mut meta, &notification_age_label(&record.created_at));
@@ -412,7 +429,7 @@ fn inbox_message_content<'a>(
     ]
     .spacing(10);
     if app.inbox_details_expanded {
-        content = content.push(notification_details(host_id, record));
+        content = content.push(notification_details(app, host_id, record));
     }
     inbox_dialog(app, content)
 }
@@ -523,6 +540,7 @@ fn notification_link_action<'a>(
 /// The message layer's collapsible `> Details`: source triplet, created
 /// timestamp, linked project/agent, safe metadata, and dedupe/source ids.
 fn notification_details<'a>(
+    app: &PohunekApp,
     host_id: &'a HostId,
     record: &'a NotificationRecord,
 ) -> Element<'a, Message> {
@@ -532,7 +550,7 @@ fn notification_details<'a>(
             notification_status_label(record.status)
         ))
         .size(12),
-        selectable_text(format!("host: {host_id}")).size(12),
+        selectable_text(format!("host: {}", app.workspace.host_label(host_id))).size(12),
         selectable_text(format!(
             "source: {} / {} / {}",
             record.source.provider,

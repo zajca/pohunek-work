@@ -571,6 +571,7 @@ impl HostView {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Workspace {
     pub hosts: BTreeMap<HostId, HostView>,
+    host_labels: BTreeMap<HostId, String>,
     pub selection: Option<Selection>,
     pub notification_intents: Vec<NotificationIntent>,
     pub toasts: Vec<Toast>,
@@ -584,6 +585,38 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// Replaces the human-readable host names shown instead of route ids.
+    ///
+    /// Labels shared by several hosts get a short suffix of the route id so
+    /// every host stays distinguishable. Hosts without a label keep showing
+    /// their route id.
+    pub fn set_host_labels(&mut self, labels: &BTreeMap<HostId, String>) {
+        let mut occurrences: BTreeMap<&str, usize> = BTreeMap::new();
+        for label in labels.values() {
+            *occurrences.entry(label.as_str()).or_default() += 1;
+        }
+        self.host_labels = labels
+            .iter()
+            .map(|(host_id, label)| {
+                let label = if occurrences[label.as_str()] > 1 {
+                    format!("{label} ({})", route_id_suffix(host_id))
+                } else {
+                    label.clone()
+                };
+                (host_id.clone(), label)
+            })
+            .collect();
+    }
+
+    /// Name to show for `host_id`: its human-readable label, else the route id.
+    #[must_use]
+    pub fn host_label(&self, host_id: &HostId) -> String {
+        self.host_labels
+            .get(host_id)
+            .cloned()
+            .unwrap_or_else(|| host_id.to_string())
+    }
+
     /// Returns the safe governance state for the configured daemon route.
     ///
     /// `host_id` is the GUI's route selector, not the protocol stable host id
@@ -2136,6 +2169,7 @@ impl Workspace {
                 let access = session_access(session);
                 rows.push(SessionRow {
                     host_id: host_id.clone(),
+                    host_label: self.host_label(host_id),
                     session_id: session.id.clone(),
                     name: session.name.clone(),
                     project_label: session.project_id.as_deref().map(|project_id| {
@@ -2185,6 +2219,7 @@ impl Workspace {
                         project_id: info.id.clone(),
                     },
                     label: info.label.clone(),
+                    host_label: self.host_label(host_id),
                     host_connected: host.conn == ConnState::Connected,
                     known: true,
                     session_count: host
@@ -2222,6 +2257,7 @@ impl Workspace {
                         project_id: project_id.to_owned(),
                     },
                     label: project_display_label(host, project_id),
+                    host_label: self.host_label(host_id),
                     host_connected: host.conn == ConnState::Connected,
                     known: host.projects.contains_key(project_id),
                     session_count,
@@ -2263,7 +2299,7 @@ pub fn project_choice_labels(choices: &[ProjectChoice], always_host: bool) -> Ve
             let mut label = choice.label.clone();
             if always_host || by_label[choice.label.as_str()] > 1 {
                 label.push_str(SEPARATOR);
-                label.push_str(choice.project.host_id.as_str());
+                label.push_str(&choice.host_label);
             }
             if by_host_label[&(&choice.project.host_id, choice.label.as_str())] > 1 {
                 label.push_str(SEPARATOR);
@@ -2272,6 +2308,15 @@ pub fn project_choice_labels(choices: &[ProjectChoice], always_host: bool) -> Ve
             label
         })
         .collect()
+}
+
+/// Number of trailing route-id characters that tell hosts with equal labels apart.
+const ROUTE_ID_SUFFIX_CHARS: usize = 4;
+
+fn route_id_suffix(host_id: &HostId) -> String {
+    let chars: Vec<char> = host_id.as_str().chars().collect();
+    let start = chars.len().saturating_sub(ROUTE_ID_SUFFIX_CHARS);
+    chars[start..].iter().collect()
 }
 
 fn sort_project_choices(choices: &mut [ProjectChoice]) {
@@ -2671,6 +2716,8 @@ pub struct ProjectChoice {
     pub project: ProjectRef,
     /// Project label, or the project id when the host has no such project.
     pub label: String,
+    /// Display name of the owning host.
+    pub host_label: String,
     /// Whether the owning host is currently connected.
     pub host_connected: bool,
     /// `false` when only sessions reference the project and the host lists no
@@ -2684,6 +2731,8 @@ pub struct ProjectChoice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
     pub host_id: HostId,
+    /// Display name of the owning host.
+    pub host_label: String,
     pub session_id: SessionId,
     /// Owner-set display name, or `None` to show the session id.
     pub name: Option<String>,
@@ -2993,8 +3042,8 @@ mod tests {
     use serde_json::Value;
 
     use crate::connection::{
-        discovered_host_config, discovered_transport_addr, parse_agent_state, parse_event_message,
-        subscribe_request, Backoff,
+        discovered_host_config, discovered_host_label, discovered_transport_addr,
+        parse_agent_state, parse_event_message, subscribe_request, Backoff,
     };
     use crate::link::action_prompt_provider;
     use crate::sdk::notification_seed_queries;
@@ -5637,6 +5686,79 @@ mod tests {
             project_choice_labels(&choices[2..], true),
             ["web  ·  local", "web  ·  remote"]
         );
+    }
+
+    #[test]
+    fn host_labels_replace_route_ids_and_disambiguate_duplicates() {
+        let mut workspace = Workspace::default();
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: connected_snapshot(
+                "netbird:peer~AAAA1111",
+                Vec::new(),
+                vec![labelled_project("p-1", "api")],
+            ),
+        });
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: connected_snapshot(
+                "netbird:peer~BBBB2222",
+                Vec::new(),
+                vec![labelled_project("p-1", "api")],
+            ),
+        });
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: connected_snapshot("local", Vec::new(), Vec::new()),
+        });
+        workspace.set_host_labels(&BTreeMap::from([
+            (HostId::new("netbird:peer~AAAA1111"), "dev-box".to_owned()),
+            (HostId::new("netbird:peer~BBBB2222"), "dev-box".to_owned()),
+        ]));
+
+        assert_eq!(
+            workspace.host_label(&HostId::new("netbird:peer~AAAA1111")),
+            "dev-box (1111)"
+        );
+        assert_eq!(
+            workspace.host_label(&HostId::new("netbird:peer~BBBB2222")),
+            "dev-box (2222)"
+        );
+        assert_eq!(workspace.host_label(&HostId::new("local")), "local");
+        assert_eq!(
+            project_choice_labels(&workspace.project_choices(), false),
+            ["api  ·  dev-box (1111)", "api  ·  dev-box (2222)"]
+        );
+
+        workspace.set_host_labels(&BTreeMap::from([(
+            HostId::new("netbird:peer~AAAA1111"),
+            "alpha".to_owned(),
+        )]));
+        assert_eq!(
+            workspace.host_label(&HostId::new("netbird:peer~AAAA1111")),
+            "alpha"
+        );
+        assert_eq!(
+            workspace.host_label(&HostId::new("netbird:peer~BBBB2222")),
+            "netbird:peer~BBBB2222"
+        );
+    }
+
+    #[test]
+    fn discovered_host_label_prefers_name_then_first_fqdn_label() {
+        let mut record = HostRecord {
+            name: Some(" dev ".to_owned()),
+            fqdn: Some("other.example.netbird.cloud".to_owned()),
+            address: None,
+            port: 18722,
+            overlay: "netbird".to_owned(),
+            peer_id: None,
+            class: HostClass::ReachableDaemon {
+                daemon_version: "0.5.0".to_owned(),
+            },
+        };
+        assert_eq!(discovered_host_label(&record).as_deref(), Some("dev"));
+        record.name = Some("  ".to_owned());
+        assert_eq!(discovered_host_label(&record).as_deref(), Some("other"));
+        record.fqdn = None;
+        assert_eq!(discovered_host_label(&record), None);
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-08-12
 
+use std::collections::BTreeMap;
+
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::text_editor;
 use iced::Size;
@@ -14,6 +16,8 @@ use protocol::{NotificationId, NotificationKind, SessionId};
 pub(crate) const BLANK_TEMPLATE_LABEL: &str = "— blank —";
 pub(crate) const ASSISTANT_AUTO_AGENT_LABEL: &str = "Auto";
 pub(crate) const PROJECT_PLACEHOLDER_LABEL: &str = "Choose a project";
+/// Shown in the project select until a host reports its first project.
+pub(crate) const PROJECTS_LOADING_LABEL: &str = "Connecting to hosts...";
 
 /// Which overlay modal is open.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +57,26 @@ pub(crate) struct TemplateRecipe {
 pub(crate) struct ResolvedTemplate {
     pub(crate) rendered: String,
     pub(crate) recipe: TemplateRecipe,
+}
+
+/// How the process presents itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppMode {
+    /// The complete control-plane window.
+    Full,
+    /// Only the Start-a-session dialog; the process exits once the session is
+    /// started and its terminal is open.
+    NewSession,
+}
+
+/// Progress of a [`AppMode::NewSession`] process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LauncherState {
+    /// The first projects have arrived and the Project select was opened.
+    pub(crate) primed: bool,
+    /// A session launch is in flight or succeeded; further submits are ignored
+    /// so one dialog never starts two sessions.
+    pub(crate) pending: bool,
 }
 
 /// User-editable fields in the session-start modal.
@@ -149,11 +173,14 @@ pub(crate) enum FormField {
     AssistantBaseBranch,
 }
 
-/// State of an expanded keyboard-controlled select field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// State of an expanded select field.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FormSelect {
     pub(crate) field: FormField,
+    /// Highlighted position among the entries matching `query`.
     pub(crate) cursor: usize,
+    /// Fuzzy filter typed into the search box; empty shows every option.
+    pub(crate) query: String,
 }
 
 #[derive(Debug, Clone)]
@@ -225,6 +252,8 @@ pub(crate) enum Message {
     MoveFormSelect(ListDirection),
     ConfirmFormSelect,
     CloseFormSelect,
+    FormSelectQueryChanged(String),
+    FocusFormSelectSearch,
     ChooseFormSelect {
         field: FormField,
         index: usize,
@@ -275,5 +304,6 @@ pub(crate) enum Message {
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveryResult {
     pub(crate) hosts: Vec<HostConfig>,
+    pub(crate) labels: BTreeMap<HostId, String>,
     pub(crate) warning: Option<String>,
 }

@@ -1,6 +1,7 @@
 //! Top-level Iced view tree: shared widget helpers and the view submodules.
 
 pub(crate) mod detail;
+mod dropdown;
 mod hosts;
 pub(crate) mod inbox;
 mod modals;
@@ -14,7 +15,7 @@ use iced::{Background, Center, Color, Element, Fill, Shrink, Theme};
 use pohunek_gui_core::ConnState;
 use protocol::{AgentKind, SessionInfo};
 
-use crate::message::{Message, ModalView};
+use crate::message::{AppMode, Message, ModalView};
 use crate::PohunekApp;
 
 use detail::detail_view;
@@ -99,6 +100,9 @@ fn list_button<'a>(
 }
 
 pub(crate) fn view(app: &PohunekApp) -> Element<'_, Message> {
+    if app.mode == AppMode::NewSession {
+        return launcher_view(app);
+    }
     let base = container(detail_view(app))
         .padding(16)
         .width(Fill)
@@ -121,6 +125,19 @@ pub(crate) fn view(app: &PohunekApp) -> Element<'_, Message> {
         ModalView::Inbox => modal(base.into(), inbox_modal_content(app), Message::CloseModal),
         ModalView::Hosts => modal(base.into(), hosts_modal_content(app), Message::CloseModal),
     }
+}
+
+/// Size of the status line under the dialog-only window's dialog.
+const STATUS_TEXT_SIZE: u32 = 13;
+
+/// Dialog-only window: the Start dialog fills the window, with the status line
+/// below it so a failed launch is visible.
+fn launcher_view(app: &PohunekApp) -> Element<'_, Message> {
+    let mut content = column![start_modal_content(app)].spacing(8).align_x(Center);
+    if let Some(status) = &app.status {
+        content = content.push(text(status).size(STATUS_TEXT_SIZE));
+    }
+    container(content).center(Fill).padding(16).into()
 }
 
 /// Overlays `dialog` centered on a dimmed backdrop above `base`. Clicking the

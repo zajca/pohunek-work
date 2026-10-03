@@ -19,6 +19,7 @@ pub mod assistant {
 
 mod connection;
 mod error;
+mod fuzzy;
 mod link;
 mod message;
 mod review;
@@ -44,10 +45,12 @@ pub use connection::{
     discover_hosts, host_subscription_stream, render_attach_argv, render_attach_command,
     spawn_attach_command, validate_attach_argv_template, validate_attach_shell_template,
     workspace_connection_stream, AttachCommandSpawner, AttachSpawnError, AttachSpawnIntent,
-    AttachTemplateError, AttachTemplateValues,
+    AttachTemplateError, AttachTemplateValues, DiscoveredHosts,
 };
 #[doc(inline)]
 pub use error::CoreError;
+#[doc(inline)]
+pub use fuzzy::{fuzzy_rank, fuzzy_score};
 #[doc(inline)]
 pub use link::{
     preview_action_prompt, preview_prompt_content, session_link_metadata, session_metadata_rows,
