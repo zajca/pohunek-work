@@ -347,6 +347,28 @@ class VerifyArchiveTest(unittest.TestCase):
             result = self.verify(directory)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_an_unlisted_file_is_refused(self):
+        for relative in ("extra", "templates/extra.js"):
+            directory = self.extract(CORE_REF)
+            (directory / relative).write_text("x")
+            result = self.verify(directory)
+            self.assertEqual(result.returncode, 1, relative)
+            self.assertIn("does not list: " + relative, result.stderr)
+
+    def test_a_missing_listed_file_is_refused(self):
+        directory = self.extract(CORE_REF)
+        (directory / "templates" / "launcher.conf").unlink()
+        result = self.verify(directory)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing or not a regular file: templates/launcher.conf", result.stderr)
+
+    def test_a_special_file_is_refused(self):
+        directory = self.extract(CORE_REF)
+        os.mkfifo(directory / "pipe")
+        result = self.verify(directory)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("special file", result.stderr)
+
     def test_a_manifest_with_a_malformed_core_version_is_refused(self):
         directory = self.extract(CORE_REF)
         manifest = directory / "MANIFEST"

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Evaluate and assemble the macOS launchd lifetime acceptance evidence.
 
-`scripts/acceptance/macos-launchd-lifetime` drives the manual procedure and
-stores every raw observation (CLI JSON, `ps`, `launchctl` exit statuses, boot
-time) in its state directory. This helper is the only code that interprets
-those files: small query commands answer the driver's questions, and
-`assemble` turns the whole state directory into the evidence document
-described in `docs/acceptance/README.md`. Evaluation is a pure function of the
-state directory, so it is unit-tested on any host
-(`scripts/tests/test_launchd_lifetime_evidence.py`).
+`macos-gui-launch` (next to this file) stores every raw observation (CLI JSON,
+`ps`, `launchctl` exit statuses, boot time) in its state directory. This helper
+is the only code that interprets those files: small query commands answer the
+caller's questions, and `assemble` turns the whole state directory into the
+evidence document. Evaluation is a pure function of the state directory, so it
+is unit-tested on any host (`native/scripts/tests/test_launchd_lifetime_evidence.py`).
 
 Stdlib only and Python 3.9 compatible: the Xcode Command Line Tools ship
 Python 3.9 as `/usr/bin/python3`.
@@ -166,7 +164,7 @@ def check(name: str, passed: bool, detail: str = "") -> Dict[str, Any]:
 
 
 def read_launchctl(path: Path) -> Dict[str, int]:
-    """Parse `<label> <exit status>` lines recorded by the driver."""
+    """Parse `<label> <exit status>` lines recorded by the caller."""
     text = read_text(path)
     statuses: Dict[str, int] = {}
     for line in (text or "").splitlines():
@@ -540,7 +538,7 @@ def utc_now() -> str:
 
 
 def command_init(args: argparse.Namespace) -> int:
-    """Write run.json from the host facts the driver collected."""
+    """Write run.json from the host facts the caller collected."""
     service = read_envelope(Path(args.service))
     run = {
         "run_id": args.run_id,

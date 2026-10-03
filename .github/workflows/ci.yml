@@ -140,6 +140,9 @@ jobs:
       - name: Packaging script tests
         run: python3 -m unittest discover -s packaging/tests
 
+      - name: Native acceptance helper tests
+        run: python3 -m unittest discover -s native/scripts/tests
+
       - name: Lint the workflows and their shell steps
         uses: docker://rhysd/actionlint:1.7.7
         with:

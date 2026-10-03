@@ -127,6 +127,19 @@ while IFS= read -r manifest_line; do
     esac
 done < "$manifest"
 [ "$manifest_header" -eq 1 ] || refuse_archive "MANIFEST is empty"
+# The tree must hold exactly the listed files: an unlisted file would be
+# installed (the web installer copies frontend/ recursively) without a digest.
+# Symbolic links were refused above; any other non-regular entry is refused here.
+special_entry=$(find "$archive_dir" ! -type f ! -type d -print | head -n 1)
+[ -z "$special_entry" ] || refuse_archive "the archive holds a special file: $special_entry"
+unlisted=$(find "$archive_dir" -type f ! -path "$archive_dir/MANIFEST" -print | while IFS= read -r present; do
+    relative=${present#"$archive_dir"/}
+    case "$manifest_members" in
+        *" $relative "*) ;;
+        *) printf '%s\n' "$relative"; break ;;
+    esac
+done)
+[ -z "$unlisted" ] || refuse_archive "the archive holds a file the MANIFEST does not list: $unlisted"
 [ "$manifest_component" = "$component" ] \
     || refuse_archive "this is the ${manifest_component:-unknown} archive; this installer needs the $component archive"
 case $manifest_version in
