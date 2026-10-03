@@ -18,6 +18,7 @@ use crate::keyboard::{KeyMap, KeyMapError};
 use crate::notify::{
     CommandResolution, NotificationBackend, Notifier, DEFAULT_NOTIFY_COMMAND, SYSTEM_OSASCRIPT,
 };
+use crate::open::Opener;
 use crate::terminal::AttachTerminal;
 
 // 80x24 is the traditional terminal size expected by many CLI tools.
@@ -103,6 +104,8 @@ pub(crate) struct AppConfig {
     pub(crate) connection_options: ConnectionOptions,
     pub(crate) terminal_size: TerminalSize,
     pub(crate) notification: Notifier,
+    /// Opens links and folders in the desktop's default applications.
+    pub(crate) opener: Opener,
     pub(crate) keymap: KeyMap,
 }
 
@@ -120,6 +123,9 @@ impl AppConfig {
         validate_text_field("pohunek_bin", &raw.pohunek_bin)?;
         if let Some(command) = &raw.notification_command {
             validate_text_field("notification_command", command)?;
+        }
+        if let Some(command) = &raw.open_command {
+            validate_text_field("open_command", command)?;
         }
         let attach = attach_selection(&raw, cfg!(target_os = "macos"))?;
         let launch = raw_gui.launch_settings()?;
@@ -142,6 +148,13 @@ impl AppConfig {
                 &launch,
                 &bin_resolver,
             ),
+            opener: Opener::new(
+                raw.open_command.as_deref(),
+                cfg!(target_os = "macos"),
+                &bin_resolver,
+                launch.attach_observe,
+                launch.open_timeout,
+            ),
             keymap: keymap_from_raw_keybindings(&raw.keybindings)?,
         })
     }
@@ -158,6 +171,9 @@ struct RawConfig {
     pohunek_bin: String,
     #[serde(default)]
     notification_command: Option<String>,
+    /// Program that opens one URL or folder given as its only argument.
+    #[serde(default)]
+    open_command: Option<String>,
     #[serde(default)]
     gui: Option<RawGuiConfig>,
     #[serde(default)]
@@ -649,13 +665,16 @@ open_inbox = "ctrl+i"
     #[test]
     fn a_nul_in_the_toml_string_is_caught_by_the_field_check() {
         let raw: RawConfig = toml::from_str(
-            "attach_terminal = \"terminal-app\"\npohunek_bin = \"a\\u0000b\"\nnotification_command = \"n\\u0000\"",
+            "attach_terminal = \"terminal-app\"\npohunek_bin = \"a\\u0000b\"\nnotification_command = \"n\\u0000\"\nopen_command = \"o\\u0000\"",
         )
         .expect("raw config");
         validate_text_field("pohunek_bin", &raw.pohunek_bin).expect_err("NUL in pohunek_bin");
         let command = raw.notification_command.expect("command");
         validate_text_field("notification_command", &command)
             .expect_err("NUL in notification_command");
+        let opener = raw.open_command.expect("open command");
+        validate_text_field("open_command", &opener).expect_err("NUL in open_command");
+        validate_text_field("open_command", " ").expect_err("blank open_command");
     }
 
     #[test]

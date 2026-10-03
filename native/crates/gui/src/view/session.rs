@@ -3,17 +3,17 @@
 use iced::widget::{button, column, row, scrollable, text, text_input};
 use iced::{Center, Element, Fill};
 use pohunek_gui_core::{session_metadata_rows, HostId, RuntimeContinuity, SessionAccess};
-use protocol::{
-    AgentActivity, CwdSource, NotificationStatus, SessionInfo, SubagentInfo, SubagentLifecycle,
-};
+use protocol::{AgentActivity, CwdSource, NotificationStatus, SessionInfo};
 
 use crate::message::Message;
 use crate::selection::selected_session;
 use crate::PohunekApp;
 
+use super::links::links_view;
+use super::subagents::subagent_view;
 use super::{
-    agent_kind_label, card, dialog_card, muted_style, section_title, selectable_text,
-    session_agent_label, status_pill, PillTone,
+    card, dialog_card, muted_style, section_title, selectable_text, session_agent_label,
+    status_pill, PillTone,
 };
 
 /// Session-detail dialog opened from the prioritized list.
@@ -81,6 +81,9 @@ fn session_detail(app: &PohunekApp) -> Element<'_, Message> {
                 .push(selectable_text(format!("activity: {activity}")).size(14));
             detail = detail.push(session_attention_view(app, host_id, session));
             detail = detail.push(subagent_view(&session.subagents));
+            if let Some(links) = links_view(app, host_id, session) {
+                detail = detail.push(links);
+            }
             detail = session_runtime_details(detail, app, host_id, session);
             if let Some(project) = session
                 .project_label
@@ -123,47 +126,6 @@ fn session_detail(app: &PohunekApp) -> Element<'_, Message> {
         }
     }
     card(detail)
-}
-
-fn subagent_view(subagents: &[SubagentInfo]) -> Element<'static, Message> {
-    let running = subagents
-        .iter()
-        .filter(|subagent| subagent.lifecycle == SubagentLifecycle::Running)
-        .count();
-    let mut content = column![text(format!(
-        "Subagents · {running} running · {} recent",
-        subagents.len()
-    ))
-    .size(14)]
-    .spacing(4);
-    if subagents.is_empty() {
-        content = content.push(text("No observed subagents.").size(12).style(muted_style));
-    } else {
-        for subagent in subagents {
-            let kind = subagent.agent_type.as_deref().unwrap_or("agent");
-            content = content.push(
-                selectable_text(format!(
-                    "{} · {} · {} · {}",
-                    agent_kind_label(&subagent.provider),
-                    kind,
-                    subagent.id,
-                    subagent_lifecycle_label(subagent.lifecycle)
-                ))
-                .size(12),
-            );
-        }
-    }
-    card(content)
-}
-
-const fn subagent_lifecycle_label(lifecycle: SubagentLifecycle) -> &'static str {
-    match lifecycle {
-        SubagentLifecycle::Running => "working",
-        SubagentLifecycle::Completed => "completed",
-        SubagentLifecycle::Failed => "failed",
-        SubagentLifecycle::Cancelled => "cancelled",
-        SubagentLifecycle::Lost => "lost",
-    }
 }
 
 fn session_attention_view(

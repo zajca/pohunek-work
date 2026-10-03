@@ -15,6 +15,7 @@ use crate::view::inbox::notification_age_label;
 use crate::view::modals::toast_view;
 use crate::PohunekApp;
 
+use super::links::{row_buttons, session_host_is_local, Targets};
 use super::{card, list_button, muted_style, push_meta, status_pill, PillTone, STATUS_DOT};
 
 /// Heading size of the overview title.
@@ -76,7 +77,7 @@ pub(crate) fn detail_view(app: &PohunekApp) -> Element<'_, Message> {
         SessionGroup::Unavailable,
     ] {
         if rows.iter().any(|row| row.group == group) {
-            content = content.push(session_group(group, &rows));
+            content = content.push(session_group(app, group, &rows));
         }
     }
     for toast in app.workspace.toasts.iter().rev().take(VISIBLE_TOASTS).rev() {
@@ -183,7 +184,11 @@ fn filter_chip<'a>(
     }
 }
 
-fn session_group(group: SessionGroup, rows: &[SessionRow]) -> Element<'static, Message> {
+fn session_group<'a>(
+    app: &PohunekApp,
+    group: SessionGroup,
+    rows: &[SessionRow],
+) -> Element<'a, Message> {
     let matching: Vec<&SessionRow> = rows.iter().filter(|row| row.group == group).collect();
     let mut list = column![row![
         text(group_label(group)).size(18),
@@ -193,12 +198,13 @@ fn session_group(group: SessionGroup, rows: &[SessionRow]) -> Element<'static, M
     .align_y(Center)]
     .spacing(6);
     for session in matching {
-        list = list.push(session_row(session));
+        list = list.push(session_row(app, session));
     }
     card(list)
 }
 
-fn session_row(row: &SessionRow) -> Element<'static, Message> {
+/// Title line of a session row: name, attention label and subagent badge.
+fn row_heading(row: &SessionRow) -> iced::widget::Row<'static, Message> {
     let mut heading = row![text(row.display_name().to_owned()).size(ROW_TITLE_SIZE)]
         .spacing(6)
         .align_y(Center);
@@ -211,6 +217,22 @@ fn session_row(row: &SessionRow) -> Element<'static, Message> {
         };
         heading = heading.push(status_pill(label, PillTone::Danger));
     }
+    if row.subagents.running > 0 {
+        heading = heading.push(status_pill(
+            format!("{} subagents running", row.subagents.running),
+            PillTone::Success,
+        ));
+    } else if row.subagents.total > 0 {
+        heading = heading.push(status_pill(
+            format!("{} subagents", row.subagents.total),
+            PillTone::Neutral,
+        ));
+    }
+    heading
+}
+
+fn session_row(app: &PohunekApp, row: &SessionRow) -> Element<'static, Message> {
+    let heading = row_heading(row);
 
     let mut location = row![project_chip(row.project_label.as_deref())]
         .spacing(8)
@@ -241,6 +263,15 @@ fn session_row(row: &SessionRow) -> Element<'static, Message> {
         false,
     );
     let mut actions = row![].spacing(6).align_y(Center);
+    let targets = Targets::new(
+        row.link.as_ref(),
+        row.branch.as_deref(),
+        row.worktree_path.as_deref(),
+        session_host_is_local(app, &row.host_id),
+    );
+    for link_button in row_buttons(&targets) {
+        actions = actions.push(link_button);
+    }
     match row.access {
         SessionAccess::Attach | SessionAccess::Resume => {
             let label = if row.access == SessionAccess::Resume {

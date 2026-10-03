@@ -10,6 +10,7 @@ mod config;
 mod keyboard;
 mod message;
 mod notify;
+mod open;
 mod runtime;
 mod selection;
 mod terminal;
