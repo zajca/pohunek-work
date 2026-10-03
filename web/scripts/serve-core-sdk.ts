@@ -1,7 +1,7 @@
 // Serves the packed core SDK tarballs at the loopback address web/core-sdk.json
 // names, the way a core release serves them.
 //
-// usage: bun scripts/serve-core-sdk.ts [--dir DIR] [--run COMMAND [ARG...]]
+// usage: bun scripts/serve-core-sdk.ts [--dir DIR] [--pin FILE] [--run COMMAND [ARG...]]
 //
 // Without a command the server runs until interrupted. With a command it
 // serves while the command runs and exits with the command's status, so
@@ -80,15 +80,19 @@ async function main(): Promise<number> {
   const own = separator === -1 ? args : args.slice(0, separator);
   const command = separator === -1 ? [] : args.slice(separator + 1);
   let directory = DEFAULT_DIR;
+  let pinPath: string | undefined;
   for (let index = 0; index < own.length; index += 1) {
     if (own[index] === "--dir" && own[index + 1] !== undefined) {
       directory = resolve(own[index + 1] as string);
+      index += 1;
+    } else if (own[index] === "--pin" && own[index + 1] !== undefined) {
+      pinPath = resolve(own[index + 1] as string);
       index += 1;
     } else {
       throw new Error(`unknown argument: ${String(own[index])}`);
     }
   }
-  const pin = loadPin();
+  const pin = pinPath === undefined ? loadPin() : loadPin(pinPath);
   const address = localServeAddress(pin);
   if (address === undefined) {
     process.stdout.write(`core-sdk.json names a core release (${pin.assetBaseUrl}); nothing to serve\n`);

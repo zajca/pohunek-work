@@ -21,16 +21,17 @@ records their integrity.
 
 - `coreRev` is the core commit everything is built against: the SDK tarballs,
   and the `pohunekd`, `pohunek-sessiond` and `pohunek` binaries the real-daemon
-  tests drive. It must equal the revision in `native/Cargo.toml`;
-  `packaging/core-pin` fails the release (and the packaging tests) when the two
-  differ.
-- `assetBaseUrl` is `http://127.0.0.1:<port>/releases/download` before the core
-  release exists and `https://github.com/zajca/pohunek/releases/download` after.
+  tests drive. It must be the commit of the core tag (or the revision) pinned in
+  `native/Cargo.toml`; `packaging/core-pin` fails the release (and the packaging
+  tests) when the two differ.
+- `assetBaseUrl` is `https://github.com/zajca/pohunek/releases/download` for a
+  core release, or `http://127.0.0.1:<port>/releases/download` to develop against
+  an unreleased core commit (see below).
 - `web/package.json` carries the resulting URLs in its `catalog`; the three
   workspace members reference them as `catalog:`. `bun run core-sdk:sync`
   rewrites the catalog from the pin and CI runs it with `--check`.
 
-## Before the core release: pack and serve
+## Developing against an unreleased core: pack and serve
 
 `web/scripts/pack-core-sdk.ts` (`bun run core-sdk:pack`) packs the three tarballs
 into `web/.core-sdk/assets`:

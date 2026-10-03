@@ -117,6 +117,16 @@ describe("package.json catalog", () => {
   });
 });
 
+// A pin that names the loopback asset server, whatever the repository pin is, so the
+// serve script is exercised before and after the cutover to a release URL.
+async function loopbackPinFile(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "pohunek-pin-"));
+  roots.push(root);
+  const path = join(root, "core-sdk.json");
+  await writeFile(path, JSON.stringify(LOCAL));
+  return path;
+}
+
 async function assetDirectory(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "pohunek-serve-"));
   roots.push(root);
@@ -148,16 +158,13 @@ describe("asset server", () => {
 
   test("the command form serves while the command runs and returns its status", async () => {
     const directory = await assetDirectory();
-    const pin = loadPin(PIN_PATH);
-    const address = localServeAddress(pin);
-    if (address === undefined) {
-      return;
-    }
+    const pinPath = await loopbackPinFile();
+    const pin = loadPin(pinPath);
     for (const sdkPackage of ["protocol", "sdk", "testkit"]) {
       await writeFile(join(directory, `pohunek-ts-${sdkPackage}-${pin.sdkVersion}.tgz`), sdkPackage);
     }
     const probe = `const r = await fetch(${JSON.stringify(assetUrl(pin, "sdk"))}); process.exit(r.status === 200 ? 7 : 1);`;
-    const child = Bun.spawn([process.execPath, SERVE_SCRIPT, "--dir", directory, "--run", process.execPath, "-e", probe], {
+    const child = Bun.spawn([process.execPath, SERVE_SCRIPT, "--dir", directory, "--pin", pinPath, "--run", process.execPath, "-e", probe], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -167,7 +174,11 @@ describe("asset server", () => {
   test("a missing tarball is reported before serving", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pohunek-serve-empty-"));
     roots.push(directory);
-    const child = Bun.spawn([process.execPath, SERVE_SCRIPT, "--dir", directory], { stdout: "pipe", stderr: "pipe" });
+    const pinPath = await loopbackPinFile();
+    const child = Bun.spawn([process.execPath, SERVE_SCRIPT, "--dir", directory, "--pin", pinPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     expect(await child.exited).toBe(1);
     expect(await new Response(child.stderr).text()).toContain("is missing; run `bun run core-sdk:pack` first");
   });

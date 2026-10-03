@@ -23,21 +23,18 @@ Every surface is built and tested against one core release of
 [`zajca/pohunek`](https://github.com/zajca/pohunek). The pin lives in these
 places, which a bump must change together:
 
-- `native/Cargo.toml` `[workspace.dependencies]`: the core crates by git `rev`
-  (a release tag once one exists), all on the same revision, plus
-  `native/Cargo.lock`.
+- `native/Cargo.toml` `[workspace.dependencies]`: the core crates by git `tag`
+  (one core release tag, the same on every crate), plus `native/Cargo.lock`.
 - `.github/workflows/ci.yml` (`launchers` job): `POHUNEK_RELEASE` and
   `POHUNEK_MUSL_SHA256`, the core release whose `pohunek` binary the launcher
   rendering tests run.
-- `web/core-sdk.json`: the core commit (`coreRev`) the web workspace is built
-  against and where its `@pohunek/protocol`, `@pohunek/sdk` and
-  `@pohunek/testkit` tarballs are served (`assetBaseUrl`, `sdkVersion`).
+- `web/core-sdk.json`: the core commit (`coreRev`) of that release and where its
+  `@pohunek/protocol`, `@pohunek/sdk` and `@pohunek/testkit` tarballs are
+  downloaded (`assetBaseUrl`, `sdkVersion`, the release `vSDKVERSION`).
   `web/package.json` carries the resulting URLs in its `catalog` (refresh it
   with `bun run core-sdk:sync` in `web/`) and `web/bun.lock` records the
-  integrity. Until a core release exists the tarballs are packed from `coreRev`
-  and served from loopback during install; the cutover to the release download
-  URL is a change to this one file. `packaging/core-pin` fails when `coreRev`
-  differs from `native/Cargo.toml`; see
+  integrity of the published tarballs. `packaging/core-pin` fails when the web
+  pin and `native/Cargo.toml` name different core commits or tags; see
   [`web/docs/core-sdk.md`](web/docs/core-sdk.md).
 
 The TypeScript SDK handshake requires the daemon's `health.protocol_version` to

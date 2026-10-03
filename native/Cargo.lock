@@ -832,7 +832,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2737,8 +2737,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-assistant"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "pohunek-client",
  "pohunek-knowledge",
@@ -2751,8 +2751,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-client"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "futures",
  "libc",
@@ -2815,8 +2815,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-knowledge"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "include_dir",
  "pohunek-protocol",
@@ -2828,8 +2828,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-netbird"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "pohunek-overlay",
  "pohunek-platform",
@@ -2841,8 +2841,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-overlay"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "base64 0.22.1",
  "futures",
@@ -2851,8 +2851,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-paths"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "nix",
  "thiserror 2.0.18",
@@ -2860,8 +2860,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-platform"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "async-io",
  "calcifer-macos-acl",
@@ -2880,8 +2880,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-prompt"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",
@@ -2889,8 +2889,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-protocol"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2902,8 +2902,8 @@ dependencies = [
 
 [[package]]
 name = "pohunek-test-support"
-version = "0.31.6"
-source = "git+https://github.com/zajca/pohunek?rev=e740cf2b54a365f3903525105986c46ba08e6c96#e740cf2b54a365f3903525105986c46ba08e6c96"
+version = "0.32.1"
+source = "git+https://github.com/zajca/pohunek?tag=v0.32.1#ab628f45c218c0910ab29bc6a21740ba341e2a07"
 dependencies = [
  "tempfile",
  "tokio",
@@ -3062,7 +3062,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3300,7 +3300,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3313,7 +3313,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3857,7 +3857,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4727,7 +4727,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
