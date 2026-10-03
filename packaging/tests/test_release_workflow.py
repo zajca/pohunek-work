@@ -46,7 +46,9 @@ ATTEST_JOB_LINES = [
     for pattern in (
         rf"    (name|runs-on|timeout-minutes): {_SCALAR}",
         r"    needs: \[[a-z0-9, -]+\]",
-        r"    if: \$\{\{ github\.event_name == 'push' && github\.ref_type == 'tag' \}\}",
+        r"    if: >-",
+        r"      \$\{\{ !cancelled\(\) && github\.event_name == 'push' && github\.ref_type == 'tag'",
+        r"      && needs\.gate\.result == 'success' \}\}",
         r"    (permissions|steps):",
         r"      contents: read",
         r"      id-token: write",
@@ -345,6 +347,13 @@ class AttestTest(unittest.TestCase):
     def test_the_attest_job_waits_for_the_gate_and_runs_on_tag_pushes_only(self):
         self.assertEqual(needs_of(self.attest), ["gate"])
         self.assertIn("github.event_name == 'push' && github.ref_type == 'tag'", self.attest)
+
+    def test_the_attest_job_runs_although_the_other_surfaces_jobs_were_skipped(self):
+        # Without a status function the implicit success() also requires every
+        # transitive predecessor to have run, and the jobs of the surfaces that
+        # were not selected are skipped by design.
+        self.assertIn("!cancelled()", self.attest)
+        self.assertIn("needs.gate.result == 'success'", self.attest)
 
     def test_an_oidc_scope_on_any_other_job_is_rejected(self):
         jobs_with_scope = dict(RELEASE_JOBS)
