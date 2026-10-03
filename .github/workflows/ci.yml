@@ -98,8 +98,8 @@ jobs:
     env:
       # The rendering tests drive the real `pohunek prompt` CLI; this is the
       # core release they are pinned to. Bump it together with the digest.
-      POHUNEK_RELEASE: v0.31.6
-      POHUNEK_MUSL_SHA256: fc0a53a98ed0d2b6123d78e338f3fa6bc44277df8d5a7c68c6c250f4b097a428
+      POHUNEK_RELEASE: v0.32.1
+      POHUNEK_MUSL_SHA256: 74cd64249949c9b03f0455755a04577b9fa0de213b2bf0cdd86bab73d055b5b3
     defaults:
       run:
         working-directory: launchers
@@ -407,7 +407,7 @@ jobs:
       # CLI binaries of the core revision pinned in native/Cargo.toml.
       - name: Resolve the pinned core revision
         id: core
-        run: echo "rev=$(sed -n 's/^pohunek-protocol = .*rev = "\([0-9a-f]\{40\}\)".*/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(grep '^pohunek-protocol = ' Cargo.toml | sed -n -e 's/.*tag = "\([^"]*\)".*/\1/p' -e 's/.*rev = "\([0-9a-f]\{40\}\)".*/\1/p' | head -n 1)" >> "$GITHUB_OUTPUT"
 
       - name: Restore the core binaries
         id: core-cache
