@@ -19,6 +19,7 @@
 mod diff;
 mod dispatch;
 mod model;
+mod prompt;
 mod store;
 
 #[doc(inline)]

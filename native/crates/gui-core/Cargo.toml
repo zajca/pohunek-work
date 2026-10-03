@@ -24,8 +24,9 @@ toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-pohunek-daemon = { workspace = true }
+pohunek-platform = { workspace = true }
 pohunek-test-support = { workspace = true }
+rustix = { workspace = true, features = ["process"] }
 tempfile = { workspace = true }
 time = { workspace = true, features = ["macros"] }
 

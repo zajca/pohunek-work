@@ -265,7 +265,8 @@ running on its host (daemon owns the PTY).
   for that exact source; a review that has already been dispatched is never
   resumed, and a fresh empty draft is started only when no matching draft
   exists. Dispatch renders the review into a preset prompt
-  (`~/.config/pohunek/prompts/review.tmpl`) and launches `session.new --input`
+  (`~/.config/pohunek/prompts/review.tmpl` when present, otherwise the template
+  built into gui-core) and launches `session.new --input`
   with `cwd` set to the source session's **same** worktree (git forbids a
   second worktree on an already-checked-out branch, so this is `cwd`-only, not
   a new `--branch` checkout); the dispatch modal offers an agent picker seeded
