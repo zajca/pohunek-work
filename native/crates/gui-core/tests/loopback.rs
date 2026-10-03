@@ -66,6 +66,42 @@ mod no_origin;
 mod support;
 
 #[tokio::test]
+async fn dropping_the_harness_with_a_live_session_reaps_the_worker_and_agent() {
+    let mut env = ProcessEnv::lock();
+    let bin_dir = temp_dir("gui-core-drop-bin");
+    write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
+    prepend_path(&mut env, &bin_dir);
+
+    let daemon = LoopbackDaemon::spawn("drop-reaps").await;
+    let host = daemon.host("host-drop");
+    let session =
+        create_agent_session(&host, AgentKind::Codex, temp_dir("gui-core-drop-cwd")).await;
+    let inspector = HostInspector::new();
+    let hierarchy = inspector
+        .descendants(daemon.pid())
+        .expect("list the daemon's process tree");
+    assert!(
+        hierarchy.iter().any(|fact| fact
+            .cmdline
+            .iter()
+            .any(|arg| arg.ends_with("pohunek-sessiond"))),
+        "session {} must have a worker below the daemon: {hierarchy:?}",
+        session.id.0
+    );
+
+    // The unwind path of a failing test runs the same `Drop`.
+    drop(daemon);
+
+    wait::wait_until("the worker and agent to be gone", || async {
+        hierarchy
+            .iter()
+            .all(|fact| !inspector.is_running(fact.identity()).unwrap_or(false))
+            .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn governance_inspect_returns_safe_never_enrolled_status_over_the_unix_socket() {
     let _env = ProcessEnv::lock();
     let daemon = LoopbackDaemon::spawn("gui-governance-inspect").await;
@@ -2064,6 +2100,10 @@ const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a daemon may take to exit after SIGTERM before it is killed.
 const DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How long a daemon being dropped by a failing test may take to exit after
+/// SIGTERM before it is killed.
+const DAEMON_DROP_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// File name of the daemon's stderr inside its private root, kept for
 /// diagnostics when startup or shutdown fails.
 const DAEMON_STDERR_FILE: &str = "pohunekd.stderr";
@@ -2112,6 +2152,11 @@ impl LoopbackDaemon {
     /// Host configuration reaching this daemon over its Unix socket.
     fn host(&self, id: &str) -> HostConfig {
         HostConfig::local(id, &self.socket)
+    }
+
+    /// Process id of the running daemon.
+    fn pid(&self) -> u32 {
+        self.child.as_ref().expect("daemon is running").id()
     }
 
     /// The daemon's `HOME`, which its session children inherit.
@@ -2229,11 +2274,46 @@ impl LoopbackDaemon {
 }
 
 impl Drop for LoopbackDaemon {
-    /// Kills a daemon that a failing test left running.
+    /// Tears down a daemon that a failing test left running, together with the
+    /// workers and agents it started.
+    ///
+    /// Workers run in their own process groups and outlive the daemon by design,
+    /// so the hierarchy is recorded first. The daemon then gets a bounded
+    /// graceful exit (SIGTERM, then SIGKILL), and every recorded process that is
+    /// still the same process is killed.
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let inspector = HostInspector::new();
+        let hierarchy = inspector.descendants(child.id()).unwrap_or_else(|error| {
+            eprintln!("cannot list the daemon's process tree: {error}");
+            Vec::new()
+        });
+        if let Some(pid) = i32::try_from(child.id())
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        }
+        let deadline = std::time::Instant::now() + DAEMON_DROP_EXIT_TIMEOUT;
+        while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(wait::POLL_INTERVAL);
+        }
+        if matches!(child.try_wait(), Ok(None)) {
             let _ = child.kill();
-            let _ = child.wait();
+        }
+        let _ = child.wait();
+        for fact in hierarchy {
+            let identity = fact.identity();
+            if inspector.is_running(identity).unwrap_or(false) {
+                if let Some(pid) = i32::try_from(identity.pid)
+                    .ok()
+                    .and_then(rustix::process::Pid::from_raw)
+                {
+                    let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+                }
+            }
         }
     }
 }
