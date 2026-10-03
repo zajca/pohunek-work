@@ -83,7 +83,10 @@ as well as provider integration, remain later milestones.
 
 The TypeScript surfaces are:
 
-- `@pohunek/protocol`: types generated from the Rust protocol source.
+- `@pohunek/protocol`: types generated from the Rust protocol source. Core
+  publishes it (with `@pohunek/sdk` and `@pohunek/testkit`) as a release
+  tarball; this workspace installs the tarballs of the pinned core revision (see
+  [core-sdk.md](core-sdk.md)).
 - `@pohunek/sdk`: the shared runtime plus Bun/Node Unix and TCP transports.
 - `@pohunek/sdk/browser`: the browser-safe entry with only the WebSocket path;
   it contains no `node:net` dependency.
@@ -94,7 +97,35 @@ The TypeScript surfaces are:
 - `@pohunek/frontend`: the Svelte control-center SPA.
 - `@pohunek/testkit`: the stateful fixture daemon used by tests and dev mode.
 
-For development, run `bun run dev` from the repository root. It starts two loopback fixture
+## Install and run from this repository
+
+`web/` is its own Bun workspace (`backend`, `client-core`, `frontend`) with
+its own `package.json`, `bun.lock`, `tsconfig*.json` and ESLint configuration;
+nothing sits at the repository root. It needs Bun 1.3.11 (`packageManager` in
+`web/package.json`, `web/.bun-version`), Node for `bun run dev`, and a Rust
+toolchain only to build the real daemon for the end-to-end tests. The core SDK
+packages are installed from tarballs, so a first install packs and serves them
+(details and the cutover to a published core release are in
+[core-sdk.md](core-sdk.md)):
+
+```sh
+cd web
+bun run core-sdk:pack       # tarballs of the core revision in core-sdk.json
+bun run core-sdk:install    # serves them while `bun install --frozen-lockfile` runs
+bun run typecheck && bun run lint && bun test
+bun run test:e2e            # builds the SPA, runs the Playwright (chromium) suite
+```
+
+The real-daemon end-to-end test drives the core binaries of the same revision
+(unset every other `POHUNEK_*` variable; a shell inside a pohunek session sets
+some and the daemon rejects the incomplete origin environment):
+
+```sh
+eval "$(bun scripts/build-core-binaries.ts)"   # POHUNEK_DAEMON_BIN, POHUNEK_WORKER_BIN, POHUNEK_CLI_BIN
+POHUNEK_E2E=1 bun test backend/test/real-daemon.e2e.test.ts
+```
+
+For development, run `bun run dev` from `web/`. It starts two loopback fixture
 daemons, the backend with its explicit loopback-development allowance, and the
 Vite frontend. It needs neither a Rust daemon nor NetBird. Bun remains the
 workspace runtime and orchestrates the fixture daemons and backend. The command

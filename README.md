@@ -29,9 +29,16 @@ places, which a bump must change together:
 - `.github/workflows/ci.yml` (`launchers` job): `POHUNEK_RELEASE` and
   `POHUNEK_MUSL_SHA256`, the core release whose `pohunek` binary the launcher
   rendering tests run.
-- `web/` (once its SDK dependency lands): `@pohunek/protocol`, `@pohunek/sdk` and
-  `@pohunek/testkit` by the release tarball URLs of that core release;
-  `bun.lock` records the integrity.
+- `web/core-sdk.json`: the core commit (`coreRev`) the web workspace is built
+  against and where its `@pohunek/protocol`, `@pohunek/sdk` and
+  `@pohunek/testkit` tarballs are served (`assetBaseUrl`, `sdkVersion`).
+  `web/package.json` carries the resulting URLs in its `catalog` (refresh it
+  with `bun run core-sdk:sync` in `web/`) and `web/bun.lock` records the
+  integrity. Until a core release exists the tarballs are packed from `coreRev`
+  and served from loopback during install; the cutover to the release download
+  URL is a change to this one file. `packaging/core-pin` fails when `coreRev`
+  differs from `native/Cargo.toml`; see
+  [`web/docs/core-sdk.md`](web/docs/core-sdk.md).
 
 The TypeScript SDK handshake requires the daemon's `health.protocol_version` to
 equal `PROTOCOL_VERSION`, so the UIs move in lockstep with the core protocol
@@ -48,10 +55,9 @@ surfaces, a bump pull request runs the jobs of each surface it touches.
 only their jobs on pull requests, runs everything on `main`, the weekly
 schedule and manual dispatch, and reports one always-present `ci` check that
 is the single required status. Jobs exist for `plugin/`, `launchers/`,
-`native/` and the shared `packaging/`; `web/` has none yet because its core SDK dependency is not pinned
-(it follows with the web slice of
-[#10](https://github.com/zajca/pohunek-work/issues/10)). A new surface adds a
-filter entry, a job and an entry in the `ci` job's `needs`.
+`native/`, `web/` (Linux and macOS, against the core binaries and SDK tarballs
+of the revision in `web/core-sdk.json`) and the shared `packaging/`. A new
+surface adds a filter entry, a job and an entry in the `ci` job's `needs`.
 
 ## Releases
 
@@ -61,7 +67,7 @@ headless Wayland smoke test), the web control center archives, the launchers
 archive and the signed, notarized macOS `Pohunek.app` and web archives, and
 attaches them to a GitHub release. Every archive has a `.sha256` file and a
 `MANIFEST` that records the pinned core version; `packaging/core-pin` reads it
-from `native/Cargo.toml` and fails the release when `web/package.json` or the
+from `native/Cargo.toml` and fails the release when `web/core-sdk.json` or the
 GUI version disagrees. Core ships the CLI, daemon and worker archives; this
 repository builds none of them.
 

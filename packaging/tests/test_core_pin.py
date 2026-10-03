@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CORE_PIN = ROOT / "packaging" / "core-pin"
 
 CRATES = ("protocol", "client", "paths")
+LOCAL_BASE = "http://127.0.0.1:47321/releases/download"
 
 CARGO = """[workspace]
 members = ["crates/gui"]
@@ -83,13 +84,14 @@ class CorePinTest(unittest.TestCase):
         path.write_text(CARGO.format(dependencies="\n".join(lines), version=version))
         return path
 
-    def web(self, dependencies):
-        path = self.dir / "package.json"
-        path.write_text(json.dumps({"private": True, "dependencies": dependencies}))
+    def web(self, rev, *, version="0.0.0-core.test", base=LOCAL_BASE, repo="https://github.com/zajca/pohunek", **extra):
+        path = self.dir / "core-sdk.json"
+        pin = {"coreRepository": repo, "coreRev": rev, "sdkVersion": version, "assetBaseUrl": base}
+        path.write_text(json.dumps({**pin, **extra}))
         return path
 
-    def sdk_url(self, tag, repo="zajca/pohunek"):
-        return f"https://github.com/{repo}/releases/download/{tag}/pohunek-protocol-{tag[1:]}.tgz"
+    def release_base(self, repo="zajca/pohunek"):
+        return f"https://github.com/{repo}/releases/download"
 
     def pin(self, *args):
         result = subprocess.run(
@@ -115,58 +117,83 @@ class CorePinTest(unittest.TestCase):
         self.assertEqual(values["core_ref"], "v1.2.3")
         self.assertEqual(values["core_rev"], "")
 
-    def test_matching_tags_agree(self):
-        native = self.native(pins=[{"tag": "v1.2.3"}] * 3)
-        # Specs that are not release tarballs are not pins.
-        web = self.web({"@pohunek/protocol": self.sdk_url("v1.2.3"), "@pohunek/sdk": "workspace:*"})
-        result, values = self.pin("--native", native, "--web", web, "--require-web")
+    def test_a_local_web_pin_agrees_by_commit(self):
+        result, values = self.pin("--native", self.native(), "--web", self.web(self.first), "--require-web")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(values["core_ref"], "v1.2.3")
+        self.assertEqual(values["core_ref"], self.first)
+        self.assertEqual(values["core_rev"], self.first)
 
-    def test_a_native_commit_matches_the_commit_of_the_web_tag(self):
-        native = self.native()
-        web = self.web({"@pohunek/protocol": self.sdk_url("v1.2.3")})
-        result, values = self.pin("--native", native, "--web", web, "--require-web")
+    def test_a_native_tag_matches_the_web_commit(self):
+        native = self.native(pins=[{"tag": "v1.2.3"}] * 3)
+        result, values = self.pin("--native", native, "--web", self.web(self.first))
         self.assertEqual(result.returncode, 0, result.stderr)
         # The annotated tag is peeled to the commit it points at.
         self.assertEqual(values["core_ref"], "v1.2.3")
+
+    def test_matching_release_tags_agree(self):
+        native = self.native(pins=[{"tag": "v1.2.3"}] * 3)
+        web = self.web(self.first, version="1.2.3", base=self.release_base())
+        result, values = self.pin("--native", native, "--web", web, "--require-web")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(values["core_ref"], "v1.2.3")
+
+    def test_a_release_web_pin_names_the_tag_of_a_native_commit(self):
+        web = self.web(self.first, version="1.2.3", base=self.release_base())
+        result, values = self.pin("--native", self.native(), "--web", web)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(values["core_ref"], "v1.2.3")
         self.assertEqual(values["core_rev"], self.first)
 
-    def test_a_lightweight_tag_resolves_to_its_commit(self):
+    def test_a_lightweight_release_tag_resolves_to_its_commit(self):
         native = self.native(pins=[{"rev": self.second}] * 3)
-        web = self.web({"@pohunek/protocol": self.sdk_url("v1.2.4")})
+        web = self.web(self.second, version="1.2.4", base=self.release_base())
         result, values = self.pin("--native", native, "--web", web)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(values["core_ref"], "v1.2.4")
 
     def test_disagreeing_pins_fail(self):
         tag_pins = [{"tag": "v1.2.3"}] * 3
+        release = self.release_base()
+        # The web pin file is rewritten per case, so each case is built lazily.
         cases = (
-            (tag_pins, {"@pohunek/protocol": self.sdk_url("v1.2.4")}, "web pins core v1.2.4"),
-            (None, {"@pohunek/protocol": self.sdk_url("v1.2.4")}, "native pins core commit"),
-            (None, {"@pohunek/protocol": self.sdk_url("v9.9.9")}, "does not exist"),
-            (
-                None,
-                {"@pohunek/protocol": self.sdk_url("v1.2.3"), "@pohunek/sdk": self.sdk_url("v1.2.4")},
-                "different core releases",
-            ),
+            (None, lambda: self.web(self.second), "web pins core commit"),
+            (tag_pins, lambda: self.web(self.second), "web pins core commit"),
+            (tag_pins, lambda: self.web(self.second, version="1.2.4", base=release), "web pins core v1.2.4"),
+            (None, lambda: self.web(self.first, version="9.9.9", base=release), "does not exist"),
+            (None, lambda: self.web(self.second, version="1.2.3", base=release), "but its coreRev is"),
         )
-        for pins, dependencies, message in cases:
-            result, _ = self.pin("--native", self.native(pins=pins), "--web", self.web(dependencies))
+        for pins, web, message in cases:
+            result, _ = self.pin("--native", self.native(pins=pins), "--web", web())
             self.assertEqual(result.returncode, 1, message)
             self.assertIn(message, result.stderr)
 
-    def test_sdk_tarballs_must_come_from_the_github_core_repository(self):
+    def test_the_web_pin_must_name_the_github_core_repository(self):
         path = self.dir / "Cargo.toml"
         lines = "\n".join(
             f'pohunek-{crate} = {{ git = "https://github.com/zajca/pohunek.git", rev = "{self.first}" }}'
             for crate in CRATES
         )
         path.write_text(CARGO.format(dependencies=lines, version="0.1.0"))
-        web = self.web({"@pohunek/protocol": self.sdk_url("v1.2.3", "other/repo")})
-        result, _ = self.pin("--native", path, "--web", web)
+        other_repo = self.web(self.first, repo="https://github.com/other/repo")
+        result, _ = self.pin("--native", path, "--web", other_repo)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("names core repository other/repo, not zajca/pohunek", result.stderr)
+        other_release = self.web(self.first, version="1.2.3", base=self.release_base("other/repo"))
+        result, _ = self.pin("--native", path, "--web", other_release)
         self.assertEqual(result.returncode, 1)
         self.assertIn("comes from other/repo, not the core repository zajca/pohunek", result.stderr)
+
+    def test_a_malformed_web_pin_fails(self):
+        for kwargs, message in (
+            ({"rev": "abc"}, "coreRev must be a 40-digit"),
+            ({"rev": self.first, "version": "v1"}, "sdkVersion must be a semantic version"),
+            ({"rev": self.first, "extra": "x"}, "exactly the keys"),
+            ({"rev": self.first, "version": "1.2.3-rc.1", "base": self.release_base()}, "plain X.Y.Z"),
+        ):
+            rev = kwargs.pop("rev")
+            result, _ = self.pin("--native", self.native(), "--web", self.web(rev, **kwargs))
+            self.assertEqual(result.returncode, 1, message)
+            self.assertIn(message, result.stderr)
 
     def test_the_core_crates_must_share_one_pin(self):
         native = self.native(pins=[{"rev": self.first}, {"rev": self.second}, {"rev": self.first}])
@@ -191,11 +218,10 @@ class CorePinTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("no core git dependency", result.stderr)
 
-    def test_require_web_fails_without_sdk_tarballs(self):
-        web = self.web({"@pohunek/protocol": "workspace:*"})
-        result, _ = self.pin("--native", self.native(), "--web", web, "--require-web")
+    def test_require_web_fails_without_a_web_pin(self):
+        result, _ = self.pin("--native", self.native(), "--web", self.dir / "absent.json", "--require-web")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("names no core SDK release tarball", result.stderr)
+        self.assertIn("does not exist", result.stderr)
 
     def test_the_expected_version_must_match_the_gui_version(self):
         native = self.native(version="0.2.0")
@@ -207,7 +233,7 @@ class CorePinTest(unittest.TestCase):
         self.assertIn("is 0.2.0, but the release is 0.3.0", bad.stderr)
 
     def test_the_repository_pins_resolve(self):
-        result, values = self.pin("--native", ROOT / "native" / "Cargo.toml", "--web", ROOT / "web" / "package.json")
+        result, values = self.pin("--native", ROOT / "native" / "Cargo.toml", "--web", ROOT / "web" / "core-sdk.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(values["native_version"], r"^\d+\.\d+\.\d+$")
 

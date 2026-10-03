@@ -3,24 +3,28 @@
 
 usage: core-pin [--native PATH] [--web PATH] [--require-web] [--expect-version X.Y.Z]
 
-Reads the core crates' git pin from native/Cargo.toml (the single source) and,
-when web/package.json names the core SDK release tarballs, checks that both pins
-name the same core release. Prints `key=value` lines (usable with
-`>> "$GITHUB_OUTPUT"`):
+Reads the core crates' git pin from native/Cargo.toml (the single source for the
+GUI) and, when web/core-sdk.json exists, checks that the web pin names the same
+core commit. Prints `key=value` lines (usable with `>> "$GITHUB_OUTPUT"`):
 
   core_ref        the core release tag `vX.Y.Z` when known, else the 40-digit commit
   core_rev        the 40-digit core commit, empty when only a tag is known
   native_version  the GUI version in native/Cargo.toml `[workspace.package]`
 
+web/core-sdk.json (see web/scripts/core-sdk.ts) holds `coreRepository`,
+`coreRev`, `sdkVersion` and `assetBaseUrl`. When `assetBaseUrl` is the core
+repository's GitHub release download URL, the web pin also names the release tag
+`v<sdkVersion>`.
+
 The pin is refused, with exit status 1, when
   - the core crates in native/Cargo.toml do not all share one git URL and one
     `rev` or `tag`;
-  - the SDK tarball URLs in web/package.json name different releases or a
-    different repository than the core crates;
-  - the two pins disagree: tag against tag by name, a native commit against a web
-    tag by resolving the tag with `git ls-remote` (the peeled commit of an
-    annotated tag counts);
-  - `--require-web` is given and web/package.json names no SDK tarball;
+  - web/core-sdk.json is malformed, names a different repository than the core
+    crates, or names a release tag that does not point at its `coreRev`;
+  - the two pins disagree: a native commit against the web `coreRev`, a native
+    tag (resolved with `git ls-remote`, the peeled commit of an annotated tag
+    counts) against the web `coreRev`, a native tag against the web release tag;
+  - `--require-web` is given and web/core-sdk.json is absent;
   - `--expect-version` is given and differs from the native GUI version.
 
 Python 3.11 or newer (tomllib), standard library only.
@@ -39,10 +43,10 @@ import tomllib
 TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+SDK_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")
 CORE_CRATE_PREFIX = "pohunek-"
-SDK_SCOPE = "@pohunek/"
-SDK_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/(v[0-9]+\.[0-9]+\.[0-9]+)/")
-DEPENDENCY_TABLES = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+WEB_KEYS = ("coreRepository", "coreRev", "sdkVersion", "assetBaseUrl")
+RELEASE_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download$")
 
 
 class PinError(Exception):
@@ -86,30 +90,40 @@ def read_native(path: Path) -> tuple[str, str | None, str | None, str]:
     return git, tag, rev, version
 
 
-def read_web(path: Path, core_repo: str | None) -> str | None:
-    """Returns the core release tag the SDK tarball URLs name, or None.
+def read_web(path: Path, core_repo: str | None) -> tuple[str, str | None] | None:
+    """Returns (core commit, release tag or None) of the web pin, None when absent.
 
-    The tarballs must come from the core repository when it is a GitHub one."""
+    The tag is set only when `assetBaseUrl` is the core repository's GitHub
+    release download URL; before a core release it is the loopback server."""
     if not path.is_file():
         return None
     try:
-        package = json.loads(path.read_text())
+        pin = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise PinError(f"cannot read {path}: {error}") from error
-    tags = set()
-    for table in DEPENDENCY_TABLES:
-        for name, spec in package.get(table, {}).items():
-            if not name.startswith(SDK_SCOPE) or not isinstance(spec, str):
-                continue
-            match = SDK_URL.match(spec)
-            if match is None:
-                continue
-            if core_repo is not None and match.group(1) != core_repo:
-                raise PinError(f"{name} in {path} comes from {match.group(1)}, not the core repository {core_repo}")
-            tags.add(match.group(2))
-    if len(tags) > 1:
-        raise PinError(f"the SDK tarballs in {path} name different core releases: {sorted(tags)}")
-    return tags.pop() if tags else None
+    if not isinstance(pin, dict) or sorted(pin) != sorted(WEB_KEYS):
+        raise PinError(f"{path} must be an object with exactly the keys {', '.join(WEB_KEYS)}")
+    for key in WEB_KEYS:
+        if not isinstance(pin[key], str) or not pin[key]:
+            raise PinError(f"{path}: {key} must be a non-empty string")
+    web_repo = repo_slug(pin["coreRepository"])
+    if web_repo is None:
+        raise PinError(f"{path}: coreRepository must be https://github.com/<owner>/<repo>")
+    if core_repo is not None and web_repo != core_repo:
+        raise PinError(f"{path} names core repository {web_repo}, not {core_repo}")
+    if not COMMIT.match(pin["coreRev"]):
+        raise PinError(f"{path}: coreRev must be a 40-digit lowercase commit: {pin['coreRev']}")
+    if not SDK_VERSION.match(pin["sdkVersion"]):
+        raise PinError(f"{path}: sdkVersion must be a semantic version: {pin['sdkVersion']}")
+    release = RELEASE_URL.match(pin["assetBaseUrl"])
+    if release is None:
+        return pin["coreRev"], None
+    if release.group(1) != web_repo:
+        raise PinError(f"{path}: assetBaseUrl comes from {release.group(1)}, not the core repository {web_repo}")
+    tag = f"v{pin['sdkVersion']}"
+    if not TAG.match(tag):
+        raise PinError(f"{path}: a release assetBaseUrl needs a plain X.Y.Z sdkVersion: {pin['sdkVersion']}")
+    return pin["coreRev"], tag
 
 
 def resolve_tag(git: str, tag: str) -> str:
@@ -137,26 +151,29 @@ def resolve(native: Path, web: Path, require_web: bool, expect_version: str | No
     git, native_tag, native_rev, version = read_native(native)
     if expect_version is not None and expect_version != version:
         raise PinError(f"the GUI version in {native} is {version}, but the release is {expect_version}")
-    web_tag = read_web(web, repo_slug(git))
-    if web_tag is None and require_web:
-        raise PinError(f"{web} names no core SDK release tarball")
+    pin = read_web(web, repo_slug(git))
+    if pin is None and require_web:
+        raise PinError(f"{web} does not exist")
     ref, rev = native_tag or native_rev, native_rev
-    if web_tag is not None:
-        if native_tag is not None:
-            if native_tag != web_tag:
+    if pin is not None:
+        web_rev, web_tag = pin
+        if web_tag is not None:
+            if native_tag is not None and native_tag != web_tag:
                 raise PinError(f"native pins core {native_tag}, web pins core {web_tag}")
-        else:
             resolved = resolve_tag(git, web_tag)
-            if resolved != native_rev:
-                raise PinError(f"native pins core commit {native_rev}, but web pins core {web_tag} = {resolved}")
+            if resolved != web_rev:
+                raise PinError(f"web pins core {web_tag} = {resolved}, but its coreRev is {web_rev}")
             ref = web_tag
+        native_commit = native_rev if native_rev is not None else resolve_tag(git, native_tag or "")
+        if native_commit != web_rev:
+            raise PinError(f"native pins core {native_tag or native_rev} = {native_commit}, but web pins core commit {web_rev}")
     return {"core_ref": ref, "core_rev": rev or "", "native_version": version}
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--native", type=Path, default=Path("native/Cargo.toml"))
-    parser.add_argument("--web", type=Path, default=Path("web/package.json"))
+    parser.add_argument("--web", type=Path, default=Path("web/core-sdk.json"))
     parser.add_argument("--require-web", action="store_true")
     parser.add_argument("--expect-version")
     args = parser.parse_args(argv)

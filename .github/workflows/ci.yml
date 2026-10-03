@@ -32,6 +32,7 @@ jobs:
       plugin: ${{ steps.filter.outputs.plugin }}
       launchers: ${{ steps.filter.outputs.launchers }}
       native: ${{ steps.filter.outputs.native }}
+      web: ${{ steps.filter.outputs.web }}
       packaging: ${{ steps.filter.outputs.packaging }}
     steps:
       # Only pull requests read the filter outputs; every other event runs all
@@ -52,6 +53,10 @@ jobs:
               - '.github/workflows/ci.yml'
             native:
               - 'native/**'
+              - 'packaging/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'web/**'
               - 'packaging/**'
               - '.github/workflows/ci.yml'
             packaging:
@@ -159,6 +164,208 @@ jobs:
             native/scripts/smoke-gui-release native/scripts/smoke-gui-release-macos \
             native/scripts/acceptance/macos-gui-launch \
             web/release/package.sh web/release/install.sh
+
+  # The web control center against the core revision pinned in web/core-sdk.json:
+  # the SDK tarballs are packed from that revision and served from the loopback
+  # address the pin names, so `bun install --frozen-lockfile` verifies the
+  # lockfile integrity against reproducible bytes. The real daemon, worker and
+  # CLI come from the same revision.
+  web:
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      - name: Resolve the pinned core revision
+        id: core
+        run: echo "rev=$(jq -r .coreRev core-sdk.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock', 'web/package.json') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Restore the core binaries
+        uses: actions/cache@v4
+        with:
+          path: web/.core-sdk/core-binaries
+          key: web-core-binaries-${{ runner.os }}-${{ steps.core.outputs.rev }}
+
+      # Reuses the restored binaries; otherwise builds them from the pinned
+      # revision. The worker lands beside the daemon.
+      - name: Build the core binaries
+        shell: bash
+        run: bun scripts/build-core-binaries.ts | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+
+      - name: Pack the core SDK tarballs twice and compare
+        run: bun scripts/pack-core-sdk.ts --verify-reproducible
+
+      - name: Check the package.json catalog against the pin
+        run: bun scripts/sync-core-sdk.ts --check
+
+      - name: Install web dependencies
+        run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests
+        run: bun test
+
+      # The lockfile pins Playwright, so the browser build follows bun.lock.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+
+      - name: Install Playwright Chromium
+        run: bunx playwright install --only-shell chromium
+
+      - name: Browser end-to-end tests
+        run: bun run test:e2e
+
+      - name: Backend end-to-end against the real daemon
+        run: bun test backend/test/real-daemon.e2e.test.ts
+        env:
+          POHUNEK_E2E: "1"
+
+      # The release archive for the host platform: builds the SPA, compiles the
+      # backend, smoke-tests it against a fixture daemon, and audits the archive.
+      - name: Package and audit the release archive
+        env:
+          POHUNEK_CORE_REF: ${{ steps.core.outputs.rev }}
+        run: |
+          set -euo pipefail
+          bash release/package.sh 0.0.0 linux-x86_64
+          ../packaging/check-archive dist/pohunek-web-0.0.0-linux-x86_64.tar.gz \
+            --component web --version 0.0.0 --target x86_64-unknown-linux-gnu --core "$POHUNEK_CORE_REF"
+
+  # The compiled backend and the browser suite on Apple Silicon, against the
+  # real macOS pohunekd, pohunek-sessiond and pohunek. The runner is ephemeral,
+  # so the backend suite may also exercise the owner default runtime directory
+  # (`/private/tmp/pohunek-<uid>`), which a developer's own daemon would share.
+  web-macos:
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.web == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        run: test "$(uname -m)" = "arm64"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      - name: Resolve the pinned core revision
+        id: core
+        run: echo "rev=$(jq -r .coreRev core-sdk.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/bun.lock', 'web/package.json') }}
+          restore-keys: |
+            bun-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore the core binaries
+        uses: actions/cache@v4
+        with:
+          path: web/.core-sdk/core-binaries
+          key: web-core-binaries-${{ runner.os }}-${{ runner.arch }}-${{ steps.core.outputs.rev }}
+
+      - name: Build the core binaries
+        shell: bash
+        run: bun scripts/build-core-binaries.ts | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+
+      - name: Pack the core SDK tarballs
+        run: bun scripts/pack-core-sdk.ts
+
+      - name: Install web dependencies
+        run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/bun.lock') }}
+
+      - name: Install Playwright Chromium
+        run: bunx playwright install --only-shell chromium
+
+      - name: Browser end-to-end tests
+        run: bun run test:e2e
+
+      # The release package ships this executable: compile it for the native
+      # target and smoke it against a fixture daemon, outside the workspace
+      # runtime.
+      - name: Compile and smoke the packaged backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pohunek-web-smoke"
+          rm -rf "$out"
+          mkdir -p "$out"
+          bun build --compile --target=bun-darwin-arm64 \
+            --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+            --outfile="$out/pohunek-web" ./backend/src/entrypoint.ts
+          file "$out/pohunek-web" | tee /dev/stderr | grep -q "arm64"
+          bun run release/smoke.ts "$out/pohunek-web" frontend/dist
+
+      - name: Backend end-to-end against the real daemon
+        run: bun test backend/test/real-daemon.e2e.test.ts
+        env:
+          POHUNEK_E2E: "1"
+          POHUNEK_E2E_DEFAULT_RUNTIME: "1"
 
   native:
     needs: changes
@@ -351,7 +558,7 @@ jobs:
 
   ci:
     if: ${{ always() }}
-    needs: [changes, plugin, launchers, native, native-macos, packaging]
+    needs: [changes, plugin, launchers, native, native-macos, web, web-macos, packaging]
     runs-on: ubuntu-latest
     steps:
       # A skipped surface job is a pass; a failed or cancelled one is not.

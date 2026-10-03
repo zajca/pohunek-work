@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@pohunek/protocol": "workspace:*",
-    "@pohunek/sdk": "workspace:*"
+    "@pohunek/protocol": "catalog:",
+    "@pohunek/sdk": "catalog:"
   },
   "devDependencies": {
     "@pohunek/backend": "workspace:*",
-    "@pohunek/testkit": "workspace:*"
+    "@pohunek/testkit": "catalog:"
   },
   "exports": {
     ".": {

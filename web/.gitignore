@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-types/
+logs/
+test-results/
+# Core checkout, packed SDK tarballs and core binaries (see docs/core-sdk.md).
+.core-sdk/

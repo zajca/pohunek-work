@@ -1,0 +1,3 @@
+[test]
+# The core checkout under .core-sdk carries core's own tests.
+pathIgnorePatterns = [".core-sdk/**"]
