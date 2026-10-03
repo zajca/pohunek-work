@@ -53,9 +53,11 @@ given.
 - **No new state.** Linear, GitHub and pohunek remain the sources of truth.
   The only write is session metadata (`work.link.*`, `work.role`) at launch;
   `on_turn` is computed at read time and never stored.
-- **CLI only.** The plugin talks to pohunek through its public CLI with
-  `--json` (verified against pohunek 0.31.6) and needs no change in the
-  pohunek repository before its next release.
+- **Public contracts only.** The plugin talks to pohunek through its public
+  CLI with `--json` (verified against pohunek 0.31.6). The other surfaces of
+  this repository (`web/`, `native/`) additionally speak the public protocol
+  through SDKs pinned to a core release; none of them reaches into core
+  internals.
 - **Owner-controlled autonomy.** What an agent may do without confirmation is
   versioned configuration that starts empty. `merge` is never delegable by
   default.

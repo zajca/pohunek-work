@@ -290,7 +290,7 @@ All interfaces use the same plugin library and the same actions.
 | rofi | `pohunek-rofi-work`, shipped with the plugin: rows on my turn, Enter runs the row action | C |
 | Notifications | `pohunek-work watch` posts through `notification.create` on transition to `me` | C |
 | Agent skill `/work` | reads `list --json`, runs `do` | C |
-| GUI or web panel | not in v1: #148 excludes native GUI extensions; decision tracked in #328 | — |
+| GUI or web panel | the native GUI (`native/`) and the web control center (`web/`) of this repository; showing plugin data in them is a separate design (question 1) | — |
 
 ### 9.1 `list --json`
 
@@ -582,7 +582,8 @@ the plugin as an ordinary owner process, which is what #148 formalizes.
     3. [#327](https://github.com/zajca/pohunek/issues/327) `session.list`
        filter by metadata key and value;
     4. [#328](https://github.com/zajca/pohunek/issues/328) displaying plugin
-       data in the GUI or web UI (v2 decision).
+       data in the GUI or web UI (a decision of this repository's own UIs; core
+   ships no UI).
     Done: each implemented issue removes the matching workaround in the
     plugin.
 16. **Provider extraction from core.** `ProviderKind` becomes an opaque,
@@ -688,11 +689,11 @@ the plugin as an ordinary owner process, which is what #148 formalizes.
 
 ## 18. Open Questions
 
-1. How should plugin data reach the GUI or web UI after v1: a generic
-   core-rendered table contract, a web-only surface, or no GUI at all?
-   Tracked in [zajca/pohunek#328](https://github.com/zajca/pohunek/issues/328).
+1. How should plugin data reach the GUI or web UI after v1? Both UIs now live
+   in this repository, so the plugin's `list --json` is the natural source and
+   no core-rendered table contract is needed; the surface design is open.
 2. Resolved: the plugin lives in its own repository, `zajca/pohunek-work`,
-   and talks to pohunek only through the CLI; see
+   and talks to pohunek only through public contracts (the CLI with `--json`; the UIs in this repository also use the public protocol through pinned SDKs); see
    [`implementation-plan.md`](implementation-plan.md) decision D1.
 3. Should `babysit` become delegable at level 2 immediately or only after the
    action log shows how often rule 4 still matches after a babysit run?
