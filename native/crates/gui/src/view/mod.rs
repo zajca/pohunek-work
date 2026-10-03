@@ -4,9 +4,11 @@ pub(crate) mod detail;
 mod dropdown;
 mod hosts;
 pub(crate) mod inbox;
+mod links;
 mod modals;
 mod selectable_text;
 mod session;
+mod subagents;
 
 use iced::widget::{
     button, center, column, container, mouse_area, opaque, row, scrollable, stack, text,

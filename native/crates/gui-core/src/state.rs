@@ -15,6 +15,8 @@ use protocol::{
 };
 
 use crate::providers;
+use crate::subagents::{subagent_counts, SubagentCounts};
+use crate::work_link::{work_link, WorkLink};
 use crate::{
     parse_unified_diff, CoreError, DiffModel, DomainEvent, HealthSummary, HostId,
     ObservationCapabilities, PromptPreview, Review, ReviewComment, ReviewSide, ReviewSource,
@@ -2204,6 +2206,8 @@ impl Workspace {
                     access,
                     can_stop: session_can_stop(session),
                     can_remove: session_can_remove(session),
+                    subagents: subagent_counts(&session.subagents),
+                    link: work_link(session),
                 });
             }
         }
@@ -2771,6 +2775,10 @@ pub struct SessionRow {
     pub can_stop: bool,
     /// Whether removal can safely stop or discard the current logical session.
     pub can_remove: bool,
+    /// Running and observed subagent counts.
+    pub subagents: SubagentCounts,
+    /// Work item the session is linked to, when it carries a link.
+    pub link: Option<WorkLink>,
 }
 
 impl SessionRow {
@@ -3407,6 +3415,58 @@ mod tests {
         assert_eq!(rows[1].group, SessionGroup::Ready);
         assert_eq!(rows[2].group, SessionGroup::Running);
         assert_eq!(rows[2].name.as_deref(), Some("triage build"));
+    }
+
+    #[test]
+    fn session_rows_carry_subagent_counts_and_the_work_link() {
+        let mut linked = session("s-1", Some(AgentActivity::Working));
+        linked.metadata = BTreeMap::from([
+            ("work.link.id".to_owned(), "KBC-1".to_owned()),
+            (
+                "work.link.url".to_owned(),
+                "https://linear.app/keboola/issue/KBC-1".to_owned(),
+            ),
+        ]);
+        linked.subagents = vec![protocol::SubagentInfo {
+            id: "sub-1".to_owned(),
+            parent_id: None,
+            provider: protocol::AgentKind::Codex,
+            agent_type: None,
+            lifecycle: protocol::SubagentLifecycle::Running,
+            activity: None,
+            revision: protocol::SubagentRevision::new(1),
+            started_at_ms: 1,
+            updated_at_ms: 1,
+            finished_at_ms: None,
+        }];
+        let mut workspace = Workspace::default();
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: snapshot(
+                "local",
+                vec![linked, session("s-2", Some(AgentActivity::Idle))],
+            ),
+        });
+
+        let rows = workspace.session_rows();
+        let linked_row = rows
+            .iter()
+            .find(|row| row.session_id.0 == "s-1")
+            .expect("s-1");
+        let plain_row = rows
+            .iter()
+            .find(|row| row.session_id.0 == "s-2")
+            .expect("s-2");
+
+        assert_eq!(
+            linked_row.subagents,
+            SubagentCounts {
+                running: 1,
+                total: 1
+            }
+        );
+        assert_eq!(linked_row.link.as_ref().expect("link").id, "KBC-1");
+        assert_eq!(plain_row.subagents, SubagentCounts::default());
+        assert_eq!(plain_row.link, None);
     }
 
     #[test]

@@ -288,6 +288,15 @@ pub(crate) enum Message {
     ReadSelectedSessionOutput,
     WaitForSelectedSession,
     ForkSelectedSession,
+    /// Opens a link or folder in the desktop's default application.
+    OpenExternal(crate::open::OpenTarget),
+    /// Outcome of [`Message::OpenExternal`]: what was opened, or the failure.
+    ExternalOpened(Result<String, String>),
+    /// Puts `text` on the clipboard; `label` names it in the status line.
+    CopyText {
+        label: &'static str,
+        text: String,
+    },
     MetadataKeyChanged(String),
     MetadataValueChanged(String),
     SetMetadata,

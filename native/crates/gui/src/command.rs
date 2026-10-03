@@ -33,6 +33,7 @@ use crate::message::{
     TemplateRecipe, ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
 };
 use crate::notify::{apply_outcome, NotificationOutcome};
+use crate::open::OpenTarget;
 use crate::runtime;
 use crate::selection::{
     connection_options, host_config, optional_field, preselected_project, project_host,
@@ -595,6 +596,20 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                 app.status = Some(err);
             }
         },
+        Message::OpenExternal(target) => match open_external_task(app, target) {
+            Ok(task) => tasks.push(task),
+            Err(err) => app.status = Some(err),
+        },
+        Message::ExternalOpened(result) => {
+            app.status = Some(match result {
+                Ok(what) => format!("opened {what}"),
+                Err(err) => err,
+            });
+        }
+        Message::CopyText { label, text } => {
+            app.status = Some(format!("copied {label}"));
+            tasks.push(iced::clipboard::write(text));
+        }
         Message::AttachSpawned(result) => {
             let spawned = result.is_ok();
             let status = match result {
@@ -1195,6 +1210,28 @@ fn wait_for_selected_session_task(app: &PohunekApp) -> Result<Task<Message>, Str
                 .map_err(|err| err.to_string())
         }),
         Message::CoreCommandCompleted,
+    ))
+}
+
+/// Opens `target` off the UI thread; the opener may wait for its application.
+fn open_external_task(app: &PohunekApp, target: OpenTarget) -> Result<Task<Message>, String> {
+    let opener = app
+        .config
+        .as_ref()
+        .map_err(ToString::to_string)?
+        .opener
+        .clone();
+    Ok(Task::perform(
+        runtime::perform_blocking_or(
+            move || {
+                opener
+                    .open(&target)
+                    .map(|()| target.describe())
+                    .map_err(|err| format!("cannot open the {}: {err}", target.describe()))
+            },
+            Err,
+        ),
+        Message::ExternalOpened,
     ))
 }
 
@@ -2524,6 +2561,51 @@ mod tests {
     }
 
     #[test]
+    fn external_open_outcomes_reach_the_status_line() {
+        let mut app = app_without_selection();
+
+        let _ = update(
+            &mut app,
+            Message::ExternalOpened(Ok("GitHub link".to_owned())),
+        );
+        assert_eq!(app.status.as_deref(), Some("opened GitHub link"));
+
+        let _ = update(
+            &mut app,
+            Message::ExternalOpened(Err("cannot open the folder: gone".to_owned())),
+        );
+        assert_eq!(app.status.as_deref(), Some("cannot open the folder: gone"));
+    }
+
+    #[test]
+    fn opening_without_a_loaded_config_is_reported_not_dropped() {
+        let mut app = app_without_selection();
+        let url = pohunek_gui_core::ExternalUrl::parse("https://github.com/o/r").expect("url");
+
+        let _ = update(&mut app, Message::OpenExternal(OpenTarget::Url(url)));
+
+        assert_eq!(
+            app.status.as_deref(),
+            Some("test config is intentionally absent")
+        );
+    }
+
+    #[test]
+    fn copying_text_names_what_was_copied() {
+        let mut app = app_without_selection();
+
+        let _ = update(
+            &mut app,
+            Message::CopyText {
+                label: "branch",
+                text: "feat/x".to_owned(),
+            },
+        );
+
+        assert_eq!(app.status.as_deref(), Some("copied branch"));
+    }
+
+    #[test]
     fn governance_snapshot_dispatches_once_and_completion_does_not_loop() {
         let mut app = app_with_governance_host();
         let route = HostId::new("local");
@@ -2603,6 +2685,10 @@ mod tests {
             "127.0.0.1:9".parse().expect("valid inert test address"),
         );
         app.hosts = vec![local_host.clone()];
+        let bin_resolver = std::sync::Arc::new(crate::bin_resolver::BinResolver::with_discovery(
+            "pohunek",
+            || Err(crate::bin_resolver::BinError::SearchPath("test".to_owned())),
+        ));
         app.config = Ok(AppConfig {
             attach: crate::config::AttachSelection::Command {
                 template: "attach {host} {id}".to_owned(),
@@ -2617,10 +2703,7 @@ mod tests {
                 attach_observe: std::time::Duration::from_millis(50),
                 attach_script_max_age: std::time::Duration::from_secs(3600),
             },
-            bin_resolver: std::sync::Arc::new(crate::bin_resolver::BinResolver::with_discovery(
-                "pohunek",
-                || Err(crate::bin_resolver::BinError::SearchPath("test".to_owned())),
-            )),
+            bin_resolver: std::sync::Arc::clone(&bin_resolver),
             local_host,
             connection_options: ConnectionOptions::default(),
             terminal_size: crate::config::TerminalSize::default(),
@@ -2630,6 +2713,13 @@ mod tests {
                 },
                 timeout: std::time::Duration::from_secs(1),
             },
+            opener: crate::open::Opener::new(
+                Some("/nonexistent/opener"),
+                false,
+                &bin_resolver,
+                std::time::Duration::from_millis(50),
+                std::time::Duration::from_secs(1),
+            ),
             keymap: keyboard::KeyMap::default(),
         });
         app

@@ -127,7 +127,7 @@ impl CommandResolution {
     }
 
     /// Returns the lookup result, waiting at most `budget` for it.
-    fn resolve(&self, budget: Duration) -> Result<PathBuf, String> {
+    pub(crate) fn resolve(&self, budget: Duration) -> Result<PathBuf, String> {
         let mut inner = self.shared.inner.lock().expect("resolution lock");
         if inner.result.is_none() && !inner.started {
             inner.started = true;

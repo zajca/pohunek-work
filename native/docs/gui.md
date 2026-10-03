@@ -55,6 +55,7 @@ attach_command = "$TERMINAL -e sh -c 'exec \"$@\"' sh {bin} attach --host {host}
 attach_command_mode = "shell"   # optional: "shell" (default) or "argv"
 # attach_terminal = "terminal-app"   # macOS only, instead of attach_command
 notification_command = "notify-send"   # optional; see Notifications
+open_command = "xdg-open"   # optional; see Links and folders
 
 [gui]
 connect_timeout_ms = 2000
@@ -175,7 +176,7 @@ attach_command = "wezterm start -- {bin} --host={host} attach -- {id}"
 For the local host `{host}` is empty, and an empty `--host=` selects the local
 daemon.
 
-`pohunek_bin`, `attach_command`, and `notification_command` must not be blank or
+`pohunek_bin`, `attach_command`, `notification_command`, and `open_command` must not be blank or
 contain a NUL byte; that fails at load with an error naming the field.
 
 Use an absolute `pohunek_bin` when you want no lookup at all. `attach_command`
@@ -341,11 +342,47 @@ runtimes. A stale click is revalidated before terminate or delete is sent.
 Clicking the row itself opens session detail in a modal over the unchanged
 session list. The modal contains inspection, terminal observation, fork,
 rename, metadata, terminate, and delete controls according to current
-capabilities. Worktree path and branch can still appear as read-only session
-metadata; the GUI does not browse or manage worktrees. Session detail separates
-Current attention from Recent activity and links to the host-filtered Activity
-view. It also lists the durable current and recent Claude/Codex subagents,
-including how many are still working.
+capabilities. Worktree path and branch appear as read-only session metadata;
+the GUI does not manage worktrees. Session detail separates Current attention
+from Recent activity and links to the host-filtered Activity view.
+
+### Subagents
+
+Session detail lists the durable current and recent Claude/Codex subagents as a
+tree: a subagent is nested under the one named by its `parent_id` (of the same
+provider), and one whose parent is no longer listed is shown as a root. Each row
+shows a lifecycle pill, the subagent type, the provider, the activity of a
+running subagent, and its age or run time. A session row in the list carries a
+badge with the number of running subagents.
+
+### Work links and folders
+
+The GUI reads the work item a session is linked to from its metadata: the
+`work.link.*` keys and `work.role` written by the `pohunek-work` plugin win as a
+set; only when no `work.link.id` is stored are the `link.*` keys of the provider
+launch flows read. The two namespaces are never mixed field by field.
+
+Session detail has a Links card and each session row shows compact buttons:
+
+- **Open in Linear / GitHub** opens the stored item URL; the label follows the
+  site of the URL, not the stored provider.
+- **Open branch on GitHub** is offered for a GitHub pull-request link with a
+  branch.
+- **Open folder** opens the worktree (or the working directory) in the file
+  manager. It is offered only for sessions of the local host, because a remote
+  session reports a path on its own machine; those sessions get **Copy path**.
+- **Copy branch** and **Copy path** put the value on the clipboard.
+
+Metadata can be set by any client, so only `https://` URLs without credentials,
+whitespace or control characters are opened, and the value is handed to the
+opener as a single argument without a shell. A folder is checked again to be an
+existing absolute directory when the button is pressed.
+
+The opener is `xdg-open` (`open` on macOS) unless `open_command` names another
+program; it receives the URL or path as its only argument. A launcher that stays
+in the foreground is left running; one that fails within `gui.attach_observe_ms`
+is reported in the status line. Finding the opener executable is bounded by
+`gui.open_timeout_ms`.
 
 ## Navigation and Keyboard
 

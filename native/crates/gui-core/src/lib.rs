@@ -25,7 +25,9 @@ mod message;
 mod review;
 mod sdk;
 mod state;
+mod subagents;
 mod ui_state;
+mod work_link;
 
 use protocol::{
     AgentRuntime, DaemonHealthResult, NotificationRecord, ProjectInfo, ProtocolVersion, SessionInfo,
@@ -98,7 +100,11 @@ pub use state::{
     SessionGroup, SessionObservation, SessionRow, Toast, Workspace,
 };
 #[doc(inline)]
+pub use subagents::{subagent_counts, subagent_tree, SubagentCounts, SubagentNode};
+#[doc(inline)]
 pub use ui_state::{default_state_dir, Selection, UiState, UiStateError, WindowSize};
+#[doc(inline)]
+pub use work_link::{work_link, ExternalUrl, Site, UrlError, WorkLink};
 
 const UI_STATE_FILE: &str = "ui-state.toml";
 /// Stable protocol code older daemons return for unknown optional methods.
