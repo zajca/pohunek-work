@@ -79,5 +79,7 @@ everything and publishes nothing. The macOS signing job needs the secrets
 `APPLE_NOTARY_ISSUER_ID` in the `macos-signing` environment and the repository
 variable `MACOS_TEAM_ID`; without them the job fails before any work and no
 macOS archive is published. A dry run without credentials sets
-`skip_macos_signing`. The packaging scripts and their tests live in
+`skip_macos_signing`. A tag release without macOS archives needs the explicit
+repository variable `RELEASE_WITHOUT_MACOS=true`; with any other value or none,
+a missing credential stops the release. The packaging scripts and their tests live in
 `packaging/`, shared by `native/` and `web/`.
