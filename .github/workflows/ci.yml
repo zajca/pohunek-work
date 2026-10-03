@@ -28,6 +28,7 @@ jobs:
       pull-requests: read
     outputs:
       plugin: ${{ steps.filter.outputs.plugin }}
+      launchers: ${{ steps.filter.outputs.launchers }}
     steps:
       # Push events resolve the filter with git against the previous commit,
       # which needs more than a depth-1 checkout.
@@ -40,6 +41,10 @@ jobs:
           filters: |
             plugin:
               - 'plugin/**'
+              - 'launchers/**'
+              - '.github/workflows/ci.yml'
+            launchers:
+              - 'launchers/**'
               - '.github/workflows/ci.yml'
 
   plugin:
@@ -59,9 +64,57 @@ jobs:
       - run: bun run typecheck
       - run: bun test
 
+  launchers:
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.launchers == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, shell: dash, render: true }
+          - { os: ubuntu-latest, shell: bash, render: true }
+          - { os: macos-latest, shell: /bin/sh, render: false }
+    runs-on: ${{ matrix.os }}
+    env:
+      # The rendering tests drive the real `pohunek prompt` CLI; this is the
+      # core release they are pinned to. Bump it together with the digest.
+      POHUNEK_RELEASE: v0.31.6
+      POHUNEK_MUSL_SHA256: fc0a53a98ed0d2b6123d78e338f3fa6bc44277df8d5a7c68c6c250f4b097a428
+    defaults:
+      run:
+        working-directory: launchers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: launchers/package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - name: Install the pohunek release binary
+        if: ${{ matrix.render }}
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="pohunek-cli-${POHUNEK_RELEASE#v}-x86_64-unknown-linux-musl.tar.gz"
+          gh release download "$POHUNEK_RELEASE" -R zajca/pohunek -p "$asset"
+          echo "$POHUNEK_MUSL_SHA256  $asset" | sha256sum -c -
+          tar xzf "$asset"
+          echo "POHUNEK_TEST_BIN=$PWD/${asset%.tar.gz}/pohunek" >> "$GITHUB_ENV"
+      - name: Launcher tests under ${{ matrix.shell }}
+        env:
+          POHUNEK_TEST_SHELL: ${{ matrix.shell }}
+        run: |
+          if [ "${{ matrix.render }}" = "true" ]; then
+            bun test
+          else
+            bun test tests/launcher-scripts.test.ts tests/lib-timeout.test.ts
+          fi
+
   ci:
     if: ${{ always() }}
-    needs: [changes, plugin]
+    needs: [changes, plugin, launchers]
     runs-on: ubuntu-latest
     steps:
       # A skipped surface job is a pass; a failed or cancelled one is not.

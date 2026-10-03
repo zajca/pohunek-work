@@ -30,6 +30,12 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   draft and re-reads the pull request to confirm it is no longer a draft;
 - `pohunek-work do <key> attach` attaches the terminal to the one live linked
   session;
+- `pohunek-work setup [scripts|config|sway] [--force] [--json]` installs the
+  rofi/sway launcher scripts, the starter `launcher.conf` and prompt templates,
+  and the sway drop-in from `launchers/` into the per-user XDG locations;
+  `pohunek-work doctor` reports the launcher requirements (rofi, swaymsg,
+  python3, terminal, installed scripts, sway include) as advisory `warn` lines
+  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.
 

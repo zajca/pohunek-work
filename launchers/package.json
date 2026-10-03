@@ -1,0 +1,21 @@
+{
+  "name": "pohunek-launchers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tests of the pohunek rofi/sway launcher scripts",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "bun run lint && bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.11.0",
+    "typescript": "6",
+    "typescript-eslint": "^8.71.0"
+  },
+  "packageManager": "bun@1.4.2"
+}

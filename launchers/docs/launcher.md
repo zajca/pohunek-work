@@ -9,38 +9,85 @@ intents: [setup, debug, help]
 
 # Launcher Setup
 
-The launcher integration is local filesystem setup. It writes scripts, default
-configuration, and an optional sway drop-in.
+The launcher integration is local filesystem setup. `pohunek-work setup` writes
+the launcher scripts, default configuration, and an optional sway drop-in; the
+files come from this repository's `launchers/` directory and are embedded in the
+`pohunek-work` binary, so a compiled binary needs no source tree. The scripts
+call the `pohunek` CLI (`session`, `project action`, `prompt render`,
+`prompt link`, `host discover`, `attach`), which must be installed separately.
 
-The rofi/sway launcher is a Linux capability. On macOS `pohunek setup` writes
-only the config and templates and reports the scripts and the sway drop-in as
-skipped, `pohunek setup sway` succeeds without writing anything, and
-`pohunek doctor` does not probe rofi, swaymsg, `timeout`, `$TERMINAL`, the
-launcher scripts or the sway include. The optional `terminal=` key in
-`launcher.conf` is still read: on macOS `pohunek doctor` checks that the whole
-value resolves to one executable (the launcher runs it as a single program name,
-so a value with arguments such as `kitty -e` is reported; use a wrapper script).
+Install locations follow the XDG rules of `pohunek`: `XDG_DATA_HOME` (default
+`$HOME/.local/share`) holds `pohunek/bin/` with the scripts, `XDG_CONFIG_HOME`
+(default `$HOME/.config`) holds `pohunek/launcher.conf`, `pohunek/prompts/` and
+the sway config at `sway/`. A set XDG variable must be an absolute path without
+`..` components; without an XDG variable and `HOME` the command fails instead of
+guessing.
+
+The rofi/sway launcher is a Linux capability. On macOS `pohunek-work setup`
+writes only the config and templates and reports the scripts and the sway
+drop-in as skipped, `pohunek-work setup sway` succeeds without writing anything,
+and `pohunek-work doctor` checks only the terminal. The optional `terminal=` key
+in `launcher.conf` is still read: on macOS `pohunek-work doctor` checks that the
+whole value resolves to one executable (the launcher runs it as a single program
+name, so a value with arguments such as `kitty -e` is reported; use a wrapper
+script).
 
 Use the split setup commands when diagnosing or applying changes:
 
-1. `pohunek setup scripts` materializes launcher scripts into the data directory
-   bin path.
-2. `pohunek setup config` writes default launcher configuration and prompt
-   templates (`issue.tmpl`, `pr.tmpl`, `review.tmpl`) without overwriting
-   existing files unless `--force` is used. `review.tmpl` is GUI-only
-   (Track D.6, see [GUI setup](gui.md#review)): the shell launcher scripts
-   render `issue.tmpl`/`pr.tmpl` themselves, but `pohunek-gui` reads and
-   renders `review.tmpl` directly to build a review-dispatch session's
-   prompt.
-3. `pohunek setup sway` writes the sway drop-in, or `pohunek setup sway --print`
-   prints the snippet for manual review.
+1. `pohunek-work setup scripts` installs the launcher scripts into the data
+   directory bin path.
+2. `pohunek-work setup config` writes default launcher configuration and prompt
+   templates (`issue.tmpl`, `pr.tmpl`, `review.tmpl`). `issue.tmpl` and
+   `pr.tmpl` are the host-level prompt templates the pohunek daemon falls back to
+   when a project action names a template without an in-repo copy; `review.tmpl`
+   is GUI-only: the native GUI reads and renders it directly to build a
+   review-dispatch session's prompt.
+3. `pohunek-work setup sway` writes the sway drop-in, or
+   `pohunek-work setup sway --print` prints the snippet for manual review.
+   `--keybind` chooses the session switcher key (default `$mod+p`). The Linear
+   issue picker needs a project (`pohunek-rofi-issue <project> [action]`), so its
+   binding is generated only with `--issue-project <project>`;
+   `--issue-keybind` (default `$mod+i`) then chooses its key. Paths and the
+   project are quoted so that both sway's config parser and `sh` read them back
+   unchanged, whatever characters they contain; control characters and key
+   sequences containing `;`, `,`, quotes, `\` or `#` are refused.
+
+`pohunek-work setup` with no subcommand runs all three (scripts and drop-in on
+Linux, config only on macOS) and prints the next steps. Every command accepts
+`--json`, which prints one envelope (`cli_version`, `protocol`, `ok`) per
+invocation; with `sway --print --json` the snippet is part of the payload.
+
+An existing file is never replaced without `--force`. A file whose content (and,
+for scripts, mode) already matches is reported as `unchanged`; a file that
+differs is reported as `skipped` and left alone, so a local edit survives a
+re-run. After upgrading `pohunek-work`, run `pohunek-work setup scripts --force`
+to replace the installed scripts (with `--force` the obsolete
+`pohunek-session-banner` script is removed as well), and
+`pohunek-work setup config --force` only when the defaults should replace your
+edits. `--force` replaces a file through a rename, so a symbolic link at the
+target is replaced and its referent is not written.
+
+Verify the result with `pohunek-work doctor`. Besides its configuration, pohunek,
+GitHub and Linear checks it reports the launcher requirements as `warn` lines
+that never change the exit code: `bin:rofi`, `bin:swaymsg`, `bin:python3` (every
+script needs it), `terminal` (`terminal=` in `launcher.conf`, else `$TERMINAL`;
+the launcher runs the whole value as one program, so it is resolved as one
+executable and `kitty -e` is reported), `launcher_scripts` (every entrypoint is
+installed and executable and `lib.sh` is readable) and `sway_include` (an
+`include` directive of the sway config, with sway variables, `~`, `$HOME` and
+globs expanded, covers the generated drop-in; a mention of `config.d` elsewhere
+does not count). When the install directories cannot be derived
+from the environment a single `launcher_paths` warning replaces the path-based
+checks.
 
 After setup, verify daemon health and project/action resolution before blaming
 the launcher UI. The launcher ultimately depends on the same daemon, project,
-session, and action surfaces described in [sessions](../concepts/sessions.md)
-and [projects](../concepts/projects.md).
+session, and action surfaces the `pohunek` CLI documents (sessions and
+projects).
 
-Attach uses raw terminal passthrough by default, preserving the terminal's
+`pohunek attach` itself belongs to the `pohunek` CLI; it reads the attach keys of
+`launcher.conf` from the same config directory. Attach uses raw terminal
+passthrough by default, preserving the terminal's
 native scrollback. Ctrl-\ temporarily freezes the visible agent screen and opens
 a session menu together with a one-row status banner. The menu owns kill
 confirmation (`k` then `y`), detach (`d`), new session in the same worktree
@@ -71,18 +118,17 @@ and use explicit native recovery only when supported. Set
 ## Work-item Links
 
 `pohunek-launch-issue` and `pohunek-launch-pr` render the action's prompt with
-`pohunek prompt render` (the same shared `crates/prompt` renderer the GUI
-uses), then build the session-link metadata with a sibling client-side
-subcommand, `pohunek prompt link --provider <linear_issue|github_pr>
+`pohunek prompt render` (the same shared renderer the GUI uses), then build the
+session-link metadata with a sibling client-side subcommand, `pohunek prompt link --provider <linear_issue|github_pr>
 --item-id <id> --url <url>`, reading the same provider JSON from stdin. It
 derives `link.branch` from the provider JSON and prints the five canonical
 `link.provider`/`link.kind`/`link.id`/`link.url`/`link.branch` lines. Neither
 subcommand talks to the daemon.
 
-`scripts/lib.sh`'s `pohunek_link_meta` helper wraps that call, and
+`launchers/lib.sh`'s `pohunek_link_meta` helper wraps that call, and
 `pohunek_run_session_new` forwards each line as a repeated `session new --meta
 key=value` flag, so the link is written atomically in the same `session.new`
 call that starts the agent — never as a separate post-launch step. Because
 both surfaces build the metadata from the one shared implementation, a link
 written by a launch script is byte-identical to one written by the GUI for the
-same work item; see [GUI setup](gui.md) for the GUI side of this convention.
+same work item; the native GUI follows the same convention.

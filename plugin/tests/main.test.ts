@@ -138,3 +138,54 @@ test("reportError prints the given class in the JSON envelope and returns exit 2
   const envelope = JSON.parse(lines.join("\n")) as { err: { class: string; code: string; msg: string } };
   expect(envelope.err).toEqual({ class: "internal", code: "internal_error", msg: "boom" });
 });
+
+test("setup rejects unknown steps and options that do not apply", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const cases: readonly (readonly string[])[] = [
+    ["setup", "everything"],
+    ["setup", "all"],
+    ["setup", "scripts", "extra"],
+    ["setup", "scripts", "--print"],
+    ["setup", "config", "--keybind", "$mod+x"],
+    ["setup", "sway", "--print", "--force"],
+    ["setup", "scripts", "--issue-project", "ui"],
+    ["setup", "sway", "--issue-keybind", "$mod+g"],
+    ["setup", "sway", "--issue-project", ""],
+  ];
+  for (const args of cases) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("usage:");
+  }
+});
+
+test("setup installs into the XDG locations and reports JSON on stdout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await exec(["bun", MAIN, "setup", "scripts", "--json"], {
+    timeoutMs: 20_000,
+    env: {
+      PATH: process.env["PATH"] ?? "",
+      XDG_DATA_HOME: join(dir, "data"),
+      XDG_CONFIG_HOME: join(dir, "config"),
+    },
+  });
+  expect(result.exitCode).toBe(0);
+  const envelope = JSON.parse(result.stdout) as { ok: { dir: string; files: { path: string; outcome: string }[] } };
+  expect(envelope.ok.dir).toBe(join(dir, "data", "pohunek", "bin"));
+  expect(envelope.ok.files.every((file) => file.outcome === "created")).toBe(true);
+});
+
+test("setup without a derivable home is a configuration error envelope", async () => {
+  const result = await exec(["bun", MAIN, "setup", "--json"], { timeoutMs: 20_000, env: { PATH: process.env["PATH"] ?? "" } });
+  expect(result.exitCode).toBe(2);
+  const envelope = JSON.parse(result.stdout) as { err: { class: string; code: string; msg: string } };
+  expect(envelope.err).toEqual({ class: "configuration", code: "setup_paths", msg: "missing XDG_DATA_HOME or HOME" });
+});
+
+test("doctor reports the launcher requirements as warnings next to the config failure", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const result = await run(["doctor"], dir);
+  expect(result.code).toBe(10);
+  expect(result.out).toContain("FAIL config_invalid config");
+  expect(result.out).toMatch(/^warn warn launcher_scripts: not installed; run 'pohunek-work setup scripts'$/m);
+});
