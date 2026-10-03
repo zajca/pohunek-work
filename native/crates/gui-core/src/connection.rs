@@ -2,6 +2,7 @@
 
 // Rust guideline compliant 2026-09-30
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures::{stream, StreamExt};
@@ -341,22 +342,55 @@ fn required_str<'a>(value: &'a Value, field: &'static str) -> Result<&'a str, Co
         .ok_or(CoreError::MissingAgentStateField { field })
 }
 
+/// Hosts the GUI connects to, with the names to show for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredHosts {
+    /// The local host first, then every reachable discovered daemon.
+    pub hosts: Vec<HostConfig>,
+    /// Human-readable names of the discovered hosts; the route id is the only
+    /// identity and never changes with the name.
+    pub labels: BTreeMap<HostId, String>,
+}
+
 /// Discover reachable remote hosts through the local daemon and include local.
 pub async fn discover_hosts(
     local: HostConfig,
     options: ConnectionOptions,
-) -> Result<Vec<HostConfig>, CoreError> {
+) -> Result<DiscoveredHosts, CoreError> {
     let mut client = connect_client(&local, options).await?;
     let records =
         call_client::<method::HostDiscover>(&mut client, HostDiscoverParams { force: false })
             .await?;
-    let mut hosts = vec![local.clone()];
+    let mut discovered = DiscoveredHosts {
+        hosts: vec![local.clone()],
+        labels: BTreeMap::new(),
+    };
     for record in records {
         if matches!(record.class, HostClass::ReachableDaemon { .. }) {
-            hosts.push(discovered_host_config(&record)?);
+            let config = discovered_host_config(&record)?;
+            if let Some(label) = discovered_host_label(&record) {
+                discovered.labels.insert(config.id.clone(), label);
+            }
+            discovered.hosts.push(config);
         }
     }
-    Ok(hosts)
+    Ok(discovered)
+}
+
+/// Name to show for a discovered host: the daemon-reported short name, else
+/// the first DNS label of its FQDN.
+pub(crate) fn discovered_host_label(record: &HostRecord) -> Option<String> {
+    let non_empty = |value: &str| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    };
+    record.name.as_deref().and_then(non_empty).or_else(|| {
+        record
+            .fqdn
+            .as_deref()
+            .and_then(|fqdn| fqdn.split('.').next())
+            .and_then(non_empty)
+    })
 }
 
 pub(crate) fn discovered_host_config(record: &HostRecord) -> Result<HostConfig, CoreError> {

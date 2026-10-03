@@ -3,21 +3,22 @@
 // Rust guideline compliant 2026-10-01
 
 use iced::widget::{
-    button, checkbox, column, container, row, scrollable, text, text_editor, text_input,
+    button, checkbox, column, container, row, scrollable, space, text, text_editor, text_input,
 };
-use iced::{Center, Element};
+use iced::{Background, Border, Center, Color, Element, Fill, Shadow, Theme, Vector};
 use pohunek_gui_core::Toast;
 
-use crate::keyboard::{KeyBindingHelp, KeyContext};
-use crate::message::{FormField, Message};
+use crate::keyboard::{
+    KeyBindingHelp, KeyContext, SelectEntry, SELECT_LIST_MAX_HEIGHT, SELECT_ROW_HEIGHT,
+    SELECT_ROW_SPACING,
+};
+use crate::message::{FormField, FormSelect, LaunchPhase, ListDirection, Message};
 use crate::selection::project_host;
 use crate::view::session::session_name_input;
 use crate::PohunekApp;
 
+use super::dropdown::{dropdown, MenuKeys};
 use super::{dialog_card, muted_style, scrolling_dialog_card};
-
-/// Tallest an open select option list grows before it scrolls.
-const SELECT_OPTIONS_MAX_HEIGHT: f32 = 240.0;
 
 pub(crate) fn start_modal_content(app: &PohunekApp) -> Element<'_, Message> {
     let advanced_label = if app.start.show_advanced {
@@ -63,9 +64,15 @@ pub(crate) fn start_modal_content(app: &PohunekApp) -> Element<'_, Message> {
             .spacing(8),
         );
     }
-    let mut start = button("Start session").style(iced::widget::button::primary);
-    if project_host(app, app.start.project.as_ref())
-        .is_some_and(|host| host.agent_is_launchable(&app.start.agent))
+    let mut start = button(if app.launcher.phase == LaunchPhase::Launching {
+        "Starting..."
+    } else {
+        "Start session"
+    })
+    .style(iced::widget::button::primary);
+    if app.launcher.phase == LaunchPhase::Idle
+        && project_host(app, app.start.project.as_ref())
+            .is_some_and(|host| host.agent_is_launchable(&app.start.agent))
     {
         start = start.on_press(Message::CreateSession);
     }
@@ -199,39 +206,177 @@ fn form_select<'a>(
 ) -> Element<'a, Message> {
     let selected = crate::keyboard::form_select_label(app, field);
     let is_focused = app.form_focus == field;
-    let open = app.form_select.filter(|select| select.field == field);
-    let control = button(row![text(selected), text("v")].spacing(8))
+    let open = app
+        .form_select
+        .as_ref()
+        .filter(|select| select.field == field);
+    let trigger = button(row![text(selected).width(Fill), text("v")].spacing(8))
+        .width(Fill)
         .on_press(Message::ToggleFormSelect(field));
-    let control = if is_focused {
-        control.style(iced::widget::button::primary)
+    let trigger = if is_focused {
+        trigger.style(iced::widget::button::primary)
     } else {
-        control.style(iced::widget::button::secondary)
+        trigger.style(iced::widget::button::secondary)
     };
-    let mut content = column![text(label).size(14), control].spacing(4);
-    if let Some(select) = open {
-        let mut options = column![].spacing(4);
-        for (index, option) in crate::keyboard::form_select_options(app, field)
-            .into_iter()
-            .enumerate()
-        {
-            let option_button =
-                button(text(option)).on_press(Message::ChooseFormSelect { field, index });
-            options = options.push(if select.cursor == index {
-                option_button.style(iced::widget::button::primary)
-            } else {
-                option_button.style(iced::widget::button::secondary)
-            });
-        }
-        content =
-            content.push(container(scrollable(options)).max_height(SELECT_OPTIONS_MAX_HEIGHT));
-    }
-    content.into()
+    let menu = open.map_or_else(
+        || Element::from(space()),
+        |select| select_menu(app, field, select),
+    );
+    let keys = MenuKeys {
+        up: Message::MoveFormSelect(ListDirection::Up),
+        down: Message::MoveFormSelect(ListDirection::Down),
+        confirm: Message::ConfirmFormSelect,
+        dismiss: Message::CloseFormSelect,
+    };
+    column![
+        text(label).size(14),
+        dropdown(trigger, menu, open.is_some(), keys)
+    ]
+    .spacing(4)
+    .width(Fill)
+    .into()
 }
 
-pub(crate) fn toast_view(toast: &Toast) -> Element<'_, Message> {
+/// Menu of an open select: an optional search box above the option rows.
+fn select_menu<'a>(
+    app: &'a PohunekApp,
+    field: FormField,
+    select: &'a FormSelect,
+) -> Element<'a, Message> {
+    let entries = crate::keyboard::form_select_entries(app, field, &select.query);
+    let mut rows = column![].spacing(SELECT_ROW_SPACING);
+    if entries.is_empty() {
+        rows = rows.push(
+            container(text("No matches").style(muted_style))
+                .height(SELECT_ROW_HEIGHT)
+                .padding([0, 10])
+                .align_y(Center),
+        );
+    }
+    for (position, entry) in entries.into_iter().enumerate() {
+        rows = rows.push(select_row(
+            field,
+            position,
+            entry,
+            position == select.cursor,
+        ));
+    }
+    let list = container(scrollable(rows).id(crate::keyboard::form_select_scroll_id()))
+        .max_height(SELECT_LIST_MAX_HEIGHT);
+    let mut menu = column![].spacing(8);
+    if crate::keyboard::form_select_is_searchable(app, field) {
+        menu = menu.push(
+            text_input("Search...", &select.query)
+                .id(crate::keyboard::form_select_search_id())
+                .on_input(Message::FormSelectQueryChanged)
+                .size(14),
+        );
+    }
+    container(menu.push(list))
+        .padding(8)
+        .style(menu_style)
+        .into()
+}
+
+fn select_row(
+    field: FormField,
+    position: usize,
+    entry: SelectEntry,
+    is_cursor: bool,
+) -> Element<'static, Message> {
+    // The cursor row inherits the button's text color so it stays readable on
+    // the accent background; other rows fade secondary information.
+    let fade = move |theme: &Theme, faded: bool| {
+        if faded && !is_cursor {
+            muted_style(theme)
+        } else {
+            iced::widget::text::Style::default()
+        }
+    };
+    let font = if entry.is_current {
+        iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        }
+    } else {
+        iced::Font::DEFAULT
+    };
+    let dimmed = entry.dimmed;
+    let mut content = row![
+        text(entry.label)
+            .font(font)
+            .style(move |theme: &Theme| fade(theme, dimmed)),
+        space().width(Fill),
+    ]
+    .align_y(Center);
+    if let Some(detail) = entry.detail {
+        content = content.push(
+            text(detail)
+                .size(12)
+                .style(move |theme: &Theme| fade(theme, true)),
+        );
+    }
+    button(container(content).center_y(Fill))
+        .width(Fill)
+        .height(SELECT_ROW_HEIGHT)
+        .padding([0, 10])
+        .on_press(Message::ChooseFormSelect {
+            field,
+            index: position,
+        })
+        .style(select_row_style(is_cursor))
+        .into()
+}
+
+/// Row background: a solid accent with its paired text color for the cursor
+/// row, a light tint on hover, transparent otherwise.
+fn select_row_style(
+    is_cursor: bool,
+) -> impl Fn(&Theme, iced::widget::button::Status) -> iced::widget::button::Style {
+    move |theme, status| {
+        use iced::widget::button::{Status, Style};
+        let palette = theme.extended_palette();
+        let mut style = Style {
+            background: None,
+            text_color: palette.background.base.text,
+            border: iced::border::rounded(6.0),
+            ..Style::default()
+        };
+        if is_cursor {
+            style.background = Some(Background::Color(palette.primary.base.color));
+            style.text_color = palette.primary.base.text;
+        } else if matches!(status, Status::Hovered | Status::Pressed) {
+            style.background = Some(Background::Color(palette.background.weak.color));
+        }
+        style
+    }
+}
+
+/// Raised panel for the dropdown menu so it reads as floating above the dialog.
+fn menu_style(theme: &Theme) -> iced::widget::container::Style {
+    let palette = theme.extended_palette();
+    iced::widget::container::Style {
+        background: Some(Background::Color(palette.background.base.color)),
+        border: Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: Shadow {
+            color: Color::BLACK.scale_alpha(0.4),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
+pub(crate) fn toast_view<'a>(app: &PohunekApp, toast: &'a Toast) -> Element<'a, Message> {
     container(text(format!(
         "{} / {}: {}",
-        toast.host_id, toast.session_id.0, toast.message
+        app.workspace.host_label(&toast.host_id),
+        toast.session_id.0,
+        toast.message
     )))
     .padding(8)
     .into()

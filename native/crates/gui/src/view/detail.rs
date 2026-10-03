@@ -80,7 +80,7 @@ pub(crate) fn detail_view(app: &PohunekApp) -> Element<'_, Message> {
         }
     }
     for toast in app.workspace.toasts.iter().rev().take(VISIBLE_TOASTS).rev() {
-        content = content.push(toast_view(toast));
+        content = content.push(toast_view(app, toast));
     }
     if let Some(status) = &app.status {
         content = content.push(text(status).size(ROW_DETAIL_SIZE));
@@ -302,7 +302,7 @@ fn session_row(row: &SessionRow) -> Element<'static, Message> {
 
 /// Muted detail line: host, agent, state, activity, attention title and age.
 fn session_meta(row: &SessionRow) -> String {
-    let mut meta = row.host_id.to_string();
+    let mut meta = row.host_label.clone();
     push_meta(&mut meta, &row.agent);
     push_meta(&mut meta, row.state.as_str());
     if let Some(activity) = row.activity {
@@ -386,6 +386,7 @@ mod tests {
                 project_id: project.to_owned(),
             },
             label: label.to_owned(),
+            host_label: host.to_owned(),
             host_connected: true,
             known: true,
             session_count,

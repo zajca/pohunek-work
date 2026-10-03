@@ -432,7 +432,13 @@ person at the Mac and the signed `Pohunek.app`. Manual procedure:
 ## Session and Assistant Launch
 
 The Start session modal opens with a Project select as its first field. Options
-are every known project on every host, labeled with the host (`label · host`).
+are every known project on every host, shown as the project label with the
+host's name (the discovered short host name, not its route id) and its session
+count beside it; hosts that are not connected are dimmed. Every select opens as a
+floating list over the dialog, and the Project select (and any select with more
+than six options) has a search box that takes focus as soon as the list opens:
+type to filter with fuzzy matching on project, host and project id, Up/Down move,
+Enter chooses, Esc closes only the list.
 The project is preselected from the active project filter, else from the
 selected session's project, else the only project. Choosing another project
 clears the template, reloads that project's actions, and re-validates the agent
@@ -446,6 +452,32 @@ The Assistant entry opens a native launch modal with the same Project select as
 its first field and the same preselection rules. The shared
 `pohunek-assistant` launcher (re-exported as `gui-core::assistant`) performs host inspection, snapshot creation,
 knowledge materialization, prompt composition, and `session.new`.
+
+### Dialog-only window
+
+`pohunek-gui --new-session` starts a separate process that shows only the Start
+session dialog, for a compositor key binding. It connects to the same daemon and
+hosts, preselects a project the same way (from the saved selection, once the
+host owning that session has answered), opens the
+Project select with its search box focused, and exits once the session has been
+created and its terminal opened with the configured attach command. Esc or Close
+exits without starting anything, except while a launch is in flight: the window
+stays until the terminal is open, so a created session is never left unseen. A
+failed launch keeps the dialog open with the error below it; if only the
+terminal failed, the form is locked (the session exists) and Esc closes the
+window. The form is never submitted twice.
+The process never writes the saved UI state and never raises desktop
+notifications, so it cannot interfere with the main window. Any other argument is
+an error.
+
+The window has a fixed size and the Wayland application id
+`pohunek-gui-new-session`, so sway floats it on its own; a rule makes that
+explicit:
+
+```
+bindsym $mod+Shift+n exec pohunek-gui --new-session
+for_window [app_id="pohunek-gui-new-session"] floating enable, move position center
+```
 
 ## Activity
 

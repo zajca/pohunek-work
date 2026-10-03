@@ -19,6 +19,7 @@ mod view;
 
 #[cfg(target_os = "linux")]
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -36,8 +37,8 @@ use attach::{window_dimension_to_f32, AttachPlan};
 use command::{discover_hosts_task, update};
 use config::AppConfig;
 use message::{
-    AssistantForm, FormField, FormSelect, InboxView, Message, MetadataEdit, ModalView, StartForm,
-    TemplateRecipe,
+    AppMode, AssistantForm, FormField, FormSelect, InboxView, LauncherState, Message, MetadataEdit,
+    ModalView, StartForm, TemplateRecipe,
 };
 use view::view;
 
@@ -62,24 +63,79 @@ fn main() -> ExitCode {
     }
 }
 
+/// Command-line flag that starts only the Start-a-session dialog.
+const NEW_SESSION_FLAG: &str = "--new-session";
+
+/// Wayland application id of the dialog-only window, so a compositor rule can
+/// float it without touching the main window.
+#[cfg(target_os = "linux")]
+const LAUNCHER_APP_ID: &str = "pohunek-gui-new-session";
+
+/// Size of the dialog-only window: the 640 px dialog plus its margin, tall
+/// enough that an open project list fits below the select.
+const LAUNCHER_WINDOW_SIZE: (f32, f32) = (700.0, 760.0);
+
+/// Argument error: this program accepts no argument except [`NEW_SESSION_FLAG`].
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("unexpected argument `{argument}`; usage: pohunek-gui [{NEW_SESSION_FLAG}]")]
+struct UsageError {
+    argument: String,
+}
+
+fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppMode, UsageError> {
+    let mut mode = AppMode::Full;
+    for argument in args {
+        if argument == NEW_SESSION_FLAG {
+            mode = AppMode::NewSession;
+        } else {
+            return Err(UsageError {
+                argument: argument.to_string_lossy().into_owned(),
+            });
+        }
+    }
+    Ok(mode)
+}
+
 fn run() -> Result<(), StartupError> {
+    let mode = parse_args(std::env::args_os().skip(1))?;
     #[cfg(target_os = "linux")]
     validate_wayland_environment()?;
-    let boot = BootState::load();
+    let boot = BootState::load(mode);
     let initial_window_size = boot.ui_state.window_size;
-    iced::application(move || PohunekApp::boot(boot.clone()), update, view)
+    let application = iced::application(move || PohunekApp::boot(boot.clone(), mode), update, view)
         .subscription(subscription)
-        .theme(theme)
-        .window_size((
+        .theme(theme);
+    match mode {
+        AppMode::Full => application.window_size((
             window_dimension_to_f32(initial_window_size.width),
             window_dimension_to_f32(initial_window_size.height),
-        ))
-        .run()?;
+        )),
+        AppMode::NewSession => application.window(launcher_window_settings()),
+    }
+    .run()?;
     Ok(())
+}
+
+fn launcher_window_settings() -> window::Settings {
+    window::Settings {
+        size: LAUNCHER_WINDOW_SIZE.into(),
+        position: window::Position::Centered,
+        // A fixed size makes the compositor float the window (sway and other
+        // Wayland compositors treat equal min and max size as a dialog).
+        resizable: false,
+        #[cfg(target_os = "linux")]
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: LAUNCHER_APP_ID.to_owned(),
+            ..window::settings::PlatformSpecific::default()
+        },
+        ..window::Settings::default()
+    }
 }
 
 #[derive(Debug, Error)]
 enum StartupError {
+    #[error(transparent)]
+    Usage(#[from] UsageError),
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     Display(#[from] DisplayServerError),
@@ -147,7 +203,21 @@ struct BootState {
 }
 
 impl BootState {
-    fn load() -> Self {
+    fn load(mode: AppMode) -> Self {
+        Self::read().for_mode(mode)
+    }
+
+    /// The dialog-only process reads the saved selection to preselect a
+    /// project but never writes it: the main window owns the file, and this
+    /// process's window size and selection must not replace the main one's.
+    fn for_mode(mut self, mode: AppMode) -> Self {
+        if mode == AppMode::NewSession {
+            self.state_dir = None;
+        }
+        self
+    }
+
+    fn read() -> Self {
         match default_state_dir() {
             Ok(state_dir) => match UiState::load_from_dir(&state_dir) {
                 Ok(ui_state) => Self {
@@ -174,6 +244,8 @@ impl BootState {
 // clonable, and the application state is owned by Iced and never cloned.
 #[derive(Debug)]
 struct PohunekApp {
+    mode: AppMode,
+    launcher: LauncherState,
     workspace: Workspace,
     config: Result<AppConfig, String>,
     keymap: keyboard::KeyMap,
@@ -222,7 +294,7 @@ struct PohunekApp {
 }
 
 impl PohunekApp {
-    fn boot(boot: BootState) -> (Self, Task<Message>) {
+    fn boot(boot: BootState, mode: AppMode) -> (Self, Task<Message>) {
         let config = AppConfig::load().map_err(|err| err.to_string());
         let keymap = config.as_ref().map_or_else(
             |_| keyboard::KeyMap::default(),
@@ -234,37 +306,40 @@ impl PohunekApp {
         };
         let mut workspace = Workspace::default();
         workspace.selection.clone_from(&boot.ui_state.selection);
-        (
-            Self {
-                workspace,
-                config,
-                keymap,
-                hosts: Vec::new(),
-                ui_state: boot.ui_state,
-                start: StartForm::default(),
-                assistant: AssistantForm::default(),
-                form_focus: FormField::StartAgent,
-                form_select: None,
-                prompt_editor: text_editor::Content::new(),
-                assistant_editor: text_editor::Content::new(),
-                template_recipe: None,
-                modal: ModalView::None,
-                notification_filter: NotificationFilter::default(),
-                inbox_scope: NotificationScope::default(),
-                inbox_view: InboxView::default(),
-                inbox_cursor: None,
-                inbox_details_expanded: false,
-                metadata_edit: MetadataEdit::default(),
-                rename_edit: String::new(),
-                project_filter: None,
-                template_generation: 0,
-                state_dir: boot.state_dir,
-                status: boot.status,
-                notified_intents: 0,
-                notification_health: notify::NotificationHealth::default(),
-            },
-            task,
-        )
+        let mut app = Self {
+            mode,
+            launcher: LauncherState::default(),
+            workspace,
+            config,
+            keymap,
+            hosts: Vec::new(),
+            ui_state: boot.ui_state,
+            start: StartForm::default(),
+            assistant: AssistantForm::default(),
+            form_focus: FormField::StartAgent,
+            form_select: None,
+            prompt_editor: text_editor::Content::new(),
+            assistant_editor: text_editor::Content::new(),
+            template_recipe: None,
+            modal: ModalView::None,
+            notification_filter: NotificationFilter::default(),
+            inbox_scope: NotificationScope::default(),
+            inbox_view: InboxView::default(),
+            inbox_cursor: None,
+            inbox_details_expanded: false,
+            metadata_edit: MetadataEdit::default(),
+            rename_edit: String::new(),
+            project_filter: None,
+            template_generation: 0,
+            state_dir: boot.state_dir,
+            status: boot.status,
+            notified_intents: 0,
+            notification_health: notify::NotificationHealth::default(),
+        };
+        if mode == AppMode::NewSession {
+            command::open_start_modal(&mut app);
+        }
+        (app, task)
     }
 
     pub(crate) fn attach_plan(
@@ -296,6 +371,8 @@ impl PohunekApp {
     #[cfg(test)]
     pub(crate) fn test_default() -> Self {
         Self {
+            mode: AppMode::Full,
+            launcher: LauncherState::default(),
             workspace: Workspace::default(),
             config: Err("test config is intentionally absent".to_owned()),
             keymap: keyboard::KeyMap::default(),
@@ -489,5 +566,53 @@ mod tests {
 
         assert_eq!(size.cols, 132);
         assert_eq!(size.rows, 40);
+    }
+}
+
+/// Startup-mode tests; unlike `tests` above they compile on every platform.
+#[cfg(test)]
+mod startup_mode_tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn no_argument_starts_the_full_window() {
+        assert_eq!(parse_args(args(&[])), Ok(AppMode::Full));
+    }
+
+    #[test]
+    fn new_session_flag_starts_the_dialog_only_window() {
+        assert_eq!(
+            parse_args(args(&["--new-session"])),
+            Ok(AppMode::NewSession)
+        );
+    }
+
+    #[test]
+    fn any_other_argument_is_rejected() {
+        let err = parse_args(args(&["--new-sesion"])).expect_err("typo must fail");
+        assert_eq!(err.argument, "--new-sesion");
+        assert!(err
+            .to_string()
+            .contains("usage: pohunek-gui [--new-session]"));
+        parse_args(args(&["--new-session", "extra"])).expect_err("extra argument must fail");
+    }
+
+    #[test]
+    fn dialog_only_process_never_writes_the_ui_state() {
+        let boot = BootState {
+            ui_state: UiState::default(),
+            state_dir: Some(PathBuf::from("/state")),
+            status: None,
+        };
+        assert!(boot
+            .clone()
+            .for_mode(AppMode::NewSession)
+            .state_dir
+            .is_none());
+        assert!(boot.for_mode(AppMode::Full).state_dir.is_some());
     }
 }

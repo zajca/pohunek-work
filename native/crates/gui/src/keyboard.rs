@@ -14,12 +14,13 @@ use iced::keyboard::{self, Key, Modifiers};
 use iced::widget::{operation, Id};
 use iced::{Subscription, Task};
 use pohunek_gui_core::assistant::Intent as AssistantIntent;
-use pohunek_gui_core::{project_choice_labels, ProjectChoice, ProjectRef};
+use pohunek_gui_core::{fuzzy_rank, project_choice_labels, ProjectChoice, ProjectRef};
 use protocol::ProviderKind;
 
 use crate::message::{
     FormField, FormSelect, InboxView, ListDirection, Message, ModalView,
-    ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL, PROJECT_PLACEHOLDER_LABEL,
+    ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL, PROJECTS_LOADING_LABEL,
+    PROJECT_PLACEHOLDER_LABEL,
 };
 use crate::selection::{available_actions, project_host, selected_session};
 use crate::PohunekApp;
@@ -71,6 +72,49 @@ const ASSISTANT_PROJECT_SELECT_ID: &str = "assistant-project";
 const ASSISTANT_INTENT_SELECT_ID: &str = "assistant-intent";
 const ASSISTANT_AGENT_SELECT_ID: &str = "assistant-agent";
 const READ_ONLY_TEXT_INPUT_ID: &str = "read-only-selectable-text";
+const FORM_SELECT_SEARCH_ID: &str = "form-select-search";
+const FORM_SELECT_SCROLL_ID: &str = "form-select-options";
+
+/// Option count above which a select shows a search box; project selects
+/// always do. Short lists such as agents are faster to pick from directly.
+const SELECT_SEARCH_MIN_OPTIONS: usize = 6;
+
+/// Height of one option row in an open select. The row height is fixed so the
+/// scroll offset that keeps the cursor row centered can be derived from the
+/// cursor position alone.
+pub(crate) const SELECT_ROW_HEIGHT: f32 = 32.0;
+/// Gap between option rows.
+pub(crate) const SELECT_ROW_SPACING: f32 = 2.0;
+/// Tallest an open select option list grows before it scrolls.
+pub(crate) const SELECT_LIST_MAX_HEIGHT: f32 = 264.0;
+
+/// Scrolls the open select's option list so the cursor row sits mid-list.
+pub(crate) fn form_select_scroll_task(cursor: usize) -> Task<Message> {
+    // Lists are far shorter than `u16::MAX` rows; the clamp only avoids a lossy cast.
+    let position = f32::from(u16::try_from(cursor).unwrap_or(u16::MAX));
+    let row_top = position * (SELECT_ROW_HEIGHT + SELECT_ROW_SPACING);
+    let offset = (row_top - (SELECT_LIST_MAX_HEIGHT - SELECT_ROW_HEIGHT) / 2.0).max(0.0);
+    operation::scroll_to(
+        form_select_scroll_id(),
+        operation::AbsoluteOffset {
+            x: Some(0.0),
+            y: Some(offset),
+        },
+    )
+}
+
+/// Focuses the search box of the open select, when it has one.
+pub(crate) fn form_select_search_focus_task() -> Task<Message> {
+    operation::focus(form_select_search_id())
+}
+
+pub(crate) fn form_select_search_id() -> Id {
+    Id::new(FORM_SELECT_SEARCH_ID)
+}
+
+pub(crate) fn form_select_scroll_id() -> Id {
+    Id::new(FORM_SELECT_SCROLL_ID)
+}
 
 pub(crate) fn start_name_input_id() -> Id {
     Id::new(START_NAME_INPUT_ID)
@@ -895,6 +939,114 @@ pub(crate) fn form_select_options(app: &PohunekApp, field: FormField) -> Vec<Str
     }
 }
 
+/// One selectable row of an open form select.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectEntry {
+    /// Position in the unfiltered option list.
+    pub(crate) index: usize,
+    pub(crate) label: String,
+    /// Muted secondary text shown after the label, such as the owning host.
+    pub(crate) detail: Option<String>,
+    /// The option's host is not connected, so it is shown dimmed.
+    pub(crate) dimmed: bool,
+    /// The option is the field's current value.
+    pub(crate) is_current: bool,
+}
+
+/// Whether `field`'s open select shows a search box.
+pub(crate) fn form_select_is_searchable(app: &PohunekApp, field: FormField) -> bool {
+    matches!(field, FormField::StartProject | FormField::AssistantProject)
+        || form_select_options(app, field).len() > SELECT_SEARCH_MIN_OPTIONS
+}
+
+/// Rows of `field`'s select that match the fuzzy `query`, best match first;
+/// every option, in list order, for an empty query.
+pub(crate) fn form_select_entries(
+    app: &PohunekApp,
+    field: FormField,
+    query: &str,
+) -> Vec<SelectEntry> {
+    let entries = match field {
+        FormField::StartProject => {
+            project_entries(&app.workspace.project_choices(), app.start.project.as_ref())
+        }
+        FormField::AssistantProject => project_entries(
+            &app.workspace.project_choices(),
+            app.assistant.project.as_ref(),
+        ),
+        _ => {
+            let current = form_select_label(app, field);
+            form_select_options(app, field)
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| SelectEntry {
+                    index,
+                    is_current: label == current,
+                    label,
+                    detail: None,
+                    dimmed: false,
+                })
+                .collect()
+        }
+    };
+    let haystacks: Vec<String> = match field {
+        FormField::StartProject | FormField::AssistantProject => app
+            .workspace
+            .project_choices()
+            .iter()
+            .map(|choice| {
+                format!(
+                    "{} {} {}",
+                    choice.label, choice.host_label, choice.project.project_id
+                )
+            })
+            .collect(),
+        _ => entries.iter().map(|entry| entry.label.clone()).collect(),
+    };
+    fuzzy_rank(query, haystacks.iter().map(String::as_str))
+        .into_iter()
+        .map(|position| entries[position].clone())
+        .collect()
+}
+
+/// Project rows in `project_choices` order: the project label, with the host
+/// and session count as detail. The project id is appended only where one host
+/// holds several projects with the same label.
+fn project_entries(choices: &[ProjectChoice], current: Option<&ProjectRef>) -> Vec<SelectEntry> {
+    choices
+        .iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let duplicate = choices.iter().filter(|other| {
+                other.project.host_id == choice.project.host_id && other.label == choice.label
+            });
+            let mut label = choice.label.clone();
+            if duplicate.count() > 1 {
+                label.push_str("  ·  ");
+                label.push_str(&choice.project.project_id);
+            }
+            let mut detail = choice.host_label.clone();
+            if !choice.host_connected {
+                detail = format!("{detail}  ·  offline");
+            } else if choice.session_count > 0 {
+                let noun = if choice.session_count == 1 {
+                    "session"
+                } else {
+                    "sessions"
+                };
+                detail = format!("{detail}  ·  {} {noun}", choice.session_count);
+            }
+            SelectEntry {
+                index,
+                label,
+                detail: Some(detail),
+                dimmed: !choice.host_connected,
+                is_current: current == Some(&choice.project),
+            }
+        })
+        .collect()
+}
+
 /// Picker labels in `project_choices` order: `label · host`, plus the project
 /// id when one host holds several projects with the same label.
 fn project_picker_labels(app: &PohunekApp) -> Vec<String> {
@@ -902,6 +1054,9 @@ fn project_picker_labels(app: &PohunekApp) -> Vec<String> {
 }
 
 fn project_select_label(app: &PohunekApp, project: Option<&ProjectRef>) -> String {
+    if app.workspace.project_choices().is_empty() {
+        return PROJECTS_LOADING_LABEL.to_owned();
+    }
     project
         .and_then(|project| {
             let choices = app.workspace.project_choices();
@@ -983,6 +1138,7 @@ pub(crate) fn form_select_key_message(
     }
     let is_open = app
         .form_select
+        .as_ref()
         .is_some_and(|select| select.field == app.form_focus);
     match key.as_ref() {
         Key::Named(Named::ArrowUp) if is_open => Some(Message::MoveFormSelect(ListDirection::Up)),
@@ -1044,18 +1200,22 @@ pub(crate) fn form_reserves_enter(app: &PohunekApp, key: &Key) -> bool {
         && matches!(key.as_ref(), Key::Named(Named::Enter))
 }
 
-pub(crate) fn form_select_choice_message(app: &PohunekApp, select: FormSelect) -> Option<Message> {
-    let options = form_select_options(app, select.field);
-    let option = options.get(select.cursor)?.clone();
+pub(crate) fn form_select_choice_message(app: &PohunekApp, select: &FormSelect) -> Option<Message> {
+    let entry = form_select_entries(app, select.field, &select.query)
+        .into_iter()
+        .nth(select.cursor)?;
+    let option = form_select_options(app, select.field)
+        .into_iter()
+        .nth(entry.index)?;
     match select.field {
-        FormField::StartProject => project_choice_at(app, select.cursor)
+        FormField::StartProject => project_choice_at(app, entry.index)
             .map(|choice| Message::StartProjectSelected(choice.project)),
-        FormField::AssistantProject => project_choice_at(app, select.cursor)
+        FormField::AssistantProject => project_choice_at(app, entry.index)
             .map(|choice| Message::AssistantProjectSelected(choice.project)),
         FormField::StartAgent => Some(Message::StartAgentSelected(option)),
         FormField::StartTemplate => Some(Message::StartTemplateSelected(option)),
         FormField::AssistantIntent => ASSISTANT_INTENTS
-            .get(select.cursor)
+            .get(entry.index)
             .copied()
             .map(Message::AssistantIntentSelected),
         FormField::AssistantAgent => Some(Message::AssistantAgentSelected(option)),
@@ -1373,6 +1533,7 @@ mod tests {
         app.form_select = Some(FormSelect {
             field: FormField::StartProject,
             cursor: 0,
+            query: String::new(),
         });
         assert!(matches!(
             form_select_key_message(&app, &down, Modifiers::empty()),
@@ -1445,6 +1606,7 @@ mod tests {
         app.form_select = Some(FormSelect {
             field: FormField::StartAgent,
             cursor: 0,
+            query: String::new(),
         });
         assert!(matches!(
             form_select_key_message(&app, &down, Modifiers::empty()),
@@ -1603,9 +1765,10 @@ mod tests {
         assert!(matches!(
             form_select_choice_message(
                 &app,
-                FormSelect {
+                &FormSelect {
                     field: FormField::AssistantIntent,
                     cursor: 4,
+                    query: String::new(),
                 }
             ),
             Some(Message::AssistantIntentSelected(AssistantIntent::Debug))

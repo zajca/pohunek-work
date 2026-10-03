@@ -28,15 +28,15 @@ use crate::attach::{attach_task, window_dimension_to_u32};
 use crate::config::AppConfig;
 use crate::keyboard;
 use crate::message::{
-    AssistantForm, DiscoveryResult, FormField, FormSelect, InboxView, ListDirection, Message,
-    ModalView, NotificationAction, ResolvedTemplate, StartForm, TemplateRecipe,
-    ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
+    AppMode, AssistantForm, DiscoveryResult, FormField, FormSelect, InboxView, LaunchPhase,
+    ListDirection, Message, ModalView, NotificationAction, ResolvedTemplate, StartForm,
+    TemplateRecipe, ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
 };
 use crate::notify::{apply_outcome, NotificationOutcome};
 use crate::runtime;
 use crate::selection::{
     connection_options, host_config, optional_field, preselected_project, project_host,
-    project_target, required_field, save_ui_state_task, selected_session_target,
+    project_target, required_field, save_ui_state_task, selected_session, selected_session_target,
     sync_rename_edit_for_selection, terminal_size,
 };
 use crate::PohunekApp;
@@ -60,6 +60,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.workspace.apply(event);
             normalize_project_filter(app);
             tasks.extend(normalize_launch_forms(app));
+            tasks.extend(prime_launcher(app));
             if let Some(host_id) = governance_host {
                 match governance_inspect_task(app, host_id) {
                     Ok(task) => tasks.push(task),
@@ -71,6 +72,8 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
         }
         Message::HostsDiscovered(result) => {
             app.hosts = result.hosts;
+            let host_ids: Vec<HostId> = app.hosts.iter().map(|host| host.id.clone()).collect();
+            app.workspace.set_host_labels(&host_ids, &result.labels);
             app.status = result.warning;
         }
         Message::SetProjectFilter(filter) => {
@@ -240,9 +243,14 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.modal = ModalView::Keymap;
             tasks.push(keyboard::focus_task(app));
         }
+        Message::CloseModal
+            if app.mode == AppMode::NewSession && app.launcher.phase == LaunchPhase::Launching => {}
         Message::CloseModal => {
             app.modal = ModalView::None;
             app.form_select = None;
+            if app.mode == AppMode::NewSession {
+                tasks.push(iced::exit());
+            }
         }
         Message::StartProjectSelected(project) => {
             if app.start.project.as_ref() != Some(&project) {
@@ -316,15 +324,27 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
         Message::ToggleFormSelect(field) => {
             if keyboard::form_field_is_visible(app, field) {
                 app.form_focus = field;
-                if app.form_select.is_some_and(|select| select.field == field) {
+                if app
+                    .form_select
+                    .as_ref()
+                    .is_some_and(|select| select.field == field)
+                {
                     app.form_select = None;
                 } else {
                     let options = keyboard::form_select_options(app, field);
                     if !options.is_empty() {
+                        let cursor = keyboard::form_select_cursor(app, field);
                         app.form_select = Some(FormSelect {
                             field,
-                            cursor: keyboard::form_select_cursor(app, field),
+                            cursor,
+                            query: String::new(),
                         });
+                        if keyboard::form_select_is_searchable(app, field) {
+                            // The search box exists only after the next view pass, so
+                            // focusing it is deferred to a follow-up message.
+                            tasks.push(Task::done(Message::FocusFormSelectSearch));
+                        }
+                        tasks.push(keyboard::form_select_scroll_task(cursor));
                     }
                 }
                 tasks.push(keyboard::form_field_focus_task(field));
@@ -332,26 +352,50 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
         }
         Message::MoveFormSelect(direction) => {
             move_form_select(app, direction);
+            if let Some(select) = &app.form_select {
+                tasks.push(keyboard::form_select_scroll_task(select.cursor));
+            }
         }
         Message::ConfirmFormSelect => {
-            if let Some(select) = app.form_select.take() {
-                if let Some(message) = keyboard::form_select_choice_message(app, select) {
-                    tasks.push(Task::done(message));
-                }
+            // A search that matches nothing keeps the list open instead of
+            // discarding what was typed.
+            let choice = app
+                .form_select
+                .as_ref()
+                .and_then(|select| keyboard::form_select_choice_message(app, select));
+            if let Some(message) = choice {
+                app.form_select = None;
+                tasks.push(Task::done(message));
             }
         }
         Message::CloseFormSelect => app.form_select = None,
+        Message::FocusFormSelectSearch => {
+            if app.form_select.is_some() {
+                tasks.push(keyboard::form_select_search_focus_task());
+            }
+        }
+        Message::FormSelectQueryChanged(query) => {
+            if let Some(select) = &mut app.form_select {
+                select.query = query;
+                select.cursor = 0;
+                tasks.push(keyboard::form_select_scroll_task(0));
+            }
+        }
         Message::ChooseFormSelect { field, index } => {
             if keyboard::form_field_is_visible(app, field) {
                 app.form_focus = field;
-                app.form_select = None;
-                if let Some(message) = keyboard::form_select_choice_message(
-                    app,
-                    FormSelect {
-                        field,
-                        cursor: index,
-                    },
-                ) {
+                let query = app
+                    .form_select
+                    .take()
+                    .filter(|select| select.field == field)
+                    .map(|select| select.query)
+                    .unwrap_or_default();
+                let choice = FormSelect {
+                    field,
+                    cursor: index,
+                    query,
+                };
+                if let Some(message) = keyboard::form_select_choice_message(app, &choice) {
                     tasks.push(Task::done(message));
                 }
                 tasks.push(keyboard::form_field_focus_task(field));
@@ -376,10 +420,18 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.form_focus = FormField::StartName;
             app.start.name = value;
         }
+        Message::CreateSession if app.launcher.phase != LaunchPhase::Idle => {}
         Message::CreateSession => match create_session_task(app) {
             Ok(task) => {
                 tasks.push(task);
-                app.modal = ModalView::None;
+                if app.mode == AppMode::NewSession {
+                    // The dialog stays up until the terminal opens, so a failed
+                    // launch is reported where the owner is looking.
+                    app.launcher.phase = LaunchPhase::Launching;
+                    app.status = Some("Starting session...".to_owned());
+                } else {
+                    app.modal = ModalView::None;
+                }
             }
             Err(err) => app.status = Some(err),
         },
@@ -531,18 +583,29 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                 if let Some((host_id, session_id)) = opened_session {
                     match attach_task(app, &host_id, &session_id) {
                         Ok(task) => tasks.push(task),
-                        Err(err) => app.status = Some(err),
+                        Err(err) => {
+                            let message = launcher_attach_failed(app, err);
+                            app.status = Some(message);
+                        }
                     }
                 }
             }
-            Err(err) => app.status = Some(err),
+            Err(err) => {
+                app.launcher.phase = LaunchPhase::Idle;
+                app.status = Some(err);
+            }
         },
         Message::AttachSpawned(result) => {
-            app.status = Some(match result {
+            let spawned = result.is_ok();
+            let status = match result {
                 Ok(None) => "attach command spawned".to_owned(),
                 Ok(Some(warning)) => format!("attach command spawned (warning: {warning})"),
-                Err(err) => err,
-            });
+                Err(err) => launcher_attach_failed(app, err),
+            };
+            app.status = Some(status);
+            if spawned && app.mode == AppMode::NewSession {
+                tasks.push(iced::exit());
+            }
         }
         Message::NotificationSent(outcome) => {
             if let Some(status) = apply_outcome(&mut app.notification_health, &outcome) {
@@ -604,6 +667,56 @@ fn normalize_project_filter(app: &mut PohunekApp) {
 /// preselection rule's project, or clears it when that yields none. The typed
 /// prompt, request and name text stay. Returns the action reload for the Start
 /// form when it gained a new project while its modal is open.
+/// Dialog-only mode: once the first projects are known, preselects a project
+/// and opens the Project select, so the owner can type to filter right away.
+fn prime_launcher(app: &mut PohunekApp) -> Vec<Task<Message>> {
+    if app.mode != AppMode::NewSession
+        || app.launcher.primed
+        || app.modal != ModalView::Start
+        || app.workspace.project_choices().is_empty()
+        || !preselection_inputs_ready(app)
+    {
+        return Vec::new();
+    }
+    app.launcher.primed = true;
+    let mut tasks = Vec::new();
+    if app.start.project.is_none() {
+        app.start.project = preselected_project(app);
+        ensure_start_agent_matches_host(app);
+        tasks.extend(load_start_actions_task(app));
+    }
+    tasks.push(Task::done(Message::ToggleFormSelect(
+        FormField::StartProject,
+    )));
+    tasks
+}
+
+/// Whether the data that decides the preselected project has arrived: the
+/// session behind the saved selection is known, there is no saved selection,
+/// or every configured host has reported. A fast local host must not lock in
+/// a preselection before the slower host that owns the saved session answers.
+fn preselection_inputs_ready(app: &PohunekApp) -> bool {
+    app.ui_state.selection.is_none()
+        || selected_session(app).is_some()
+        || (!app.hosts.is_empty()
+            && app
+                .hosts
+                .iter()
+                .all(|host| app.workspace.hosts.contains_key(&host.id)))
+}
+
+/// Explains an attach failure after the session was already created, so the
+/// dialog is not mistaken for a failed launch, and locks the form against a
+/// second launch.
+fn launcher_attach_failed(app: &mut PohunekApp, error: String) -> String {
+    if app.mode == AppMode::NewSession {
+        app.launcher.phase = LaunchPhase::Created;
+        format!("Session started, but its terminal could not be opened: {error}")
+    } else {
+        error
+    }
+}
+
 fn normalize_launch_forms(app: &mut PohunekApp) -> Option<Task<Message>> {
     let mut start_project_changed = false;
     if let Some(project) = app.start.project.clone() {
@@ -653,7 +766,7 @@ fn drop_selection_outside_filter(app: &mut PohunekApp) -> bool {
     true
 }
 
-fn open_start_modal(app: &mut PohunekApp) {
+pub(crate) fn open_start_modal(app: &mut PohunekApp) {
     app.template_generation += 1;
     app.start = StartForm {
         project: preselected_project(app),
@@ -702,12 +815,14 @@ fn load_start_actions_task(app: &PohunekApp) -> Option<Task<Message>> {
 }
 
 fn move_form_select(app: &mut PohunekApp, direction: ListDirection) {
-    let Some(mut select) = app.form_select else {
+    let Some(select) = app.form_select.as_ref() else {
         return;
     };
-    let option_count = keyboard::form_select_options(app, select.field).len();
+    let option_count = keyboard::form_select_entries(app, select.field, &select.query).len();
+    let Some(select) = app.form_select.as_mut() else {
+        return;
+    };
     if option_count == 0 {
-        app.form_select = None;
         return;
     }
     let cursor = select.cursor.min(option_count - 1);
@@ -716,7 +831,6 @@ fn move_form_select(app: &mut PohunekApp, direction: ListDirection) {
         ListDirection::Up => cursor - 1,
         ListDirection::Down => (cursor + 1) % option_count,
     };
-    app.form_select = Some(select);
 }
 
 fn move_list_selection(app: &mut PohunekApp, direction: ListDirection) {
@@ -774,12 +888,14 @@ pub(crate) fn discover_hosts_task(config: &AppConfig) -> Task<Message> {
     Task::perform(
         runtime::perform(async move {
             match discover_hosts(local.clone(), options).await {
-                Ok(hosts) => DiscoveryResult {
-                    hosts,
+                Ok(discovered) => DiscoveryResult {
+                    hosts: discovered.hosts,
+                    labels: discovered.labels,
                     warning: None,
                 },
                 Err(err) => DiscoveryResult {
                     hosts: vec![local],
+                    labels: BTreeMap::new(),
                     warning: Some(format!("host discovery failed: {err}")),
                 },
             }
@@ -789,6 +905,12 @@ pub(crate) fn discover_hosts_task(config: &AppConfig) -> Task<Message> {
 }
 
 fn notification_tasks(app: &mut PohunekApp) -> Task<Message> {
+    // The main window owns desktop notifications; a second process would
+    // announce every event twice.
+    if app.mode == AppMode::NewSession {
+        app.notified_intents = app.workspace.notification_intents.len();
+        return Task::none();
+    }
     let Ok(config) = &app.config else {
         app.notified_intents = app.workspace.notification_intents.len();
         return Task::none();
@@ -1723,6 +1845,99 @@ mod tests {
         assert!(edited.contains('!'));
     }
 
+    fn form_select_with_query(query: &str) -> FormSelect {
+        FormSelect {
+            field: FormField::StartProject,
+            cursor: 0,
+            query: query.to_owned(),
+        }
+    }
+
+    #[test]
+    fn filtered_project_select_maps_the_cursor_to_the_matching_project() {
+        let mut app = app_with_two_hosts();
+        app.modal = ModalView::Start;
+
+        // `web` sits at position 2 of the unfiltered list but is the first match.
+        let message = keyboard::form_select_choice_message(&app, &form_select_with_query("web"));
+        assert!(matches!(
+            message,
+            Some(Message::StartProjectSelected(project)) if project == project_ref("local", "p-2")
+        ));
+        // Searching by host name finds the remote project.
+        let entries = keyboard::form_select_entries(&app, FormField::StartProject, "remote");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index, 1);
+        assert!(matches!(
+            keyboard::form_select_choice_message(&app, &form_select_with_query("remote")),
+            Some(Message::StartProjectSelected(project)) if project == project_ref("remote", "p-9")
+        ));
+        // No match selects nothing.
+        assert!(
+            keyboard::form_select_choice_message(&app, &form_select_with_query("zzz")).is_none()
+        );
+    }
+
+    #[test]
+    fn project_entries_show_the_host_label_instead_of_the_route_id() {
+        let mut app = app_with_two_hosts();
+        app.workspace.set_host_labels(
+            &[],
+            &BTreeMap::from([(HostId::new("remote"), "dev-box".to_owned())]),
+        );
+
+        let entries = keyboard::form_select_entries(&app, FormField::StartProject, "dev-box");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "api");
+        assert_eq!(entries[0].detail.as_deref(), Some("dev-box"));
+        assert_eq!(
+            keyboard::form_select_options(&app, FormField::StartProject)[1],
+            "api  ·  dev-box"
+        );
+    }
+
+    #[test]
+    fn typing_a_query_resets_the_cursor_and_confirm_keeps_an_empty_result_open() {
+        let mut app = app_with_two_hosts();
+        app.modal = ModalView::Start;
+        app.form_select = Some(FormSelect {
+            field: FormField::StartProject,
+            cursor: 2,
+            query: String::new(),
+        });
+
+        let _ = update(&mut app, Message::FormSelectQueryChanged("zzz".to_owned()));
+        let select = app.form_select.as_ref().expect("open select");
+        assert_eq!((select.cursor, select.query.as_str()), (0, "zzz"));
+
+        let _ = update(&mut app, Message::ConfirmFormSelect);
+        assert!(app.form_select.is_some());
+
+        let _ = update(&mut app, Message::FormSelectQueryChanged("web".to_owned()));
+        let _ = update(&mut app, Message::ConfirmFormSelect);
+        assert!(app.form_select.is_none());
+    }
+
+    #[test]
+    fn choosing_a_row_of_a_filtered_list_selects_that_project() {
+        let mut app = app_with_two_hosts();
+        app.modal = ModalView::Start;
+        app.form_select = Some(form_select_with_query("web"));
+
+        let _ = update(
+            &mut app,
+            Message::ChooseFormSelect {
+                field: FormField::StartProject,
+                index: 0,
+            },
+        );
+        // The reducer replays `StartProjectSelected` on the next tick; resolve
+        // the same choice directly.
+        let message = keyboard::form_select_choice_message(&app, &form_select_with_query("web"));
+        assert!(matches!(message, Some(Message::StartProjectSelected(_))));
+        assert!(app.form_select.is_none());
+    }
+
     #[test]
     fn start_modal_with_many_projects_renders_every_option() {
         let mut app = app_with_two_hosts();
@@ -1740,6 +1955,7 @@ mod tests {
         app.form_select = Some(FormSelect {
             field: FormField::StartProject,
             cursor: 0,
+            query: String::new(),
         });
 
         let local_options = keyboard::form_select_options(&app, FormField::StartProject)
@@ -1771,9 +1987,10 @@ mod tests {
         let pick = |cursor| {
             keyboard::form_select_choice_message(
                 &app,
-                FormSelect {
+                &FormSelect {
                     field: FormField::StartProject,
                     cursor,
+                    query: String::new(),
                 },
             )
         };
@@ -2090,9 +2307,10 @@ mod tests {
         let pick = |cursor| {
             keyboard::form_select_choice_message(
                 &app,
-                FormSelect {
+                &FormSelect {
                     field: FormField::StartProject,
                     cursor,
+                    query: String::new(),
                 },
             )
         };
@@ -2245,6 +2463,8 @@ mod tests {
 
     fn app_without_selection() -> PohunekApp {
         PohunekApp {
+            mode: AppMode::Full,
+            launcher: crate::message::LauncherState::default(),
             workspace: Workspace::default(),
             config: Err("test config is intentionally absent".to_owned()),
             keymap: keyboard::KeyMap::default(),
@@ -2282,13 +2502,14 @@ mod tests {
         app.form_select = Some(FormSelect {
             field: FormField::AssistantIntent,
             cursor: 0,
+            query: String::new(),
         });
 
         move_form_select(&mut app, ListDirection::Up);
-        assert_eq!(app.form_select.expect("open select").cursor, 4);
+        assert_eq!(app.form_select.as_ref().expect("open select").cursor, 4);
 
         move_form_select(&mut app, ListDirection::Down);
-        assert_eq!(app.form_select.expect("open select").cursor, 0);
+        assert_eq!(app.form_select.as_ref().expect("open select").cursor, 0);
     }
 
     #[test]
@@ -2524,5 +2745,189 @@ mod tests {
             deleted_at: None,
             superseded_by: None,
         }
+    }
+
+    fn launcher_app() -> PohunekApp {
+        let mut app = app_with_two_hosts();
+        app.mode = AppMode::NewSession;
+        open_start_modal(&mut app);
+        app
+    }
+
+    #[test]
+    fn launcher_primes_once_by_opening_the_project_select_when_projects_arrive() {
+        let mut app = app_without_selection();
+        app.mode = AppMode::NewSession;
+        open_start_modal(&mut app);
+        assert!(prime_launcher(&mut app).is_empty(), "no projects yet");
+        assert!(!app.launcher.primed);
+
+        app.workspace.hosts.insert(
+            HostId::new("local"),
+            host_with(&[("p-1", "api")], &["codex"]),
+        );
+        let tasks = prime_launcher(&mut app);
+        assert!(app.launcher.primed);
+        assert_eq!(app.start.project, Some(project_ref("local", "p-1")));
+        assert!(!tasks.is_empty());
+        assert!(prime_launcher(&mut app).is_empty(), "primes only once");
+    }
+
+    #[test]
+    fn launcher_waits_for_the_host_of_the_saved_selection_before_priming() {
+        let mut app = app_with_two_hosts();
+        app.workspace.hosts.remove(&HostId::new("remote"));
+        app.mode = AppMode::NewSession;
+        app.ui_state.selection = Some(Selection::Session {
+            host_id: HostId::new("remote"),
+            session_id: SessionId("s-9".to_owned()),
+        });
+        open_start_modal(&mut app);
+
+        assert!(prime_launcher(&mut app).is_empty());
+        assert!(!app.launcher.primed);
+        assert_eq!(app.start.project, None);
+
+        let mut remote = host_with(&[("p-9", "api")], &["claude"]);
+        remote
+            .sessions
+            .insert("s-9".to_owned(), test_session("s-9", Some("p-9")));
+        app.workspace.hosts.insert(HostId::new("remote"), remote);
+
+        assert!(!prime_launcher(&mut app).is_empty());
+        assert_eq!(app.start.project, Some(project_ref("remote", "p-9")));
+    }
+
+    #[test]
+    fn launcher_primes_once_every_host_reported_even_without_the_saved_session() {
+        let mut app = app_with_two_hosts();
+        app.mode = AppMode::NewSession;
+        app.ui_state.selection = Some(Selection::Session {
+            host_id: HostId::new("remote"),
+            session_id: SessionId("gone".to_owned()),
+        });
+        open_start_modal(&mut app);
+
+        assert!(!prime_launcher(&mut app).is_empty());
+        assert!(app.launcher.primed);
+    }
+
+    #[test]
+    fn host_filter_choices_carry_the_host_id_even_when_labels_look_alike() {
+        let mut app = app_with_two_hosts();
+        // A remote host that calls itself like the local fallback label.
+        app.workspace.set_host_labels(
+            &[HostId::new("local"), HostId::new("remote")],
+            &BTreeMap::from([(HostId::new("remote"), "local".to_owned())]),
+        );
+
+        let choices = crate::view::inbox::host_filter_choices(&app.workspace);
+
+        let ids: Vec<Option<HostId>> = choices.iter().map(|c| c.host_id.clone()).collect();
+        assert_eq!(
+            ids,
+            [
+                None,
+                Some(HostId::new("local")),
+                Some(HostId::new("remote"))
+            ]
+        );
+        let labels: std::collections::BTreeSet<&str> =
+            choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels.len(), 3, "labels were {labels:?}");
+    }
+
+    #[test]
+    fn full_window_never_primes_the_launcher() {
+        let mut app = app_with_two_hosts();
+        app.modal = ModalView::Start;
+        assert!(prime_launcher(&mut app).is_empty());
+        assert!(!app.launcher.primed);
+    }
+
+    #[test]
+    fn launcher_ignores_a_second_submit_while_a_launch_is_pending() {
+        let mut app = launcher_app();
+        app.launcher.phase = LaunchPhase::Launching;
+        app.status = None;
+
+        let task = update(&mut app, Message::CreateSession);
+
+        assert_eq!(task.units(), 0);
+        assert!(app.status.is_none());
+    }
+
+    #[test]
+    fn launcher_allows_a_retry_after_a_failed_launch() {
+        let mut app = launcher_app();
+        app.launcher.phase = LaunchPhase::Launching;
+
+        let _ = update(
+            &mut app,
+            Message::CoreCommandCompleted(Err("daemon refused".to_owned())),
+        );
+
+        assert_eq!(app.launcher.phase, LaunchPhase::Idle);
+        assert_eq!(app.status.as_deref(), Some("daemon refused"));
+    }
+
+    #[test]
+    fn launcher_closes_the_process_with_the_dialog() {
+        let mut app = launcher_app();
+        assert_eq!(update(&mut app, Message::CloseModal).units(), 1);
+
+        let mut full = app_with_two_hosts();
+        full.modal = ModalView::Start;
+        assert_eq!(update(&mut full, Message::CloseModal).units(), 0);
+    }
+
+    #[test]
+    fn launcher_ignores_close_while_the_session_is_being_started() {
+        let mut app = launcher_app();
+        app.launcher.phase = LaunchPhase::Launching;
+
+        let task = update(&mut app, Message::CloseModal);
+
+        assert_eq!(task.units(), 0);
+        assert_eq!(app.modal, ModalView::Start);
+    }
+
+    #[test]
+    fn launcher_locks_the_form_but_allows_close_after_a_terminal_failure() {
+        let mut app = launcher_app();
+        app.launcher.phase = LaunchPhase::Launching;
+        let _ = update(
+            &mut app,
+            Message::AttachSpawned(Err("no terminal".to_owned())),
+        );
+        assert_eq!(app.launcher.phase, LaunchPhase::Created);
+
+        assert_eq!(update(&mut app, Message::CreateSession).units(), 0);
+        assert_eq!(update(&mut app, Message::CloseModal).units(), 1);
+    }
+
+    #[test]
+    fn launcher_exits_only_after_the_terminal_was_spawned() {
+        let mut app = launcher_app();
+        let failed = update(
+            &mut app,
+            Message::AttachSpawned(Err("no terminal".to_owned())),
+        );
+        assert_eq!(failed.units(), 0);
+        assert_eq!(
+            app.status.as_deref(),
+            Some("Session started, but its terminal could not be opened: no terminal")
+        );
+
+        let spawned = update(&mut app, Message::AttachSpawned(Ok(None)));
+        assert_eq!(spawned.units(), 1);
+    }
+
+    #[test]
+    fn full_window_keeps_running_after_attach() {
+        let mut app = app_with_two_hosts();
+        let task = update(&mut app, Message::AttachSpawned(Ok(None)));
+        assert_eq!(task.units(), 0);
+        assert_eq!(app.status.as_deref(), Some("attach command spawned"));
     }
 }

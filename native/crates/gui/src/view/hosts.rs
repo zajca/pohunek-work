@@ -40,7 +40,7 @@ pub(crate) fn hosts_button(app: &PohunekApp) -> Element<'_, Message> {
 pub(crate) fn hosts_modal_content(app: &PohunekApp) -> Element<'_, Message> {
     let mut hosts = column![].spacing(12);
     for (host_id, host) in &app.workspace.hosts {
-        hosts = hosts.push(host_card(host_id, host));
+        hosts = hosts.push(host_card(app, host_id, host));
     }
     if app.workspace.hosts.is_empty() {
         hosts = hosts.push(text("No hosts connected yet.").size(13).style(muted_style));
@@ -48,10 +48,14 @@ pub(crate) fn hosts_modal_content(app: &PohunekApp) -> Element<'_, Message> {
     dialog_card("Hosts", scrollable(hosts))
 }
 
-fn host_card<'a>(host_id: &'a HostId, host: &'a HostView) -> Element<'a, Message> {
+fn host_card<'a>(
+    app: &'a PohunekApp,
+    host_id: &'a HostId,
+    host: &'a HostView,
+) -> Element<'a, Message> {
     let mut rows = column![row![
         conn_dot(host.conn.clone()),
-        text(host_id.to_string()).size(15)
+        text(app.workspace.host_label(host_id)).size(15)
     ]
     .spacing(6)
     .align_y(Center)]

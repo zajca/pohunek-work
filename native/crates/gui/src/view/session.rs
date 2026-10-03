@@ -31,7 +31,8 @@ pub(crate) fn confirm_delete_modal_content(app: &PohunekApp) -> Element<'_, Mess
         |(host_id, session)| {
             let name = session.name.as_deref().unwrap_or(session.id.0.as_str());
             format!(
-                "Delete {name} ({host_id} / {})? This removes its logical record, retained session logs, and any eligible Pohunek-owned worktree.",
+                "Delete {name} ({} / {})? This removes its logical record, retained session logs, and any eligible Pohunek-owned worktree.",
+                app.workspace.host_label(host_id),
                 session.id.0
             )
         },
@@ -67,9 +68,10 @@ fn session_detail(app: &PohunekApp) -> Element<'_, Message> {
             let activity = session.activity.map_or("unknown", session_activity_label);
             // Lead with the display name when set, keeping host/id as a subtitle
             // so the session stays identifiable.
+            let host_label = app.workspace.host_label(host_id);
             let heading = match &session.name {
-                Some(name) => format!("{name}  ·  {host_id} / {}", session.id.0),
-                None => format!("{} / {}", host_id, session.id.0),
+                Some(name) => format!("{name}  ·  {host_label} / {}", session.id.0),
+                None => format!("{} / {}", host_label, session.id.0),
             };
             detail = detail
                 .push(selectable_text(heading).size(16))
