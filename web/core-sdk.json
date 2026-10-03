@@ -1,6 +1,6 @@
 {
   "coreRepository": "https://github.com/zajca/pohunek",
-  "coreRev": "a23b9b628d0ea11f3abe74f96145431e1ed11e3a",
-  "sdkVersion": "0.32.3",
+  "coreRev": "e6fcf2377ba14a51d8e7de971c13e1e86a864134",
+  "sdkVersion": "0.33.0",
   "assetBaseUrl": "https://github.com/zajca/pohunek/releases/download"
 }
