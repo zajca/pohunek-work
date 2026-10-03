@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -36,6 +37,29 @@ LAUNCHER_FILES = (
     "templates/prompts/review.tmpl",
     "docs/launcher.md",
     "docs/debug-launcher.md",
+)
+
+# The launcher files that plugin/src/setup/assets.ts imports as text.
+PLUGIN_LAUNCHER_FILES = (
+    "lib.sh",
+    "pohunek-launch-issue",
+    "pohunek-launch-pr",
+    "pohunek-rofi",
+    "pohunek-rofi-issue",
+    "templates/launcher.conf",
+    "templates/sway-dropin.conf.tmpl",
+    "templates/sway-issue-binding.conf.tmpl",
+    "templates/prompts/issue.tmpl",
+    "templates/prompts/pr.tmpl",
+    "templates/prompts/review.tmpl",
+)
+PLUGIN_FILES = (
+    "plugin/package.json",
+    "plugin/tsconfig.json",
+    "plugin/README.md",
+    "plugin/src/main.ts",
+    "plugin/src/setup/assets.ts",
+    "plugin/prompts/work-review.tmpl",
 )
 
 
@@ -91,6 +115,24 @@ class Workspace:
         return result.stdout.strip()
 
 
+def plugin_workspace(test):
+    ws = Workspace(test)
+    for member in PLUGIN_LAUNCHER_FILES:
+        file = ws.launchers / member
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("text\n")
+    for member in PLUGIN_FILES:
+        file = ws.root / member
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("text\n")
+    (ws.root / "plugin" / "tests").mkdir()
+    (ws.root / "plugin" / "tests" / "list.test.ts").write_text("x\n")
+    (ws.root / "plugin" / "bun.lock").write_text("x\n")
+    (ws.root / "plugin" / "docs").mkdir()
+    (ws.root / "plugin" / "docs" / "rfc.md").write_text("x\n")
+    return ws
+
+
 class StageArchiveTest(unittest.TestCase):
     def test_gui_archive_holds_the_binary_the_readme_and_the_licenses(self):
         ws = Workspace(self)
@@ -133,6 +175,51 @@ class StageArchiveTest(unittest.TestCase):
         self.assertTrue(os.access(staging / "pohunek-rofi", os.X_OK))
         self.assertFalse((staging / "package.json").exists())
         self.assertFalse((staging / "tests").exists())
+
+    def test_plugin_archive_keeps_the_plugin_and_launchers_sibling_layout(self):
+        ws = plugin_workspace(self)
+        name = ws.stage("plugin", "noarch", ws.root)
+        self.assertEqual(name, f"pohunek-work-plugin-{VERSION}-noarch")
+        staging = ws.out / name
+        members = PLUGIN_FILES + tuple(f"launchers/{m}" for m in PLUGIN_LAUNCHER_FILES)
+        for member in members + ("README.md", "LICENSES/pohunek-core-MIT.txt"):
+            self.assertTrue((staging / member).is_file(), member)
+        for absent in ("plugin/tests", "plugin/bun.lock", "plugin/docs", "launchers/docs", "packaging"):
+            self.assertFalse((staging / absent).exists(), absent)
+
+    def test_a_missing_plugin_input_is_refused(self):
+        ws = plugin_workspace(self)
+        (ws.launchers / "templates" / "sway-issue-binding.conf.tmpl").unlink()
+        result = run(
+            [PACKAGING / "stage-archive", "plugin", VERSION, "noarch", ws.root, ws.out],
+            cwd=ws.root,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("required input file is missing", result.stderr)
+        shutil.rmtree(ws.root / "plugin" / "src")
+        result = run(
+            [PACKAGING / "stage-archive", "plugin", VERSION, "noarch", ws.root, ws.out],
+            cwd=ws.root,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_the_real_plugin_archive_resolves_every_relative_import(self):
+        out = Path(tempfile.mkdtemp(prefix="pohunek-plugin-stage-"))
+        self.addCleanup(shutil.rmtree, out, ignore_errors=True)
+        name = run([PACKAGING / "stage-archive", "plugin", VERSION, "noarch", ROOT, out], cwd=ROOT).stdout.strip()
+        staging = out / name
+        statement = re.compile(r"""(?:from|import\()\s*["'](\.{1,2}/[^"']+)["']""")
+        checked = 0
+        for source in sorted((ROOT / "plugin" / "src").rglob("*.ts")):
+            for target in statement.findall(source.read_text()):
+                resolved = (source.parent / target).resolve()
+                found = [c for c in (resolved, resolved.with_name(resolved.name + ".ts"), resolved / "index.ts") if c.is_file()]
+                self.assertTrue(found, f"{source}: {target} does not exist in the repository")
+                self.assertTrue((staging / found[0].relative_to(ROOT)).is_file(), f"{source}: {target} is not in the archive")
+                checked += 1
+        self.assertGreater(checked, 0)
 
     def test_a_missing_launcher_file_is_refused(self):
         ws = Workspace(self)
@@ -421,6 +508,27 @@ class MakeArchiveTest(unittest.TestCase):
         self.assertIn(f"core {CORE_REF}\n", manifest)
         self.assertIn("component launchers\n", manifest)
         self.assertIn(f"{name}/pohunek-rofi", names)
+
+    def test_a_plugin_archive_is_sealed_with_the_plugin_component(self):
+        ws = plugin_workspace(self)
+        result = self.make(ws, "plugin", "noarch", ws.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        name = f"pohunek-work-plugin-{VERSION}-noarch"
+        archive = Path(result.stdout.strip())
+        self.assertEqual(archive, ws.out / f"{name}.tar.gz")
+        with tarfile.open(archive) as tar:
+            manifest = tar.extractfile(f"{name}/MANIFEST").read().decode()
+            names = tar.getnames()
+        self.assertIn("component plugin\n", manifest)
+        self.assertIn("target noarch\n", manifest)
+        self.assertIn(f"core {CORE_REF}\n", manifest)
+        self.assertIn(f"{name}/plugin/src/main.ts", names)
+        check = run(
+            [PACKAGING / "check-archive", archive, "--component", "plugin", "--version", VERSION,
+             "--target", "noarch", "--core", CORE_REF],
+            check=False,
+        )
+        self.assertEqual(check.returncode, 0, check.stderr)
 
     def test_the_archive_is_reproducible(self):
         first, second = Workspace(self), Workspace(self)

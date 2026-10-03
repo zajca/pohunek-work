@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Resolve which surface a release is for and check its version against the sources.
+
+usage: resolve-release --tag REF_NAME
+       resolve-release --surface SURFACE --version X.Y.Z
+
+Each surface is released by its own tag, `<surface>-vX.Y.Z`, and has its own
+version:
+
+  gui        native/Cargo.toml          [workspace.package] version
+  web        web/package.json           version
+  launchers  launchers/package.json     version
+  plugin     plugin/package.json        version
+
+`--tag` takes a tag name (a push event), `--surface` and `--version` take the
+manual dispatch inputs. Prints `key=value` lines (usable with
+`>> "$GITHUB_OUTPUT"`):
+
+  surface  gui, web, launchers or plugin
+  version  X.Y.Z
+  tag      `<surface>-vX.Y.Z`
+
+Exits 1, printing nothing on stdout, when the surface is missing or unknown, the
+version is not X.Y.Z, or the version differs from the surface's source version,
+so a tag can never disagree with the sources it builds.
+
+Run from the repository root (or pass `--root`). Python 3.11 or newer
+(tomllib), standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+SURFACES = ("gui", "web", "launchers", "plugin")
+VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
+TAG = re.compile(r"^(?P<surface>[a-z]+)-v(?P<version>[0-9]+\.[0-9]+\.[0-9]+)\Z")
+SOURCES = {
+    "gui": "native/Cargo.toml",
+    "web": "web/package.json",
+    "launchers": "launchers/package.json",
+    "plugin": "plugin/package.json",
+}
+
+
+class ReleaseError(Exception):
+    """The release request is malformed or disagrees with the sources."""
+
+
+def parse_tag(name: str) -> tuple[str, str]:
+    match = TAG.match(name)
+    if match is None:
+        raise ReleaseError(f"the tag must look like <surface>-vX.Y.Z with a surface of {', '.join(SURFACES)}, got: {name!r}")
+    return match.group("surface"), match.group("version")
+
+
+def source_version(root: Path, surface: str) -> str:
+    path = root / SOURCES[surface]
+    try:
+        if surface == "gui":
+            version = tomllib.loads(path.read_text()).get("workspace", {}).get("package", {}).get("version")
+        else:
+            version = json.loads(path.read_text()).get("version")
+    except (OSError, tomllib.TOMLDecodeError, json.JSONDecodeError, AttributeError) as error:
+        raise ReleaseError(f"cannot read the version of {surface} from {path}: {error}") from error
+    if not isinstance(version, str) or not VERSION.match(version):
+        raise ReleaseError(f"{path} must declare a version X.Y.Z, got: {version!r}")
+    return version
+
+
+def resolve(root: Path, surface: str | None, version: str | None) -> dict[str, str]:
+    if surface not in SURFACES:
+        raise ReleaseError(f"the surface must be one of {', '.join(SURFACES)}, got: {surface!r}")
+    if version is None or not VERSION.match(version):
+        raise ReleaseError(f"the release version must be X.Y.Z, got: {version!r}")
+    declared = source_version(root, surface)
+    if declared != version:
+        raise ReleaseError(f"{SOURCES[surface]} declares {surface} version {declared}, but the release is {version}")
+    return {"surface": surface, "version": version, "tag": f"{surface}-v{version}"}
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--tag")
+    parser.add_argument("--surface")
+    parser.add_argument("--version")
+    parser.add_argument("--root", type=Path, default=Path("."))
+    args = parser.parse_args(argv)
+    try:
+        if args.tag is not None:
+            if args.surface is not None or args.version is not None:
+                raise ReleaseError("--tag excludes --surface and --version")
+            surface, version = parse_tag(args.tag)
+        else:
+            surface, version = args.surface, args.version
+        release = resolve(args.root, surface, version)
+    except ReleaseError as error:
+        print(f"resolve-release: {error}", file=sys.stderr)
+        return 1
+    for key, value in release.items():
+        print(f"{key}={value}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

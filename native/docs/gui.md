@@ -273,7 +273,7 @@ Each release of this repository attaches `pohunek-gui-<version>-x86_64-unknown-l
 and a `MANIFEST` that names the core release the GUI was built against.
 
 ```sh
-gh release download v<version> -R zajca/pohunek-work -p 'pohunek-gui-*-x86_64-unknown-linux-gnu.tar.gz*'
+gh release download gui-v<version> -R zajca/pohunek-work -p 'pohunek-gui-*-x86_64-unknown-linux-gnu.tar.gz*'
 sha256sum -c pohunek-gui-<version>-x86_64-unknown-linux-gnu.tar.gz.sha256
 tar -xzf pohunek-gui-<version>-x86_64-unknown-linux-gnu.tar.gz
 pohunek-gui-<version>-x86_64-unknown-linux-gnu/pohunek-gui

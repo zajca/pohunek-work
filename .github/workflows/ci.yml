@@ -5,13 +5,20 @@ name: CI
 # itself) changes; pushes to main, the weekly schedule and manual dispatch run
 # every job. The `ci` job always runs and is the single required check, so a
 # skipped surface never leaves a missing status. The release workflow calls
-# this workflow as its gate; a call from a tag push runs every job.
+# this workflow as its gate and passes the `surface` it releases: only that
+# surface's jobs run, plus `packaging`, which tests the scripts every release
+# uses. A call without a surface runs every job.
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      surface:
+        description: "Release surface (gui, web, launchers or plugin); empty runs every job"
+        required: false
+        type: string
   schedule:
     - cron: "17 4 * * 1"
 
@@ -62,6 +69,8 @@ jobs:
               - '.github/workflows/ci.yml'
             packaging:
               - 'packaging/**'
+              - 'plugin/**'
+              - 'launchers/**'
               - 'native/packaging/**'
               - 'web/packaging/**'
               - 'native/scripts/**'
@@ -76,7 +85,7 @@ jobs:
 
   plugin:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.plugin == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.plugin == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'plugin' || inputs.surface == 'launchers')) }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -93,7 +102,7 @@ jobs:
 
   launchers:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.launchers == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.launchers == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'launchers')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -139,12 +148,14 @@ jobs:
             bun test tests/launcher-scripts.test.ts tests/lib-timeout.test.ts
           fi
 
-  # The release packaging scripts shared by native/ and web/. The web surface's
+  # The release packaging scripts shared by every surface. The web surface's
   # filter lists `packaging/**` too, because its installer tests run the
-  # manifest and verification scripts from there.
+  # manifest and verification scripts from there; the filter also lists
+  # `plugin/**` and `launchers/**` because the plugin archive tests stage the
+  # real sources.
   packaging:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui' || inputs.surface == 'web' || inputs.surface == 'launchers' || inputs.surface == 'plugin')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,7 +190,7 @@ jobs:
   # CLI come from the same revision.
   web:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.web == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.web == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'web')) }}
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -276,7 +287,7 @@ jobs:
   # (`/private/tmp/pohunek-<uid>`), which a developer's own daemon would share.
   web-macos:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.web == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.web == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'web')) }}
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -376,7 +387,7 @@ jobs:
 
   native:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.native == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui')) }}
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -446,7 +457,7 @@ jobs:
 
   native-macos:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.native == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui')) }}
     runs-on: macos-15
     env:
       CARGO_TERM_COLOR: always
@@ -571,7 +582,7 @@ jobs:
   macos-package:
     name: macOS ad-hoc signing (${{ matrix.component }})
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.macos_package == 'true' }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.macos_package == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui' || inputs.surface == 'web')) }}
     runs-on: macos-15
     timeout-minutes: 60
     env:

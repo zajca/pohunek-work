@@ -3,10 +3,12 @@
 #
 # usage: stage-archive <component> <version> <target> <input> <output-dir>
 #
-# <component> is gui, web, or launchers. <input> is the built input of that
-# component: the directory holding the `pohunek-gui` binary (a `Pohunek.app`
-# bundle instead for the macOS gui component), the input tree assembled by
-# web/release/package.sh, or the `launchers/` source directory. The staging
+# <component> is gui, web, launchers, or plugin. <input> is the built input of
+# that component: the directory holding the `pohunek-gui` binary (a
+# `Pohunek.app` bundle instead for the macOS gui component), the input tree
+# assembled by web/release/package.sh, the `launchers/` source directory, or the
+# repository root for the plugin (its sources import files from `launchers/`,
+# so the archive keeps the `plugin/` and `launchers/` sibling layout). The staging
 # directory <output-dir>/<name> is created fresh and the archive name
 # `<prefix>-<version>-<target>` is printed on stdout. Run from the repository
 # root: the README and the license texts are copied from it.
@@ -32,6 +34,7 @@ case $component in
     gui) prefix=pohunek-gui ;;
     web) prefix=pohunek-web ;;
     launchers) prefix=pohunek-launchers ;;
+    plugin) prefix=pohunek-work-plugin ;;
     *) fail "unsupported component: $component" ;;
 esac
 case $version in
@@ -87,6 +90,25 @@ case $component in
             templates/prompts/issue.tmpl templates/prompts/pr.tmpl templates/prompts/review.tmpl \
             docs/launcher.md docs/debug-launcher.md; do
             copy_member "$member"
+        done
+        ;;
+    plugin)
+        # The CLI sources and prompt templates, and the launcher files that
+        # `plugin/src/setup/assets.ts` imports as text.
+        for member in plugin/package.json plugin/tsconfig.json plugin/README.md; do
+            copy_member "$member"
+        done
+        [ -d "$input/plugin/src" ] || fail "required input directory is missing: $input/plugin/src"
+        [ -d "$input/plugin/prompts" ] || fail "required input directory is missing: $input/plugin/prompts"
+        members=$(cd "$input" && find plugin/src plugin/prompts -type f | LC_ALL=C sort)
+        [ -n "$members" ] || fail "the plugin input has no source files"
+        for member in $members; do
+            copy_member "$member"
+        done
+        for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue \
+            templates/launcher.conf templates/sway-dropin.conf.tmpl templates/sway-issue-binding.conf.tmpl \
+            templates/prompts/issue.tmpl templates/prompts/pr.tmpl templates/prompts/review.tmpl; do
+            copy_member "launchers/$member"
         done
         ;;
 esac

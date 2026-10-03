@@ -1,14 +1,17 @@
 """Static checks of the release workflow's trust boundaries (stdlib only).
 
 `actionlint` validates the syntax and the shell steps in CI; these tests pin the
-properties that make the release safe: no job holds a secret, only `publish`
-holds a write token, only `attest` holds the OIDC scopes and it runs no
-repository or downloaded code, the signing job runs no program from the staged
-tree, and the CI gate is one reusable workflow.
+properties that make the release safe: a tag selects exactly one surface and
+no other surface's job runs, no job holds a secret, only `publish` holds a write
+token, only `attest` holds the OIDC scopes and it runs no repository or
+downloaded code, the signing job runs no program from the staged tree, and the
+CI gate is one reusable workflow.
 """
 
 from pathlib import Path
+import os
 import re
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -133,12 +136,61 @@ def jobs(text):
 
 RELEASE_JOBS = jobs(RELEASE)
 
+SURFACES = ("gui", "web", "launchers", "plugin")
+# The jobs that exist per surface; `verify-macos` stands for the whole macOS
+# chain (stage, package, verify), which the gui and web surfaces share.
+SURFACE_JOBS = {
+    "gui": ("build-gui-linux", "verify-macos"),
+    "web": ("package-web", "verify-macos"),
+    "launchers": ("package-launchers",),
+    "plugin": ("package-plugin",),
+}
+BUILD_JOBS = ("build-gui-linux", "package-web", "package-launchers", "package-plugin", "verify-macos")
+# The release assets of each surface: archive name, component, target, signing.
+SURFACE_ASSETS = {
+    "gui": (
+        "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz:gui:x86_64-unknown-linux-gnu:none",
+        "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:adhoc",
+    ),
+    "web": (
+        "pohunek-web-${VERSION}-linux-x86_64.tar.gz:web:x86_64-unknown-linux-gnu:none",
+        "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:adhoc",
+    ),
+    "launchers": ("pohunek-launchers-${VERSION}-noarch.tar.gz:launchers:noarch:none",),
+    "plugin": ("pohunek-work-plugin-${VERSION}-noarch.tar.gz:plugin:noarch:none",),
+}
+
+
+def needs_of(block):
+    match = re.search(r"(?m)^    needs: \[([^\]]*)\]$", block)
+    return sorted(item.strip() for item in match.group(1).split(","))
+
+
+def run_gate(surface, results):
+    """Runs the gate job's script with the given job results; True when it passes."""
+    script = "\n".join(run_scripts(RELEASE_JOBS["gate"])[0])
+    env = {
+        "PATH": os.environ["PATH"],
+        "SURFACE": surface,
+        "GUI_LINUX": results.get("build-gui-linux", "skipped"),
+        "WEB_LINUX": results.get("package-web", "skipped"),
+        "LAUNCHERS": results.get("package-launchers", "skipped"),
+        "PLUGIN": results.get("package-plugin", "skipped"),
+        "MACOS": results.get("verify-macos", "skipped"),
+    }
+    done = subprocess.run(["bash", "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return done.returncode == 0
+
 
 class ReleaseTriggerTest(unittest.TestCase):
-    def test_a_version_tag_triggers_the_release_and_a_manual_run_never_publishes(self):
+    def test_a_surface_tag_triggers_the_release_and_a_manual_run_never_publishes(self):
         header = RELEASE.split("\njobs:\n", 1)[0]
-        self.assertIn('- "v[0-9]+.[0-9]+.[0-9]+"', header)
-        self.assertIn("workflow_dispatch:", header)
+        tags = re.findall(r'(?m)^      - "([^"]+)"$', header.split("workflow_dispatch:", 1)[0])
+        self.assertEqual(tags, [f"{surface}-v[0-9]+.[0-9]+.[0-9]+" for surface in SURFACES])
+        self.assertNotIn('- "v[0-9]+', header)
+        dispatch = header.split("workflow_dispatch:", 1)[1]
+        self.assertRegex(dispatch, r"surface:\n(?:.*\n)*?        type: choice\n        options:\n          - gui\n          - web\n          - launchers\n          - plugin\n")
+        self.assertIn("      version:\n", dispatch)
         publish = RELEASE_JOBS["publish"]
         self.assertIn("github.event_name == 'push'", publish)
         self.assertIn("github.ref_type == 'tag'", publish)
@@ -149,29 +201,35 @@ class ReleaseTriggerTest(unittest.TestCase):
                 self.assertNotIn("ref_name", job, name)
                 self.assertNotIn("GITHUB_REF_NAME", job, name)
                 self.assertNotIn("inputs.version", job, name)
+                self.assertNotIn("inputs.surface", job, name)
         self.assertNotIn("GITHUB_REF_NAME", RELEASE)
 
     def test_the_ci_gate_is_the_reusable_ci_workflow_and_gates_every_build(self):
         ci = RELEASE_JOBS["ci"]
         self.assertIn("uses: ./.github/workflows/ci.yml", ci)
         self.assertIn("pull-requests: read", ci)
-        for name in ("build-gui-linux", "package-web", "package-launchers", "stage-macos"):
+        self.assertIn("needs: [prepare]", ci)
+        self.assertIn("surface: ${{ needs.prepare.outputs.surface }}", ci)
+        for name in ("build-gui-linux", "package-web", "package-launchers", "package-plugin", "stage-macos"):
             self.assertRegex(RELEASE_JOBS[name], r"needs: \[prepare, ci\]", name)
-        self.assertIn("workflow_call:", CI.split("\njobs:\n", 1)[0])
+        self.assertRegex(CI.split("\njobs:\n", 1)[0], r"workflow_call:\n    inputs:\n      surface:\n")
         self.assertIn("ci:\n    if: ${{ always() }}", CI)
         self.assertRegex(CI, r"needs: \[changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package\]")
 
     def test_the_release_and_ci_concurrency_groups_cannot_collide(self):
-        self.assertIn("group: release-${{ github.ref }}", RELEASE)
+        self.assertIn("group: release-${{ github.ref }}-${{ inputs.surface }}", RELEASE)
         self.assertIn("group: ci-${{ github.workflow }}-${{ github.ref }}", CI)
 
     def test_every_archive_records_the_core_pin_and_is_checked_before_upload(self):
-        for name in ("build-gui-linux", "package-web", "package-launchers"):
+        for name in ("build-gui-linux", "package-web", "package-launchers", "package-plugin"):
             job = RELEASE_JOBS[name]
             self.assertIn("POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}", job, name)
             self.assertIn("packaging/check-archive", job, name)
-        self.assertIn("packaging/core-pin --require-web --expect-version", RELEASE_JOBS["prepare"])
-        self.assertIn("pipefail", RELEASE_JOBS["prepare"].split("Resolve the core pin", 1)[1])
+        prepare = RELEASE_JOBS["prepare"]
+        self.assertIn("packaging/core-pin --require-web", prepare)
+        self.assertIn("pipefail", prepare.split("Resolve the core pin", 1)[1])
+        self.assertIn('packaging/resolve-release --tag="$REF_NAME"', prepare)
+        self.assertIn('packaging/resolve-release --surface="$INPUT_SURFACE" --version="$INPUT_VERSION"', prepare)
 
 
 class MacosPackagingTest(unittest.TestCase):
@@ -206,9 +264,14 @@ class MacosPackagingTest(unittest.TestCase):
         ):
             self.assertNotIn(retired, RELEASE, retired)
 
-    def test_the_macos_archives_are_always_built(self):
+    def test_the_macos_archives_are_built_for_the_gui_and_web_surfaces_only(self):
+        condition = "    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}\n"
         for name in ("stage-macos", "package-macos", "verify-macos"):
-            self.assertNotRegex(RELEASE_JOBS[name], r"(?m)^    if:", name)
+            job = RELEASE_JOBS[name]
+            self.assertIn(condition, job, name)
+            self.assertEqual(len(re.findall(r"(?m)^    if:", job)), 1, name)
+            self.assertIn('component: ["${{ needs.prepare.outputs.surface }}"]', job, name)
+            self.assertNotIn("component: [gui, web]", job, name)
 
     def test_the_packaging_job_runs_nothing_from_the_tree_and_uses_pinned_actions(self):
         for use in re.findall(r"uses: (\S+)", self.package):
@@ -279,12 +342,8 @@ class AttestTest(unittest.TestCase):
             self.assertIn("${{ runner.temp }}/attest-assets/" + glob, self.attest)
         self.assertIn("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", self.attest)
 
-    def test_the_attest_job_waits_for_every_archive_and_runs_on_tag_pushes_only(self):
-        needs = re.search(r"(?m)^    needs: \[([^\]]*)\]$", self.attest).group(1)
-        self.assertEqual(
-            sorted(item.strip() for item in needs.split(",")),
-            sorted(["build-gui-linux", "package-web", "package-launchers", "verify-macos"]),
-        )
+    def test_the_attest_job_waits_for_the_gate_and_runs_on_tag_pushes_only(self):
+        self.assertEqual(needs_of(self.attest), ["gate"])
         self.assertIn("github.event_name == 'push' && github.ref_type == 'tag'", self.attest)
 
     def test_an_oidc_scope_on_any_other_job_is_rejected(self):
@@ -326,36 +385,16 @@ class PublishTest(unittest.TestCase):
     def setUp(self):
         self.publish = RELEASE_JOBS["publish"]
 
-    def test_only_the_publish_job_can_write_and_it_needs_every_archive_job_and_the_attestation(self):
+    def test_only_the_publish_job_can_write_and_it_needs_the_gate_and_the_attestation(self):
         for name, job in RELEASE_JOBS.items():
             if name != "publish":
                 self.assertNotIn("contents: write", job, name)
         self.assertIn("contents: write", self.publish)
-        needs = re.search(r"(?m)^    needs: \[([^\]]*)\]$", self.publish).group(1)
-        self.assertEqual(
-            sorted(item.strip() for item in needs.split(",")),
-            sorted(
-                [
-                    "prepare",
-                    "build-gui-linux",
-                    "package-web",
-                    "package-launchers",
-                    "verify-macos",
-                    "attest",
-                ]
-            ),
-        )
+        self.assertEqual(needs_of(self.publish), ["attest", "gate", "prepare"])
 
     def test_publishing_needs_every_job_to_have_succeeded(self):
         condition = self.publish.split("runs-on:", 1)[0]
-        for result in (
-            "prepare",
-            "build-gui-linux",
-            "package-web",
-            "package-launchers",
-            "verify-macos",
-            "attest",
-        ):
+        for result in ("prepare", "gate", "attest"):
             self.assertIn(f"needs.{result}.result == 'success'", condition, result)
         self.assertNotIn("skipped", condition)
         self.assertNotIn("vars.", condition)
@@ -364,17 +403,18 @@ class PublishTest(unittest.TestCase):
         for forbidden in ("tar -x", "smoke", "cargo", "bun ", "verify-signed", "install.sh"):
             self.assertNotIn(forbidden, self.publish, forbidden)
 
-    def test_the_asset_set_always_holds_the_macos_archives_and_is_checked_around_publishing(self):
-        for asset in (
-            "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz",
-            "pohunek-web-${VERSION}-linux-x86_64.tar.gz",
-            "pohunek-launchers-${VERSION}-noarch.tar.gz",
-            "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:adhoc",
-            "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:adhoc",
-        ):
-            self.assertIn(asset, self.publish)
+    def asset_arms(self):
+        """Maps each surface to the expected asset entries of its `case` arm."""
+        script = "\n".join(run_scripts(self.publish)[0])
+        body = script.split('case "$SURFACE" in', 1)[1].split("esac", 1)[0]
+        arms = dict(re.findall(r"(?s)(gui|web|launchers|plugin)\)\n(.*?)\n;;", body))
+        return {surface: tuple(re.findall(r'"([^"]+)"', arm)) for surface, arm in arms.items()}, body
+
+    def test_the_asset_set_is_fixed_per_surface_and_checked_around_publishing(self):
+        arms, body = self.asset_arms()
+        self.assertEqual(arms, SURFACE_ASSETS)
+        self.assertIn('echo "::error::unknown surface: $SURFACE"', body)
         self.assertNotIn("expected+=", self.publish)
-        self.assertNotRegex(self.publish, r"(?m)^\s+if \[ .*macos", "the macOS archives are not optional")
         self.assertIn("the downloaded assets differ from the expected set", self.publish)
         self.assertIn("fail_on_unmatched_files: true", self.publish)
         after = self.publish.split("Verify the published assets", 1)[1]
@@ -382,8 +422,93 @@ class PublishTest(unittest.TestCase):
         self.assertIn("sha256sum -c", after)
         self.assertIn("cmp ", after)
 
+    def test_a_surface_release_holds_no_other_surfaces_archive(self):
+        arms, _ = self.asset_arms()
+        prefixes = {
+            "gui": "pohunek-gui-",
+            "web": "pohunek-web-",
+            "launchers": "pohunek-launchers-",
+            "plugin": "pohunek-work-plugin-",
+        }
+        for surface, entries in arms.items():
+            self.assertTrue(entries, surface)
+            for entry in entries:
+                self.assertTrue(entry.startswith(prefixes[surface]), f"{surface}: {entry}")
+                self.assertEqual(entry.split(":")[1], surface, entry)
+
+    def test_the_release_is_named_by_the_surface_tag_from_prepare(self):
+        self.assertIn("TAG: ${{ needs.prepare.outputs.tag }}", self.publish)
+        self.assertIn("SURFACE: ${{ needs.prepare.outputs.surface }}", self.publish)
+        self.assertIn('gh release download "$TAG"', self.publish)
+        self.assertIn("gh release download ${TAG}", self.publish)
+        self.assertNotIn("gh release download v", self.publish)
+
     def test_the_release_notes_point_at_the_attestation_check(self):
         self.assertIn("gh attestation verify", self.publish)
+
+
+class SurfaceSelectionTest(unittest.TestCase):
+    def test_prepare_exposes_the_surface_the_version_and_the_tag(self):
+        prepare = RELEASE_JOBS["prepare"]
+        for output in ("surface", "version", "tag"):
+            self.assertIn(f"{output}: ${{{{ steps.release.outputs.{output} }}}}", prepare)
+
+    def test_each_build_job_runs_for_its_surface_only(self):
+        expected = {
+            "build-gui-linux": "needs.prepare.outputs.surface == 'gui'",
+            "package-web": "needs.prepare.outputs.surface == 'web'",
+            "package-launchers": "needs.prepare.outputs.surface == 'launchers'",
+            "package-plugin": "needs.prepare.outputs.surface == 'plugin'",
+        }
+        for name, condition in expected.items():
+            self.assertIn(f"    if: ${{{{ {condition} }}}}\n", RELEASE_JOBS[name], name)
+
+    def test_every_job_that_builds_waits_for_prepare_and_none_reads_the_tag(self):
+        for name in ("build-gui-linux", "package-web", "package-launchers", "package-plugin", "stage-macos"):
+            self.assertEqual(needs_of(RELEASE_JOBS[name]), ["ci", "prepare"], name)
+
+    def test_the_plugin_archive_is_built_from_the_repository_root_and_smoked_outside_the_checkout(self):
+        job = RELEASE_JOBS["package-plugin"]
+        self.assertIn('packaging/make-archive plugin "$VERSION" noarch . dist', job)
+        self.assertIn("--component plugin", job)
+        self.assertIn("mktemp -d", job)
+        self.assertIn("bun plugin/src/main.ts", job)
+        self.assertIn("name: release-plugin", job)
+        self.assertIn("bun-version-file: plugin/package.json", job)
+        for use in re.findall(r"uses: (\S+)", job):
+            self.assertRegex(use, PINNED, use)
+
+    def test_the_gate_needs_every_build_job_and_holds_no_token_beyond_read(self):
+        gate = RELEASE_JOBS["gate"]
+        self.assertEqual(needs_of(gate), sorted(("prepare",) + BUILD_JOBS))
+        self.assertIn("if: ${{ !cancelled() && needs.prepare.result == 'success' }}", gate)
+        self.assertRegex(gate, r"(?m)^    permissions:\n      contents: read\n")
+        self.assertNotIn("actions/checkout", gate)
+        self.assertNotIn("uses:", gate)
+
+    def test_the_gate_passes_only_when_exactly_the_selected_surfaces_jobs_succeeded(self):
+        for surface in SURFACES:
+            selected = {name: "success" for name in SURFACE_JOBS[surface]}
+            self.assertTrue(run_gate(surface, selected), surface)
+            for job in SURFACE_JOBS[surface]:
+                for result in ("failure", "cancelled", "skipped"):
+                    self.assertFalse(run_gate(surface, dict(selected, **{job: result})), f"{surface} {job} {result}")
+            for other in BUILD_JOBS:
+                if other in selected:
+                    continue
+                for result in ("success", "failure"):
+                    self.assertFalse(
+                        run_gate(surface, dict(selected, **{other: result})),
+                        f"a {surface} release must not run {other}",
+                    )
+
+    def test_the_gate_refuses_an_unknown_or_empty_surface(self):
+        for surface in ("", "docs", "GUI", "gui web"):
+            self.assertFalse(run_gate(surface, {"build-gui-linux": "success", "verify-macos": "success"}), repr(surface))
+
+    def test_the_attest_and_publish_jobs_cannot_start_without_the_gate(self):
+        self.assertEqual(needs_of(RELEASE_JOBS["attest"]), ["gate"])
+        self.assertIn("needs.gate.result == 'success'", RELEASE_JOBS["publish"])
 
 
 class CiFilterTest(unittest.TestCase):
@@ -396,6 +521,8 @@ class CiFilterTest(unittest.TestCase):
             "native/scripts/**",
             "web/release/**",
             ".github/workflows/**",
+            "plugin/**",
+            "launchers/**",
         ):
             self.assertIn("- '%s'" % path, block)
         native = CI.split("            native:\n", 1)[1].split("            packaging:\n", 1)[0]
@@ -425,13 +552,39 @@ class CiFilterTest(unittest.TestCase):
         for name in ("web", "web-macos"):
             self.assertIn("needs.changes.outputs.web == 'true'", jobs(CI)[name], name)
 
-    def test_pull_requests_are_still_filtered_and_other_events_run_everything(self):
-        for name in ("plugin", "launchers", "native", "native-macos", "web", "web-macos", "packaging", "macos-package"):
-            job = jobs(CI)[name]
-            self.assertIn("github.event_name != 'pull_request' ||", job, name)
+    def test_pull_requests_are_still_filtered_and_other_events_run_everything_or_the_released_surface(self):
+        surfaces = {
+            "plugin": ("plugin", "launchers"),
+            "launchers": ("launchers",),
+            "native": ("gui",),
+            "native-macos": ("gui",),
+            "web": ("web",),
+            "web-macos": ("web",),
+            "packaging": SURFACES,
+            "macos-package": ("gui", "web"),
+        }
+        for name, released in surfaces.items():
+            condition = re.search(r"(?m)^    if: (.*)$", jobs(CI)[name]).group(1)
+            self.assertIn("github.event_name == 'pull_request' && needs.changes.outputs.", condition, name)
+            self.assertIn("github.event_name != 'pull_request' && (inputs.surface == ''", condition, name)
+            self.assertEqual(re.findall(r"inputs\.surface == '([a-z]+)'", condition), list(released), name)
         changes = jobs(CI)["changes"]
         self.assertEqual(changes.count("if: ${{ github.event_name == 'pull_request' }}"), 2)
 
+    def test_no_surface_job_runs_for_a_release_of_another_surface(self):
+        for surface in SURFACES:
+            running = [
+                name
+                for name in ("plugin", "launchers", "native", "native-macos", "web", "web-macos", "macos-package")
+                if re.search(rf"inputs\.surface == '{surface}'", re.search(r"(?m)^    if: (.*)$", jobs(CI)[name]).group(1))
+            ]
+            others = {
+                "gui": {"native", "native-macos", "macos-package"},
+                "web": {"web", "web-macos", "macos-package"},
+                "launchers": {"launchers", "plugin"},
+                "plugin": {"plugin"},
+            }
+            self.assertEqual(set(running), others[surface], surface)
 
 if __name__ == "__main__":
     unittest.main()
