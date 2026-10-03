@@ -32,7 +32,7 @@ ATTEST_ALLOWED_SCRIPTS = {
         "set -euo pipefail",
         'cd "$RUNNER_TEMP/attest-assets"',
         "sha256sum -c ./*.sha256",
-        'test "$(ls ./*.tar.gz | wc -l)" = "$(ls ./*.sha256 | wc -l)"',
+        "test \"$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)\" = \"$(find . -maxdepth 1 -name '*.sha256' | wc -l)\"",
     ),
 }
 # A plain scalar value: its first character may not open a flow collection, an
