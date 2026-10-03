@@ -98,6 +98,10 @@ unused_result_ok = "warn"
 
 # Avoids false positives with the structured-logging message templates.
 literal_string_with_formatting_args = "allow"
+# `assert!(x.is_empty())` is the idiomatic emptiness check in tests; the
+# lint's `assert_eq!(x, [] as [T; 0])` replacement needs a spelled-out element
+# type at every site and reads worse than the assertion it replaces.
+assert_is_empty = "allow"
 
 # Custom opt-outs (case-by-case, per M-STATIC-VERIFICATION). These are binary
 # crates and unpublished internal libs, so the public-API doc lints below would
