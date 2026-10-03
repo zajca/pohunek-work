@@ -453,6 +453,8 @@ describe("loadConfig [tui]", () => {
   });
 
   test.each([
+    ["poll_interval_secs = 300", "poll_interval_secs = 2147484", "watch.poll_interval_secs", "must not exceed 2147483 (timer limit)"],
+    ["timeout_ms = 5000", "timeout_ms = 2147483648", "notify.timeout_ms", "must not exceed 2147483647 (timer limit)"],
     ["refresh_interval_secs = 300", "refresh_interval_secs = 2147484", "tui.refresh_interval_secs", "must not exceed 2147483 (timer limit)"],
     ["stale_after_secs = 900", "stale_after_secs = 9999999", "tui.stale_after_secs", "must not exceed 2147483 (timer limit)"],
     ["list_timeout_ms = 60000", "list_timeout_ms = 2147483648", "tui.list_timeout_ms", "must not exceed 2147483647 (timer limit)"],

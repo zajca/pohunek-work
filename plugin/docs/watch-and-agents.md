@@ -15,8 +15,13 @@ pohunek-work watch                      # every configured project
 pohunek-work watch --project widgets    # one pohunek project label
 ```
 
+A label with no project file is rejected at start (`unknown_project`, exit 2).
+A project that is configured but skipped at run time (not registered in
+pohunek, origin mismatch) is logged as `watch_warning` on every poll.
+
 It prints one line to stderr when it starts and nothing else. Stop it with
-`SIGINT` or `SIGTERM`; it exits 0.
+`SIGINT` or `SIGTERM`; it exits 0. A signal during a poll sends no further
+notifications; the one already running finishes or hits `timeout_ms`.
 
 ### Configuration
 
@@ -24,11 +29,11 @@ Both tables are required in `config.toml`:
 
 ```toml
 [watch]
-poll_interval_secs = 300   # pause between polls
+poll_interval_secs = 300   # pause between polls; at most 2147483 (timer limit)
 
 [notify]
 command = "/usr/bin/notify-send"   # absolute path
-timeout_ms = 5000                  # the command is killed after this
+timeout_ms = 5000                  # the command is killed after this; at most 2147483647
 ```
 
 Every poll runs the full `list` fetch, so the interval is also the GitHub and
@@ -84,6 +89,7 @@ JSON lines in `$POHUNEK_WORK_STATE_DIR/logs/watch.log`
 | `watch_notified` | a notification was delivered (`key`, `project`, `reason`) |
 | `watch_notify_failed` | the command failed, timed out or could not start |
 | `watch_tick_failed` | a poll threw; the loop continues with the next one |
+| `watch_warning` | a project was left out of the poll (not registered in pohunek, origin mismatch) |
 | `source_failed` | a source did not answer (`pohunek`, `github` or `linear` plus a code) |
 
 Quick checks:

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { notificationArgv, runWatch, watchTick, type Baseline, type WatchDeps } from "../../src/commands/watch.ts";
+import { notificationArgv, runWatch, unknownProject, watchTick, type Baseline, type WatchDeps } from "../../src/commands/watch.ts";
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
@@ -83,7 +83,7 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
 const options = { project: "widgets" };
 
 async function tick(h: Harness, baseline: Baseline): Promise<{ baseline: Baseline; notified: readonly string[] }> {
-  return watchTick(config, options, h.deps, baseline);
+  return watchTick(config, options, h.deps, baseline, new AbortController().signal);
 }
 
 test("the first poll sets the baseline and notifies nobody, even for rows already on the owner's turn", async () => {
@@ -209,4 +209,43 @@ test("notificationArgv reduces provider text to ASCII", () => {
   };
   const argv = notificationArgv(config.global.notify, item as never);
   expect(argv.slice(3).join("|")).toBe("your turn: github:acme/widgets#12|widsgets: needs?evil");
+});
+
+test("an abort during a notification batch stops before the next notification", async () => {
+  const second = pr({ id: "acme/widgets#13", number: 13, url: "https://example.invalid/13", headRefName: "feature/abc-2", isDraft: true });
+  const secondWaiting = pr({ id: "acme/widgets#13", number: 13, url: "https://example.invalid/13", headRefName: "feature/abc-2", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
+  const h = harness([waiting, secondWaiting]);
+  const state = (await tick(h, null)).baseline;
+  h.world.prs = githubOk([mine, second]);
+  const controller = new AbortController();
+  h.setExec(() => {
+    controller.abort();
+    return Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+  });
+  const result = await watchTick(config, options, h.deps, state, controller.signal);
+  expect(h.argvs).toHaveLength(1);
+  expect(result.notified).toHaveLength(1);
+});
+
+test("an abort before the notifications sends none", async () => {
+  const h = harness([waiting]);
+  const state = (await tick(h, null)).baseline;
+  h.world.prs = githubOk([mine]);
+  const controller = new AbortController();
+  controller.abort();
+  const result = await watchTick(config, options, h.deps, state, controller.signal);
+  expect(result.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("collector warnings are logged as errors", async () => {
+  const h = harness([mine]);
+  await watchTick(config, { project: "no-such-project" }, h.deps, null, new AbortController().signal);
+  expect(h.logs).toContainEqual({ level: "error", event: "watch_warning" });
+});
+
+test("unknownProject accepts null and configured labels and returns an unknown label", () => {
+  expect(unknownProject(config, null)).toBeNull();
+  expect(unknownProject(config, "widgets")).toBeNull();
+  expect(unknownProject(config, "typo")).toBe("typo");
 });

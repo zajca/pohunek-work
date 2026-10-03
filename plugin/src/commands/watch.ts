@@ -24,7 +24,7 @@ export type Baseline = ReadonlyMap<string, TurnActor> | null;
 
 export interface TickResult {
   readonly baseline: Baseline;
-  /** Row ids a notification was attempted for, in row order. */
+  /** Row ids a notification was attempted for, in row order; stops at an abort. */
   readonly notified: readonly string[];
 }
 
@@ -38,6 +38,12 @@ export function notificationArgv(notify: NotifyConfig, item: ListItem): readonly
   const summary = toAscii(`your turn: ${item.key}`);
   const body = toAscii(`${item.project}: ${item.on_turn.reason}`);
   return [notify.command, `--app-name=${APP_NAME}`, "--", summary, body];
+}
+
+/** Label of a project the watch is restricted to that no project file defines; null when it is known. */
+export function unknownProject(config: PluginConfig, project: string | null): string | null {
+  if (project === null) return null;
+  return config.projects.some((p) => p.pohunekLabel === project) ? null : project;
 }
 
 async function notify(config: PluginConfig, item: ListItem, deps: WatchDeps): Promise<void> {
@@ -66,17 +72,24 @@ export async function watchTick(
   options: WatchOptions,
   deps: WatchDeps,
   baseline: Baseline,
+  signal: AbortSignal,
 ): Promise<TickResult> {
   const { logger } = deps;
   const collected = await collectRows(config, options.project, deps);
+  for (const warning of collected.warnings) logger.error("watch_warning", { warning });
   const items = collected.rows.map((row) => row.listItem);
   const complete = collected.sourceFailures.length === 0;
   const next = transitionsToMe(baseline, items);
   const nextBaseline: Baseline = baseline === null && !complete ? null : next.baseline;
   const marked = items.filter((item) => next.marked.has(rowId(item)));
   logger.info("watch_tick", { rows: items.length, notify: marked.length, complete, baselined: nextBaseline !== null });
-  for (const item of marked) await notify(config, item, deps);
-  return { baseline: nextBaseline, notified: marked.map(rowId) };
+  const notified: string[] = [];
+  for (const item of marked) {
+    if (signal.aborted) break;
+    notified.push(rowId(item));
+    await notify(config, item, deps);
+  }
+  return { baseline: nextBaseline, notified };
 }
 
 /** Polls every `[watch] poll_interval_secs` until `signal` aborts. */
@@ -90,7 +103,7 @@ export async function runWatch(
   let baseline: Baseline = null;
   while (!signal.aborted) {
     try {
-      baseline = (await watchTick(config, options, deps, baseline)).baseline;
+      baseline = (await watchTick(config, options, deps, baseline, signal)).baseline;
     } catch (error) {
       deps.logger.error("watch_tick_failed", { error: error instanceof Error ? error : String(error) });
     }

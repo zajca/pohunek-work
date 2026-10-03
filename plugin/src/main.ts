@@ -9,7 +9,7 @@ import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupS
 import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
-import { runWatch } from "./commands/watch.ts";
+import { runWatch, unknownProject } from "./commands/watch.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
@@ -347,6 +347,10 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     return reportError(false, "configuration", "config_invalid", error.message);
+  }
+  const unknown = unknownProject(config, options.project);
+  if (unknown !== null) {
+    return reportError(false, "usage", "unknown_project", `no project file for label ${JSON.stringify(unknown)}`);
   }
   const logger = createLogger({
     logDir: resolveLogDir(),
