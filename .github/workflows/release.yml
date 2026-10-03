@@ -1,21 +1,31 @@
 name: Release
 
-# Builds and publishes the user-surface artifacts of this repository when a
-# `vX.Y.Z` tag is pushed:
+# Every surface of this repository is released by its own tag and carries its
+# own version. A `<surface>-vX.Y.Z` tag builds, attests and publishes only that
+# surface's archives:
 #
-#   pohunek-gui     x86_64-unknown-linux-gnu archive (headless Wayland smoke)
-#                   and the ad-hoc signed Pohunek.app archive
-#                   (aarch64-apple-darwin)
-#   pohunek-web     linux-x86_64 archive and the ad-hoc signed
-#                   aarch64-apple-darwin archive of the web control center
-#   pohunek-launchers  the rofi/sway launcher scripts, templates and guides
+#   gui-vX.Y.Z        pohunek-gui: x86_64-unknown-linux-gnu archive (headless
+#                     Wayland smoke) and the ad-hoc signed Pohunek.app archive
+#                     (aarch64-apple-darwin)
+#   web-vX.Y.Z        pohunek-web: linux-x86_64 archive and the ad-hoc signed
+#                     aarch64-apple-darwin archive of the web control center
+#   launchers-vX.Y.Z  pohunek-launchers: the rofi/sway launcher scripts,
+#                     templates and guides
+#   plugin-vX.Y.Z     pohunek-work-plugin: the `pohunek-work` CLI sources and
+#                     prompt templates (architecture-independent)
 #
-# Every archive ships with a `.sha256` file and a MANIFEST that records the
-# pinned core version (`packaging/core-pin`). Core owns the CLI, daemon and
-# worker artifacts; none of them is built here.
+# The version of a tag must equal the version declared by its surface's sources
+# (`packaging/resolve-release`). Every archive ships with a `.sha256` file and a
+# MANIFEST that records the pinned core version (`packaging/core-pin`). Core owns
+# the CLI, daemon and worker artifacts; none of them is built here.
 #
-# A manual run (workflow_dispatch) builds everything for the given version and
+# A manual run (workflow_dispatch) builds one surface at the given version and
 # publishes and attests nothing: it is the dry run.
+#
+# `prepare` selects the surface; every surface's jobs are skipped unless
+# `prepare` selected it, and `gate` fails the release unless exactly the selected
+# surface's jobs ran and succeeded, so one surface's tag never builds or
+# publishes another surface's archives.
 #
 # The macOS archives are built in four jobs so that no built program runs after
 # the final bytes are produced:
@@ -36,11 +46,23 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "gui-v[0-9]+.[0-9]+.[0-9]+"
+      - "web-v[0-9]+.[0-9]+.[0-9]+"
+      - "launchers-v[0-9]+.[0-9]+.[0-9]+"
+      - "plugin-v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
+      surface:
+        description: "Surface to build (nothing is published)"
+        required: true
+        type: choice
+        options:
+          - gui
+          - web
+          - launchers
+          - plugin
       version:
-        description: "Version to build, X.Y.Z (nothing is published)"
+        description: "Version to build, X.Y.Z; must equal the surface's source version"
         required: true
         type: string
 
@@ -48,7 +70,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref }}-${{ inputs.surface }}
   cancel-in-progress: false
 
 env:
@@ -57,13 +79,15 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
-  # The only job that reads the tag name or the dispatch input; every other job
-  # takes the validated version and the core pin from these outputs.
+  # The only job that reads the tag name or the dispatch inputs; every other job
+  # takes the validated surface, version and core pin from these outputs.
   prepare:
-    name: Resolve the version and the core pin
+    name: Resolve the surface, the version and the core pin
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      surface: ${{ steps.release.outputs.surface }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
       core_ref: ${{ steps.pin.outputs.core_ref }}
       core_rev: ${{ steps.pin.outputs.core_rev }}
     steps:
@@ -71,48 +95,50 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve the release version
-        id: version
+      # Fails on an unknown surface, a malformed version, or a version that
+      # differs from the one the surface's sources declare.
+      - name: Resolve the surface and the release version
+        id: release
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          INPUT_SURFACE: ${{ inputs.surface }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = push ]; then
-            version="${REF_NAME#v}"
+            release="$(packaging/resolve-release --tag="$REF_NAME")"
           else
-            version="$INPUT_VERSION"
+            release="$(packaging/resolve-release --surface="$INPUT_SURFACE" --version="$INPUT_VERSION")"
           fi
-          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::the release version must be X.Y.Z, got: $version"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$release" >> "$GITHUB_OUTPUT"
 
-      # Fails when native/Cargo.toml and web/core-sdk.json pin different core
-      # releases, or when the GUI version differs from the release version (the
-      # binary reports the Cargo version, the app bundle the release version).
+      # The core pin is shared by the whole repository and recorded in every
+      # manifest, so it is resolved for every surface. Fails when
+      # native/Cargo.toml and web/core-sdk.json pin different core releases.
       - name: Resolve the core pin
         id: pin
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          packaging/core-pin --require-web --expect-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
+          packaging/core-pin --require-web | tee -a "$GITHUB_OUTPUT"
 
-  # The same jobs that gate a pull request, called as a workflow so no job is
-  # defined twice.
+  # The jobs that gate a pull request, called as a workflow so no job is defined
+  # twice. Only the jobs of the selected surface (and the shared packaging job)
+  # run.
   ci:
     name: CI gate
+    needs: [prepare]
     permissions:
       contents: read
       pull-requests: read
     uses: ./.github/workflows/ci.yml
+    with:
+      surface: ${{ needs.prepare.outputs.surface }}
 
   build-gui-linux:
     name: Build pohunek-gui for x86_64-unknown-linux-gnu
     needs: [prepare, ci]
+    if: ${{ needs.prepare.outputs.surface == 'gui' }}
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: -D warnings
@@ -180,6 +206,7 @@ jobs:
   package-web:
     name: Package the web control center for linux-x86_64
     needs: [prepare, ci]
+    if: ${{ needs.prepare.outputs.surface == 'web' }}
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -224,6 +251,7 @@ jobs:
   package-launchers:
     name: Package the launchers
     needs: [prepare, ci]
+    if: ${{ needs.prepare.outputs.surface == 'launchers' }}
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -269,9 +297,71 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The plugin is Bun source that runs unbundled, so the archive holds the
+  # sources and `plugin/` imports the launcher files it embeds from the sibling
+  # `launchers/` directory.
+  package-plugin:
+    name: Package the plugin
+    needs: [prepare, ci]
+    if: ${{ needs.prepare.outputs.surface == 'plugin' }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: plugin/package.json
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          archive="$(packaging/make-archive plugin "$VERSION" noarch . dist)"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          packaging/check-archive "$archive" --component plugin --version "$VERSION" \
+            --target noarch --core "$POHUNEK_CORE_REF"
+
+      # The extracted sources must load every module, including the launcher
+      # files they import as text; with no arguments the CLI prints its usage
+      # and exits 2 without reading any configuration or contacting a service.
+      - name: Check the packaged CLI loads
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          extract_dir="$(mktemp -d)"
+          trap 'rm -rf "$extract_dir"' EXIT
+          tar -xzf "$ARCHIVE" -C "$extract_dir"
+          root="$extract_dir/pohunek-work-plugin-${VERSION}-noarch"
+          status=0
+          output="$(cd "$root" && bun plugin/src/main.ts 2>&1)" || status=$?
+          if [ "$status" -ne 2 ] || ! printf '%s\n' "$output" | grep -q '^usage:'; then
+            echo "::error::the packaged CLI did not print its usage (exit status $status)"
+            printf '%s\n' "$output"
+            exit 1
+          fi
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-plugin
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   stage-macos:
     name: Stage ${{ matrix.component }} for aarch64-apple-darwin
     needs: [prepare, ci]
+    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}
     runs-on: macos-15
     timeout-minutes: 120
     env:
@@ -281,7 +371,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [gui, web]
+        component: ["${{ needs.prepare.outputs.surface }}"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -368,6 +458,7 @@ jobs:
   package-macos:
     name: Package ${{ matrix.component }} for aarch64-apple-darwin
     needs: [prepare, stage-macos]
+    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
@@ -378,7 +469,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [gui, web]
+        component: ["${{ needs.prepare.outputs.surface }}"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -398,9 +489,11 @@ jobs:
       # value is ever interpolated into a script.
       - name: Check and extract the staged tree
         shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
         run: |
           set -euo pipefail
-          name="pohunek-${{ matrix.component }}-${VERSION}-aarch64-apple-darwin"
+          name="pohunek-${COMPONENT}-${VERSION}-aarch64-apple-darwin"
           ( cd "$RUNNER_TEMP/stage-download" && shasum -a 256 -c stage.tar.sha256 )
           entries="$(tar -tf "$RUNNER_TEMP/stage-download/stage.tar")"
           if printf '%s\n' "$entries" | grep -v -e "^${name}/" -e "^${name}\$"; then
@@ -420,12 +513,14 @@ jobs:
       - name: Ad-hoc sign, verify, and package
         id: package
         shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
         run: |
           set -euo pipefail
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           export SOURCE_DATE_EPOCH
-          archive="$(packaging/macos/package --adhoc-release "${{ matrix.component }}" "$VERSION" \
-            "dist/pohunek-${{ matrix.component }}-${VERSION}-aarch64-apple-darwin")"
+          archive="$(packaging/macos/package --adhoc-release "$COMPONENT" "$VERSION" \
+            "dist/pohunek-${COMPONENT}-${VERSION}-aarch64-apple-darwin")"
           mkdir -p "$RUNNER_TEMP/signed-upload"
           cp "$archive" "$archive.sha256" "$RUNNER_TEMP/signed-upload/"
 
@@ -440,6 +535,7 @@ jobs:
   verify-macos:
     name: Verify ${{ matrix.component }} for aarch64-apple-darwin
     needs: [prepare, package-macos]
+    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}
     runs-on: macos-15
     timeout-minutes: 120
     permissions:
@@ -450,7 +546,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [gui, web]
+        component: ["${{ needs.prepare.outputs.surface }}"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -523,7 +619,50 @@ jobs:
           ARCHIVE_ROOT: ${{ steps.extract.outputs.root }}
         run: native/scripts/smoke-gui-release-macos "$ARCHIVE_ROOT/Pohunek.app"
 
-  # Build-provenance attestations for every release archive and checksum file.
+  # A skipped dependency skips its dependents, so the jobs that attest and
+  # publish wait for this one job instead. It fails unless the jobs of the
+  # selected surface succeeded and every other surface's job was skipped. It
+  # checks out nothing and holds no token beyond read access.
+  gate:
+    name: Check that only the selected surface was built
+    needs: [prepare, build-gui-linux, package-web, package-launchers, package-plugin, verify-macos]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      SURFACE: ${{ needs.prepare.outputs.surface }}
+      GUI_LINUX: ${{ needs.build-gui-linux.result }}
+      WEB_LINUX: ${{ needs.package-web.result }}
+      LAUNCHERS: ${{ needs.package-launchers.result }}
+      PLUGIN: ${{ needs.package-plugin.result }}
+      MACOS: ${{ needs.verify-macos.result }}
+    steps:
+      - name: Require the selected surface's jobs and no other
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$SURFACE" in
+            gui) want="build-gui-linux=success package-web=skipped package-launchers=skipped package-plugin=skipped verify-macos=success" ;;
+            web) want="build-gui-linux=skipped package-web=success package-launchers=skipped package-plugin=skipped verify-macos=success" ;;
+            launchers) want="build-gui-linux=skipped package-web=skipped package-launchers=success package-plugin=skipped verify-macos=skipped" ;;
+            plugin) want="build-gui-linux=skipped package-web=skipped package-launchers=skipped package-plugin=success verify-macos=skipped" ;;
+            *)
+              echo "::error::unknown surface: $SURFACE"
+              exit 1
+              ;;
+          esac
+          have="build-gui-linux=$GUI_LINUX package-web=$WEB_LINUX package-launchers=$LAUNCHERS package-plugin=$PLUGIN verify-macos=$MACOS"
+          if [ "$have" != "$want" ]; then
+            echo "::error::the job results do not match the ${SURFACE} release"
+            echo "expected: $want"
+            echo "actual:   $have"
+            exit 1
+          fi
+
+  # Build-provenance attestations for every archive and checksum file of the
+  # selected surface.
   # The only job with `id-token: write` and `attestations: write`: it checks out
   # nothing, only downloads the already built and verified assets, checks their
   # checksum files, and attests them, so no code from this repository or from an
@@ -532,7 +671,7 @@ jobs:
   # and attests nothing.
   attest:
     name: Attest release assets
-    needs: [build-gui-linux, package-web, package-launchers, verify-macos]
+    needs: [gate]
     if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -570,21 +709,20 @@ jobs:
   # never reaches it.
   publish:
     name: Publish the release
-    needs: [prepare, build-gui-linux, package-web, package-launchers, verify-macos, attest]
+    needs: [prepare, gate, attest]
     if: >-
       ${{ always() && github.event_name == 'push' && github.ref_type == 'tag'
       && needs.prepare.result == 'success'
-      && needs.build-gui-linux.result == 'success'
-      && needs.package-web.result == 'success'
-      && needs.package-launchers.result == 'success'
-      && needs.verify-macos.result == 'success'
+      && needs.gate.result == 'success'
       && needs.attest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
     env:
+      SURFACE: ${{ needs.prepare.outputs.surface }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
       CORE_REF: ${{ needs.prepare.outputs.core_ref }}
       CORE_REV: ${{ needs.prepare.outputs.core_rev }}
       GH_TOKEN: ${{ github.token }}
@@ -608,13 +746,34 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/release"
-          expected=(
-            "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz:gui:x86_64-unknown-linux-gnu:none"
-            "pohunek-web-${VERSION}-linux-x86_64.tar.gz:web:x86_64-unknown-linux-gnu:none"
-            "pohunek-launchers-${VERSION}-noarch.tar.gz:launchers:noarch:none"
-            "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:adhoc"
-            "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:adhoc"
-          )
+          case "$SURFACE" in
+            gui)
+              expected=(
+                "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz:gui:x86_64-unknown-linux-gnu:none"
+                "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:adhoc"
+              )
+              ;;
+            web)
+              expected=(
+                "pohunek-web-${VERSION}-linux-x86_64.tar.gz:web:x86_64-unknown-linux-gnu:none"
+                "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:adhoc"
+              )
+              ;;
+            launchers)
+              expected=(
+                "pohunek-launchers-${VERSION}-noarch.tar.gz:launchers:noarch:none"
+              )
+              ;;
+            plugin)
+              expected=(
+                "pohunek-work-plugin-${VERSION}-noarch.tar.gz:plugin:noarch:none"
+              )
+              ;;
+            *)
+              echo "::error::unknown surface: $SURFACE"
+              exit 1
+              ;;
+          esac
           names=()
           for entry in "${expected[@]}"; do
             IFS=: read -r name component target signing <<< "$entry"
@@ -635,15 +794,15 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "Release ${VERSION} of the pohunek user surfaces."
+            echo "Release ${VERSION} of the pohunek ${SURFACE} surface (tag \`${TAG}\`)."
             echo
             echo "Pinned core release: \`${CORE_REF}\`${CORE_REV:+ (commit \`${CORE_REV}\`)}."
             echo "Every archive has a \`.sha256\` file and a \`MANIFEST\` that records the core version."
             echo
-            echo "The macOS archives are ad-hoc signed. Every archive and checksum has a GitHub build-provenance attestation:"
+            echo "A macOS archive is ad-hoc signed. Every archive and checksum has a GitHub build-provenance attestation:"
             echo "\`gh attestation verify <archive> --repo ${GITHUB_REPOSITORY}\`."
             echo
-            echo "Download with \`gh release download v${VERSION} -R ${GITHUB_REPOSITORY} -p '<archive>*'\`"
+            echo "Download with \`gh release download ${TAG} -R ${GITHUB_REPOSITORY} -p '<archive>*'\`"
             echo "(needs \`gh auth login\`), or fetch the asset URL directly while the repository is public."
           } > "$RUNNER_TEMP/release-notes.md"
 
@@ -660,8 +819,6 @@ jobs:
       # were verified above.
       - name: Verify the published assets
         shell: bash
-        env:
-          TAG: v${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           published="$RUNNER_TEMP/published"

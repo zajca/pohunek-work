@@ -52,8 +52,18 @@ Guidelines: `.agents/rust-guidelines/SKILL.md` is the index; always read
 
 ## Releases and macOS signing
 
-`.github/workflows/release.yml` publishes the Linux archives and the macOS
-archives together on a `vX.Y.Z` tag; there is no opt-out for macOS. macOS
+Each surface is released by its own tag and version: `gui-vX.Y.Z`,
+`web-vX.Y.Z`, `launchers-vX.Y.Z` and `plugin-vX.Y.Z` (no bare `vX.Y.Z` tag).
+`.github/workflows/release.yml` runs only the jobs of the tagged surface:
+`prepare` (the only job that reads the tag name or the dispatch inputs) calls
+`packaging/resolve-release`, which fails unless the tag's version equals the
+version in the surface's sources (`native/Cargo.toml`, `web/package.json`,
+`launchers/package.json`, `plugin/package.json`); `gate` fails the release
+unless exactly that surface's jobs succeeded. Bump the surface's version before
+tagging. `gui` and `web` publish the Linux and the macOS archives together;
+there is no opt-out for macOS. The core pin (`packaging/core-pin --require-web`)
+is shared by every surface and recorded in every manifest, so a release of any
+surface fails while `native/Cargo.toml` and `web/core-sdk.json` disagree. macOS
 archives are ad-hoc signed (`packaging/macos/package --adhoc-release`) and no
 job uses a secret, environment or
 repository variable. Only `attest` holds `id-token: write` and
@@ -61,7 +71,8 @@ repository variable. Only `attest` holds `id-token: write` and
 only `publish` holds `contents: write`. `packaging/tests/test_release_workflow.py`
 pins these boundaries; changing a job's permissions or steps means updating its
 allowlist on purpose. Distribution is the Homebrew tap `zajca/homebrew-pohunek`
-(formulae `pohunek-gui`, `pohunek-web`), owned by core. Verify a release asset
+(formulae `pohunek-gui`, `pohunek-web`), owned by core, which consumes the
+`gui-v*` and `web-v*` release assets. Verify a release asset
 with `gh attestation verify <archive> --repo zajca/pohunek-work`.
 
 ## Conventions

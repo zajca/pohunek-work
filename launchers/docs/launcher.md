@@ -144,7 +144,7 @@ the same content `pohunek-work setup` embeds; use `pohunek-work setup` when the
 into `$XDG_DATA_HOME/pohunek/bin` by hand:
 
 ```sh
-gh release download v<version> -R zajca/pohunek-work -p 'pohunek-launchers-*'
+gh release download launchers-v<version> -R zajca/pohunek-work -p 'pohunek-launchers-*'
 sha256sum -c pohunek-launchers-<version>-noarch.tar.gz.sha256
 tar -xzf pohunek-launchers-<version>-noarch.tar.gz
 ```

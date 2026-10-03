@@ -58,27 +58,40 @@ surface adds a filter entry, a job and an entry in the `ci` job's `needs`.
 
 ## Releases
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it calls the CI
-workflow as its gate, then builds the Linux `pohunek-gui` archive (with a
-headless Wayland smoke test), the web control center archives, the launchers
-archive and the ad-hoc signed macOS `Pohunek.app` and web archives
-(aarch64-apple-darwin), and attaches them to a GitHub release once every
-archive and checksum has a build-provenance attestation. Every archive has a
-`.sha256` file and a `MANIFEST` that records the pinned core version; `packaging/core-pin` reads it
-from `native/Cargo.toml` and fails the release when `web/core-sdk.json` or the
-GUI version disagrees. Core ships the CLI, daemon and worker archives; this
+Each surface is released by its own tag with its own version. Pushing the tag
+runs `.github/workflows/release.yml`, which calls the CI workflow for that
+surface as its gate, builds only that surface's archives, and attaches them to
+a GitHub release once every archive and checksum has a build-provenance
+attestation:
+
+| Tag | Release assets | Version source |
+| --- | --- | --- |
+| `gui-vX.Y.Z` | `pohunek-gui` Linux archive (headless Wayland smoke test) and the ad-hoc signed macOS `Pohunek.app` archive | `native/Cargo.toml` |
+| `web-vX.Y.Z` | `pohunek-web` Linux archive and the ad-hoc signed macOS archive | `web/package.json` |
+| `launchers-vX.Y.Z` | `pohunek-launchers` archive | `launchers/package.json` |
+| `plugin-vX.Y.Z` | `pohunek-work-plugin` archive: the `pohunek-work` CLI sources and prompt templates, plus the `launchers/` files the CLI embeds (`plugin/` and `launchers/` keep their sibling layout) | `plugin/package.json` |
+
+The macOS archives are aarch64-apple-darwin. Raise the surface's version in its
+source file before tagging: `packaging/resolve-release` fails the release when
+the tag's version differs from the sources, and when the prefix is not one of
+the four surfaces. Every archive has a `.sha256` file and a `MANIFEST` that
+records the pinned core version; `packaging/core-pin` reads it from
+`native/Cargo.toml` and fails a release of any surface when `web/core-sdk.json`
+pins a different core. Core ships the CLI, daemon and worker archives; this
 repository builds none of them.
 
-Download an archive with `gh release download vX.Y.Z -R zajca/pohunek-work -p
-'<archive>*'` (needs `gh auth login`), or, while the repository is public, from
-the asset URL with `curl -LO`. Verify it with `sha256sum -c <archive>.sha256`.
+Download an archive with `gh release download gui-vX.Y.Z -R zajca/pohunek-work -p
+'<archive>*'` (needs `gh auth login`; use the tag of the surface you want), or,
+while the repository is public, from the asset URL with `curl -LO`. Verify it
+with `sha256sum -c <archive>.sha256`.
 
 Every archive and checksum carries a GitHub build-provenance attestation made
 by the `attest` job of the release workflow; check a download with
 `gh attestation verify <archive> --repo zajca/pohunek-work`.
 
-A manual run of the workflow (Actions, Release, version `X.Y.Z`) builds
-everything, including the macOS archives, and publishes and attests nothing.
+A manual run of the workflow (Actions, Release, a surface and its version
+`X.Y.Z`) builds that surface, including its macOS archive, and publishes and
+attests nothing.
 
 ### macOS archives
 
@@ -105,6 +118,5 @@ identity, so macOS treats a new version of the app as a new program: after an
 upgrade the Keychain asks once more for permission to use the stored
 credentials; choose Always Allow again.
 
-The packaging scripts and their tests live in `packaging/`, shared by `native/`
-and `web/`. The packaging scripts and their tests live in
-`packaging/`, shared by `native/` and `web/`.
+The packaging scripts and their tests live in `packaging/`, shared by every
+surface's release.
