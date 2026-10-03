@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Command line entry point: `pohunek-work list`, `do`, `doctor`, `setup` and `tui`.
+// Command line entry point: `pohunek-work list`, `do`, `doctor`, `setup`, `tui` and `watch`.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, isLaunchAction, type DoAction } from "./actions/types.ts";
@@ -9,6 +9,7 @@ import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupS
 import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
+import { runWatch, unknownProject } from "./commands/watch.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
@@ -19,6 +20,7 @@ import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
 import { createPohunekClient } from "./sources/pohunek.ts";
 import { exec } from "./util/exec.ts";
+import { sleep } from "./util/sleep.ts";
 import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
@@ -33,6 +35,7 @@ const USAGE = `usage:
   pohunek-work setup config [--force] [--json]
   pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project>] [--issue-keybind <key>] [--json]
   pohunek-work tui
+  pohunek-work watch [--project <label>]
 
 merge is not an action: merging stays manual.
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
@@ -320,6 +323,68 @@ async function tuiCommand(argv: readonly string[]): Promise<number> {
   }
 }
 
+function parseWatchArgs(argv: readonly string[]): { project: string | null } {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...argv],
+      options: { project: { type: "string" } },
+      allowPositionals: true,
+      strict: true,
+    });
+    if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
+    return { project: values.project ?? null };
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
+  }
+}
+
+async function watchCommand(argv: readonly string[]): Promise<number> {
+  const options = parseWatchArgs(argv);
+  let config;
+  try {
+    config = await loadConfig(resolveConfigDir());
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    return reportError(false, "configuration", "config_invalid", error.message);
+  }
+  const unknown = unknownProject(config, options.project);
+  if (unknown !== null) {
+    return reportError(false, "usage", "unknown_project", `no project file for label ${JSON.stringify(unknown)}`);
+  }
+  const logger = createLogger({
+    logDir: resolveLogDir(),
+    command: "watch",
+    maxStringLength: config.global.log.maxStringLength,
+  });
+  const controller = new AbortController();
+  const stop = (): void => {
+    controller.abort();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  logger.info("watch_start", { ...options, poll_interval_secs: config.global.watch.pollIntervalSecs });
+  console.error(`watching every ${String(config.global.watch.pollIntervalSecs)} s; stop with SIGINT or SIGTERM`);
+  try {
+    await runWatch(config, options, {
+      pohunek: createPohunekClient(config.global.pohunek),
+      github: createGithubSource(config.global),
+      linear: createLinearSource(config.global.linear),
+      logger,
+      exec,
+      sleep,
+    }, controller.signal);
+    logger.info("watch_stop");
+    return 0;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    await logger.close();
+    const logFailure = logger.failure();
+    if (logFailure !== null) console.error(`log write failed: ${logFailure.message}`);
+  }
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv;
   const json = argv.includes("--json");
@@ -335,6 +400,8 @@ async function main(argv: readonly string[]): Promise<number> {
         return await setupCommand(rest);
       case "tui":
         return await tuiCommand(rest);
+      case "watch":
+        return await watchCommand(rest);
       default:
         throw new UsageError(command === undefined ? "missing command" : `unknown command: ${command}`);
     }

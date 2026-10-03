@@ -47,6 +47,8 @@ export interface LogConfig {
 
 export interface NotifyConfig {
   readonly command: string;
+  /** Longest time the notification command may run before it is killed. */
+  readonly timeoutMs: number;
 }
 
 export interface ActionsConfig {

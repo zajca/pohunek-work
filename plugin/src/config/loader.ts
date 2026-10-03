@@ -144,14 +144,17 @@ function parseWatch(root: Table, file: string): WatchConfig {
   const table = requireTable(root, "watch", file);
   const path = ["watch"];
   rejectUnknownKeys(table, ["poll_interval_secs"], file, path);
-  return { pollIntervalSecs: readPositiveInt(table, "poll_interval_secs", file, path) };
+  return { pollIntervalSecs: readTimerValue(table, "poll_interval_secs", MS_PER_SECOND, file, path) };
 }
 
 function parseNotify(root: Table, file: string): NotifyConfig {
   const table = requireTable(root, "notify", file);
   const path = ["notify"];
-  rejectUnknownKeys(table, ["command"], file, path);
-  return { command: readAbsolutePath(table, "command", file, path) };
+  rejectUnknownKeys(table, ["command", "timeout_ms"], file, path);
+  return {
+    command: readAbsolutePath(table, "command", file, path),
+    timeoutMs: readTimerValue(table, "timeout_ms", 1, file, path),
+  };
 }
 
 function parseLog(root: Table, file: string): LogConfig {

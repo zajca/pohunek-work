@@ -143,6 +143,7 @@ launch_kill_margin_ms = 10000
 
 [notify]
 command = "/usr/bin/notify-send"
+timeout_ms = 5000
 
 [policy]
 delegable = []
