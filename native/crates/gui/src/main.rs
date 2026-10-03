@@ -567,6 +567,12 @@ mod tests {
         assert_eq!(size.cols, 132);
         assert_eq!(size.rows, 40);
     }
+}
+
+/// Startup-mode tests; unlike `tests` above they compile on every platform.
+#[cfg(test)]
+mod startup_mode_tests {
+    use super::*;
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
