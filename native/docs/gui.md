@@ -457,11 +457,15 @@ knowledge materialization, prompt composition, and `session.new`.
 
 `pohunek-gui --new-session` starts a separate process that shows only the Start
 session dialog, for a compositor key binding. It connects to the same daemon and
-hosts, preselects a project the same way (from the saved selection), opens the
+hosts, preselects a project the same way (from the saved selection, once the
+host owning that session has answered), opens the
 Project select with its search box focused, and exits once the session has been
 created and its terminal opened with the configured attach command. Esc or Close
-exits without starting anything. A failed launch keeps the dialog open with the
-error below it, and the form is not submitted twice while a launch is pending.
+exits without starting anything, except while a launch is in flight: the window
+stays until the terminal is open, so a created session is never left unseen. A
+failed launch keeps the dialog open with the error below it; if only the
+terminal failed, the form is locked (the session exists) and Esc closes the
+window. The form is never submitted twice.
 The process never writes the saved UI state and never raises desktop
 notifications, so it cannot interfere with the main window. Any other argument is
 an error.

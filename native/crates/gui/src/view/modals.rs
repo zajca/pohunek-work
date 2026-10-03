@@ -12,7 +12,7 @@ use crate::keyboard::{
     KeyBindingHelp, KeyContext, SelectEntry, SELECT_LIST_MAX_HEIGHT, SELECT_ROW_HEIGHT,
     SELECT_ROW_SPACING,
 };
-use crate::message::{FormField, FormSelect, ListDirection, Message};
+use crate::message::{FormField, FormSelect, LaunchPhase, ListDirection, Message};
 use crate::selection::project_host;
 use crate::view::session::session_name_input;
 use crate::PohunekApp;
@@ -64,13 +64,13 @@ pub(crate) fn start_modal_content(app: &PohunekApp) -> Element<'_, Message> {
             .spacing(8),
         );
     }
-    let mut start = button(if app.launcher.pending {
+    let mut start = button(if app.launcher.phase == LaunchPhase::Launching {
         "Starting..."
     } else {
         "Start session"
     })
     .style(iced::widget::button::primary);
-    if !app.launcher.pending
+    if app.launcher.phase == LaunchPhase::Idle
         && project_host(app, app.start.project.as_ref())
             .is_some_and(|host| host.agent_is_launchable(&app.start.agent))
     {

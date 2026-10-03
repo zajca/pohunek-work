@@ -74,9 +74,21 @@ pub(crate) enum AppMode {
 pub(crate) struct LauncherState {
     /// The first projects have arrived and the Project select was opened.
     pub(crate) primed: bool,
-    /// A session launch is in flight or succeeded; further submits are ignored
-    /// so one dialog never starts two sessions.
-    pub(crate) pending: bool,
+    pub(crate) phase: LaunchPhase,
+}
+
+/// Where the dialog-only process is between submit and exit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LaunchPhase {
+    /// Nothing submitted, or the last launch failed and may be retried.
+    #[default]
+    Idle,
+    /// `session.new` was sent and the terminal has not opened yet. The window
+    /// stays up: closing now could leave a created session nobody sees.
+    Launching,
+    /// The session exists but its terminal did not open. The form is locked so
+    /// a retry cannot start a second session; the owner may close the window.
+    Created,
 }
 
 /// User-editable fields in the session-start modal.

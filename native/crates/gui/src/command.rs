@@ -28,15 +28,15 @@ use crate::attach::{attach_task, window_dimension_to_u32};
 use crate::config::AppConfig;
 use crate::keyboard;
 use crate::message::{
-    AppMode, AssistantForm, DiscoveryResult, FormField, FormSelect, InboxView, ListDirection,
-    Message, ModalView, NotificationAction, ResolvedTemplate, StartForm, TemplateRecipe,
-    ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
+    AppMode, AssistantForm, DiscoveryResult, FormField, FormSelect, InboxView, LaunchPhase,
+    ListDirection, Message, ModalView, NotificationAction, ResolvedTemplate, StartForm,
+    TemplateRecipe, ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
 };
 use crate::notify::{apply_outcome, NotificationOutcome};
 use crate::runtime;
 use crate::selection::{
     connection_options, host_config, optional_field, preselected_project, project_host,
-    project_target, required_field, save_ui_state_task, selected_session_target,
+    project_target, required_field, save_ui_state_task, selected_session, selected_session_target,
     sync_rename_edit_for_selection, terminal_size,
 };
 use crate::PohunekApp;
@@ -72,7 +72,8 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
         }
         Message::HostsDiscovered(result) => {
             app.hosts = result.hosts;
-            app.workspace.set_host_labels(&result.labels);
+            let host_ids: Vec<HostId> = app.hosts.iter().map(|host| host.id.clone()).collect();
+            app.workspace.set_host_labels(&host_ids, &result.labels);
             app.status = result.warning;
         }
         Message::SetProjectFilter(filter) => {
@@ -242,6 +243,8 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.modal = ModalView::Keymap;
             tasks.push(keyboard::focus_task(app));
         }
+        Message::CloseModal
+            if app.mode == AppMode::NewSession && app.launcher.phase == LaunchPhase::Launching => {}
         Message::CloseModal => {
             app.modal = ModalView::None;
             app.form_select = None;
@@ -417,14 +420,14 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.form_focus = FormField::StartName;
             app.start.name = value;
         }
-        Message::CreateSession if app.launcher.pending => {}
+        Message::CreateSession if app.launcher.phase != LaunchPhase::Idle => {}
         Message::CreateSession => match create_session_task(app) {
             Ok(task) => {
                 tasks.push(task);
                 if app.mode == AppMode::NewSession {
                     // The dialog stays up until the terminal opens, so a failed
                     // launch is reported where the owner is looking.
-                    app.launcher.pending = true;
+                    app.launcher.phase = LaunchPhase::Launching;
                     app.status = Some("Starting session...".to_owned());
                 } else {
                     app.modal = ModalView::None;
@@ -580,22 +583,26 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                 if let Some((host_id, session_id)) = opened_session {
                     match attach_task(app, &host_id, &session_id) {
                         Ok(task) => tasks.push(task),
-                        Err(err) => app.status = Some(launcher_attach_error(app, err)),
+                        Err(err) => {
+                            let message = launcher_attach_failed(app, err);
+                            app.status = Some(message);
+                        }
                     }
                 }
             }
             Err(err) => {
-                app.launcher.pending = false;
+                app.launcher.phase = LaunchPhase::Idle;
                 app.status = Some(err);
             }
         },
         Message::AttachSpawned(result) => {
             let spawned = result.is_ok();
-            app.status = Some(match result {
+            let status = match result {
                 Ok(None) => "attach command spawned".to_owned(),
                 Ok(Some(warning)) => format!("attach command spawned (warning: {warning})"),
-                Err(err) => launcher_attach_error(app, err),
-            });
+                Err(err) => launcher_attach_failed(app, err),
+            };
+            app.status = Some(status);
             if spawned && app.mode == AppMode::NewSession {
                 tasks.push(iced::exit());
             }
@@ -667,6 +674,7 @@ fn prime_launcher(app: &mut PohunekApp) -> Vec<Task<Message>> {
         || app.launcher.primed
         || app.modal != ModalView::Start
         || app.workspace.project_choices().is_empty()
+        || !preselection_inputs_ready(app)
     {
         return Vec::new();
     }
@@ -683,10 +691,26 @@ fn prime_launcher(app: &mut PohunekApp) -> Vec<Task<Message>> {
     tasks
 }
 
+/// Whether the data that decides the preselected project has arrived: the
+/// session behind the saved selection is known, there is no saved selection,
+/// or every configured host has reported. A fast local host must not lock in
+/// a preselection before the slower host that owns the saved session answers.
+fn preselection_inputs_ready(app: &PohunekApp) -> bool {
+    app.ui_state.selection.is_none()
+        || selected_session(app).is_some()
+        || (!app.hosts.is_empty()
+            && app
+                .hosts
+                .iter()
+                .all(|host| app.workspace.hosts.contains_key(&host.id)))
+}
+
 /// Explains an attach failure after the session was already created, so the
-/// dialog is not mistaken for a failed launch.
-fn launcher_attach_error(app: &PohunekApp, error: String) -> String {
+/// dialog is not mistaken for a failed launch, and locks the form against a
+/// second launch.
+fn launcher_attach_failed(app: &mut PohunekApp, error: String) -> String {
     if app.mode == AppMode::NewSession {
+        app.launcher.phase = LaunchPhase::Created;
         format!("Session started, but its terminal could not be opened: {error}")
     } else {
         error
@@ -1857,10 +1881,10 @@ mod tests {
     #[test]
     fn project_entries_show_the_host_label_instead_of_the_route_id() {
         let mut app = app_with_two_hosts();
-        app.workspace.set_host_labels(&BTreeMap::from([(
-            HostId::new("remote"),
-            "dev-box".to_owned(),
-        )]));
+        app.workspace.set_host_labels(
+            &[],
+            &BTreeMap::from([(HostId::new("remote"), "dev-box".to_owned())]),
+        );
 
         let entries = keyboard::form_select_entries(&app, FormField::StartProject, "dev-box");
         assert_eq!(entries.len(), 1);
@@ -2750,6 +2774,70 @@ mod tests {
     }
 
     #[test]
+    fn launcher_waits_for_the_host_of_the_saved_selection_before_priming() {
+        let mut app = app_with_two_hosts();
+        app.workspace.hosts.remove(&HostId::new("remote"));
+        app.mode = AppMode::NewSession;
+        app.ui_state.selection = Some(Selection::Session {
+            host_id: HostId::new("remote"),
+            session_id: SessionId("s-9".to_owned()),
+        });
+        open_start_modal(&mut app);
+
+        assert!(prime_launcher(&mut app).is_empty());
+        assert!(!app.launcher.primed);
+        assert_eq!(app.start.project, None);
+
+        let mut remote = host_with(&[("p-9", "api")], &["claude"]);
+        remote
+            .sessions
+            .insert("s-9".to_owned(), test_session("s-9", Some("p-9")));
+        app.workspace.hosts.insert(HostId::new("remote"), remote);
+
+        assert!(!prime_launcher(&mut app).is_empty());
+        assert_eq!(app.start.project, Some(project_ref("remote", "p-9")));
+    }
+
+    #[test]
+    fn launcher_primes_once_every_host_reported_even_without_the_saved_session() {
+        let mut app = app_with_two_hosts();
+        app.mode = AppMode::NewSession;
+        app.ui_state.selection = Some(Selection::Session {
+            host_id: HostId::new("remote"),
+            session_id: SessionId("gone".to_owned()),
+        });
+        open_start_modal(&mut app);
+
+        assert!(!prime_launcher(&mut app).is_empty());
+        assert!(app.launcher.primed);
+    }
+
+    #[test]
+    fn host_filter_choices_carry_the_host_id_even_when_labels_look_alike() {
+        let mut app = app_with_two_hosts();
+        // A remote host that calls itself like the local fallback label.
+        app.workspace.set_host_labels(
+            &[HostId::new("local"), HostId::new("remote")],
+            &BTreeMap::from([(HostId::new("remote"), "local".to_owned())]),
+        );
+
+        let choices = crate::view::inbox::host_filter_choices(&app.workspace);
+
+        let ids: Vec<Option<HostId>> = choices.iter().map(|c| c.host_id.clone()).collect();
+        assert_eq!(
+            ids,
+            [
+                None,
+                Some(HostId::new("local")),
+                Some(HostId::new("remote"))
+            ]
+        );
+        let labels: std::collections::BTreeSet<&str> =
+            choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels.len(), 3, "labels were {labels:?}");
+    }
+
+    #[test]
     fn full_window_never_primes_the_launcher() {
         let mut app = app_with_two_hosts();
         app.modal = ModalView::Start;
@@ -2760,7 +2848,7 @@ mod tests {
     #[test]
     fn launcher_ignores_a_second_submit_while_a_launch_is_pending() {
         let mut app = launcher_app();
-        app.launcher.pending = true;
+        app.launcher.phase = LaunchPhase::Launching;
         app.status = None;
 
         let task = update(&mut app, Message::CreateSession);
@@ -2772,14 +2860,14 @@ mod tests {
     #[test]
     fn launcher_allows_a_retry_after_a_failed_launch() {
         let mut app = launcher_app();
-        app.launcher.pending = true;
+        app.launcher.phase = LaunchPhase::Launching;
 
         let _ = update(
             &mut app,
             Message::CoreCommandCompleted(Err("daemon refused".to_owned())),
         );
 
-        assert!(!app.launcher.pending);
+        assert_eq!(app.launcher.phase, LaunchPhase::Idle);
         assert_eq!(app.status.as_deref(), Some("daemon refused"));
     }
 
@@ -2791,6 +2879,31 @@ mod tests {
         let mut full = app_with_two_hosts();
         full.modal = ModalView::Start;
         assert_eq!(update(&mut full, Message::CloseModal).units(), 0);
+    }
+
+    #[test]
+    fn launcher_ignores_close_while_the_session_is_being_started() {
+        let mut app = launcher_app();
+        app.launcher.phase = LaunchPhase::Launching;
+
+        let task = update(&mut app, Message::CloseModal);
+
+        assert_eq!(task.units(), 0);
+        assert_eq!(app.modal, ModalView::Start);
+    }
+
+    #[test]
+    fn launcher_locks_the_form_but_allows_close_after_a_terminal_failure() {
+        let mut app = launcher_app();
+        app.launcher.phase = LaunchPhase::Launching;
+        let _ = update(
+            &mut app,
+            Message::AttachSpawned(Err("no terminal".to_owned())),
+        );
+        assert_eq!(app.launcher.phase, LaunchPhase::Created);
+
+        assert_eq!(update(&mut app, Message::CreateSession).units(), 0);
+        assert_eq!(update(&mut app, Message::CloseModal).units(), 1);
     }
 
     #[test]

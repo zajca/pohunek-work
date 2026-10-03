@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use iced::widget::{button, column, container, pick_list, row, scrollable, text};
 use iced::{Center, Element, Fill, Theme};
-use pohunek_gui_core::{HostId, NotificationScope, Selection};
+use pohunek_gui_core::{HostId, NotificationScope, Selection, Workspace};
 use protocol::{
     NotificationId, NotificationKind, NotificationKindPolicy, NotificationRecord,
     NotificationSeverity, NotificationStatus, SessionId,
@@ -287,29 +287,47 @@ fn inbox_host_picker(app: &PohunekApp) -> Option<Element<'_, Message>> {
     if app.workspace.hosts.len() < 2 {
         return None;
     }
-    // Labels are unique per host, so a picked label identifies exactly one host.
-    let hosts: Vec<(HostId, String)> = app
-        .workspace
-        .hosts
-        .keys()
-        .map(|host_id| (host_id.clone(), app.workspace.host_label(host_id)))
-        .collect();
-    let mut options = vec![INBOX_ALL_HOSTS_LABEL.to_owned()];
-    options.extend(hosts.iter().map(|(_, label)| label.clone()));
-    let selected = app.notification_filter.host_id.as_ref().map_or_else(
-        || INBOX_ALL_HOSTS_LABEL.to_owned(),
-        |host_id| app.workspace.host_label(host_id),
-    );
+    let selected = HostFilterChoice::new(app.notification_filter.host_id.clone(), &app.workspace);
     Some(
-        pick_list(options, Some(selected), move |value| {
-            let host_id = hosts
-                .iter()
-                .find(|(_, label)| *label == value)
-                .map(|(host_id, _)| host_id.clone());
-            Message::FilterNotificationHost(host_id)
-        })
+        pick_list(
+            host_filter_choices(&app.workspace),
+            Some(selected),
+            |choice| Message::FilterNotificationHost(choice.host_id),
+        )
         .into(),
     )
+}
+
+/// One entry of the inbox host filter. The host id is the value; the label is
+/// only what the owner reads, so equal labels can never select the wrong host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostFilterChoice {
+    /// `None` is the "all hosts" entry.
+    pub(crate) host_id: Option<HostId>,
+    pub(crate) label: String,
+}
+
+impl HostFilterChoice {
+    fn new(host_id: Option<HostId>, workspace: &Workspace) -> Self {
+        let label = host_id.as_ref().map_or_else(
+            || INBOX_ALL_HOSTS_LABEL.to_owned(),
+            |host_id| workspace.host_label(host_id),
+        );
+        Self { host_id, label }
+    }
+}
+
+impl std::fmt::Display for HostFilterChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+pub(crate) fn host_filter_choices(workspace: &Workspace) -> Vec<HostFilterChoice> {
+    std::iter::once(None)
+        .chain(workspace.hosts.keys().cloned().map(Some))
+        .map(|host_id| HostFilterChoice::new(host_id, workspace))
+        .collect()
 }
 
 fn inbox_empty_label(scope: NotificationScope) -> &'static str {

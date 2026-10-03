@@ -199,6 +199,22 @@ impl<'a> From<Dropdown<'a>> for Element<'a, Message> {
     }
 }
 
+/// Which side of the trigger the menu opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    Below,
+    Above,
+}
+
+/// Opens below unless the menu does not fit there and the room above is larger.
+fn choose_placement(natural_height: f32, space_below: f32, space_above: f32) -> Placement {
+    if natural_height > space_below && space_above > space_below {
+        Placement::Above
+    } else {
+        Placement::Below
+    }
+}
+
 struct MenuOverlay<'a, 'b> {
     menu: &'b mut Element<'a, Message>,
     tree: &'b mut Tree,
@@ -213,24 +229,27 @@ impl overlay::Overlay<Message, iced::Theme, iced::Renderer> for MenuOverlay<'_, 
             bounds.height - (self.trigger_bounds.y + self.trigger_bounds.height) - MENU_GAP;
         let space_above = self.trigger_bounds.y - MENU_GAP;
 
-        let measure = |available: f32, menu: &mut Element<'_, Message>, tree: &mut Tree| {
+        let mut measure = |available: f32| {
             let limits = layout::Limits::new(Size::ZERO, Size::new(width, available.max(0.0)))
                 .width(Length::Fixed(width));
-            menu.as_widget_mut().layout(tree, renderer, &limits)
+            self.menu
+                .as_widget_mut()
+                .layout(self.tree, renderer, &limits)
         };
 
-        let below = measure(space_below, self.menu, self.tree);
-        // Flip above the trigger only when the menu does not fit below and
-        // there is more room above.
-        let (node, y) = if below.size().height > space_below && space_above > space_below {
-            let above = measure(space_above, self.menu, self.tree);
-            let y = self.trigger_bounds.y - MENU_GAP - above.size().height;
-            (above, y)
-        } else {
-            (
-                below,
-                self.trigger_bounds.y + self.trigger_bounds.height + MENU_GAP,
-            )
+        // A menu laid out within one side's room can never report more height
+        // than that room, so the natural height is measured with the larger
+        // side's limit, the side is chosen from it, and only then is the menu
+        // laid out within the chosen side.
+        let natural = measure(space_below.max(space_above)).size().height;
+        let placement = choose_placement(natural, space_below, space_above);
+        let node = measure(match placement {
+            Placement::Below => space_below,
+            Placement::Above => space_above,
+        });
+        let y = match placement {
+            Placement::Below => self.trigger_bounds.y + self.trigger_bounds.height + MENU_GAP,
+            Placement::Above => self.trigger_bounds.y - MENU_GAP - node.size().height,
         };
         let x = self.trigger_bounds.x.min(bounds.width - width).max(0.0);
         node.move_to(Point::new(x, y.max(0.0)))
@@ -337,5 +356,25 @@ impl MenuOverlay<'_, '_> {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_that_fits_below_opens_below() {
+        assert_eq!(choose_placement(200.0, 300.0, 600.0), Placement::Below);
+    }
+
+    #[test]
+    fn menu_that_does_not_fit_below_opens_above_when_there_is_more_room() {
+        assert_eq!(choose_placement(300.0, 120.0, 500.0), Placement::Above);
+    }
+
+    #[test]
+    fn menu_stays_below_when_neither_side_has_more_room() {
+        assert_eq!(choose_placement(500.0, 300.0, 200.0), Placement::Below);
     }
 }
