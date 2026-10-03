@@ -3,6 +3,7 @@
 
 // Rust guideline compliant 2026-10-01
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -10,12 +11,10 @@ use protocol::{SessionInfo, SessionNewParams, SessionNewResult};
 
 use time::OffsetDateTime;
 
-use super::model::{format_rfc3339, Review, ReviewComment};
+use super::model::{format_rfc3339, Review};
+use super::prompt::{render_review_template, ReviewPromptContext, DEFAULT_REVIEW_TEMPLATE};
 use super::store::ReviewStore;
-use crate::{
-    create_session_with_options, render_prompt, ConnectionOptions, CoreError, HostConfig,
-    PromptProvider,
-};
+use crate::{create_session_with_options, ConnectionOptions, CoreError, HostConfig};
 
 /// Session metadata key recording which review dispatched a session.
 pub const REVIEW_SOURCE_KEY: &str = "review.source";
@@ -23,20 +22,19 @@ pub const REVIEW_SOURCE_KEY: &str = "review.source";
 pub const REVIEW_DISPATCHED_AT_KEY: &str = "review.dispatched_at";
 
 /// Prefix shared by every `link.*` session metadata key
-/// (`crates/prompt/src/link.rs`'s `LINK_*_KEY` constants). Copied verbatim
+/// (the core prompt crate's `LINK_*_KEY` constants). Copied verbatim
 /// from the source session onto a dispatched review session so the review
 /// session stays linked to the same provider item as its source.
 const LINK_METADATA_PREFIX: &str = "link.";
 
-/// Reads and renders `<config_dir>/prompts/review.tmpl` for `review`.
+/// Renders the review prompt for `review`.
 ///
-/// Reads the host config directory directly
-/// (`pohunek_paths::config_home()`/`pohunek`/`prompts/review.tmpl`),
-/// bypassing the per-project `ProjectConfigResolver` in-repo-shadows-host
-/// layered lookup that `project.action` templates use: review dispatch is a
-/// GUI-global feature with no project/repo context available at render time,
-/// so there is nothing to shadow the host template with. This is a deliberate
-/// design choice (`.agent-context/d6-context.md` §7), not an oversight.
+/// The template is `prompts/review.tmpl` under the host config directory
+/// (`pohunek_paths::config_home()`/`pohunek`) when that file exists, and the
+/// built-in default otherwise. The host directory is read directly, bypassing
+/// the per-project `ProjectConfigResolver` lookup that `project.action`
+/// templates use: review dispatch is a GUI-global feature with no project or
+/// repo context at render time.
 ///
 /// `source_description` is a human-readable summary of what was reviewed
 /// (e.g. `"session abc123 worktree diff vs main"` or `"PR #42"`), supplied by
@@ -45,11 +43,11 @@ const LINK_METADATA_PREFIX: &str = "link.";
 ///
 /// # Errors
 ///
-/// Returns [`CoreError::MissingReviewTemplate`] when `review.tmpl` is absent —
-/// no silent default template; the operator should run `pohunek setup`.
 /// Returns [`CoreError::MissingEnv`] when neither `XDG_CONFIG_HOME` nor `HOME`
-/// resolves. Returns [`CoreError::Prompt`] when the template references a
-/// variable outside `${branch}`/`${source}`/`${comments}`/`${comment_count}`.
+/// resolves, [`CoreError::ReviewTemplateIo`] when the template file exists but
+/// cannot be read, and [`CoreError::UnknownReviewPromptVariables`] when the
+/// template references a variable outside
+/// `${provider}`/`${branch}`/`${source}`/`${comments}`/`${comment_count}`.
 pub fn render_review_prompt(
     review: &Review,
     source_description: &str,
@@ -62,64 +60,30 @@ pub fn render_review_prompt(
     render_review_prompt_from_config_dir(review, source_description, &config_dir)
 }
 
-/// Same as [`render_review_prompt`], but with the host config directory
-/// (normally `pohunek_paths::config_home()/pohunek`) passed in explicitly.
-///
-/// Split out purely so the template-resolution success/failure paths are
-/// unit-testable against a temp directory without mutating process-wide
-/// `XDG_CONFIG_HOME`/`HOME` env vars (which would require serializing tests
-/// against each other). [`render_review_prompt`] is the only public entry
-/// point; this stays private to the module.
+/// Same as [`render_review_prompt`], but with the host config directory passed
+/// in explicitly so the template-resolution paths are testable against a temp
+/// directory without mutating process-wide `XDG_CONFIG_HOME`/`HOME`.
 fn render_review_prompt_from_config_dir(
     review: &Review,
     source_description: &str,
     config_dir: &Path,
 ) -> Result<String, CoreError> {
     let template_path = config_dir.join("prompts").join("review.tmpl");
-    let template = std::fs::read_to_string(&template_path).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            CoreError::MissingReviewTemplate {
-                path: template_path.clone(),
-            }
-        } else {
-            CoreError::ReviewTemplateIo {
-                path: template_path.clone(),
-                source,
-            }
+    let template = match std::fs::read_to_string(&template_path) {
+        Ok(template) => Cow::Owned(template),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            Cow::Borrowed(DEFAULT_REVIEW_TEMPLATE)
         }
-    })?;
-    let context_json = review_context_json(review, source_description);
-    Ok(render_prompt(
+        Err(source) => {
+            return Err(CoreError::ReviewTemplateIo {
+                path: template_path,
+                source,
+            })
+        }
+    };
+    render_review_template(
         &template,
-        PromptProvider::Review,
-        review.id.as_str(),
-        &context_json,
-    )?)
-}
-
-fn review_context_json(review: &Review, source_description: &str) -> String {
-    let comments = review
-        .comments
-        .iter()
-        .map(render_comment_block)
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    serde_json::json!({
-        "branch": review.branch,
-        "source": source_description,
-        "comments": comments,
-        "comment_count": review.comments.len(),
-    })
-    .to_string()
-}
-
-fn render_comment_block(comment: &ReviewComment) -> String {
-    format!(
-        "{}:{} ({}): {}",
-        comment.path,
-        comment.line,
-        comment.side.as_str(),
-        comment.text
+        &ReviewPromptContext::new(review, source_description),
     )
 }
 
@@ -256,8 +220,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        render_comment_block, render_review_prompt_from_config_dir, review_context_json,
-        review_session_metadata, REVIEW_DISPATCHED_AT_KEY, REVIEW_SOURCE_KEY,
+        render_review_prompt_from_config_dir, review_session_metadata, REVIEW_DISPATCHED_AT_KEY,
+        REVIEW_SOURCE_KEY,
     };
     use crate::review::model::{Review, ReviewComment, ReviewSide, ReviewSource};
     use crate::{CoreError, HostId};
@@ -294,49 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn render_comment_block_matches_the_documented_format() {
-        let comment = ReviewComment::new("src/lib.rs", ReviewSide::New, 10, "fix this");
-        assert_eq!(
-            render_comment_block(&comment),
-            "src/lib.rs:10 (new): fix this"
-        );
-    }
-
-    #[test]
-    fn review_context_json_carries_branch_source_comments_and_count() {
-        let review = sample_review();
-
-        let context_json = review_context_json(&review, "PR #42");
-        let context: serde_json::Value = serde_json::from_str(&context_json).expect("valid json");
-
-        assert_eq!(context["branch"], "feature/diff-review");
-        assert_eq!(context["source"], "PR #42");
-        assert_eq!(context["comment_count"], 2);
-        assert_eq!(
-            context["comments"],
-            "src/lib.rs:10 (new): fix this\n\nsrc/lib.rs:20 (old): remove dead code"
-        );
-    }
-
-    #[test]
-    fn review_context_json_uses_empty_string_for_no_comments() {
-        let review = Review::new(
-            ReviewSource::PullRequest {
-                host_id: HostId::new("host-1"),
-                pr_number: 1,
-            },
-            "project-1",
-            "feature/x",
-        );
-
-        let context_json = review_context_json(&review, "PR #1");
-        let context: serde_json::Value = serde_json::from_str(&context_json).expect("valid json");
-
-        assert_eq!(context["comments"], "");
-        assert_eq!(context["comment_count"], 0);
-    }
-
-    #[test]
     fn render_review_prompt_succeeds_when_the_template_file_exists() {
         let root = fixture_root();
         let config_dir = root.path().join("config");
@@ -360,24 +281,53 @@ mod tests {
     }
 
     #[test]
-    fn render_review_prompt_returns_a_typed_error_when_the_template_is_missing() {
-        // No `review.tmpl` written under this config dir at all (not even the
-        // `prompts` directory) — this is the "operator never ran `pohunek
-        // setup`" case DoD item 7 requires a typed error for, with no silent
-        // default template.
+    fn render_review_prompt_falls_back_to_the_built_in_template_when_none_is_installed() {
         let root = fixture_root();
         let config_dir = root.path().join("config");
         let review = sample_review();
 
-        let err = render_review_prompt_from_config_dir(&review, "PR #42", &config_dir)
-            .expect_err("missing template must error, not silently render a default");
+        let rendered = render_review_prompt_from_config_dir(&review, "PR #42", &config_dir)
+            .expect("built-in template renders");
 
-        match err {
-            CoreError::MissingReviewTemplate { path } => {
-                assert_eq!(path, config_dir.join("prompts").join("review.tmpl"));
-            }
-            other => panic!("expected CoreError::MissingReviewTemplate, got {other:?}"),
-        }
+        assert!(
+            rendered.contains("branch `feature/diff-review`"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("src/lib.rs:20 (old): remove dead code"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_review_prompt_reports_an_unreadable_template() {
+        let root = fixture_root();
+        let config_dir = root.path().join("config");
+        // A directory at the template path is neither absent nor readable.
+        std::fs::create_dir_all(config_dir.join("prompts").join("review.tmpl"))
+            .expect("create directory in place of the template");
+
+        let err = render_review_prompt_from_config_dir(&sample_review(), "PR #42", &config_dir)
+            .expect_err("unreadable template must error");
+
+        assert!(matches!(err, CoreError::ReviewTemplateIo { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn render_review_prompt_rejects_unknown_variables_in_an_installed_template() {
+        let root = fixture_root();
+        let config_dir = root.path().join("config");
+        let prompts_dir = config_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+        std::fs::write(prompts_dir.join("review.tmpl"), "${nope}").expect("write review.tmpl");
+
+        let err = render_review_prompt_from_config_dir(&sample_review(), "PR #42", &config_dir)
+            .expect_err("unknown variable rejected");
+
+        assert!(
+            matches!(err, CoreError::UnknownReviewPromptVariables(_)),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -1,12 +1,16 @@
-//! Headless GUI-core harness against in-process loopback daemons.
+//! Headless GUI-core harness against real `pohunekd` and `pohunek-sessiond`
+//! processes.
+//!
+//! Every test starts its own daemon in a private environment and talks to it
+//! over the daemon's Unix socket. The binaries come from the pinned core
+//! revision (see `support`).
 
-// Rust guideline compliant 2026-09-30
+// Rust guideline compliant 2026-10-03
 #![forbid(unsafe_code)]
 
-use std::ffi::OsString;
 use std::net::SocketAddr;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -17,15 +21,6 @@ use no_origin::{
     stop_session as stop_gui_session, wait_for_session,
 };
 use pohunek_client::{Client, ClientOptions, OriginSource};
-use pohunek_daemon::api::{DaemonState, HealthInfo, RemoteServer};
-use pohunek_daemon::governance::HostGovernanceService;
-use pohunek_daemon::notifications::NotificationService;
-use pohunek_daemon::procwatch::{HostInspector, ProcessInspector};
-use pohunek_daemon::runtime::{
-    EnvironmentSource, SubprocessWorkerEnvironment, SubprocessWorkerLauncher,
-};
-use pohunek_daemon::session::{SessionRegistry, SessionRegistryConfig};
-use pohunek_daemon::store::Store;
 use pohunek_gui_core::assistant::{self, AssistantPaths, Intent, LaunchParams};
 use pohunek_gui_core::{
     dispatch_review, launch_action_prompt_with_options, launch_provider_item_with_options,
@@ -39,9 +34,10 @@ use pohunek_gui_core::{
     ReviewStatus, ReviewStore, Selection, SessionLinkKind, SessionLinkProvider, UiState,
     WindowSize, Workspace,
 };
+use pohunek_platform::process::{HostInspector, ProcessInspector};
 use pohunek_test_support::env::TestEnv;
 use pohunek_test_support::process_env::ProcessEnv;
-use pohunek_test_support::{wait, worker_binary};
+use pohunek_test_support::wait;
 use protocol::{
     method, AgentActivity, AgentKind, ErrorClass, NotificationPolicyParams, ProcessStartIdentity,
     ProjectActionParams, ProjectActionResult, ProjectActionsParams, ProjectAddParams,
@@ -53,7 +49,6 @@ use protocol::{
 use time::format_description::well_known::Rfc3339;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 // Keeps a test report live long enough for local scheduling without making it
@@ -68,16 +63,17 @@ const GUI_TEST_OUTPUT_BYTES: u32 = 1_024;
 const GUI_TEST_WAIT_MS: u32 = 100;
 
 mod no_origin;
+mod support;
 
 #[tokio::test]
-async fn governance_inspect_returns_safe_never_enrolled_status_over_tcp() {
+async fn governance_inspect_returns_safe_never_enrolled_status_over_the_unix_socket() {
     let _env = ProcessEnv::lock();
-    let daemon = LoopbackDaemon::spawn("gui-governance-inspect", "0.5.0").await;
-    let host = HostConfig::tcp("host-governance", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("gui-governance-inspect").await;
+    let host = daemon.host("host-governance");
 
     let status = inspect_host_governance(&host)
         .await
-        .expect("governance inspect through the real TCP daemon");
+        .expect("governance inspect through the real daemon");
 
     assert!(status.host_id().to_string().starts_with("host_"));
     assert!(status.enrollment().is_none());
@@ -102,10 +98,10 @@ async fn loopback_hosts_seed_and_stream_agent_state() {
     );
     prepend_path(&mut env, &bin_dir);
 
-    let daemon_a = LoopbackDaemon::spawn("gui-a", "0.0.0-a").await;
-    let daemon_b = LoopbackDaemon::spawn("gui-b", "0.0.0-b").await;
-    let host_a = HostConfig::tcp("host-a", daemon_a.addr);
-    let host_b = HostConfig::tcp("host-b", daemon_b.addr);
+    let daemon_a = LoopbackDaemon::spawn("gui-a").await;
+    let daemon_b = LoopbackDaemon::spawn("gui-b").await;
+    let host_a = daemon_a.host("host-a");
+    let host_b = daemon_b.host("host-b");
 
     let snapshot_a = load_host_snapshot(&host_a).await.expect("host-a seed");
     let snapshot_b = load_host_snapshot(&host_b).await.expect("host-b seed");
@@ -148,10 +144,10 @@ async fn workspace_connects_to_multiple_loopback_daemons_and_lists_sessions() {
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon_a = LoopbackDaemon::spawn("m1-a", "0.1.0-a").await;
-    let daemon_b = LoopbackDaemon::spawn("m1-b", "0.1.0-b").await;
-    let host_a = HostConfig::tcp("host-a", daemon_a.addr);
-    let host_b = HostConfig::tcp("host-b", daemon_b.addr);
+    let daemon_a = LoopbackDaemon::spawn("m1-a").await;
+    let daemon_b = LoopbackDaemon::spawn("m1-b").await;
+    let host_a = daemon_a.host("host-a");
+    let host_b = daemon_b.host("host-b");
     let repo_a = init_git_repo("gui-core-m1-repo-a");
     let repo_b = init_git_repo("gui-core-m1-repo-b");
     let session_a = create_agent_session(&host_a, AgentKind::Codex, repo_a).await;
@@ -200,8 +196,8 @@ async fn live_agent_state_updates_are_reflected() {
     );
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m1-blocked", "0.1.0-blocked").await;
-    let host = HostConfig::tcp("host-blocked", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m1-blocked").await;
+    let host = daemon.host("host-blocked");
     let mut workspace = Workspace::default();
     let mut stream = Box::pin(workspace_connection_stream(
         vec![host.clone()],
@@ -246,8 +242,8 @@ async fn notification_seed_degrades_gracefully_without_daemon_support() {
     // This daemon build does not serve `notification.list`, so seeding must be
     // non-fatal: the host still connects and streams sessions with an empty
     // inbox rather than failing the whole snapshot load.
-    let daemon = LoopbackDaemon::spawn("notif-seed", "0.1.0-notif").await;
-    let host = HostConfig::tcp("host-notif", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("notif-seed").await;
+    let host = daemon.host("host-notif");
     let mut workspace = Workspace::default();
     let mut stream = Box::pin(workspace_connection_stream(
         vec![host.clone()],
@@ -302,8 +298,8 @@ async fn unreachable_host_marks_error_without_breaking_other_hosts() {
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m1-live", "0.1.0-live").await;
-    let live_host = HostConfig::tcp("host-live", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m1-live").await;
+    let live_host = daemon.host("host-live");
     let dead_host = HostConfig::tcp("host-dead", unused_loopback_addr().await);
     let session = create_agent_session(
         &live_host,
@@ -340,8 +336,8 @@ async fn session_lifecycle_create_inspect_and_stop_reconciles_workspace_state() 
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn_with_notifications("m2-session", "0.2.0-session").await;
-    let host = HostConfig::tcp("host-session", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m2-session").await;
+    let host = daemon.host("host-session");
     let mut workspace = Workspace::default();
     let mut stream = Box::pin(workspace_connection_stream(
         vec![host.clone()],
@@ -432,8 +428,8 @@ async fn session_children_receive_the_fixture_environment_not_the_host_one() {
     );
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("env-scrub", "0.2.0-env-scrub").await;
-    let host = HostConfig::tcp("host-env-scrub", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("env-scrub").await;
+    let host = daemon.host("host-env-scrub");
     let created = no_origin::create_session(
         &host,
         SessionNewParams {
@@ -454,12 +450,12 @@ async fn session_children_receive_the_fixture_environment_not_the_host_one() {
     .expect("session.new through gui-core");
 
     let recorded = wait_for_file(&env_out).await;
-    let fixture_home = TEST_ENV.with(|env| env.home().display().to_string());
+    let fixture_home = daemon.home().display().to_string();
     assert!(
         recorded
             .lines()
             .any(|line| line == format!("HOME={fixture_home}")),
-        "the child must see the fixture HOME, got:\n{recorded}"
+        "the child must see the daemon fixture HOME, got:\n{recorded}"
     );
     assert!(
         recorded.lines().any(|line| line == "SSH_AUTH_SOCK=<unset>"),
@@ -552,8 +548,8 @@ async fn session_metadata_merge_and_clear_round_trips() {
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m2-metadata", "0.2.0-metadata").await;
-    let host = HostConfig::tcp("host-metadata", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m2-metadata").await;
+    let host = daemon.host("host-metadata");
     let created = no_origin::create_session(
         &host,
         SessionNewParams {
@@ -619,8 +615,8 @@ async fn session_metadata_merge_and_clear_round_trips() {
 #[tokio::test]
 async fn project_add_list_show_rename_and_remove_round_trips() {
     let _env = ProcessEnv::lock();
-    let daemon = LoopbackDaemon::spawn("m2-project", "0.2.0-project").await;
-    let host = HostConfig::tcp("host-project", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m2-project").await;
+    let host = daemon.host("host-project");
     let repo = init_git_repo("gui-core-m2-project-repo");
 
     let added = add_project(
@@ -689,8 +685,8 @@ async fn worktree_creation_is_session_new_with_branch_and_visible_in_project_sho
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m2-worktree", "0.2.0-worktree").await;
-    let host = HostConfig::tcp("host-worktree", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m2-worktree").await;
+    let host = daemon.host("host-worktree");
     let repo = init_git_repo("gui-core-m2-worktree-repo");
     let project = add_project(
         &host,
@@ -751,8 +747,8 @@ async fn worktree_creation_is_session_new_with_branch_and_visible_in_project_sho
 #[tokio::test]
 async fn prompt_actions_and_prompt_resolve_from_target_host() {
     let _env = ProcessEnv::lock();
-    let daemon = LoopbackDaemon::spawn("m3-resolve", "0.3.0-resolve").await;
-    let host = HostConfig::tcp("host-prompts", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m3-resolve").await;
+    let host = daemon.host("host-prompts");
     let repo = init_git_repo("gui-core-m3-resolve-repo");
     write_file(
         &repo.join(".pohunek/templates.toml"),
@@ -838,21 +834,12 @@ async fn remote_prompt_resolution_uses_target_daemon_config_not_operator_filesys
     );
     env.set("XDG_CONFIG_HOME", operator_config_home);
 
-    let remote_config_dir = temp_dir("gui-core-m3-remote-config");
+    let daemon = LoopbackDaemon::spawn("m3-remote").await;
     write_file(
-        &remote_config_dir.join("prompts/issue.tmpl"),
+        &daemon.config_dir().join("prompts/issue.tmpl"),
         "REMOTE TARGET ${title}",
     );
-    let daemon = LoopbackDaemon::spawn_with_config(
-        "m3-remote",
-        "0.3.0-remote",
-        Some(remote_config_dir),
-        None,
-        None,
-        false,
-    )
-    .await;
-    let host = HostConfig::tcp("remote-host", daemon.addr);
+    let host = daemon.host("remote-host");
     let repo = init_git_repo("gui-core-m3-remote-repo");
     let project = add_project(
         &host,
@@ -966,8 +953,8 @@ async fn launch_from_rendered_preset_creates_one_session_with_rendered_input() {
     write_executable(&bin_dir.join("codex"), &recording_script(&prompt_out));
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m3-launch", "0.3.0-launch").await;
-    let host = HostConfig::tcp("host-launch", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m3-launch").await;
+    let host = daemon.host("host-launch");
     let repo = init_git_repo("gui-core-m3-launch-repo");
     write_provider_action_fixture(
         &repo,
@@ -1059,8 +1046,8 @@ async fn assistant_launch_creates_project_session_with_opening_prompt() {
     write_executable(&bin_dir.join("codex"), &recording_script(&prompt_out));
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("assistant-launch", "0.4.0-assistant").await;
-    let host = HostConfig::tcp("host-assistant", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("assistant-launch").await;
+    let host = daemon.host("host-assistant");
     let repo = init_git_repo("gui-core-assistant-repo");
     let project = add_project(
         &host,
@@ -1134,11 +1121,8 @@ async fn provider_launch_linear_issue_creates_one_linked_session_and_persists_me
     write_executable(&bin_dir.join("codex"), &recording_script(&prompt_out));
     prepend_path(&mut env, &bin_dir);
 
-    let store_path = temp_dir("gui-core-m4-linear-store").join("metadata.jsonl");
-    let daemon =
-        LoopbackDaemon::spawn_with_store_path("m4-linear", "0.4.0-linear", store_path.clone())
-            .await;
-    let host = HostConfig::tcp("host-linear", daemon.addr);
+    let mut daemon = LoopbackDaemon::spawn("m4-linear").await;
+    let host = daemon.host("host-linear");
     let repo = init_git_repo("gui-core-m4-linear-repo");
     write_provider_action_fixture(
         &repo,
@@ -1218,20 +1202,23 @@ async fn provider_launch_linear_issue_creates_one_linked_session_and_persists_me
     );
 
     report_native_id(&host, &launched.session.id, "codex", "native-linear-1").await;
-    let captured = wait_for_native_id_tcp(&host, &launched.session.id, "native-linear-1").await;
+    let captured = wait_for_native_id(&host, &launched.session.id, "native-linear-1").await;
     assert_eq!(captured.metadata, launched.session.metadata);
-    let persisted = Store::new(store_path)
-        .load_sessions()
-        .expect("load logical sessions")
+    stop_session(&host, &launched.session.id).await;
+    // The daemon's own store is read back through a restarted daemon.
+    daemon.restart().await;
+    let persisted = load_host_snapshot(&host)
+        .await
+        .expect("snapshot after daemon restart")
+        .sessions
         .into_iter()
-        .find(|record| record.session_id == launched.session.id.0)
-        .expect("linked session record");
+        .find(|session| session.id == launched.session.id)
+        .expect("linked session record survives the restart");
     assert_eq!(
-        session_link_metadata(&persisted.info),
+        session_link_metadata(&persisted),
         session_link_metadata(&launched.session)
     );
 
-    stop_session(&host, &launched.session.id).await;
     daemon.shutdown().await;
 }
 
@@ -1244,8 +1231,8 @@ async fn provider_launch_github_pr_creates_one_linked_session_with_rendered_inpu
     write_executable(&bin_dir.join("claude"), &recording_script(&prompt_out));
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m4-github", "0.4.0-github").await;
-    let host = HostConfig::tcp("host-github", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m4-github").await;
+    let host = daemon.host("host-github");
     let repo = init_git_repo("gui-core-m4-github-repo");
     write_provider_action_fixture(
         &repo,
@@ -1334,8 +1321,8 @@ async fn prompt_errors_surface_without_corrupting_workspace_state() {
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("m3-error", "0.3.0-error").await;
-    let host = HostConfig::tcp("host-error", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("m3-error").await;
+    let host = daemon.host("host-error");
     let repo = init_git_repo("gui-core-m3-error-repo");
     write_prompt_error_fixture(&repo);
     let project = add_project(
@@ -1560,8 +1547,8 @@ async fn review_session_diff_is_parsed_into_added_and_modified_files() {
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("review-diff", "0.1.0-review-diff").await;
-    let host = HostConfig::tcp("host-review-diff", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("review-diff").await;
+    let host = daemon.host("host-review-diff");
     let repo = init_git_repo("gui-core-review-diff-repo");
     let project = add_project(
         &host,
@@ -1635,8 +1622,8 @@ async fn review_dispatch_creates_one_session_in_the_same_worktree_with_copied_li
     let record_bin_dir = temp_dir("gui-core-review-dispatch-record-bin");
     prepend_path(&mut env, &record_bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("review-dispatch", "0.1.0-review-dispatch").await;
-    let host = HostConfig::tcp("host-review-dispatch", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("review-dispatch").await;
+    let host = daemon.host("host-review-dispatch");
     let repo = init_git_repo("gui-core-review-dispatch-repo");
     let project = add_project(
         &host,
@@ -1793,8 +1780,8 @@ async fn review_dispatch_leaves_the_draft_byte_identical_when_session_new_fails(
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("review-dispatch-fail", "0.1.0-review-dispatch-fail").await;
-    let host = HostConfig::tcp("host-review-dispatch-fail", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("review-dispatch-fail").await;
+    let host = daemon.host("host-review-dispatch-fail");
     let repo = init_git_repo("gui-core-review-dispatch-fail-repo");
     let project = add_project(
         &host,
@@ -1877,12 +1864,8 @@ async fn review_dispatch_uses_the_overridden_agent_instead_of_the_source_session
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn(
-        "review-dispatch-agent-override",
-        "0.1.0-review-dispatch-agent-override",
-    )
-    .await;
-    let host = HostConfig::tcp("host-review-dispatch-agent-override", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("review-dispatch-agent-override").await;
+    let host = daemon.host("host-review-dispatch-agent-override");
     let repo = init_git_repo("gui-core-review-dispatch-agent-override-repo");
     let project = add_project(
         &host,
@@ -1954,8 +1937,8 @@ async fn review_state_never_contains_diff_content_or_embedded_secrets() {
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    let daemon = LoopbackDaemon::spawn("review-secret-scan", "0.1.0-review-secret-scan").await;
-    let host = HostConfig::tcp("host-review-secret-scan", daemon.addr);
+    let daemon = LoopbackDaemon::spawn("review-secret-scan").await;
+    let host = daemon.host("host-review-secret-scan");
     let repo = init_git_repo("gui-core-review-secret-scan-repo");
     let project = add_project(
         &host,
@@ -2072,152 +2055,187 @@ fn review_store_load_all_surfaces_corrupt_file_errors_without_dropping_good_revi
     assert_eq!(loaded.iter().filter(|entry| entry.is_err()).count(), 1);
 }
 
+/// How long a freshly started daemon may take to bind its control socket.
+///
+/// Startup acquires the instance locks, opens the stores and reconciles
+/// workers; the ceiling only bounds a daemon that never becomes ready.
+const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a daemon may take to exit after SIGTERM before it is killed.
+const DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// File name of the daemon's stderr inside its private root, kept for
+/// diagnostics when startup or shutdown fails.
+const DAEMON_STDERR_FILE: &str = "pohunekd.stderr";
+
+/// A real `pohunekd` process with its own private environment.
+///
+/// The daemon supervises `pohunek-sessiond` workers as direct children
+/// (`POHUNEK_WORKER_LAUNCHER=subprocess`) and serves the Unix socket below the
+/// environment's runtime directory.
 struct LoopbackDaemon {
-    addr: SocketAddr,
-    shutdown: oneshot::Sender<()>,
-    handle: tokio::task::JoinHandle<()>,
-    _governance_state_root: PathBuf,
+    env: TestEnv,
+    socket: PathBuf,
+    child: Option<std::process::Child>,
 }
 
 impl LoopbackDaemon {
-    async fn spawn(tag: &str, version: &str) -> Self {
-        Self::spawn_with_config(tag, version, None, None, None, false).await
-    }
-
-    async fn spawn_with_notifications(tag: &str, version: &str) -> Self {
-        Self::spawn_with_config(tag, version, None, None, None, true).await
-    }
-
-    async fn spawn_with_store_path(tag: &str, version: &str, store_path: PathBuf) -> Self {
-        Self::spawn_with_config(tag, version, None, None, Some(store_path), false).await
-    }
-
-    async fn spawn_with_config(
-        tag: &str,
-        version: &str,
-        config_dir: Option<PathBuf>,
-        shell_command: Option<pohunek_daemon::session::ShellCommand>,
-        store_path: Option<PathBuf>,
-        notifications_enabled: bool,
-    ) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("loopback bind");
-        let addr = listener.local_addr().expect("local addr");
-        let store_path =
-            store_path.unwrap_or_else(|| temp_dir(&format!("{tag}-state")).join("metadata.jsonl"));
-        let mut config = SessionRegistryConfig {
-            // A fixed shell keeps the sessions independent of the host user's
-            // `$SHELL` and its startup files, whose background helpers can
-            // hold the PTY open past the stop deadline.
-            shell_command: pohunek_daemon::session::ShellCommand::new(
-                "/bin/sh",
-                std::iter::empty::<String>(),
-            ),
-            store_path: Some(store_path),
-            worktree_root: Some(temp_dir(&format!("{tag}-worktrees"))),
-            config_dir,
-            ..SessionRegistryConfig::default()
+    /// Starts a daemon. `tag` only labels failures.
+    async fn spawn(tag: &str) -> Self {
+        let env = TestEnv::new().expect("create the daemon's private environment");
+        let uid = std::fs::metadata(env.root())
+            .expect("daemon environment root metadata")
+            .uid();
+        let socket = pohunek_paths::BasePaths::resolve_for(
+            pohunek_paths::Platform::current().expect("supported platform"),
+            uid,
+            &pohunek_paths::PathEnv {
+                xdg_runtime_dir: Some(env.runtime_dir().into()),
+                xdg_data_home: Some(env.data_home().into()),
+                xdg_state_home: Some(env.state_home().into()),
+                xdg_cache_home: Some(env.cache_home().into()),
+                xdg_config_home: Some(env.config_home().into()),
+                home: Some(env.home().into()),
+            },
+        )
+        .expect("resolve the daemon socket path")
+        .socket;
+        let mut daemon = Self {
+            env,
+            socket,
+            child: None,
         };
-        if let Some(shell_command) = shell_command {
-            config.shell_command = shell_command;
+        daemon.start(tag).await;
+        daemon
+    }
+
+    /// Host configuration reaching this daemon over its Unix socket.
+    fn host(&self, id: &str) -> HostConfig {
+        HostConfig::local(id, &self.socket)
+    }
+
+    /// The daemon's `HOME`, which its session children inherit.
+    fn home(&self) -> &Path {
+        self.env.home()
+    }
+
+    /// The daemon's application config directory (`<config home>/pohunek`).
+    fn config_dir(&self) -> PathBuf {
+        self.env.config_home().join(pohunek_paths::APP_DIR)
+    }
+
+    async fn start(&mut self, tag: &str) {
+        let stderr = std::fs::File::create(self.env.root().join(DAEMON_STDERR_FILE))
+            .expect("create the daemon stderr file");
+        let mut command = self.env.command(support::required_binary(
+            support::DAEMON_BIN_VAR,
+            "pohunekd",
+        ));
+        command
+            .env("POHUNEK_WORKER_LAUNCHER", "subprocess")
+            .env(
+                support::WORKER_BIN_VAR,
+                support::required_binary(support::WORKER_BIN_VAR, "pohunek-sessiond"),
+            )
+            // A fixed shell keeps sessions independent of the host user's
+            // `$SHELL` and its startup files, whose background helpers can hold
+            // the PTY open past the stop deadline.
+            .env("SHELL", "/bin/sh")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr);
+        // Tests install fake agents by prepending to the process `PATH`; the
+        // daemon passes it on to the sessions it starts.
+        if let Some(path) = std::env::var_os("PATH") {
+            command.env("PATH", path);
         }
-        let sessions = worker_backed_registry(config);
-        let governance_state_root = private_temp_dir(&format!("{tag}-governance"));
-        let governance = Arc::new(
-            HostGovernanceService::open(governance_state_root.clone())
-                .await
-                .expect("open real isolated host-governance service"),
-        );
-        let mut state = DaemonState::new(
-            HealthInfo::new(version),
-            sessions,
-            governance,
-            pohunek_client::default_overlay_registry().expect("configured registry"),
-        );
-        if notifications_enabled {
-            let notifications =
-                NotificationService::open(&temp_dir(&format!("{tag}-notifications")))
-                    .expect("open loopback notification service");
-            state = state.with_notifications(notifications);
-        }
-        let server = RemoteServer::from_listener(listener, state);
-        let (shutdown, rx) = oneshot::channel();
-        let tag = tag.to_owned();
-        let handle = tokio::spawn(async move {
-            server
-                .serve(async move {
-                    let _ = rx.await;
-                })
-                .await;
-            drop(tag);
-        });
-        Self {
-            addr,
-            shutdown,
-            handle,
-            _governance_state_root: governance_state_root,
+        self.child = Some(command.spawn().expect("spawn pohunekd"));
+
+        let socket = self.socket.clone();
+        let stderr_path = self.env.root().join(DAEMON_STDERR_FILE);
+        let child = self.child.as_mut().expect("daemon child");
+        let deadline = tokio::time::Instant::now() + DAEMON_READY_TIMEOUT;
+        loop {
+            if let Some(status) = child.try_wait().expect("poll the daemon process") {
+                panic!(
+                    "{tag}: pohunekd exited during startup ({status}); stderr:\n{}",
+                    std::fs::read_to_string(&stderr_path).unwrap_or_default()
+                );
+            }
+            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{tag}: pohunekd did not bind {} within {DAEMON_READY_TIMEOUT:?}; stderr:\n{}",
+                socket.display(),
+                std::fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+            tokio::time::sleep(wait::POLL_INTERVAL).await;
         }
     }
 
-    async fn shutdown(self) {
-        let _ = self.shutdown.send(());
-        let _ = self.handle.await;
+    /// Terminates the daemon with SIGTERM and waits for it to exit; workers keep
+    /// running, as they do across a production daemon restart.
+    async fn terminate(&mut self) {
+        let mut child = self.child.take().expect("daemon is running");
+        let pid = rustix::process::Pid::from_raw(
+            i32::try_from(child.id()).expect("daemon pid fits in i32"),
+        )
+        .expect("daemon pid is positive");
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+            .expect("send SIGTERM to the daemon");
+        let deadline = tokio::time::Instant::now() + DAEMON_EXIT_TIMEOUT;
+        loop {
+            if child.try_wait().expect("poll the daemon process").is_some() {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                child.kill().expect("kill the unresponsive daemon");
+                child.wait().expect("reap the killed daemon");
+                panic!(
+                    "pohunekd ignored SIGTERM for {DAEMON_EXIT_TIMEOUT:?}; stderr:\n{}",
+                    std::fs::read_to_string(self.env.root().join(DAEMON_STDERR_FILE))
+                        .unwrap_or_default()
+                );
+            }
+            tokio::time::sleep(wait::POLL_INTERVAL).await;
+        }
+    }
+
+    /// Restarts the daemon over the same state; durable workers and the
+    /// metadata store survive.
+    async fn restart(&mut self) {
+        self.terminate().await;
+        self.start("restart").await;
+    }
+
+    /// Stops every session still running, then the daemon, so no worker outlives
+    /// the test.
+    async fn shutdown(mut self) {
+        let host = self.host("shutdown");
+        let snapshot = load_host_snapshot(&host)
+            .await
+            .expect("list the sessions to stop before shutdown");
+        for session in snapshot
+            .sessions
+            .iter()
+            .filter(|session| !session.state.is_terminal())
+        {
+            stop_session(&host, &session.id).await;
+        }
+        self.terminate().await;
     }
 }
 
-/// Build a `SessionRegistry` wired to a real `SubprocessWorkerLauncher` (the
-/// built `pohunek-sessiond`), rooted under a unique per-call worker home, so
-/// `session.new` can actually launch a durable worker instead of failing with
-/// `worker_backend_required`. Mirrors `worker_backed_registry` in
-/// `crates/daemon/tests/health_socket.rs`.
-///
-/// The worker home MUST use a short, tag-independent prefix rather than the
-/// descriptive `temp_dir(tag)` helper: the worker's control socket path is
-/// `<runtime_home>/pohunek/workers/<session_id>/control.sock`, and a
-/// nanosecond-stamped, test-name-embedding prefix pushes that path past the
-/// `SUN_LEN` (108-byte) limit on Unix domain socket paths, which surfaces as
-/// a `worker_socket_path_invalid` protocol error instead of a clean session.
-fn worker_backed_registry(mut config: SessionRegistryConfig) -> SessionRegistry {
-    let worker_home = fixture_dir("pwg");
-    let worker_environment = SubprocessWorkerEnvironment {
-        runtime_home: worker_home.join("runtime"),
-        state_home: worker_home.join("state"),
-        data_home: worker_home.join("data"),
-        config_home: worker_home.join("config"),
-        cache_home: worker_home.join("cache"),
-        home: worker_home.clone(),
-        daemon_socket: worker_home.join("daemon.sock"),
-    };
-    config.worker_runtime_root = Some(worker_environment.runtime_home.join("pohunek/workers"));
-    config.worker_state_root = Some(worker_environment.state_home.join("pohunek/workers"));
-    config.supervision = Some(
-        worker_environment
-            .supervision(worker_binary())
-            .with_environment_source(hermetic_environment_source()),
-    );
-    let launcher = Arc::new(SubprocessWorkerLauncher::new());
-    SessionRegistry::new_with_launcher_and_inspector(
-        config,
-        launcher,
-        Arc::new(HostInspector::new()),
-    )
-}
-
-/// The base environment session children receive: the test thread's scrubbed
-/// environment, with `PATH` taken from the process at call time.
-///
-/// Tests install their fake agent binaries by prepending to the process `PATH`
-/// (see [`PathGuard`]); every such guard must be in place before the registry
-/// is built, because the source is a snapshot. Every other variable comes from
-/// the fixture, so a child sees the fixture's `HOME` and none of the developer's
-/// session variables.
-fn hermetic_environment_source() -> EnvironmentSource {
-    let mut variables = TEST_ENV.with(|env| env.environment().clone());
-    if let Some(path) = std::env::var_os("PATH") {
-        variables.insert(OsString::from("PATH"), path);
+impl Drop for LoopbackDaemon {
+    /// Kills a daemon that a failing test left running.
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
-    EnvironmentSource::fixed(variables)
 }
 
 struct NotificationListErrorDaemon {
@@ -2314,15 +2332,12 @@ fn notification_error_response(request: &Request) -> Response {
 fn test_connection_options() -> ConnectionOptions {
     ConnectionOptions {
         connect_timeout: Duration::from_millis(100),
-        // `session.new` now launches a real `pohunek-sessiond` subprocess (see
-        // `worker_backed_registry`): it forks/execs the worker binary, which
-        // creates its runtime/state directories, binds its own control
-        // socket, and completes a handshake before the daemon can reply. That
-        // is well over an order of magnitude slower than the old in-process
-        // stub launcher, so single-shot request call sites (e.g.
-        // `assistant::launch_with_options`, `dispatch_review`) need a much
-        // longer budget than the reconciliation-loop call sites, which retry
-        // on timeout via `backoff_initial`/`backoff_max`.
+        // `session.new` launches a real `pohunek-sessiond` subprocess: the daemon
+        // forks and execs the worker, which creates its directories, binds its
+        // control socket and completes a handshake before the daemon replies.
+        // Single-shot request call sites (e.g. `assistant::launch_with_options`,
+        // `dispatch_review`) need that budget; the reconciliation-loop call
+        // sites retry on timeout via `backoff_initial`/`backoff_max`.
         request_timeout: Duration::from_secs(15),
         reconcile_interval: Duration::from_millis(100),
         backoff_initial: Duration::from_millis(10),
@@ -2448,7 +2463,6 @@ where
 /// Returns a loopback address that nothing listens on: the port is bound once
 /// and released before the address is returned.
 async fn unused_loopback_addr() -> SocketAddr {
-    // hermetic-allowed: #415 gui-core leaves this repository; pohunek-work rewrites its loopback tests against real daemon binaries
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind unused loopback");
@@ -2759,7 +2773,7 @@ fn process_start_identity(pid: u32) -> ProcessStartIdentity {
     ProcessStartIdentity::new(identity.start_identity.get())
 }
 
-async fn wait_for_native_id_tcp(host: &HostConfig, id: &SessionId, native_id: &str) -> SessionInfo {
+async fn wait_for_native_id(host: &HostConfig, id: &SessionId, native_id: &str) -> SessionInfo {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let inspected = inspect_session(host, id).await.expect("inspect native id");
@@ -2819,11 +2833,16 @@ async fn client(host: &HostConfig) -> Client {
             .await
             .expect("connect tcp")
         }
-        pohunek_gui_core::HostTransport::Local { .. } => {
-            panic!("loopback harness expects TCP hosts")
+        pohunek_gui_core::HostTransport::Local { ref socket_path } => {
+            Client::connect_local_with_options(
+                socket_path,
+                ClientOptions::default().with_origin_source(OriginSource::Omitted),
+            )
+            .await
+            .expect("connect local")
         }
         pohunek_gui_core::HostTransport::Remote { .. } => {
-            panic!("loopback harness expects direct TCP hosts")
+            panic!("loopback harness expects direct hosts")
         }
     }
 }
@@ -2899,13 +2918,6 @@ const SYSTEM_PATH: &str = "/usr/bin:/bin";
 
 fn temp_dir(tag: &str) -> PathBuf {
     fixture_dir(&format!("pgc-{tag}-"))
-}
-
-/// Create an isolated owner-private directory for durable governance records.
-fn private_temp_dir(tag: &str) -> PathBuf {
-    let dir = temp_dir(tag);
-    make_owner_private(&dir);
-    dir
 }
 
 #[cfg(unix)]

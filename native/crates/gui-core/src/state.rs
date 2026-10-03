@@ -259,7 +259,7 @@ pub struct ReviewCommentEditor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewDispatchModal {
     /// Rendered prompt preview, or the render error message
-    /// (`render_review_prompt` failure, e.g. a missing `review.tmpl`).
+    /// (`render_review_prompt` failure, e.g. an unreadable `review.tmpl`).
     pub prompt_preview: Result<String, String>,
     /// Wire agent name the dispatched session will run: the source
     /// session's profile by default, or the operator's picked override.
