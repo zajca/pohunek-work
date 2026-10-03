@@ -59,9 +59,9 @@
     },
   },
   "catalog": {
-    "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-protocol-0.32.1.tgz",
-    "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-sdk-0.32.1.tgz",
-    "@pohunek/testkit": "https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-testkit-0.32.1.tgz",
+    "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-protocol-0.32.3.tgz",
+    "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-sdk-0.32.3.tgz",
+    "@pohunek/testkit": "https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-testkit-0.32.3.tgz",
   },
   "packages": {
     "@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
@@ -120,11 +120,11 @@
 
     "@pohunek/frontend": ["@pohunek/frontend@workspace:frontend"],
 
-    "@pohunek/protocol": ["@pohunek/protocol@https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-protocol-0.32.1.tgz", {}, "sha512-wGjg4HcH1Ehl3Kxbu1bwjw3GMjMJUcGTSs9H5wTc//LaKZg/6RxeUBTa7loMrF0GkYxxu2ktrkNZZBdT5MK0yg=="],
+    "@pohunek/protocol": ["@pohunek/protocol@https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-protocol-0.32.3.tgz", {}, "sha512-HKsxgJjz/QFESMIAVLiS6eWYpVuxMvOQaP9xy19ShehX44o8tHOzyWtlf7WS03xEO1wbUmpsVZIJEasvQo+1Bg=="],
 
-    "@pohunek/sdk": ["@pohunek/sdk@https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-sdk-0.32.1.tgz", { "dependencies": { "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-protocol-0.32.1.tgz" } }, "sha512-Tv9UekN4FQP+KMAfr/Sj1Hc2u4JgfzNae1nRjF2oUUchubhFOVWTCKeBstKUHTUW2ethLiTw5w0HoBDzOaYtNg=="],
+    "@pohunek/sdk": ["@pohunek/sdk@https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-sdk-0.32.3.tgz", { "dependencies": { "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-protocol-0.32.3.tgz" } }, "sha512-24RNepaN+kfkKIbdxUAD3NU77fmTgITq72DJC0rm3mlVtK5HnoPsyKjYfCC9LjIJt3lrwzk5VM+5/WXkwlDMZQ=="],
 
-    "@pohunek/testkit": ["@pohunek/testkit@https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-testkit-0.32.1.tgz", { "dependencies": { "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.32.1/pohunek-ts-protocol-0.32.1.tgz" } }, "sha512-S1cRgki7h4/vF3BeqICcuXEMkY08xa5vFNW+vSbZkvjeralo1yd3knTn1KFXv/y6RsXhG5iprZyXeP4y0iojUw=="],
+    "@pohunek/testkit": ["@pohunek/testkit@https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-testkit-0.32.3.tgz", { "dependencies": { "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.32.3/pohunek-ts-protocol-0.32.3.tgz" } }, "sha512-Oh2uzDJjNLfrDp7Fmu0FqHPhF+FGNGwib7JQu4+t+4NbixgrnC1slcsevD4arSGPVe1ArAMfC6tqGkkjoRU9pQ=="],
 
     "@rolldown/binding-android-arm64": ["@rolldown/binding-android-arm64@1.1.5", "", { "os": "android", "cpu": "arm64" }, "sha512-lZg8fqIv2v7FF237bwMgzGZEJvGL79/s5knJ/i6FmsGF4XXlzccZ4jb+TrFIxtSSxFtIpdsgrPZeMk1I9AFcyQ=="],
 

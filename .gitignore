@@ -6,3 +6,4 @@ logs/
 .env.*
 .claude/
 native/target/
+__pycache__/
