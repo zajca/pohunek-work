@@ -156,7 +156,7 @@ describe("web release installer on Linux", () => {
     }
   });
 
-  test("refuses an archive built for another target and the daemon archive", async () => {
+  test("refuses an archive built for another target and the GUI archive", async () => {
     const harness = await createHarness("linux");
     try {
       await createArchive(harness, "build", MACOS_TARGET);
@@ -164,10 +164,10 @@ describe("web release installer on Linux", () => {
       expect(wrongTarget.code).not.toBe(0);
       expect(wrongTarget.stderr).toContain("is built for aarch64-apple-darwin");
 
-      await createArchive(harness, "build", LINUX_TARGET, "daemon");
+      await createArchive(harness, "build", LINUX_TARGET, "gui");
       const wrongComponent = await install(harness);
       expect(wrongComponent.code).not.toBe(0);
-      expect(wrongComponent.stderr).toContain("this is the daemon archive");
+      expect(wrongComponent.stderr).toContain("this is the gui archive");
     } finally {
       await rm(harness.root, { recursive: true, force: true });
     }

@@ -1,0 +1,657 @@
+name: Release
+
+# Builds and publishes the user-surface artifacts of this repository when a
+# `vX.Y.Z` tag is pushed:
+#
+#   pohunek-gui     x86_64-unknown-linux-gnu archive (headless Wayland smoke)
+#                   and the signed, notarized Pohunek.app archive
+#                   (aarch64-apple-darwin)
+#   pohunek-web     linux-x86_64 archive and the signed, notarized
+#                   aarch64-apple-darwin archive of the web control center
+#   pohunek-launchers  the rofi/sway launcher scripts, templates and guides
+#
+# Every archive ships with a `.sha256` file and a MANIFEST that records the
+# pinned core version (`packaging/core-pin`). Core owns the CLI, daemon and
+# worker artifacts; none of them is built here.
+#
+# A manual run (workflow_dispatch) builds everything for the given version and
+# publishes nothing: it is the dry run. Set `skip_macos_signing` to dry-run
+# without the signing credentials; signing then does not run and the macOS
+# archives are not produced.
+#
+# The macOS archives follow the staged-signing model: `stage-macos` builds and
+# audits with no secret, `sign-macos` runs in the protected `macos-signing`
+# environment and runs no program from the tree, `verify-macos` checks the
+# signed bytes with a read-only token, and only `publish` holds a write token.
+# Missing credentials fail `sign-macos` before any work; a macOS archive is
+# never published unsigned.
+#
+# Credentials, by name only (the values live in the repository or the
+# `macos-signing` environment):
+#   secrets MACOS_CERTIFICATE_P12_BASE64, MACOS_CERTIFICATE_PASSWORD,
+#           APPLE_NOTARY_KEY_P8_BASE64, APPLE_NOTARY_KEY_ID,
+#           APPLE_NOTARY_ISSUER_ID
+#   variable MACOS_TEAM_ID (repository level, read by `verify-macos` too)
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, X.Y.Z (nothing is published)"
+        required: true
+        type: string
+      skip_macos_signing:
+        description: "Dry run without signing credentials: skip signing and macOS verification"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  # The only job that reads the tag name or the dispatch input; every other job
+  # takes the validated version and the core pin from these outputs.
+  prepare:
+    name: Resolve the version and the core pin
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      core_ref: ${{ steps.pin.outputs.core_ref }}
+      core_rev: ${{ steps.pin.outputs.core_rev }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve the release version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = push ]; then
+            version="${REF_NAME#v}"
+          else
+            version="$INPUT_VERSION"
+          fi
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::the release version must be X.Y.Z, got: $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Fails when native/Cargo.toml and web/package.json pin different core
+      # releases, or when the GUI version differs from the release version (the
+      # binary reports the Cargo version, the app bundle the release version).
+      - name: Resolve the core pin
+        id: pin
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          packaging/core-pin --expect-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
+
+  # The same jobs that gate a pull request, called as a workflow so no job is
+  # defined twice.
+  ci:
+    name: CI gate
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/ci.yml
+
+  build-gui-linux:
+    name: Build pohunek-gui for x86_64-unknown-linux-gnu
+    needs: [prepare, ci]
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install the headless compositor for the smoke test
+        run: sudo apt-get update && sudo apt-get install -y weston
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: native
+          shared-key: native-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the GUI
+        working-directory: native
+        run: cargo build --release --locked -p pohunek-gui --bin pohunek-gui
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          # Archives are stamped with the tagged commit's time.
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          archive="$(packaging/make-archive gui "$VERSION" x86_64-unknown-linux-gnu native/target/release dist)"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          packaging/check-archive "$archive" --component gui --version "$VERSION" \
+            --target x86_64-unknown-linux-gnu --core "$POHUNEK_CORE_REF"
+
+      - name: Smoke-test the packaged GUI
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          extract_dir="$(mktemp -d)"
+          trap 'rm -rf "$extract_dir"' EXIT
+          tar -xzf "$ARCHIVE" -C "$extract_dir"
+          native/scripts/smoke-gui-release \
+            "$extract_dir/pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu/pohunek-gui"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-gui-linux
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # web/ is made installable by its own surface slice; this job builds the
+  # archive from web/release/package.sh as soon as `bun install --frozen-lockfile`
+  # works in web/.
+  package-web:
+    name: Package the web control center for linux-x86_64
+    needs: [prepare, ci]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Build and package
+        id: package
+        run: |
+          set -euo pipefail
+          bash web/release/package.sh "$VERSION" linux-x86_64
+          archive="web/dist/pohunek-web-${VERSION}-linux-x86_64.tar.gz"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          packaging/check-archive "$archive" --component web --version "$VERSION" \
+            --target x86_64-unknown-linux-gnu --core "$POHUNEK_CORE_REF"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-web-linux
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  package-launchers:
+    name: Package the launchers
+    needs: [prepare, ci]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          archive="$(packaging/make-archive launchers "$VERSION" noarch launchers dist)"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          packaging/check-archive "$archive" --component launchers --version "$VERSION" \
+            --target noarch --core "$POHUNEK_CORE_REF"
+
+      # The scripts must parse under the POSIX shell the launchers target.
+      - name: Check the packaged scripts parse
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          extract_dir="$(mktemp -d)"
+          trap 'rm -rf "$extract_dir"' EXIT
+          tar -xzf "$ARCHIVE" -C "$extract_dir"
+          root="$extract_dir/pohunek-launchers-${VERSION}-noarch"
+          for script in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue; do
+            test -x "$root/$script"
+            sh -n "$root/$script"
+          done
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-launchers
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  stage-macos:
+    name: Stage ${{ matrix.component }} for aarch64-apple-darwin
+    needs: [prepare, ci]
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      RUSTFLAGS: -D warnings
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gui, web]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        run: test "$(uname -m)" = "arm64"
+
+      - name: Install Rust toolchain
+        if: matrix.component == 'gui'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        if: matrix.component == 'gui'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: native
+          shared-key: release-macos-gui
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the GUI
+        if: matrix.component == 'gui'
+        id: build
+        run: |
+          set -euo pipefail
+          bindir="$(native/packaging/macos/build-release)"
+          echo "bindir=$bindir" >> "$GITHUB_OUTPUT"
+
+      - name: Install Bun
+        if: matrix.component == 'web'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+
+      - name: Install web dependencies
+        if: matrix.component == 'web'
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      # The compiled backend (Bun runtime plus the compiled SPA), smoke-tested
+      # unsigned by package.sh; signing happens in the signing job.
+      - name: Build the web control center input tree
+        if: matrix.component == 'web'
+        id: webinput
+        run: bash web/release/package.sh "$VERSION" aarch64-apple-darwin --input-only
+
+      - name: Stage and audit the archive tree
+        env:
+          GUI_BINDIR: ${{ steps.build.outputs.bindir }}
+          WEB_INPUT: ${{ steps.webinput.outputs.input }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Archives are stamped with the tagged commit's time.
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          if [ "$COMPONENT" = web ]; then
+            input="$WEB_INPUT"
+          else
+            input="$GUI_BINDIR"
+          fi
+          staging="$(packaging/macos/package --stage-release "$COMPONENT" "$VERSION" "$input" dist)"
+          # A tar keeps the modes that an artifact upload would drop.
+          mkdir -p "$RUNNER_TEMP/stage-upload"
+          tar -cf "$RUNNER_TEMP/stage-upload/stage.tar" -C "$(dirname "$staging")" "$(basename "$staging")"
+          ( cd "$RUNNER_TEMP/stage-upload" && shasum -a 256 stage.tar > stage.tar.sha256 )
+
+      - name: Upload the staged tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-stage-${{ matrix.component }}
+          path: ${{ runner.temp }}/stage-upload
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-macos:
+    name: Sign ${{ matrix.component }} for aarch64-apple-darwin
+    needs: [prepare, stage-macos]
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_macos_signing) }}
+    runs-on: macos-15
+    environment: macos-signing
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gui, web]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        run: test "$(uname -m)" = "arm64"
+
+      - name: Require signing and notarization credentials
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for variable in MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD \
+            APPLE_NOTARY_KEY_P8_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID MACOS_TEAM_ID; do
+            if [[ -z "${!variable}" ]]; then
+              missing+=("$variable")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::macOS release credentials are missing (${missing[*]}); the macOS release gate stays failed and no unsigned macOS archive is published"
+            exit 1
+          fi
+
+      - name: Download the staged tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-stage-${{ matrix.component }}
+          path: ${{ runner.temp }}/stage-download
+
+      # The artifact is untrusted data: the directory it must hold is named from
+      # the component and the version, never from the artifact, and no artifact
+      # value is ever interpolated into a script.
+      - name: Check and extract the staged tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="pohunek-${{ matrix.component }}-${VERSION}-aarch64-apple-darwin"
+          ( cd "$RUNNER_TEMP/stage-download" && shasum -a 256 -c stage.tar.sha256 )
+          entries="$(tar -tf "$RUNNER_TEMP/stage-download/stage.tar")"
+          if printf '%s\n' "$entries" | grep -v -e "^${name}/" -e "^${name}\$"; then
+            echo "::error::the staged tarball holds entries outside ${name}"
+            exit 1
+          fi
+          if printf '%s\n' "$entries" | grep -e '\.\.'; then
+            echo "::error::the staged tarball holds a parent-directory component"
+            exit 1
+          fi
+          mkdir -p dist
+          tar -xf "$RUNNER_TEMP/stage-download/stage.tar" -C dist
+          test -d "dist/${name}"
+
+      - name: Create ephemeral signing keychain
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: packaging/macos/signing-keychain create
+
+      # Signs, notarizes, verifies, and archives the staged tree. It runs no
+      # program from the tree.
+      - name: Sign, notarize, verify, and package
+        id: package
+        env:
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          archive="$(packaging/macos/package --sign-release "${{ matrix.component }}" "$VERSION" \
+            "dist/pohunek-${{ matrix.component }}-${VERSION}-aarch64-apple-darwin")"
+          mkdir -p "$RUNNER_TEMP/signed-upload"
+          cp "$archive" "$archive.sha256" "$RUNNER_TEMP/signed-upload/"
+
+      # Always removes the keychain, restoring the runner's search list.
+      - name: Remove ephemeral signing keychain
+        if: always()
+        shell: bash
+        run: packaging/macos/signing-keychain delete
+
+      - name: Upload the signed archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-macos-${{ matrix.component }}
+          path: ${{ runner.temp }}/signed-upload
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-macos:
+    name: Verify ${{ matrix.component }} for aarch64-apple-darwin
+    needs: [prepare, sign-macos]
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gui, web]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download the signed archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-macos-${{ matrix.component }}
+          path: ${{ runner.temp }}/signed-download
+
+      # Everything below runs from the extracted archive outside the
+      # checkout: the published bytes, not the build tree.
+      - name: Extract the archive and verify its signatures
+        id: extract
+        env:
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+          COMPONENT: ${{ matrix.component }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/signed-download/pohunek-${COMPONENT}-${VERSION}-aarch64-apple-darwin.tar.gz"
+          test -f "$archive"
+          packaging/check-archive "$archive" --component "$COMPONENT" --version "$VERSION" \
+            --target aarch64-apple-darwin --signing developer-id --core "$POHUNEK_CORE_REF"
+          extract_dir="$RUNNER_TEMP/extracted"
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          tar -xzf "$archive" -C "$extract_dir"
+          root="$extract_dir/$(basename "$archive" .tar.gz)"
+          if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "extracted archive is inside a Git worktree: $root" >&2
+            exit 1
+          fi
+          grep -q '^signing developer-id$' "$root/MANIFEST"
+          packaging/macos/verify-signed --notarized --team-id "$MACOS_TEAM_ID" "$root"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+
+      # The signed backend runs under the hardened runtime with its JIT
+      # entitlements, serving the compiled SPA from the extracted archive.
+      - name: Install Bun
+        if: matrix.component == 'web'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+
+      - name: Install web dependencies
+        if: matrix.component == 'web'
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Smoke-test the packaged web backend
+        if: matrix.component == 'web'
+        working-directory: web
+        env:
+          ARCHIVE_ROOT: ${{ steps.extract.outputs.root }}
+        run: |
+          set -euo pipefail
+          test -x "$ARCHIVE_ROOT/install.sh"
+          test -f "$ARCHIVE_ROOT/packaging/verify-archive"
+          bun run release/smoke.ts "$ARCHIVE_ROOT/pohunek-web" "$ARCHIVE_ROOT/frontend"
+
+      - name: Smoke-test the packaged app bundle
+        if: matrix.component == 'gui'
+        env:
+          ARCHIVE_ROOT: ${{ steps.extract.outputs.root }}
+        run: native/scripts/smoke-gui-release-macos "$ARCHIVE_ROOT/Pohunek.app"
+
+  # The only job with a write token. It re-checks every archive against its
+  # checksum and MANIFEST, creates the release, and then downloads the published
+  # assets again to confirm they are the bytes that were verified. A manual run
+  # never reaches it.
+  publish:
+    name: Publish the release
+    needs: [prepare, build-gui-linux, package-web, package-launchers, verify-macos]
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+      CORE_REV: ${{ needs.prepare.outputs.core_rev }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download every archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release
+
+      # The archives and checksums are untrusted data until checked: the set of
+      # files must be exactly the expected one, and each archive must match its
+      # checksum and its MANIFEST.
+      - name: Check the asset set, the checksums and the manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release"
+          expected=(
+            "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz:gui:x86_64-unknown-linux-gnu:none"
+            "pohunek-web-${VERSION}-linux-x86_64.tar.gz:web:x86_64-unknown-linux-gnu:none"
+            "pohunek-launchers-${VERSION}-noarch.tar.gz:launchers:noarch:none"
+            "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:developer-id"
+            "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:developer-id"
+          )
+          names=()
+          for entry in "${expected[@]}"; do
+            IFS=: read -r name component target signing <<< "$entry"
+            names+=("$name" "$name.sha256")
+            "$GITHUB_WORKSPACE/packaging/check-archive" "$name" --component "$component" \
+              --version "$VERSION" --target "$target" --signing "$signing" --core "$CORE_REF"
+          done
+          want="$(printf '%s\n' "${names[@]}" | LC_ALL=C sort)"
+          have="$(find . -type f -printf '%P\n' | LC_ALL=C sort)"
+          if [ "$want" != "$have" ]; then
+            echo "::error::the downloaded assets differ from the expected set"
+            diff <(printf '%s\n' "$want") <(printf '%s\n' "$have") || true
+            exit 1
+          fi
+          sha256sum -c ./*.sha256
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          {
+            echo "Release ${VERSION} of the pohunek user surfaces."
+            echo
+            echo "Pinned core release: \`${CORE_REF}\`${CORE_REV:+ (commit \`${CORE_REV}\`)}."
+            echo "Every archive has a \`.sha256\` file and a \`MANIFEST\` that records the core version."
+            echo
+            echo "Download with \`gh release download v${VERSION} -R ${GITHUB_REPOSITORY} -p '<archive>*'\`"
+            echo "(needs \`gh auth login\`), or fetch the asset URL directly while the repository is public."
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          body_path: ${{ runner.temp }}/release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            ${{ runner.temp }}/release/*.tar.gz
+            ${{ runner.temp }}/release/*.tar.gz.sha256
+
+      # Re-query the release: the assets that exist now must be the bytes that
+      # were verified above.
+      - name: Verify the published assets
+        shell: bash
+        env:
+          TAG: v${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          published="$RUNNER_TEMP/published"
+          rm -rf "$published"
+          mkdir -p "$published"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$published"
+          ( cd "$published" && sha256sum -c ./*.sha256 )
+          diff <(cd "$RUNNER_TEMP/release" && find . -type f -printf '%P\n' | LC_ALL=C sort) \
+               <(cd "$published" && find . -type f -printf '%P\n' | LC_ALL=C sort)
+          for file in "$RUNNER_TEMP"/release/*; do
+            cmp "$file" "$published/$(basename "$file")"
+          done

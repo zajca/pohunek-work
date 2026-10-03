@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Verify a release archive and its checksum file without running anything in it.
+
+usage: check-archive <archive.tar.gz> --component C --version X.Y.Z [--target T]
+                     [--signing none|developer-id] [--core REF]
+
+Checks, in order, and exits 1 at the first failure:
+  - `<archive>.sha256` holds exactly `<sha256>  <file name>` for the archive;
+  - the archive holds one top-level directory named like the archive, only
+    regular files and directories, and no absolute or parent-directory path;
+  - `MANIFEST` has the format-1 header, names the expected component, version,
+    signing state (default `none`), and, when given, target and core version;
+  - every `sha256` line of the MANIFEST matches its member, and every regular
+    member other than the MANIFEST itself is listed.
+
+Standard library only; Python 3.8 or newer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+from pathlib import Path, PurePosixPath
+import sys
+import tarfile
+
+HEADER = "pohunek-archive-manifest 1"
+CHUNK = 1 << 20
+
+
+class CheckError(Exception):
+    """The archive or its checksum is not what the release promises."""
+
+
+def digest(stream) -> str:
+    sha = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(CHUNK), b""):
+        sha.update(chunk)
+    return sha.hexdigest()
+
+
+def check_checksum_file(archive: Path) -> None:
+    checksum = Path(f"{archive}.sha256")
+    if not checksum.is_file():
+        raise CheckError(f"missing checksum file: {checksum}")
+    with archive.open("rb") as stream:
+        expected = f"{digest(stream)}  {archive.name}\n"
+    if checksum.read_text() != expected:
+        raise CheckError(f"{checksum.name} does not match {archive.name}")
+
+
+def check_members(archive: Path, root: str) -> tarfile.TarFile:
+    tar = tarfile.open(archive, "r:gz")
+    for member in tar.getmembers():
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts:
+            raise CheckError(f"unsafe member path: {member.name}")
+        if path.parts[0] != root:
+            raise CheckError(f"member outside {root}/: {member.name}")
+        if not (member.isfile() or member.isdir()):
+            raise CheckError(f"member is neither a file nor a directory: {member.name}")
+    return tar
+
+
+def parse_manifest(text: str) -> tuple[dict, dict]:
+    lines = text.splitlines()
+    if not lines or lines[0] != HEADER:
+        raise CheckError("MANIFEST is not a pohunek archive manifest of format 1")
+    fields: dict = {}
+    entries: dict = {}
+    for line in lines[1:]:
+        key, _, rest = line.partition(" ")
+        if key == "sha256":
+            value, _, path = rest.partition(" ")
+            if len(value) != 64 or not path or path in entries:
+                raise CheckError(f"malformed or repeated MANIFEST entry: {line}")
+            entries[path] = value
+        elif key in ("component", "version", "target", "signing", "core", "minimum-macos") and rest:
+            if key in fields:
+                raise CheckError(f"repeated MANIFEST field: {key}")
+            fields[key] = rest
+        else:
+            raise CheckError(f"unrecognized MANIFEST line: {line}")
+    return fields, entries
+
+
+def check(args: argparse.Namespace) -> None:
+    archive = args.archive
+    if not archive.name.endswith(".tar.gz"):
+        raise CheckError(f"not a .tar.gz archive: {archive}")
+    root = archive.name[: -len(".tar.gz")]
+    check_checksum_file(archive)
+    with check_members(archive, root) as tar:
+        names = {member.name: member for member in tar.getmembers() if member.isfile()}
+        manifest_member = names.get(f"{root}/MANIFEST")
+        if manifest_member is None:
+            raise CheckError("the archive has no MANIFEST")
+        fields, entries = parse_manifest(tar.extractfile(manifest_member).read().decode())
+        expected = {"component": args.component, "version": args.version, "signing": args.signing}
+        if args.target is not None:
+            expected["target"] = args.target
+        if args.core is not None:
+            expected["core"] = args.core
+        for key, value in expected.items():
+            if fields.get(key) != value:
+                raise CheckError(f"MANIFEST {key} is {fields.get(key)!r}, expected {value!r}")
+        if "target" not in fields:
+            raise CheckError("MANIFEST has no target")
+        listed = {f"{root}/{path}" for path in entries}
+        unlisted = sorted(set(names) - listed - {f"{root}/MANIFEST"})
+        if unlisted:
+            raise CheckError(f"members missing from the MANIFEST: {', '.join(unlisted)}")
+        for path, value in entries.items():
+            member = names.get(f"{root}/{path}")
+            if member is None:
+                raise CheckError(f"MANIFEST lists a missing member: {path}")
+            if digest(tar.extractfile(member)) != value:
+                raise CheckError(f"member digest mismatch: {path}")
+    print(f"check-archive: {archive.name}: {len(entries)} member(s) verified")
+
+
+def main(argv: list) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("--component", required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--target")
+    parser.add_argument("--signing", default="none", choices=["none", "developer-id"])
+    parser.add_argument("--core")
+    args = parser.parse_args(argv)
+    try:
+        check(args)
+    except (CheckError, OSError, tarfile.TarError) as error:
+        print(f"check-archive: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

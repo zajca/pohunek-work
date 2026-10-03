@@ -1,0 +1,100 @@
+#!/bin/sh
+# Assemble the staging directory of one release archive.
+#
+# usage: stage-archive <component> <version> <target> <input> <output-dir>
+#
+# <component> is gui, web, or launchers. <input> is the built input of that
+# component: the directory holding the `pohunek-gui` binary (a `Pohunek.app`
+# bundle instead for the macOS gui component), the input tree assembled by
+# web/release/package.sh, or the `launchers/` source directory. The staging
+# directory <output-dir>/<name> is created fresh and the archive name
+# `<prefix>-<version>-<target>` is printed on stdout. Run from the repository
+# root: the README and the license texts are copied from it.
+#
+# Nothing here signs or hashes. Signing, `write-manifest`, and `archive` run
+# afterwards, in that order, because the manifest covers the final bytes.
+
+set -eu
+
+fail() {
+    printf 'stage-archive: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -eq 5 ] || fail "usage: stage-archive <component> <version> <target> <input> <output-dir>"
+component=$1
+version=$2
+target=$3
+input=$4
+output=$5
+
+case $component in
+    gui) prefix=pohunek-gui ;;
+    web) prefix=pohunek-web ;;
+    launchers) prefix=pohunek-launchers ;;
+    *) fail "unsupported component: $component" ;;
+esac
+case $version in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) fail "version must be X.Y.Z: $version" ;;
+esac
+case $version in
+    *[!0-9.]*) fail "version must be X.Y.Z: $version" ;;
+esac
+case $target in
+    '' | *[!a-z0-9_-]*) fail "target must be a lowercase target triple: $target" ;;
+esac
+[ -d "$input" ] || fail "not a directory: $input"
+mkdir -p "$output"
+[ -d "$output" ] || fail "not a directory: $output"
+[ -f README.md ] || fail "required release file is missing: README.md (run from the repository root)"
+[ -d LICENSES ] || fail "required release directory is missing: LICENSES (run from the repository root)"
+[ -f packaging/verify-archive ] || fail "packaging/verify-archive is missing (run from the repository root)"
+
+name="$prefix-$version-$target"
+staging="$output/$name"
+rm -rf -- "$staging"
+mkdir -p "$staging"
+
+copy_member() {
+    [ -f "$input/$1" ] || fail "required input file is missing: $input/$1"
+    mkdir -p "$staging/$(dirname -- "$1")"
+    cp "$input/$1" "$staging/$1"
+}
+
+case $component in
+    gui)
+        case $target in
+            *-apple-darwin)
+                [ -d "$input/Pohunek.app" ] || fail "built app bundle is missing: $input/Pohunek.app"
+                cp -Rp "$input/Pohunek.app" "$staging/Pohunek.app"
+                ;;
+            *) copy_member pohunek-gui ;;
+        esac
+        ;;
+    web)
+        # The web archive is assembled by web/release/package.sh; <input> is
+        # its input tree (backend executable, frontend, installer, README).
+        cp -Rp "$input/." "$staging/"
+        mkdir -p "$staging/packaging"
+        cp packaging/verify-archive "$staging/packaging/"
+        ;;
+    launchers)
+        # The scripts the launcher setup installs, their default configuration
+        # and prompt templates, and the two guides.
+        for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue \
+            templates/launcher.conf templates/sway-dropin.conf.tmpl \
+            templates/prompts/issue.tmpl templates/prompts/pr.tmpl templates/prompts/review.tmpl \
+            docs/launcher.md docs/debug-launcher.md; do
+            copy_member "$member"
+        done
+        ;;
+esac
+
+cp -R LICENSES "$staging/LICENSES"
+# The web input tree carries its own README (the installer guide).
+if [ "$component" != web ]; then
+    cp README.md "$staging/"
+fi
+
+printf '%s\n' "$name"

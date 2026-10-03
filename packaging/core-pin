@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Resolve the pohunek core version every surface is pinned to.
+
+usage: core-pin [--native PATH] [--web PATH] [--require-web] [--expect-version X.Y.Z]
+
+Reads the core crates' git pin from native/Cargo.toml (the single source) and,
+when web/package.json names the core SDK release tarballs, checks that both pins
+name the same core release. Prints `key=value` lines (usable with
+`>> "$GITHUB_OUTPUT"`):
+
+  core_ref        the core release tag `vX.Y.Z` when known, else the 40-digit commit
+  core_rev        the 40-digit core commit, empty when only a tag is known
+  native_version  the GUI version in native/Cargo.toml `[workspace.package]`
+
+The pin is refused, with exit status 1, when
+  - the core crates in native/Cargo.toml do not all share one git URL and one
+    `rev` or `tag`;
+  - the SDK tarball URLs in web/package.json name different releases or a
+    different repository than the core crates;
+  - the two pins disagree: tag against tag by name, a native commit against a web
+    tag by resolving the tag with `git ls-remote` (the peeled commit of an
+    annotated tag counts);
+  - `--require-web` is given and web/package.json names no SDK tarball;
+  - `--expect-version` is given and differs from the native GUI version.
+
+Python 3.11 or newer (tomllib), standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tomllib
+
+TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+CORE_CRATE_PREFIX = "pohunek-"
+SDK_SCOPE = "@pohunek/"
+SDK_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/(v[0-9]+\.[0-9]+\.[0-9]+)/")
+DEPENDENCY_TABLES = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+
+
+class PinError(Exception):
+    """The pins are missing, malformed, or inconsistent."""
+
+
+def repo_slug(url: str) -> str | None:
+    """`owner/name` of a GitHub clone URL, None for any other host."""
+    match = re.match(r"^https://github\.com/([^/]+/[^/]+?)(?:\.git)?/?$", url)
+    return match.group(1) if match else None
+
+
+def read_native(path: Path) -> tuple[str, str | None, str | None, str]:
+    """Returns (git URL, tag, commit, GUI version) of the native workspace."""
+    try:
+        manifest = tomllib.loads(path.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise PinError(f"cannot read {path}: {error}") from error
+    workspace = manifest.get("workspace", {})
+    pins = set()
+    for name, spec in workspace.get("dependencies", {}).items():
+        if not name.startswith(CORE_CRATE_PREFIX) or not isinstance(spec, dict) or "git" not in spec:
+            continue
+        if "branch" in spec:
+            raise PinError(f"{name} is pinned by `branch`; pin core by `rev` or `tag`")
+        if ("rev" in spec) == ("tag" in spec):
+            raise PinError(f"{name} must be pinned by exactly one of `rev` or `tag`")
+        pins.add((spec["git"], spec.get("tag"), spec.get("rev")))
+    if not pins:
+        raise PinError(f"{path} has no core git dependency in [workspace.dependencies]")
+    if len(pins) != 1:
+        raise PinError(f"the core crates in {path} are not all pinned to one revision: {sorted(map(str, pins))}")
+    git, tag, rev = pins.pop()
+    if tag is not None and not TAG.match(tag):
+        raise PinError(f"core tag must look like vX.Y.Z: {tag}")
+    if rev is not None and not COMMIT.match(rev):
+        raise PinError(f"core rev must be a 40-digit lowercase commit: {rev}")
+    version = workspace.get("package", {}).get("version", "")
+    if not VERSION.match(str(version)):
+        raise PinError(f"{path} [workspace.package] version must be X.Y.Z: {version!r}")
+    return git, tag, rev, version
+
+
+def read_web(path: Path, core_repo: str | None) -> str | None:
+    """Returns the core release tag the SDK tarball URLs name, or None.
+
+    The tarballs must come from the core repository when it is a GitHub one."""
+    if not path.is_file():
+        return None
+    try:
+        package = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise PinError(f"cannot read {path}: {error}") from error
+    tags = set()
+    for table in DEPENDENCY_TABLES:
+        for name, spec in package.get(table, {}).items():
+            if not name.startswith(SDK_SCOPE) or not isinstance(spec, str):
+                continue
+            match = SDK_URL.match(spec)
+            if match is None:
+                continue
+            if core_repo is not None and match.group(1) != core_repo:
+                raise PinError(f"{name} in {path} comes from {match.group(1)}, not the core repository {core_repo}")
+            tags.add(match.group(2))
+    if len(tags) > 1:
+        raise PinError(f"the SDK tarballs in {path} name different core releases: {sorted(tags)}")
+    return tags.pop() if tags else None
+
+
+def resolve_tag(git: str, tag: str) -> str:
+    """The commit a core tag points at (the peeled commit for an annotated tag)."""
+    result = subprocess.run(
+        ["git", "ls-remote", "--", git, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise PinError(f"cannot list tags of {git}: {result.stderr.strip()}")
+    commits = {}
+    for line in result.stdout.splitlines():
+        commit, ref = line.split("\t", 1)
+        commits[ref] = commit
+    commit = commits.get(f"refs/tags/{tag}^{{}}") or commits.get(f"refs/tags/{tag}")
+    if commit is None or not COMMIT.match(commit):
+        raise PinError(f"core tag {tag} does not exist in {git}")
+    return commit
+
+
+def resolve(native: Path, web: Path, require_web: bool, expect_version: str | None) -> dict[str, str]:
+    git, native_tag, native_rev, version = read_native(native)
+    if expect_version is not None and expect_version != version:
+        raise PinError(f"the GUI version in {native} is {version}, but the release is {expect_version}")
+    web_tag = read_web(web, repo_slug(git))
+    if web_tag is None and require_web:
+        raise PinError(f"{web} names no core SDK release tarball")
+    ref, rev = native_tag or native_rev, native_rev
+    if web_tag is not None:
+        if native_tag is not None:
+            if native_tag != web_tag:
+                raise PinError(f"native pins core {native_tag}, web pins core {web_tag}")
+        else:
+            resolved = resolve_tag(git, web_tag)
+            if resolved != native_rev:
+                raise PinError(f"native pins core commit {native_rev}, but web pins core {web_tag} = {resolved}")
+            ref = web_tag
+    return {"core_ref": ref, "core_rev": rev or "", "native_version": version}
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--native", type=Path, default=Path("native/Cargo.toml"))
+    parser.add_argument("--web", type=Path, default=Path("web/package.json"))
+    parser.add_argument("--require-web", action="store_true")
+    parser.add_argument("--expect-version")
+    args = parser.parse_args(argv)
+    try:
+        pin = resolve(args.native, args.web, args.require_web, args.expect_version)
+    except PinError as error:
+        print(f"core-pin: {error}", file=sys.stderr)
+        return 1
+    for key, value in pin.items():
+        print(f"{key}={value}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
