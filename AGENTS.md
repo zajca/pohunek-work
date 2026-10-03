@@ -29,15 +29,15 @@ the jobs of changed surfaces on pull requests.
 ```bash
 # plugin/ and launchers/ (Bun)
 cd plugin && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
-cd launchers && bun install --frozen-lockfile && bun run lint && bun run typecheck
-# launcher shell tests need POHUNEK_TEST_SHELL (sh, bash, dash) and, for the
-# rendering tests, POHUNEK_TEST_BIN (absolute path of a core `pohunek` binary)
+cd launchers && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
+# `bun test` in launchers/ needs POHUNEK_TEST_SHELL (sh, bash or dash) and, for
+# the rendering tests, POHUNEK_TEST_BIN (absolute path of a core `pohunek` binary)
 
 # native/ (Cargo workspace; run with POHUNEK_* variables unset)
 cd native
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-native/scripts/build-core-binaries   # builds the pinned pohunekd, pohunek-sessiond, pohunek; prints the exports
+eval "$(scripts/build-core-binaries)"   # builds the pinned pohunekd, pohunek-sessiond, pohunek; exports their paths
 cargo nextest run --workspace --all-features
 cargo test --doc --workspace
 ```
