@@ -32,6 +32,12 @@ name: Release
 #           APPLE_NOTARY_KEY_P8_BASE64, APPLE_NOTARY_KEY_ID,
 #           APPLE_NOTARY_ISSUER_ID
 #   variable MACOS_TEAM_ID (repository level, read by `verify-macos` too)
+#
+# A tag release normally publishes the macOS archives too. The repository
+# variable RELEASE_WITHOUT_MACOS set to `true` is the explicit opt-out: signing
+# and verification are skipped and the release holds the Linux and launcher
+# archives only. Any other value, or no value, keeps the macOS archives
+# mandatory, so a missing credential still stops the release.
 on:
   push:
     tags:
@@ -372,7 +378,7 @@ jobs:
   sign-macos:
     name: Sign ${{ matrix.component }} for aarch64-apple-darwin
     needs: [prepare, stage-macos]
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_macos_signing) }}
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.skip_macos_signing) || (github.event_name == 'push' && vars.RELEASE_WITHOUT_MACOS == 'true')) }}
     runs-on: macos-15
     environment: macos-signing
     timeout-minutes: 90
@@ -576,7 +582,14 @@ jobs:
   publish:
     name: Publish the release
     needs: [prepare, build-gui-linux, package-web, package-launchers, verify-macos]
-    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    if: >-
+      ${{ always() && github.event_name == 'push' && github.ref_type == 'tag'
+      && needs.prepare.result == 'success'
+      && needs.build-gui-linux.result == 'success'
+      && needs.package-web.result == 'success'
+      && needs.package-launchers.result == 'success'
+      && (needs.verify-macos.result == 'success'
+      || (needs.verify-macos.result == 'skipped' && vars.RELEASE_WITHOUT_MACOS == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -585,6 +598,7 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       CORE_REF: ${{ needs.prepare.outputs.core_ref }}
       CORE_REV: ${{ needs.prepare.outputs.core_rev }}
+      WITHOUT_MACOS: ${{ vars.RELEASE_WITHOUT_MACOS }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -610,9 +624,13 @@ jobs:
             "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz:gui:x86_64-unknown-linux-gnu:none"
             "pohunek-web-${VERSION}-linux-x86_64.tar.gz:web:x86_64-unknown-linux-gnu:none"
             "pohunek-launchers-${VERSION}-noarch.tar.gz:launchers:noarch:none"
-            "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:developer-id"
-            "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:developer-id"
           )
+          if [ "$WITHOUT_MACOS" != "true" ]; then
+            expected+=(
+              "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:developer-id"
+              "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz:web:aarch64-apple-darwin:developer-id"
+            )
+          fi
           names=()
           for entry in "${expected[@]}"; do
             IFS=: read -r name component target signing <<< "$entry"
@@ -637,6 +655,10 @@ jobs:
             echo
             echo "Pinned core release: \`${CORE_REF}\`${CORE_REV:+ (commit \`${CORE_REV}\`)}."
             echo "Every archive has a \`.sha256\` file and a \`MANIFEST\` that records the core version."
+            if [ "$WITHOUT_MACOS" = "true" ]; then
+              echo
+              echo "This release has no macOS archives; they are published only when signed and notarized."
+            fi
             echo
             echo "Download with \`gh release download v${VERSION} -R ${GITHUB_REPOSITORY} -p '<archive>*'\`"
             echo "(needs \`gh auth login\`), or fetch the asset URL directly while the repository is public."

@@ -155,6 +155,13 @@ class MacosSigningTest(unittest.TestCase):
         self.assertNotIn("skip_macos_signing", self.stage)
         self.assertNotIn("skip_macos_signing", self.verify)
 
+    def test_the_macos_opt_out_is_an_explicit_repository_variable_on_tag_pushes_only(self):
+        self.assertIn("github.event_name == 'push' && vars.RELEASE_WITHOUT_MACOS == 'true'", self.sign)
+        self.assertNotIn("RELEASE_WITHOUT_MACOS", self.stage)
+        self.assertNotIn("RELEASE_WITHOUT_MACOS", self.verify)
+        header = RELEASE.split("\njobs:\n", 1)[0]
+        self.assertIn("RELEASE_WITHOUT_MACOS", header)
+
 
 class PublishTest(unittest.TestCase):
     def setUp(self):
@@ -167,6 +174,15 @@ class PublishTest(unittest.TestCase):
         self.assertIn("contents: write", self.publish)
         for needed in ("build-gui-linux", "package-web", "package-launchers", "verify-macos"):
             self.assertIn(needed, self.publish.split("runs-on:", 1)[0], needed)
+
+    def test_a_skipped_macos_verification_publishes_only_under_the_explicit_opt_out(self):
+        condition = self.publish.split("runs-on:", 1)[0]
+        for result in ("prepare", "build-gui-linux", "package-web", "package-launchers"):
+            self.assertIn(f"needs.{result}.result == 'success'", condition, result)
+        self.assertIn("needs.verify-macos.result == 'success'", condition)
+        self.assertIn(
+            "needs.verify-macos.result == 'skipped' && vars.RELEASE_WITHOUT_MACOS == 'true'", condition
+        )
 
     def test_the_publish_job_runs_nothing_from_an_archive(self):
         for forbidden in ("tar -x", "smoke", "cargo", "bun ", "verify-signed", "install.sh"):
@@ -181,6 +197,7 @@ class PublishTest(unittest.TestCase):
             "pohunek-web-${VERSION}-aarch64-apple-darwin.tar.gz",
         ):
             self.assertIn(asset, self.publish)
+        self.assertIn('if [ "$WITHOUT_MACOS" != "true" ]; then', self.publish)
         self.assertIn("the downloaded assets differ from the expected set", self.publish)
         self.assertIn("fail_on_unmatched_files: true", self.publish)
         after = self.publish.split("Verify the published assets", 1)[1]
