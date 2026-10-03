@@ -12,13 +12,13 @@ members = ["crates/gui", "crates/gui-core"]
 # Core crates, pinned to one revision. Every core crate lives in the same
 # repository, so bumping the `rev` below moves them all together. Bump it to a
 # release tag once core publishes one.
-pohunek-assistant = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
-pohunek-client = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
-pohunek-paths = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
-pohunek-platform = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
-pohunek-prompt = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
-pohunek-protocol = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
-pohunek-test-support = { git = "https://github.com/zajca/pohunek", rev = "74ee75091874cf0c4075a1a2a2d3fee8f7969cd7" }
+pohunek-assistant = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
+pohunek-client = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
+pohunek-paths = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
+pohunek-platform = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
+pohunek-prompt = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
+pohunek-protocol = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
+pohunek-test-support = { git = "https://github.com/zajca/pohunek", rev = "e740cf2b54a365f3903525105986c46ba08e6c96" }
 
 pohunek-gui-core = { path = "crates/gui-core" }
 
