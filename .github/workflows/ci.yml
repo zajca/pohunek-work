@@ -1,22 +1,77 @@
 name: CI
 
+# Every surface lives in its own top-level folder and has its own job. A
+# pull request runs a surface's job only when that surface (or the workflow
+# itself) changes; pushes to main, the weekly schedule and manual dispatch run
+# every job. The `ci` job always runs and is the single required check, so a
+# skipped surface never leaves a missing status.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
+  changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plugin: ${{ steps.filter.outputs.plugin }}
+    steps:
+      # Push events resolve the filter with git against the previous commit,
+      # which needs more than a depth-1 checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            plugin:
+              - 'plugin/**'
+              - '.github/workflows/ci.yml'
+
+  plugin:
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.plugin == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugin
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version-file: package.json
+          bun-version-file: plugin/package.json
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test
+
+  ci:
+    if: ${{ always() }}
+    needs: [changes, plugin]
+    runs-on: ubuntu-latest
+    steps:
+      # A skipped surface job is a pass; a failed or cancelled one is not.
+      - name: Require every surface job to have passed or been skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "job result: $r"; exit 1 ;;
+            esac
+          done
