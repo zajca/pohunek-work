@@ -269,15 +269,13 @@ async fn live_agent_state_updates_are_reflected() {
 }
 
 #[tokio::test]
-async fn notification_seed_degrades_gracefully_without_daemon_support() {
+async fn notification_seed_with_an_empty_inbox_connects_and_streams_sessions() {
     let mut env = ProcessEnv::lock();
     let bin_dir = temp_dir("gui-core-notif-seed-bin");
     write_executable(&bin_dir.join("codex"), "#!/bin/sh\n/bin/sleep 30\n");
     prepend_path(&mut env, &bin_dir);
 
-    // This daemon build does not serve `notification.list`, so seeding must be
-    // non-fatal: the host still connects and streams sessions with an empty
-    // inbox rather than failing the whole snapshot load.
+    // A daemon with an empty inbox: the host connects and streams sessions.
     let daemon = LoopbackDaemon::spawn("notif-seed").await;
     let host = daemon.host("host-notif");
     let mut workspace = Workspace::default();
@@ -298,6 +296,23 @@ async fn notification_seed_degrades_gracefully_without_daemon_support() {
 
     stop_session(&host, &session.id).await;
     daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn notification_seed_treats_method_not_found_as_an_empty_inbox() {
+    let _env = ProcessEnv::lock();
+    let daemon = NotificationListErrorDaemon::spawn_without_notification_support().await;
+    let host = HostConfig::tcp("host-notif-legacy", daemon.addr);
+
+    let snapshot = load_host_snapshot(&host)
+        .await
+        .expect("a daemon without notification.list still seeds the host");
+
+    assert_eq!(snapshot.health.status, "ok");
+    assert!(snapshot.notifications.is_empty());
+    assert_eq!(snapshot.project_error, None);
+
+    daemon.join().await;
 }
 
 #[tokio::test]
@@ -2324,7 +2339,18 @@ struct NotificationListErrorDaemon {
 }
 
 impl NotificationListErrorDaemon {
+    /// Serves `notification.list` with a runtime error.
     async fn spawn() -> Self {
+        Self::spawn_with(NotificationList::StoreError).await
+    }
+
+    /// Answers `notification.list` with `method_not_found`, like a daemon build
+    /// that predates the method.
+    async fn spawn_without_notification_support() -> Self {
+        Self::spawn_with(NotificationList::MethodNotFound).await
+    }
+
+    async fn spawn_with(notification_list: NotificationList) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("notification error daemon bind");
@@ -2348,7 +2374,7 @@ impl NotificationListErrorDaemon {
                 }
                 let request: Request =
                     serde_json::from_str(line.trim_end()).expect("parse request");
-                let response = notification_error_response(&request);
+                let response = notification_error_response(&request, notification_list);
                 let reply = serde_json::to_string(&response).expect("serialize response");
                 reader
                     .get_mut()
@@ -2370,7 +2396,16 @@ impl NotificationListErrorDaemon {
     }
 }
 
-fn notification_error_response(request: &Request) -> Response {
+/// How the fixture daemon answers `notification.list`.
+#[derive(Debug, Clone, Copy)]
+enum NotificationList {
+    /// A runtime error with the code `notification_store_unavailable`.
+    StoreError,
+    /// The generic `method_not_found` error of an unsupported method.
+    MethodNotFound,
+}
+
+fn notification_error_response(request: &Request, notification_list: NotificationList) -> Response {
     match request.method() {
         method::DAEMON_HEALTH => Response::ok(
             protocol::PROTOCOL_VERSION,
@@ -2389,17 +2424,19 @@ fn notification_error_response(request: &Request) -> Response {
             serde_json::json!([]),
         )
         .expect("test list response is valid"),
-        method::NOTIFICATION_LIST => Response::err(
-            protocol::PROTOCOL_VERSION,
-            request.id(),
-            ProtocolError::new(
-                ErrorClass::Runtime,
-                "notification_store_unavailable",
-                "notification store unavailable",
-                None,
-            ),
-        )
-        .expect("test notification error response is valid"),
+        method::NOTIFICATION_LIST if matches!(notification_list, NotificationList::StoreError) => {
+            Response::err(
+                protocol::PROTOCOL_VERSION,
+                request.id(),
+                ProtocolError::new(
+                    ErrorClass::Runtime,
+                    "notification_store_unavailable",
+                    "notification store unavailable",
+                    None,
+                ),
+            )
+            .expect("test notification error response is valid")
+        }
         method => Response::err(
             protocol::PROTOCOL_VERSION,
             request.id(),
