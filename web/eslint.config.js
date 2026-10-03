@@ -11,7 +11,9 @@ export default tseslint.config(
       "**/generated/**",
       "**/dist/**",
       "**/dist-types/**",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      ".core-sdk/**",
+      "**/test-results/**"
     ]
   },
   ...svelte.configs["flat/recommended"],

@@ -1,12 +1,16 @@
 {
-  "extends": "../tsconfig.base.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
     "noEmit": false,
     "emitDeclarationOnly": true,
     "outDir": "dist-types/tools",
     "rootDir": ".",
-    "tsBuildInfoFile": "dist-types/tsconfig.tools.tsbuildinfo"
+    "tsBuildInfoFile": "dist-types/tsconfig.tools.tsbuildinfo",
+    "types": [
+      "bun",
+      "node"
+    ]
   },
   "include": [
     "release/smoke.ts",
@@ -17,16 +21,7 @@
   ],
   "references": [
     {
-      "path": "../sdk/ts/protocol"
-    },
-    {
-      "path": "../sdk/ts/sdk"
-    },
-    {
       "path": "./backend"
-    },
-    {
-      "path": "../sdk/ts/testkit"
     }
   ]
 }

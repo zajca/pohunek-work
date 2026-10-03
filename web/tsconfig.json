@@ -10,22 +10,13 @@
   "include": [],
   "references": [
     {
-      "path": "./sdk/ts/protocol"
+      "path": "./backend"
     },
     {
-      "path": "./sdk/ts/sdk"
+      "path": "./client-core"
     },
     {
-      "path": "./web/backend"
-    },
-    {
-      "path": "./sdk/ts/testkit"
-    },
-    {
-      "path": "./web/client-core"
-    },
-    {
-      "path": "./web/tsconfig.tools.json"
+      "path": "./tsconfig.tools.json"
     }
   ]
 }

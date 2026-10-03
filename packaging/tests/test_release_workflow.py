@@ -60,7 +60,7 @@ class ReleaseTriggerTest(unittest.TestCase):
             self.assertRegex(RELEASE_JOBS[name], r"needs: \[prepare, ci\]", name)
         self.assertIn("workflow_call:", CI.split("\njobs:\n", 1)[0])
         self.assertIn("ci:\n    if: ${{ always() }}", CI)
-        self.assertRegex(CI, r"needs: \[changes, plugin, launchers, native, native-macos, packaging\]")
+        self.assertRegex(CI, r"needs: \[changes, plugin, launchers, native, native-macos, web, web-macos, packaging\]")
 
     def test_the_release_and_ci_concurrency_groups_cannot_collide(self):
         self.assertIn("group: release-${{ github.ref }}", RELEASE)
@@ -71,7 +71,7 @@ class ReleaseTriggerTest(unittest.TestCase):
             job = RELEASE_JOBS[name]
             self.assertIn("POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}", job, name)
             self.assertIn("packaging/check-archive", job, name)
-        self.assertIn("packaging/core-pin --expect-version", RELEASE_JOBS["prepare"])
+        self.assertIn("packaging/core-pin --require-web --expect-version", RELEASE_JOBS["prepare"])
         self.assertIn("pipefail", RELEASE_JOBS["prepare"].split("Resolve the core pin", 1)[1])
 
 
@@ -205,8 +205,16 @@ class CiFilterTest(unittest.TestCase):
         self.assertIn("- 'packaging/**'", native)
         self.assertIn("packaging: ${{ steps.filter.outputs.packaging }}", CI)
 
+    def test_the_web_filter_covers_the_web_folder_and_the_shared_packaging(self):
+        block = CI.split("            web:\n", 1)[1].split("            packaging:\n", 1)[0]
+        for path in ("web/**", "packaging/**", ".github/workflows/ci.yml"):
+            self.assertIn("- '%s'" % path, block)
+        self.assertIn("web: ${{ steps.filter.outputs.web }}", CI)
+        for name in ("web", "web-macos"):
+            self.assertIn("needs.changes.outputs.web == 'true'", jobs(CI)[name], name)
+
     def test_pull_requests_are_still_filtered_and_other_events_run_everything(self):
-        for name in ("plugin", "launchers", "native", "native-macos", "packaging"):
+        for name in ("plugin", "launchers", "native", "native-macos", "web", "web-macos", "packaging"):
             job = jobs(CI)[name]
             self.assertIn("github.event_name != 'pull_request' ||", job, name)
         changes = jobs(CI)["changes"]

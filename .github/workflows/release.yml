@@ -94,7 +94,7 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # Fails when native/Cargo.toml and web/package.json pin different core
+      # Fails when native/Cargo.toml and web/core-sdk.json pin different core
       # releases, or when the GUI version differs from the release version (the
       # binary reports the Cargo version, the app bundle the release version).
       - name: Resolve the core pin
@@ -103,7 +103,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          packaging/core-pin --expect-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
+          packaging/core-pin --require-web --expect-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
 
   # The same jobs that gate a pull request, called as a workflow so no job is
   # defined twice.
@@ -178,9 +178,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # web/ is made installable by its own surface slice; this job builds the
-  # archive from web/release/package.sh as soon as `bun install --frozen-lockfile`
-  # works in web/.
+  # web/ is its own Bun workspace. Its core SDK tarballs are packed from the
+  # revision in web/core-sdk.json and served locally while the dependencies are
+  # installed (a pin that names a core release needs neither step's work).
   package-web:
     name: Package the web control center for linux-x86_64
     needs: [prepare, ci]
@@ -197,9 +197,13 @@ jobs:
         with:
           bun-version-file: web/package.json
 
+      - name: Pack the core SDK tarballs
+        working-directory: web
+        run: bun scripts/pack-core-sdk.ts
+
       - name: Install web dependencies
         working-directory: web
-        run: bun install --frozen-lockfile
+        run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
 
       - name: Build and package
         id: package
@@ -318,10 +322,15 @@ jobs:
         with:
           bun-version-file: web/package.json
 
+      - name: Pack the core SDK tarballs
+        if: matrix.component == 'web'
+        working-directory: web
+        run: bun scripts/pack-core-sdk.ts
+
       - name: Install web dependencies
         if: matrix.component == 'web'
         working-directory: web
-        run: bun install --frozen-lockfile
+        run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
 
       # The compiled backend (Bun runtime plus the compiled SPA), smoke-tested
       # unsigned by package.sh; signing happens in the signing job.
@@ -533,10 +542,15 @@ jobs:
         with:
           bun-version-file: web/package.json
 
+      - name: Pack the core SDK tarballs
+        if: matrix.component == 'web'
+        working-directory: web
+        run: bun scripts/pack-core-sdk.ts
+
       - name: Install web dependencies
         if: matrix.component == 'web'
         working-directory: web
-        run: bun install --frozen-lockfile
+        run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
 
       - name: Smoke-test the packaged web backend
         if: matrix.component == 'web'
