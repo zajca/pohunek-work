@@ -1,0 +1,69 @@
+#!/bin/sh
+# Build the pohunek-gui release binary natively for Apple Silicon.
+#
+# usage: build-release
+#
+# Prints the directory holding the built binary on stdout. Runs only on an
+# arm64 Mac, from anywhere inside the repository. The build is locked to
+# native/Cargo.lock, targets the deployment target in DEPLOYMENT_TARGET next to
+# this script, and maps the native workspace, the cargo home (which holds the
+# pinned core crates), and the toolchain sysroot to fixed names so no
+# build-machine path reaches the binary (`packaging/macos/audit-macho` checks
+# that). `CARGO_TARGET_DIR`, `RUSTFLAGS` (for example `-D warnings`), and
+# `CARGO_LOCKED_FLAG` are honored; `CARGO_LOCKED_FLAG=` drops `--locked` for
+# acceptance builds of a throwaway version.
+
+set -eu
+
+fail() {
+    printf 'build-release: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -eq 0 ] || fail "usage: build-release"
+[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] \
+    || fail "native Apple Silicon builds run on an arm64 Mac only"
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)  # the native workspace
+target=aarch64-apple-darwin
+MACOSX_DEPLOYMENT_TARGET=$(tr -d ' \n' < "$script_dir/DEPLOYMENT_TARGET")
+export MACOSX_DEPLOYMENT_TARGET
+
+cd "$root"
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+sysroot=$(rustc --print sysroot)
+# Flags travel in CARGO_ENCODED_RUSTFLAGS (separated by the unit separator), so
+# a checkout, cargo home, or sysroot path containing a space stays one argument.
+# The caller's own RUSTFLAGS (for example `-D warnings`) are kept.
+unit_separator=$(printf '\037')
+encoded=${CARGO_ENCODED_RUSTFLAGS:-}
+if [ -z "$encoded" ]; then
+    for flag in ${RUSTFLAGS:-}; do
+        encoded=${encoded:+$encoded$unit_separator}$flag
+    done
+fi
+for flag in \
+    "--remap-path-prefix=$root=/build/pohunek-native" \
+    "--remap-path-prefix=$cargo_home=/build/cargo" \
+    "--remap-path-prefix=$sysroot=/build/rust-sysroot"; do
+    encoded=${encoded:+$encoded$unit_separator}$flag
+done
+CARGO_ENCODED_RUSTFLAGS=$encoded
+export CARGO_ENCODED_RUSTFLAGS
+unset RUSTFLAGS
+# Archive members written by ld64 or ar carry no timestamps.
+ZERO_AR_DATE=1
+export ZERO_AR_DATE
+
+locked=${CARGO_LOCKED_FLAG---locked}
+# shellcheck disable=SC2086
+cargo build --release $locked --target "$target" -p pohunek-gui --bin pohunek-gui >&2
+
+target_dir=${CARGO_TARGET_DIR:-$root/target}
+# Cargo resolved a relative override against the native workspace root.
+case $target_dir in
+    /*) ;;
+    *) target_dir=$root/$target_dir ;;
+esac
+printf '%s\n' "$target_dir/$target/release"

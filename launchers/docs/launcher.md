@@ -132,3 +132,22 @@ call that starts the agent — never as a separate post-launch step. Because
 both surfaces build the metadata from the one shared implementation, a link
 written by a launch script is byte-identical to one written by the GUI for the
 same work item; the native GUI follows the same convention.
+
+## Release archive
+
+Each release attaches `pohunek-launchers-<version>-noarch.tar.gz` (with a
+`.sha256` file): the launcher scripts, `templates/` (the default
+`launcher.conf`, the sway drop-in and the prompt templates) and these guides, with
+a `MANIFEST` that names the core release the surfaces are pinned to. It is
+the same content `pohunek-work setup` embeds; use `pohunek-work setup` when the
+`pohunek-work` binary is installed, or unpack the archive and copy the scripts
+into `$XDG_DATA_HOME/pohunek/bin` by hand:
+
+```sh
+gh release download v<version> -R zajca/pohunek-work -p 'pohunek-launchers-*'
+sha256sum -c pohunek-launchers-<version>-noarch.tar.gz.sha256
+tar -xzf pohunek-launchers-<version>-noarch.tar.gz
+```
+
+`gh` needs `gh auth login`; while the repository is public the asset URLs also
+work with `curl -LO`.

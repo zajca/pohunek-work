@@ -248,8 +248,8 @@ open it from Finder.
   `pohunek service install` places it. Install the daemon archive first.
 - It reads the same `~/.config/pohunek/gui.toml` and the same keychain items as
   the unbundled binary.
-- A development build (`packaging/macos/package --development gui ...`) is
-  unsigned, named `...-unsigned-development`, and never released.
+- A development build (`packaging/macos/package --development gui <version>
+  <bindir> <output-dir>`) is unsigned, named `...-unsigned-development`, and never released.
 - If Gatekeeper refuses an app that was downloaded with a browser, verify it
   with `spctl --assess --type execute --verbose=4 Pohunek.app` and
   `codesign --verify --deep --strict Pohunek.app`; do not disable Gatekeeper or
@@ -261,6 +261,23 @@ open it from Finder.
 Provider-specific GUI configuration and `open_url_command` are no longer read.
 Unknown legacy TOML fields are ignored by Serde, but they should be removed from
 maintained configuration files.
+
+## Install from a release
+
+Each release of this repository attaches `pohunek-gui-<version>-x86_64-unknown-linux-gnu.tar.gz`
+(glibc, Linux x86_64) and the macOS archive above, each with a `.sha256` file
+and a `MANIFEST` that names the core release the GUI was built against.
+
+```sh
+gh release download v<version> -R zajca/pohunek-work -p 'pohunek-gui-*-x86_64-unknown-linux-gnu.tar.gz*'
+sha256sum -c pohunek-gui-<version>-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf pohunek-gui-<version>-x86_64-unknown-linux-gnu.tar.gz
+pohunek-gui-<version>-x86_64-unknown-linux-gnu/pohunek-gui
+```
+
+`gh` needs `gh auth login`; while the repository is public the asset URLs also
+work with `curl -LO`. The GUI needs the `pohunek` CLI and daemon from the core
+release named in the `MANIFEST` (`core` line); install them from core's release.
 
 ## Running
 

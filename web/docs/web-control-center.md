@@ -229,3 +229,16 @@ family; a failure before the configuration loads lands in `launchd.stderr` in th
 same directory. The signed executable carries the JIT entitlements Bun documents
 for standalone executables.
 
+## Release archives
+
+Each release of this repository attaches
+`pohunek-web-<version>-linux-x86_64.tar.gz` and
+`pohunek-web-<version>-aarch64-apple-darwin.tar.gz`, each with a `.sha256` file;
+the `MANIFEST` inside names the core release (`core` line) the backend was built
+against, and the daemon on the host must be that release's. Download and verify
+one with `gh release download v<version> -R zajca/pohunek-work -p 'pohunek-web-*-linux-x86_64.tar.gz*'`
+(needs `gh auth login`; while the repository is public the asset URL works with
+`curl -LO`) and `sha256sum -c <archive>.sha256`, then unpack it and run its
+`install.sh`. `web/release/package.sh <version> [target]` builds the same archive
+locally; it reads the core pin from `packaging/core-pin` unless
+`POHUNEK_CORE_REF` is set.

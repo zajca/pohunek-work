@@ -1,0 +1,38 @@
+#!/bin/sh
+# Stage, seal, and archive one unsigned release archive (Linux targets and the
+# architecture-independent launchers archive).
+#
+# usage: make-archive <component> <version> <target> <input> <output-dir>
+#
+# Runs `stage-archive`, `write-manifest` (signing state `none`, the pinned core
+# version from POHUNEK_CORE_REF), and `archive`, and prints the archive path on
+# stdout. POHUNEK_CORE_REF is required (`packaging/core-pin` prints it): an
+# archive without the pin is never produced. `SOURCE_DATE_EPOCH` stamps the
+# archive and defaults to the commit time of HEAD. Run from the repository root.
+
+set -eu
+
+fail() {
+    printf 'make-archive: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -eq 5 ] || fail "usage: make-archive <component> <version> <target> <input> <output-dir>"
+component=$1
+version=$2
+target=$3
+input=$4
+output=$5
+
+[ -n "${POHUNEK_CORE_REF:-}" ] || fail "POHUNEK_CORE_REF is not set: an archive records the pinned core version"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) || fail "cannot read the commit time; set SOURCE_DATE_EPOCH"
+fi
+export SOURCE_DATE_EPOCH
+
+name=$("$script_dir/stage-archive" "$component" "$version" "$target" "$input" "$output")
+sh "$script_dir/write-manifest" --core "$POHUNEK_CORE_REF" "$output/$name" "$component" "$version" "$target" none
+sh "$script_dir/archive" "$output" "$name" "$output"
+output=$(CDPATH= cd -- "$output" && pwd -P)
+printf '%s\n' "$output/$name.tar.gz"

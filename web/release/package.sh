@@ -45,8 +45,18 @@ readonly input="${output_dir}/input-${target}"
 readonly archive="${output_dir}/${name}.tar.gz"
 readonly checksum="${archive}.sha256"
 
-# The Bun workspace root is the repository root; every Bun command runs there.
-cd "${repository_root}"
+# The manifest records the core version this build is pinned to. The release
+# workflow passes it in; a local run reads it from the pins.
+if [[ "${mode}" != "--input-only" && -z "${POHUNEK_CORE_REF:-}" ]]; then
+  POHUNEK_CORE_REF="$(cd "${repository_root}" && packaging/core-pin | sed -n 's/^core_ref=//p')"
+  if [[ -z "${POHUNEK_CORE_REF}" ]]; then
+    printf '%s\n' "the pinned core version could not be resolved (packaging/core-pin)" >&2
+    exit 1
+  fi
+fi
+
+# web/ is the Bun workspace root; every Bun command runs there.
+cd "${web_root}"
 rm -rf -- "${input}"
 rm -f -- "${archive}" "${checksum}"
 mkdir -p "${input}/frontend"
@@ -58,12 +68,12 @@ bun build \
   --no-compile-autoload-dotenv \
   --no-compile-autoload-bunfig \
   --outfile="${input}/pohunek-web" \
-  ./web/backend/src/entrypoint.ts
+  ./backend/src/entrypoint.ts
 
-cp -R web/frontend/dist/. "${input}/frontend/"
-cp web/release/backend.env.example web/release/install.sh web/release/README.md "${input}/"
+cp -R frontend/dist/. "${input}/frontend/"
+cp release/backend.env.example release/install.sh release/README.md "${input}/"
 if [[ "${target}" == "linux-x86_64" ]]; then
-  cp web/backend/systemd/pohunek-backend.service.in "${input}/"
+  cp backend/systemd/pohunek-backend.service.in "${input}/"
 fi
 chmod 0755 "${input}/install.sh"
 
@@ -73,7 +83,7 @@ bash -n "${input}/install.sh"
 
 # The compiled backend serves the SPA with a fixture daemon. The macOS target
 # is built and run natively on an arm64 Mac.
-bun run web/release/smoke.ts "${input}/pohunek-web" "${input}/frontend"
+bun run release/smoke.ts "${input}/pohunek-web" "${input}/frontend"
 
 if [[ "${mode}" == "--input-only" ]]; then
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -83,11 +93,14 @@ if [[ "${mode}" == "--input-only" ]]; then
   exit 0
 fi
 
+# The packaging scripts run from the repository root, which holds the README
+# and the license texts they copy.
+cd "${repository_root}"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
 export SOURCE_DATE_EPOCH
-packaging/stage-archive web "${version}" "${target}" "${input}" "${web_root}" "${output_dir}" > /dev/null
+packaging/stage-archive web "${version}" "${target}" "${input}" "${output_dir}" > /dev/null
 test -x "${output_dir}/${name}/pohunek-web"
-sh packaging/write-manifest "${output_dir}/${name}" web "${version}" "${manifest_triple}" none
+sh packaging/write-manifest --core "${POHUNEK_CORE_REF}" "${output_dir}/${name}" web "${version}" "${manifest_triple}" none
 sh packaging/archive "${output_dir}" "${name}" "${output_dir}"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then

@@ -4,12 +4,14 @@ name: CI
 # pull request runs a surface's job only when that surface (or the workflow
 # itself) changes; pushes to main, the weekly schedule and manual dispatch run
 # every job. The `ci` job always runs and is the single required check, so a
-# skipped surface never leaves a missing status.
+# skipped surface never leaves a missing status. The release workflow calls
+# this workflow as its gate; a call from a tag push runs every job.
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
   schedule:
     - cron: "17 4 * * 1"
 
@@ -30,14 +32,15 @@ jobs:
       plugin: ${{ steps.filter.outputs.plugin }}
       launchers: ${{ steps.filter.outputs.launchers }}
       native: ${{ steps.filter.outputs.native }}
+      packaging: ${{ steps.filter.outputs.packaging }}
     steps:
-      # Push events resolve the filter with git against the previous commit,
-      # which needs more than a depth-1 checkout.
+      # Only pull requests read the filter outputs; every other event runs all
+      # jobs, so a tag push (the release gate) needs no path comparison.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+        if: ${{ github.event_name == 'pull_request' }}
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: filter
+        if: ${{ github.event_name == 'pull_request' }}
         with:
           filters: |
             plugin:
@@ -49,7 +52,15 @@ jobs:
               - '.github/workflows/ci.yml'
             native:
               - 'native/**'
+              - 'packaging/**'
               - '.github/workflows/ci.yml'
+            packaging:
+              - 'packaging/**'
+              - 'native/packaging/**'
+              - 'web/packaging/**'
+              - 'native/scripts/**'
+              - 'web/release/**'
+              - '.github/workflows/**'
 
   plugin:
     needs: changes
@@ -115,6 +126,36 @@ jobs:
           else
             bun test tests/launcher-scripts.test.ts tests/lib-timeout.test.ts
           fi
+
+  # The release packaging scripts shared by native/ and web/. The web surface's
+  # filter lists `packaging/**` too, because its installer tests run the
+  # manifest and verification scripts from there.
+  packaging:
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Packaging script tests
+        run: python3 -m unittest discover -s packaging/tests
+
+      - name: Lint the workflows and their shell steps
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
+      # Error severity only: the scripts use the `CDPATH= cd` idiom, which
+      # shellcheck reports as a warning.
+      - name: Shellcheck the packaging scripts
+        run: |
+          shellcheck --severity=error \
+            packaging/archive packaging/stage-archive packaging/write-manifest \
+            packaging/verify-archive packaging/make-archive packaging/macos/* \
+            native/packaging/macos/build-release native/packaging/macos/build-app-bundle \
+            native/scripts/smoke-gui-release native/scripts/smoke-gui-release-macos \
+            native/scripts/acceptance/macos-gui-launch \
+            web/release/package.sh web/release/install.sh
 
   native:
     needs: changes
@@ -307,7 +348,7 @@ jobs:
 
   ci:
     if: ${{ always() }}
-    needs: [changes, plugin, launchers, native, native-macos]
+    needs: [changes, plugin, launchers, native, native-macos, packaging]
     runs-on: ubuntu-latest
     steps:
       # A skipped surface job is a pass; a failed or cancelled one is not.
