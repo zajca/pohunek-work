@@ -1,10 +1,13 @@
 #!/usr/bin/env bun
-// Command line entry point: `pohunek-work list`, `do` and `doctor`.
+// Command line entry point: `pohunek-work list`, `do`, `doctor`, `setup` and `tui`.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
+import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupStep } from "./commands/setup.ts";
+import { SetupIoError } from "./setup/install.ts";
+import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
@@ -25,6 +28,10 @@ const USAGE = `usage:
   pohunek-work do <key> ready [--project <label>] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--dry-run [--json]]
   pohunek-work doctor
+  pohunek-work setup [--force] [--json]
+  pohunek-work setup scripts [--force] [--json]
+  pohunek-work setup config [--force] [--json]
+  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-keybind <key>] [--json]
   pohunek-work tui
 
 merge is not an action: merging stays manual.
@@ -201,9 +208,59 @@ async function doCommand(argv: readonly string[]): Promise<number> {
   }
 }
 
+function parseSetupArgs(argv: readonly string[]): SetupOptions {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...argv],
+      options: {
+        force: { type: "boolean", default: false },
+        print: { type: "boolean", default: false },
+        keybind: { type: "string" },
+        "issue-keybind": { type: "string" },
+        json: { type: "boolean", default: false },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+    const [sub, ...extra] = positionals;
+    if (extra.length > 0) throw new UsageError(`unexpected argument: ${extra.join(" ")}`);
+    const step: SetupStep | undefined = sub === undefined ? "all" : SETUP_STEPS.find((name) => name === sub && name !== "all");
+    if (step === undefined) throw new UsageError(`unknown setup step: ${String(sub)} (known: ${SETUP_STEPS.filter((name) => name !== "all").join(", ")})`);
+    const sway = step === "sway";
+    if (!sway && (values.print || values.keybind !== undefined || values["issue-keybind"] !== undefined)) {
+      throw new UsageError("--print, --keybind and --issue-keybind apply to `setup sway` only");
+    }
+    if (values.print && values.force) throw new UsageError("--print and --force exclude each other");
+    return {
+      step,
+      force: values.force,
+      print: values.print,
+      keybind: values.keybind ?? DEFAULT_KEYBINDS.keybind,
+      issueKeybind: values["issue-keybind"] ?? DEFAULT_KEYBINDS.issueKeybind,
+      json: values.json,
+    };
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
+  }
+}
+
+async function setupCommand(argv: readonly string[]): Promise<number> {
+  const options = parseSetupArgs(argv);
+  try {
+    const output = await runSetup(options, { env: process.env, platform: process.platform, cliVersion: pkg.version });
+    process.stdout.write(output.stdout);
+    return 0;
+  } catch (error) {
+    if (error instanceof SetupPathError) return reportError(options.json, "configuration", "setup_paths", error.message);
+    if (error instanceof SetupIoError) return reportError(options.json, "action", "setup_io", error.message);
+    throw error;
+  }
+}
+
 async function doctorCommand(argv: readonly string[]): Promise<number> {
   if (argv.length > 0) throw new UsageError(`doctor takes no arguments: ${argv.join(" ")}`);
-  const report = await runDoctor({ configDir: resolveConfigDir() });
+  const report = await runDoctor({ configDir: resolveConfigDir(), launcher: { env: process.env, platform: process.platform } });
   console.log(formatDoctorReport(report));
   return report.exitCode;
 }
@@ -268,6 +325,8 @@ async function main(argv: readonly string[]): Promise<number> {
         return await doCommand(rest);
       case "doctor":
         return await doctorCommand(rest);
+      case "setup":
+        return await setupCommand(rest);
       case "tui":
         return await tuiCommand(rest);
       default:

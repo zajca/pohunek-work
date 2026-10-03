@@ -322,3 +322,57 @@ test("a config without the [tui] table fails the config check naming the table",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+const LAUNCHER_NAMES = ["bin:rofi", "bin:swaymsg", "bin:python3", "terminal", "launcher_scripts", "sway_include"];
+
+test("without a launcher probe no launcher check runs", async () => {
+  const { deps } = makeDeps();
+  const report = await runDoctor(deps);
+  expect(report.checks.map((check) => check.name)).not.toContain("bin:rofi");
+});
+
+test("launcher findings are advisory: every one warns, the exit code stays 0", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pohunek-work-doctor-launcher-"));
+  try {
+    const { deps } = makeDeps();
+    const report = await runDoctor({ ...deps, launcher: { env: { PATH: dir, HOME: dir }, platform: "linux" } });
+    expect(report.exitCode).toBe(0);
+    const launcher = report.checks.slice(5);
+    expect(launcher.map((check) => check.name)).toEqual(LAUNCHER_NAMES);
+    expect(launcher.every((check) => check.ok && check.code === "warn")).toBe(true);
+    const lines = formatDoctorReport(report).split("\n");
+    expect(lines).toHaveLength(11);
+    expect(lines[5]).toBe("warn warn bin:rofi: 'rofi' not found on PATH");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a satisfied launcher check passes with code ok", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pohunek-work-doctor-launcher-"));
+  try {
+    const { deps } = makeDeps();
+    const report = await runDoctor({ ...deps, launcher: { env: { PATH: dir, HOME: dir, TERMINAL: "foot" }, platform: "linux" } });
+    expect(report.checks.find((check) => check.name === "terminal")).toEqual({
+      name: "terminal",
+      ok: true,
+      code: "ok",
+      message: "TERMINAL=foot",
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("launcher checks still run when the config is invalid, and the config failure keeps the exit code", async () => {
+  const { deps } = makeDeps({ config: new ConfigError("config.toml", "", "file not found") });
+  const report = await runDoctor({ ...deps, launcher: { env: { PATH: "/nonexistent", HOME: "/nonexistent" }, platform: "linux" } });
+  expect(report.exitCode).toBe(DOCTOR_EXIT_CODES.config_invalid);
+  expect(report.checks.map((check) => check.name)).toEqual(["config", ...LAUNCHER_NAMES]);
+});
+
+test("a real failure after advisory findings still decides the exit code", async () => {
+  const { deps } = makeDeps({ ghExit: 1 });
+  const report = await runDoctor({ ...deps, launcher: { env: { PATH: "/nonexistent", HOME: "/nonexistent" }, platform: "linux" } });
+  expect(report.exitCode).toBe(DOCTOR_EXIT_CODES.github_unauthenticated);
+});

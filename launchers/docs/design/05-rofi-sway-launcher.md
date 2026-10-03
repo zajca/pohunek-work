@@ -81,7 +81,7 @@ low-risk proof that "the chassis is an API," and it can land **before** Phase 4.
 
 ### Slice B — Launcher scripts (provider context + preset prompts)
 
-3. `scripts/pohunek-launch-issue <linear-id>` and `scripts/pohunek-launch-pr <gh-pr>` derive
+3. `launchers/pohunek-launch-issue <linear-id>` and `launchers/pohunek-launch-pr <gh-pr>` derive
    context from the provider (title/body/branch), render a **preset prompt from a
    template**, and start the session **with the first prompt atomically** via the
    new `session new --input <text>` (decided — one round-trip, no `new` → `input`
@@ -127,8 +127,8 @@ low-risk proof that "the chassis is an API," and it can land **before** Phase 4.
 - The **only** engine change is the `session list` filter API (Slice A); it is a
   read-side query addition with no protocol or session-semantics change, and it is
   shared with the Phase 4 browser client.
-- Everything else is scripts + sway IPC living under `scripts/` (or a companion
-  repo). The chassis stays provider-agnostic and WM-agnostic.
+- Everything else is scripts + sway IPC living under `launchers/` of the pohunek-work
+  repository. The chassis stays provider-agnostic and WM-agnostic.
 - Cross-host aggregation stays client-side (per-daemon `session list`), preserving
   "no central server."
 - The orchestration relies on the existing detach ≠ stop guarantee; the banner

@@ -1,6 +1,8 @@
 // `pohunek-work doctor`: verifies configuration, pohunek, project matching,
 // GitHub authentication and the Linear keyring entry. Every failure mode has a
-// distinct code and exit code. No secret value is read, kept or printed.
+// distinct code and exit code. The optional launcher requirements are reported
+// as advisory `warn` lines that never change the exit code. No secret value is
+// read, kept or printed.
 
 import { ConfigError, loadConfig as defaultLoadConfig } from "./config/index.ts";
 import {
@@ -8,6 +10,7 @@ import {
   parseOriginRepo,
 } from "./sources/pohunek.ts";
 import { keyringEntryPresent as defaultKeyringEntryPresent } from "./sources/keyring.ts";
+import { runLauncherChecks, type LauncherProbe } from "./launcher-doctor.ts";
 import type { PluginConfig } from "./types/config.ts";
 import type { PohunekProject } from "./types/sources.ts";
 import { exec as defaultExec, SpawnError, type Exec } from "./util/exec.ts";
@@ -26,7 +29,8 @@ export const DOCTOR_EXIT_CODES = {
 } as const;
 
 export type DoctorFailureCode = keyof typeof DOCTOR_EXIT_CODES;
-export type DoctorCode = "ok" | DoctorFailureCode;
+/** `warn` marks an advisory finding: the check counts as passed and the exit code is unaffected. */
+export type DoctorCode = "ok" | "warn" | DoctorFailureCode;
 
 export interface DoctorCheck {
   readonly name: string;
@@ -47,10 +51,16 @@ export interface DoctorDeps {
   readonly loadConfig?: typeof defaultLoadConfig;
   readonly createPohunekClient?: typeof defaultCreatePohunekClient;
   readonly keyringEntryPresent?: typeof defaultKeyringEntryPresent;
+  /** Adds the launcher requirement checks; absent means they are not run. */
+  readonly launcher?: LauncherProbe;
 }
 
 function pass(name: string, message: string): DoctorCheck {
   return { name, ok: true, code: "ok", message };
+}
+
+function advisory(name: string, message: string): DoctorCheck {
+  return { name, ok: true, code: "warn", message };
 }
 
 function failed(name: string, code: DoctorFailureCode, message: string): DoctorCheck {
@@ -141,6 +151,12 @@ async function checkKeyring(
   );
 }
 
+async function launcherChecks(deps: DoctorDeps): Promise<DoctorCheck[]> {
+  if (deps.launcher === undefined) return [];
+  const found = await runLauncherChecks(deps.launcher);
+  return found.map((check) => (check.ok ? pass(check.name, check.message) : advisory(check.name, check.message)));
+}
+
 export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const run = deps.exec ?? defaultExec;
   const load = deps.loadConfig ?? defaultLoadConfig;
@@ -154,6 +170,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   } catch (error) {
     if (error instanceof ConfigError) {
       checks.push(failed("config", "config_invalid", `${error.file}: key ${error.key}: ${error.message}`));
+      // The launcher requirements do not depend on the plugin configuration.
+      checks.push(...(await launcherChecks(deps)));
       return finish(checks);
     }
     throw error;
@@ -194,17 +212,19 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
 
   checks.push(await checkGithub(config, run));
   checks.push(await checkKeyring(config, presence, run));
+  checks.push(...(await launcherChecks(deps)));
   return finish(checks);
 }
 
 function finish(checks: readonly DoctorCheck[]): DoctorReport {
   const firstFailure = checks.find((check) => !check.ok);
-  const exitCode = firstFailure === undefined || firstFailure.code === "ok" ? 0 : DOCTOR_EXIT_CODES[firstFailure.code];
+  const exitCode =
+    firstFailure === undefined || firstFailure.code === "ok" || firstFailure.code === "warn" ? 0 : DOCTOR_EXIT_CODES[firstFailure.code];
   return { checks, exitCode };
 }
 
 export function formatDoctorReport(report: DoctorReport): string {
   return report.checks
-    .map((check) => `${check.ok ? "ok  " : "FAIL"} ${check.code} ${check.name}: ${check.message}`)
+    .map((check) => `${check.ok ? (check.code === "warn" ? "warn" : "ok  ") : "FAIL"} ${check.code} ${check.name}: ${check.message}`)
     .join("\n");
 }
