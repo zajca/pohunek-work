@@ -103,7 +103,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          packaging/core-pin --expect-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
+          packaging/core-pin --require-web --expect-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
 
   # The same jobs that gate a pull request, called as a workflow so no job is
   # defined twice.
