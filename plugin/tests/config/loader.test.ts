@@ -66,7 +66,7 @@ describe("loadConfig valid", () => {
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
       actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
-      notify: { command: "/usr/bin/notify-send" },
+      notify: { command: "/usr/bin/notify-send", timeoutMs: 5000 },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
       tui: {
@@ -162,7 +162,7 @@ describe("loadConfig missing keys", () => {
 
   test("missing table fails naming the table", async () => {
     const dir = await copyFixture();
-    await editFile(dir, "config.toml", (t) => t.replace(/\[notify\]\ncommand = .*\n/, ""));
+    await editFile(dir, "config.toml", (t) => t.replace(/\[notify\]\ncommand = .*\ntimeout_ms = .*\n/, ""));
     const error = await loadError(dir);
     expect(error.key).toBe("notify");
     expect(error.message).toBe("config.toml: notify is required");
@@ -217,6 +217,7 @@ describe("loadConfig invalid values", () => {
     ["relative gh_bin", 'gh_bin = "/usr/bin/gh"', 'gh_bin = "gh"', "github.gh_bin"],
     ["relative secret_tool_bin", 'secret_tool_bin = "/usr/bin/secret-tool"', 'secret_tool_bin = "secret-tool"', "linear.secret_tool_bin"],
     ["relative pohunek bin", 'bin = "/usr/local/bin/pohunek"', 'bin = "pohunek"', "pohunek.bin"],
+    ["zero notify timeout", "timeout_ms = 5000", "timeout_ms = 0", "notify.timeout_ms"],
     ["relative notify command", 'command = "/usr/bin/notify-send"', 'command = "notify-send"', "notify.command"],
     ["http endpoint", 'endpoint = "https://api.github.example/graphql"', 'endpoint = "http://api.github.example/graphql"', "github.endpoint"],
     ["non-url endpoint", 'endpoint = "https://linear.example/graphql"', 'endpoint = "not a url"', "linear.endpoint"],

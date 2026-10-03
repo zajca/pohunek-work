@@ -29,6 +29,7 @@ poll_interval_secs = 300
 
 [notify]
 command = "/usr/bin/notify-send"
+timeout_ms = 5000
 
 [log]
 max_string_length = 2000

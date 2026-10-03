@@ -38,6 +38,14 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.
+- `pohunek-work watch [--project <label>]` polls the same pipeline every
+  `[watch] poll_interval_secs` and sends one desktop notification (key and
+  reason, no titles) through `[notify] command` when a row becomes the owner's
+  turn. The previous turn of each row lives in memory only: a restart, or a
+  poll with an unavailable source, never notifies for rows already on the
+  owner's turn. It does not use `pohunek notifications watch` yet (spike S4);
+  the systemd unit (c.3) is installed from machine-management. Usage and logs:
+  [docs/watch-and-agents.md](docs/watch-and-agents.md).
 
 Every action plans from fresh data and refuses with a typed code when its rule
 no longer holds; every write action asks for confirmation unless `--yes` is
@@ -68,6 +76,7 @@ given.
 | --- | --- |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | The complete plan before the next pohunek release: verified pohunek CLI surface, decisions, architecture, configuration, milestones M0–M3 with definitions of done, testing, risks |
 | [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md) | Refined plan for M2 (links and actions): decisions, verified pohunek facts, spikes, steps M2a-M2d with definitions of done, risks |
+| [docs/watch-and-agents.md](docs/watch-and-agents.md) | How to run `watch` (configuration, what is and is not notified, logs) and how an agent drives pohunek work without growing context or spinning |
 | [docs/rfc.md](docs/rfc.md) | Target design: joining rules, the ten `on_turn` rules, interfaces, actions, storage, per-project configuration, autonomy levels, full 28-step roadmap including the pohunek release, task layer and relay stages |
 | [docs/work-overview.html](docs/work-overview.html) | Visual summary with diagrams (open in a browser) |
 

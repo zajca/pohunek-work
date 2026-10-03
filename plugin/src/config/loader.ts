@@ -150,8 +150,11 @@ function parseWatch(root: Table, file: string): WatchConfig {
 function parseNotify(root: Table, file: string): NotifyConfig {
   const table = requireTable(root, "notify", file);
   const path = ["notify"];
-  rejectUnknownKeys(table, ["command"], file, path);
-  return { command: readAbsolutePath(table, "command", file, path) };
+  rejectUnknownKeys(table, ["command", "timeout_ms"], file, path);
+  return {
+    command: readAbsolutePath(table, "command", file, path),
+    timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
+  };
 }
 
 function parseLog(root: Table, file: string): LogConfig {
