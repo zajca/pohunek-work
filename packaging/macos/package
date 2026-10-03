@@ -4,7 +4,7 @@
 # usage:
 #   package --development   <component> <version> <bindir> <output-dir>
 #   package --stage-release <component> <version> <bindir> <output-dir>
-#   package --sign-release  <component> <version> <staging-dir>
+#   package --adhoc-release <component> <version> <staging-dir>
 #
 # <component> is gui or web (the gui archive holds Pohunek.app, built here from
 # <bindir>/pohunek-gui by native/packaging/macos/build-app-bundle; for web,
@@ -13,18 +13,15 @@
 # staged tree is audited (`audit-macho`), then sealed with a MANIFEST and
 # archived reproducibly; the archive path is printed on stdout.
 #
-# A release is made in two steps so that no signing credential exists while the
-# tree is assembled. `--stage-release` assembles and audits the tree and needs
-# no secret; it prints the staging directory. `--sign-release` then signs the tree with the
-# Developer ID identity, has Apple notarize it (stapling app bundles), verifies
-# the result, and writes the manifest and the archive, so the manifest hashes the
-# final signed bytes and records `signing developer-id`. It audits the tree again
-# before signing (the tree came from another runner) and runs nothing from it. It needs the environment of `signing-keychain`
-# (MACOS_SIGNING_IDENTITY, MACOS_SIGNING_KEYCHAIN), of `notarize`
-# (APPLE_NOTARY_*), and MACOS_TEAM_ID, and fails when any is missing: a release
-# is never produced unsigned. Signing embeds Apple's secure timestamp, so a
-# signed archive differs between runs; the unsigned content it wraps is
-# reproducible.
+# A release is made in two steps so that the tree is assembled and signed on
+# separate runners. `--stage-release` assembles and audits the tree and prints
+# the staging directory. `--adhoc-release` then ad-hoc signs every Mach-O file
+# and app bundle of the tree (`sign`), verifies the result
+# (`verify-signed --adhoc`), and writes the manifest and the archive, so the
+# manifest hashes the final signed bytes and records `signing adhoc`. It audits
+# the tree again before signing (the tree came from another runner) and runs
+# nothing from it. An ad-hoc signature uses no certificate and no keychain, so
+# the step needs no credential.
 #
 # `--development` builds an unsigned archive for local use and CI acceptance
 # (an app bundle gets only an ad-hoc seal so it can launch). Its name ends in
@@ -47,12 +44,12 @@ fail() {
 }
 
 usage="usage: package --development|--stage-release <component> <version> <bindir> <output-dir>
-       package --sign-release <component> <version> <staging-dir>"
+       package --adhoc-release <component> <version> <staging-dir>"
 [ "$#" -ge 1 ] || fail "$usage"
 mode=$1
 case $mode in
     --development | --stage-release) [ "$#" -eq 5 ] || fail "$usage" ;;
-    --sign-release) [ "$#" -eq 4 ] || fail "$usage" ;;
+    --adhoc-release) [ "$#" -eq 4 ] || fail "$usage" ;;
     *) fail "unsupported mode: $mode
 $usage" ;;
 esac
@@ -82,14 +79,7 @@ write_manifest() {
     fi
 }
 
-if [ "$mode" = --sign-release ]; then
-    # Checked first so a release with a missing credential fails before any
-    # work is done.
-    for variable in MACOS_SIGNING_IDENTITY MACOS_SIGNING_KEYCHAIN MACOS_TEAM_ID \
-        APPLE_NOTARY_KEY_P8_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
-        eval "value=\${$variable:-}"
-        [ -n "$value" ] || fail "$variable is not set: a release is never produced unsigned"
-    done
+if [ "$mode" = --adhoc-release ]; then
     staging=$(CDPATH= cd -- "$4" && pwd -P)
     output=$(dirname -- "$staging")
     name=$(basename -- "$staging")
@@ -111,9 +101,8 @@ if [ "$mode" = --sign-release ]; then
     # shellcheck disable=SC2086
     "$script_dir/audit-macho" $require --forbid-string "$root" "$staging" >&2
     "$script_dir/sign" "$staging" >&2
-    "$script_dir/notarize" "$staging" >&2
-    "$script_dir/verify-signed" --notarized --team-id "$MACOS_TEAM_ID" "$staging" >&2
-    write_manifest "$staging" developer-id
+    "$script_dir/verify-signed" --adhoc "$staging" >&2
+    write_manifest "$staging" adhoc
     sh "$root/packaging/archive" "$output" "$name" "$output"
     printf '%s\n' "$output/$name.tar.gz"
     exit 0

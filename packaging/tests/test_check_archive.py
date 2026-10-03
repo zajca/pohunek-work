@@ -59,13 +59,31 @@ class CheckArchiveTest(unittest.TestCase):
         for extra, message in (
             (("--core", "v9.9.9"), "MANIFEST core"),
             (("--target", "aarch64-apple-darwin"), "MANIFEST target"),
-            (("--signing", "developer-id"), "MANIFEST signing"),
+            (("--signing", "adhoc"), "MANIFEST signing"),
         ):
             result = self.check(archive, *extra)
             self.assertEqual(result.returncode, 1, extra)
             self.assertIn(message, result.stderr)
         result = self.check(archive, component="web")
         self.assertIn("MANIFEST component", result.stderr)
+
+    def test_an_adhoc_archive_passes_only_when_adhoc_is_expected(self):
+        _, archive = self.build()
+        key = f"{archive.name[: -len('.tar.gz')]}/MANIFEST"
+        self.rewrite(archive, lambda m: m.update({key: m[key].replace(b"signing none\n", b"signing adhoc\n")}))
+        self.refresh_checksum(archive)
+        ok = self.check(archive, "--signing", "adhoc")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        for extra in ((), ("--signing", "none")):
+            result = self.check(archive, *extra)
+            self.assertEqual(result.returncode, 1, extra)
+            self.assertIn("MANIFEST signing", result.stderr)
+
+    def test_signing_states_other_than_none_and_adhoc_are_not_accepted(self):
+        _, archive = self.build()
+        for state in ("developer-id", "notarized", "unsigned-development"):
+            result = self.check(archive, "--signing", state)
+            self.assertEqual(result.returncode, 2, state)
 
     def test_a_missing_or_wrong_checksum_fails(self):
         _, archive = self.build()

@@ -8,13 +8,14 @@
 # `vX.Y.Z` or a 40-digit commit, see `packaging/core-pin`), and the SHA-256 of
 # every regular file below the staging directory, so the installer can prove
 # that what it is about to install is complete, intact, and built for this host
-# before it changes anything. It is the last step of
-# assembling an archive: signing, stapling, and bundle assembly come first
-# because the hashes cover the final bytes.
+# before it changes anything. It is the last step of assembling an archive:
+# signing and bundle assembly come first because the hashes cover the final
+# bytes.
 #
-# <signing> is `none` for archives without a signing step (Linux),
-# `developer-id` for a signed and notarized macOS archive, and
-# `unsigned-development` for a local macOS build that must not be distributed.
+# <signing> is `none` for archives without a signing step (Linux), `adhoc` for
+# a macOS archive whose Mach-O files and app bundles carry an ad-hoc signature,
+# and `unsigned-development` for a local macOS build that must not be
+# distributed.
 # <minimum-macos> is required for an `apple-darwin` target and refused for any
 # other.
 
@@ -66,7 +67,7 @@ case $target in
     '' | *[!a-z0-9_-]*) fail "target must be a lowercase target triple: $target" ;;
 esac
 case $signing in
-    none | developer-id | unsigned-development) ;;
+    none | adhoc | unsigned-development) ;;
     *) fail "unsupported signing state: $signing" ;;
 esac
 case $target in

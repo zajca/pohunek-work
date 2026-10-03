@@ -26,7 +26,6 @@ SCRIPTS = [
     MACOS / "audit-macho",
     MACOS / "package",
     MACOS / "sign",
-    MACOS / "notarize",
     MACOS / "verify-signed",
     NATIVE_MACOS / "build-release",
     NATIVE_MACOS / "build-app-bundle",
@@ -315,7 +314,7 @@ class ToolingTest(unittest.TestCase):
             self.assertTrue(script.read_text().startswith(("#!/bin/sh\n", "#!/usr/bin/env sh\n")), script)
 
     def test_the_bash_scripts_parse_as_bash(self):
-        for script in (MACOS / "signing-keychain", ROOT / "web" / "release" / "package.sh"):
+        for script in (ROOT / "web" / "release" / "package.sh",):
             self.assertTrue(os.stat(script).st_mode & stat.S_IXUSR, script)
             result = subprocess.run(["bash", "-n", str(script)], stderr=subprocess.PIPE, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -357,7 +356,15 @@ class ToolingTest(unittest.TestCase):
         development = text.split('if [ "$mode" = --development ]; then', 1)[1].split("\nfi", 1)[0]
         self.assertIn("suffix=-unsigned-development", development)
         self.assertIn("write_manifest \"$staging\" unsigned-development", text)
-        self.assertIn("developer-id", text.split("--sign-release ]; then", 1)[1])
+        release = text.split("--adhoc-release ]; then", 1)[1].split("\nfi", 1)[0]
+        self.assertIn("write_manifest \"$staging\" adhoc", release)
+        self.assertIn('verify-signed" --adhoc "$staging"', release)
+
+    def test_no_release_step_reads_a_credential(self):
+        for script in (MACOS / "package", MACOS / "sign", MACOS / "verify-signed"):
+            text = script.read_text()
+            for variable in ("MACOS_SIGNING", "MACOS_TEAM_ID", "APPLE_NOTARY", "MACOS_CERTIFICATE"):
+                self.assertNotIn(variable, text, script)
 
 
 if __name__ == "__main__":

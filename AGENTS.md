@@ -50,6 +50,20 @@ Guidelines: `.agents/rust-guidelines/SKILL.md` is the index; always read
 `#[expect(..., reason = "...")]` over `#[allow]`, keep headless state and I/O in
 `gui-core` and the Iced view in `gui`, and use typed `thiserror` errors.
 
+## Releases and macOS signing
+
+`.github/workflows/release.yml` publishes the Linux archives and the macOS
+archives together on a `vX.Y.Z` tag; there is no opt-out for macOS. macOS
+archives are ad-hoc signed (`packaging/macos/package --adhoc-release`) and no
+job uses a secret, environment or
+repository variable. Only `attest` holds `id-token: write` and
+`attestations: write` and it checks out nothing and runs no downloaded file;
+only `publish` holds `contents: write`. `packaging/tests/test_release_workflow.py`
+pins these boundaries; changing a job's permissions or steps means updating its
+allowlist on purpose. Distribution is the Homebrew tap `zajca/homebrew-pohunek`
+(formulae `pohunek-gui`, `pohunek-web`), owned by core. Verify a release asset
+with `gh attestation verify <archive> --repo zajca/pohunek-work`.
+
 ## Conventions
 
 - Comments and all repository text are English. A comment states current
