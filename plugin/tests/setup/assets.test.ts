@@ -66,10 +66,19 @@ test("the review template references only review variables", () => {
 
 test("launcher.conf carries host-level keys only", () => {
   const conf = asset("launcher.conf");
-  for (const removed of ["project=", "agent=", "issue_action", "pr_action", "banner=", "banner_interval_seconds"]) {
+  // attach_reconnect_* belong to core's attach.conf, which `pohunek attach` reads.
+  for (const removed of [
+    "project=",
+    "agent=",
+    "issue_action",
+    "pr_action",
+    "banner=",
+    "banner_interval_seconds",
+    "attach_reconnect",
+  ]) {
     expect(conf).not.toContain(removed);
   }
-  for (const key of ["host=local", "terminal=", "linear_cli=linear", "attach_reconnect_max_attempts=3"]) {
+  for (const key of ["host=local", "terminal=", "linear_cli=linear", "mark_retry_count=20"]) {
     expect(conf).toContain(key);
   }
 });
