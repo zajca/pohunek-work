@@ -11,6 +11,7 @@ import launcherConf from "../../../launchers/templates/launcher.conf" with { typ
 import issueTemplate from "../../../launchers/templates/prompts/issue.tmpl" with { type: "text" };
 import prTemplate from "../../../launchers/templates/prompts/pr.tmpl" with { type: "text" };
 import reviewTemplate from "../../../launchers/templates/prompts/review.tmpl" with { type: "text" };
+import swayIssueBindingTemplate from "../../../launchers/templates/sway-issue-binding.conf.tmpl" with { type: "text" };
 import swayDropinTemplate from "../../../launchers/templates/sway-dropin.conf.tmpl" with { type: "text" };
 
 export interface Asset {
@@ -37,21 +38,39 @@ export const CONFIG_ASSETS: readonly Asset[] = [
 ];
 
 export interface SwayDropinValues {
+  /** Quoted command words of the session switcher. */
   readonly launcher: string;
-  readonly issue_launcher: string;
   readonly keybind: string;
-  readonly issue_keybind: string;
+  /** The issue picker binding; null leaves it out. */
+  readonly issue?: {
+    readonly keybind: string;
+    /** Quoted command word of the issue picker. */
+    readonly launcher: string;
+    /** Quoted project argument. */
+    readonly project: string;
+  };
 }
 
-/** Variables the sway drop-in template may reference. */
 const PLACEHOLDER = /\{\{([a-z_]+)\}\}/g;
 
-/** Fills the sway drop-in template; a placeholder without a value is an error, never left in the output. */
-export function renderSwayDropin(values: SwayDropinValues, template: string = swayDropinTemplate): string {
-  const known = new Map<string, string>(Object.entries(values));
+/** Fills a template in one pass; a placeholder without a value is an error and a value is never expanded again. */
+function fill(template: string, values: Readonly<Record<string, string>>): string {
   return template.replace(PLACEHOLDER, (_match, name: string) => {
-    const value = known.get(name);
-    if (value === undefined) throw new Error(`sway drop-in template references unknown variable: ${name}`);
+    const value = values[name];
+    if (value === undefined) throw new Error(`sway template references unknown variable: ${name}`);
     return value;
   });
+}
+
+/** Builds the sway drop-in; the issue picker binding is present only when `values.issue` is given. */
+export function renderSwayDropin(values: SwayDropinValues): string {
+  const issueBinding =
+    values.issue === undefined
+      ? ""
+      : fill(swayIssueBindingTemplate, {
+          issue_keybind: values.issue.keybind,
+          issue_launcher: values.issue.launcher,
+          project: values.issue.project,
+        });
+  return fill(swayDropinTemplate, { keybind: values.keybind, launcher: values.launcher, issue_binding: issueBinding });
 }

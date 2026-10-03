@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadConfig } from "../src/config/index.ts";
@@ -352,12 +352,15 @@ test("a satisfied launcher check passes with code ok", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pohunek-work-doctor-launcher-"));
   try {
     const { deps } = makeDeps();
+    const foot = join(dir, "foot");
+    await writeFile(foot, "#!/bin/sh\n");
+    await chmod(foot, 0o755);
     const report = await runDoctor({ ...deps, launcher: { env: { PATH: dir, HOME: dir, TERMINAL: "foot" }, platform: "linux" } });
     expect(report.checks.find((check) => check.name === "terminal")).toEqual({
       name: "terminal",
       ok: true,
       code: "ok",
-      message: "TERMINAL=foot",
+      message: `TERMINAL 'foot' resolves to ${foot}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

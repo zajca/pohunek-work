@@ -21,3 +21,6 @@ export const DEFAULT_SWAY_ISSUE_KEYBIND = "$mod+i";
 
 /** Obsolete script names; `setup scripts --force` deletes them from the install directory. */
 export const OBSOLETE_SCRIPTS: readonly string[] = ["pohunek-session-banner"];
+
+/** The shell library every launcher entrypoint sources from its own directory. */
+export const SCRIPT_LIBRARY = "lib.sh";

@@ -148,6 +148,9 @@ test("setup rejects unknown steps and options that do not apply", async () => {
     ["setup", "scripts", "--print"],
     ["setup", "config", "--keybind", "$mod+x"],
     ["setup", "sway", "--print", "--force"],
+    ["setup", "scripts", "--issue-project", "ui"],
+    ["setup", "sway", "--issue-keybind", "$mod+g"],
+    ["setup", "sway", "--issue-project", ""],
   ];
   for (const args of cases) {
     const result = await run(args, dir);

@@ -44,8 +44,13 @@ Use the split setup commands when diagnosing or applying changes:
    review-dispatch session's prompt.
 3. `pohunek-work setup sway` writes the sway drop-in, or
    `pohunek-work setup sway --print` prints the snippet for manual review.
-   `--keybind` and `--issue-keybind` choose the keys (defaults `$mod+p` for the
-   session switcher and `$mod+i` for the Linear issue picker).
+   `--keybind` chooses the session switcher key (default `$mod+p`). The Linear
+   issue picker needs a project (`pohunek-rofi-issue <project> [action]`), so its
+   binding is generated only with `--issue-project <project>`;
+   `--issue-keybind` (default `$mod+i`) then chooses its key. Paths and the
+   project are quoted so that both sway's config parser and `sh` read them back
+   unchanged, whatever characters they contain; control characters and key
+   sequences containing `;`, `,`, quotes, `\` or `#` are refused.
 
 `pohunek-work setup` with no subcommand runs all three (scripts and drop-in on
 Linux, config only on macOS) and prints the next steps. Every command accepts
@@ -62,16 +67,16 @@ to replace the installed scripts (with `--force` the obsolete
 edits. `--force` replaces a file through a rename, so a symbolic link at the
 target is replaced and its referent is not written.
 
-The `$mod+i` binding starts `pohunek-rofi-issue`, which takes a project argument
-(`pohunek-rofi-issue <project> [action]`); edit the generated drop-in or bind a
-wrapper that supplies it.
-
 Verify the result with `pohunek-work doctor`. Besides its configuration, pohunek,
 GitHub and Linear checks it reports the launcher requirements as `warn` lines
 that never change the exit code: `bin:rofi`, `bin:swaymsg`, `bin:python3` (every
-script needs it), `terminal` (`terminal=` in `launcher.conf` or `$TERMINAL`),
-`launcher_scripts` (is `pohunek-rofi` installed) and `sway_include` (does the
-sway config include `config.d`). When the install directories cannot be derived
+script needs it), `terminal` (`terminal=` in `launcher.conf`, else `$TERMINAL`;
+the launcher runs the whole value as one program, so it is resolved as one
+executable and `kitty -e` is reported), `launcher_scripts` (every entrypoint is
+installed and executable and `lib.sh` is readable) and `sway_include` (an
+`include` directive of the sway config, with sway variables, `~`, `$HOME` and
+globs expanded, covers the generated drop-in; a mention of `config.d` elsewhere
+does not count). When the install directories cannot be derived
 from the environment a single `launcher_paths` warning replaces the path-based
 checks.
 

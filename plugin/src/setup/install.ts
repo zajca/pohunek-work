@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { CONFIG_ASSETS, renderSwayDropin, SCRIPT_ASSETS } from "./assets.ts";
 import type { SetupPaths } from "./paths.ts";
 import { configIncludesDropin, readSwayConfig } from "./sway-include.ts";
+import { hasControlCharacter, isPlainKeybind, quoteForSwayExec } from "./sway-quote.ts";
 import { OBSOLETE_SCRIPTS, SCRIPT_MODE, SWAY_DROPIN_DIR, SWAY_DROPIN_FILE } from "./settings.ts";
 
 export type WriteOutcome = "created" | "overwritten" | "unchanged" | "skipped";
@@ -36,6 +37,8 @@ export interface SwayResult {
   readonly outcome: WriteOutcome | null;
   readonly printed: boolean;
   readonly snippet: string;
+  /** Whether the issue picker binding is part of the snippet. */
+  readonly issue_binding: boolean;
   /** Whether the main sway config already includes the drop-in directory; false in print mode. */
   readonly include_present: boolean;
 }
@@ -48,6 +51,10 @@ export interface SwayOptions extends InstallOptions {
   readonly print: boolean;
   readonly keybind: string;
   readonly issueKeybind: string;
+  /** Project the issue picker is bound for; null leaves the issue binding out, the picker needs one. */
+  readonly issueProject: string | null;
+  /** Environment used to resolve variables in the sway config's include directives. */
+  readonly env: Readonly<Record<string, string | undefined>>;
 }
 
 /** A launcher file could not be written. */
@@ -168,35 +175,49 @@ export function swayDropinPath(paths: SetupPaths): string {
   return join(paths.swayConfigDir, SWAY_DROPIN_DIR, SWAY_DROPIN_FILE);
 }
 
-function hasControlCharacter(text: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  return /[\u0000-\u001f\u007f]/.test(text);
-}
-
-/** Builds the drop-in text; refuses values that would add a line to the sway config. */
-export function buildSwaySnippet(paths: SetupPaths, keybind: string, issueKeybind: string): string {
-  const values = {
-    launcher: join(paths.launcherBinDir, "pohunek-rofi"),
-    issue_launcher: join(paths.launcherBinDir, "pohunek-rofi-issue"),
-    keybind,
-    issue_keybind: issueKeybind,
-  };
-  for (const [name, value] of Object.entries(values)) {
+/** Builds the drop-in text; refuses values that would change what sway parses or add a line to its config. */
+export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "keybind" | "issueKeybind" | "issueProject">): string {
+  const words: [string, string][] = [
+    ["launcher path", join(paths.launcherBinDir, "pohunek-rofi")],
+    ["issue launcher path", join(paths.launcherBinDir, "pohunek-rofi-issue")],
+  ];
+  if (options.issueProject !== null) words.push(["issue project", options.issueProject]);
+  for (const [name, value] of words) {
     if (value === "" || hasControlCharacter(value)) {
       throw new SetupIoError(`sway drop-in value ${name} is empty or contains a control character`);
     }
   }
-  return renderSwayDropin(values);
+  const keybinds = [["keybind", options.keybind], ...(options.issueProject === null ? [] : [["issue keybind", options.issueKeybind]])];
+  for (const [name, value] of keybinds) {
+    if (!isPlainKeybind(value ?? "")) {
+      throw new SetupIoError(`sway drop-in ${name} ${JSON.stringify(value)} is not a plain key sequence`);
+    }
+  }
+  return renderSwayDropin({
+    launcher: quoteForSwayExec(words[0]?.[1] ?? ""),
+    keybind: options.keybind,
+    ...(options.issueProject === null
+      ? {}
+      : {
+          issue: {
+            keybind: options.issueKeybind,
+            launcher: quoteForSwayExec(words[1]?.[1] ?? ""),
+            project: quoteForSwayExec(options.issueProject),
+          },
+        }),
+  });
 }
 
 /** Prints (`print`) or writes the sway drop-in, then reports whether the main config includes the drop-in directory. */
 export async function installSway(paths: SetupPaths, options: SwayOptions): Promise<SwayResult> {
-  const snippet = buildSwaySnippet(paths, options.keybind, options.issueKeybind);
+  const snippet = buildSwaySnippet(paths, options);
   const path = swayDropinPath(paths);
+  const issueBinding = options.issueProject !== null;
   if (options.print) {
-    return { path, outcome: null, printed: true, snippet, include_present: false };
+    return { path, outcome: null, printed: true, snippet, issue_binding: issueBinding, include_present: false };
   }
   const outcome = await writeManaged(path, snippet, options);
   const config = await readSwayConfig(paths.swayConfigDir);
-  return { path, outcome, printed: false, snippet, include_present: config !== null && configIncludesDropin(config) };
+  const includePresent = config !== null && configIncludesDropin(config, { dropinPath: path, configDir: paths.swayConfigDir, env: options.env });
+  return { path, outcome, printed: false, snippet, issue_binding: issueBinding, include_present: includePresent };
 }

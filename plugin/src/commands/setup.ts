@@ -15,6 +15,8 @@ export interface SetupOptions {
   readonly print: boolean;
   readonly keybind: string;
   readonly issueKeybind: string;
+  /** `sway` only: bind the issue picker for this project; without it no issue binding is generated. */
+  readonly issueProject: string | null;
   readonly json: boolean;
 }
 
@@ -116,8 +118,9 @@ function nextSteps(platform: NodeJS.Platform, paths: SetupPaths): string[] {
   return [
     `Edit ${paths.configDir}/launcher.conf - set 'terminal' (and 'linear_cli' for Linear).`,
     "Pass a project id/label to launchers, for example `pohunek-launch-issue <project> <issue-id> [action]`.",
+    `Bind the Linear issue picker with \`pohunek-work setup sway --force --issue-project <project>\` (${DEFAULT_SWAY_ISSUE_KEYBIND} by default); it needs a project.`,
     `Ensure your sway config has: include ${paths.swayConfigDir}/${SWAY_DROPIN_DIR}/*`,
-    `Reload sway (swaymsg reload): ${DEFAULT_SWAY_KEYBIND} opens the session switcher, ${DEFAULT_SWAY_ISSUE_KEYBIND} the Linear issue picker.`,
+    `Reload sway (swaymsg reload): ${DEFAULT_SWAY_KEYBIND} opens the session switcher.`,
     "Run `pohunek-work doctor` to verify rofi, swaymsg, python3, the terminal and the installed scripts.",
   ];
 }
@@ -136,7 +139,7 @@ async function runSway(paths: SetupPaths, options: SetupOptions, deps: SetupDeps
     const skipped: SwaySkipped = { step: "sway", skipped: true, reason: SWAY_SKIPPED_REASON };
     return options.json ? envelope(deps.cliVersion, skipped) : `skipped sway: ${SWAY_SKIPPED_REASON}\n`;
   }
-  const result = await installSway(paths, options);
+  const result = await installSway(paths, { ...options, env: deps.env });
   if (options.json) return envelope(deps.cliVersion, { step: "sway", ...result });
   return result.printed ? result.snippet : lines(renderSway(paths, result));
 }
@@ -145,7 +148,7 @@ async function runAll(paths: SetupPaths, options: SetupOptions, deps: SetupDeps)
   const hasSway = platformHasSway(deps.platform);
   const scripts = hasSway ? await installScripts(paths, options) : null;
   const config = await installConfig(paths, options);
-  const sway = hasSway ? await installSway(paths, { ...options, print: false, ...DEFAULT_KEYBINDS }) : null;
+  const sway = hasSway ? await installSway(paths, { ...options, print: false, ...DEFAULT_KEYBINDS, issueProject: null, env: deps.env }) : null;
   const skipped: SkippedStep[] = hasSway
     ? []
     : [

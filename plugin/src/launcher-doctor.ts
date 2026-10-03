@@ -5,9 +5,11 @@
 // capabilities.
 import { access, constants, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { SCRIPT_ASSETS } from "./setup/assets.ts";
+import { swayDropinPath } from "./setup/install.ts";
 import { resolveSetupPaths, SetupPathError, type SetupPaths } from "./setup/paths.ts";
 import { configIncludesDropin, readSwayConfig } from "./setup/sway-include.ts";
-import { SWAY_DROPIN_DIR } from "./setup/settings.ts";
+import { SCRIPT_LIBRARY, SWAY_DROPIN_DIR } from "./setup/settings.ts";
 
 export interface LauncherCheck {
   readonly name: string;
@@ -90,11 +92,26 @@ async function configuredTerminal(paths: SetupPaths | null): Promise<string | nu
   }
 }
 
+/**
+ * The launcher runs the whole terminal value as one program name (`"$terminal_bin" -e ...`),
+ * so it is resolved as one executable and never split into words: a value such as `kitty -e`
+ * does not resolve.
+ */
+async function resolvedTerminal(probe: LauncherProbe, command: string, source: string): Promise<LauncherCheck> {
+  const resolved = await resolveExecutable(command, probe.env["PATH"]);
+  if (resolved !== null) return ok("terminal", `${source} '${command}' resolves to ${resolved}`);
+  return warn(
+    "terminal",
+    `${source} '${command}' does not resolve to one executable; the launcher runs the whole value as a single program name, so put arguments in a wrapper script, or fix the value`,
+  );
+}
+
+/** `terminal=` of launcher.conf wins over `$TERMINAL`, like in the launcher. */
 async function linuxTerminal(probe: LauncherProbe, paths: SetupPaths | null): Promise<LauncherCheck> {
   const configured = await configuredTerminal(paths);
-  if (configured !== null) return ok("terminal", `terminal=${configured} (launcher.conf)`);
+  if (configured !== null) return resolvedTerminal(probe, configured, "terminal= (launcher.conf)");
   const fromEnv = probe.env["TERMINAL"];
-  if (fromEnv !== undefined && fromEnv !== "") return ok("terminal", `TERMINAL=${fromEnv}`);
+  if (fromEnv !== undefined && fromEnv !== "") return resolvedTerminal(probe, fromEnv, "TERMINAL");
   return warn("terminal", "set $TERMINAL or 'terminal=' in launcher.conf (the rofi launcher needs a terminal)");
 }
 
@@ -123,21 +140,43 @@ async function macosTerminal(probe: LauncherProbe, paths: SetupPaths | null): Pr
   return warn(name, `${MACOS_TERMINAL_APP} not found and no 'terminal=' set in launcher.conf; set 'terminal=' to a terminal command`);
 }
 
-async function launcherScripts(paths: SetupPaths): Promise<LauncherCheck> {
-  const entrypoint = join(paths.launcherBinDir, "pohunek-rofi");
-  const present = await stat(entrypoint).then(
-    (info) => info.isFile(),
-    () => false,
-  );
-  return present
-    ? ok("launcher_scripts", `installed at ${paths.launcherBinDir}`)
-    : warn("launcher_scripts", "not installed; run 'pohunek-work setup scripts'");
+async function accessible(path: string, mode: number): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isFile()) return false;
+    await access(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-async function swayInclude(paths: SetupPaths): Promise<LauncherCheck> {
+/** Every entrypoint must be executable and the library they source must be readable. */
+async function launcherScripts(paths: SetupPaths): Promise<LauncherCheck> {
+  const problems: string[] = [];
+  let present = 0;
+  for (const { name } of SCRIPT_ASSETS) {
+    const path = join(paths.launcherBinDir, name);
+    const library = name === SCRIPT_LIBRARY;
+    if (await accessible(path, library ? constants.R_OK : constants.X_OK)) {
+      present += 1;
+    } else if (await stat(path).then(() => true, () => false)) {
+      problems.push(`${name} is not ${library ? "readable" : "executable"}`);
+    } else {
+      problems.push(`${name} is missing`);
+    }
+  }
+  if (problems.length === 0) return ok("launcher_scripts", `installed at ${paths.launcherBinDir}`);
+  if (present === 0 && problems.every((problem) => problem.endsWith("is missing"))) {
+    return warn("launcher_scripts", "not installed; run 'pohunek-work setup scripts'");
+  }
+  return warn("launcher_scripts", `incomplete install at ${paths.launcherBinDir}: ${problems.join(", ")}; run 'pohunek-work setup scripts --force'`);
+}
+
+async function swayInclude(probe: LauncherProbe, paths: SetupPaths): Promise<LauncherCheck> {
   const contents = await readSwayConfig(paths.swayConfigDir);
   if (contents === null) return warn("sway_include", `sway config not found at ${join(paths.swayConfigDir, "config")}`);
-  if (configIncludesDropin(contents)) return ok("sway_include", `sway config includes ${SWAY_DROPIN_DIR}`);
+  const context = { dropinPath: swayDropinPath(paths), configDir: paths.swayConfigDir, env: probe.env };
+  if (configIncludesDropin(contents, context)) return ok("sway_include", `sway config includes ${SWAY_DROPIN_DIR}`);
   return warn(
     "sway_include",
     `add 'include ${paths.swayConfigDir}/${SWAY_DROPIN_DIR}/*' to your sway config (see 'pohunek-work setup sway')`,
@@ -168,6 +207,6 @@ export async function runLauncherChecks(probe: LauncherProbe): Promise<LauncherC
     if (pathsFailure !== null) checks.push(pathsFailure);
     return checks;
   }
-  checks.push(await launcherScripts(paths), await swayInclude(paths));
+  checks.push(await launcherScripts(paths), await swayInclude(probe, paths));
   return checks;
 }

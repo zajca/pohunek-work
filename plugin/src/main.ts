@@ -31,7 +31,7 @@ const USAGE = `usage:
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]
   pohunek-work setup config [--force] [--json]
-  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-keybind <key>] [--json]
+  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project>] [--issue-keybind <key>] [--json]
   pohunek-work tui
 
 merge is not an action: merging stays manual.
@@ -217,6 +217,7 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
         print: { type: "boolean", default: false },
         keybind: { type: "string" },
         "issue-keybind": { type: "string" },
+        "issue-project": { type: "string" },
         json: { type: "boolean", default: false },
       },
       allowPositionals: true,
@@ -227,9 +228,13 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
     const step: SetupStep | undefined = sub === undefined ? "all" : SETUP_STEPS.find((name) => name === sub && name !== "all");
     if (step === undefined) throw new UsageError(`unknown setup step: ${String(sub)} (known: ${SETUP_STEPS.filter((name) => name !== "all").join(", ")})`);
     const sway = step === "sway";
-    if (!sway && (values.print || values.keybind !== undefined || values["issue-keybind"] !== undefined)) {
-      throw new UsageError("--print, --keybind and --issue-keybind apply to `setup sway` only");
+    if (!sway && (values.print || values.keybind !== undefined || values["issue-keybind"] !== undefined || values["issue-project"] !== undefined)) {
+      throw new UsageError("--print, --keybind, --issue-keybind and --issue-project apply to `setup sway` only");
     }
+    if (values["issue-keybind"] !== undefined && values["issue-project"] === undefined) {
+      throw new UsageError("--issue-keybind needs --issue-project: the issue picker is bound for one project");
+    }
+    if (values["issue-project"] === "") throw new UsageError("--issue-project needs a project");
     if (values.print && values.force) throw new UsageError("--print and --force exclude each other");
     return {
       step,
@@ -237,6 +242,7 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
       print: values.print,
       keybind: values.keybind ?? DEFAULT_KEYBINDS.keybind,
       issueKeybind: values["issue-keybind"] ?? DEFAULT_KEYBINDS.issueKeybind,
+      issueProject: values["issue-project"] ?? null,
       json: values.json,
     };
   } catch (error) {
