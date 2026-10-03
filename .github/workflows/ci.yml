@@ -105,8 +105,8 @@ jobs:
     env:
       # The rendering tests drive the real `pohunek prompt` CLI; this is the
       # core release they are pinned to. Bump it together with the digest.
-      POHUNEK_RELEASE: v0.32.3
-      POHUNEK_MUSL_SHA256: eeb40129e334e4c7620f957d236c894b6ab731376405e04458860c971d5af2d5
+      POHUNEK_RELEASE: v0.33.0
+      POHUNEK_MUSL_SHA256: 6075ad7f85883c234c70866c002aef07356fbaab4dd9d4acbbd30b415288e006
     defaults:
       run:
         working-directory: launchers

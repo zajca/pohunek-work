@@ -11,13 +11,13 @@ members = ["crates/gui", "crates/gui-core"]
 [workspace.dependencies]
 # Core crates, pinned to one core release tag. Every core crate lives in the same
 # repository, so bumping the `tag` below moves them all together.
-pohunek-assistant = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
-pohunek-client = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
-pohunek-paths = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
-pohunek-platform = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
-pohunek-prompt = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
-pohunek-protocol = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
-pohunek-test-support = { git = "https://github.com/zajca/pohunek", tag = "v0.32.3" }
+pohunek-assistant = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
+pohunek-client = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
+pohunek-paths = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
+pohunek-platform = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
+pohunek-prompt = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
+pohunek-protocol = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
+pohunek-test-support = { git = "https://github.com/zajca/pohunek", tag = "v0.33.0" }
 
 pohunek-gui-core = { path = "crates/gui-core" }
 
@@ -40,7 +40,7 @@ tracing = "0.1"
 # Released version of the GUI, independent of the core version. The MIT license
 # text is kept in LICENSES/pohunek-core-MIT.txt at the repository root.
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 rust-version = "1.96"
