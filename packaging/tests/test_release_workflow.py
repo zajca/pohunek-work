@@ -9,6 +9,7 @@ CI gate is one reusable workflow.
 """
 
 from pathlib import Path
+import json
 import os
 import re
 import subprocess
@@ -537,7 +538,7 @@ class CiFilterTest(unittest.TestCase):
         self.assertIn("macos_package: ${{ steps.filter.outputs.macos_package }}", CI)
         self.assertIn("needs.changes.outputs.macos_package == 'true'", job)
         self.assertIn("runs-on: macos-15", job)
-        self.assertIn("component: [gui, web]", job)
+        self.assertIn("component: ${{ fromJSON(", job)
         self.assertIn("packaging/macos/package --adhoc-release", job)
         self.assertIn("packaging/macos/verify-signed --adhoc", job)
         self.assertIn("--signing adhoc", job)
@@ -555,7 +556,7 @@ class CiFilterTest(unittest.TestCase):
     def test_pull_requests_are_still_filtered_and_other_events_run_everything_or_the_released_surface(self):
         surfaces = {
             "plugin": ("plugin", "launchers"),
-            "launchers": ("launchers",),
+            "launchers": ("launchers", "plugin"),
             "native": ("gui",),
             "native-macos": ("gui",),
             "web": ("web",),
@@ -582,9 +583,41 @@ class CiFilterTest(unittest.TestCase):
                 "gui": {"native", "native-macos", "macos-package"},
                 "web": {"web", "web-macos", "macos-package"},
                 "launchers": {"launchers", "plugin"},
-                "plugin": {"plugin"},
+                "plugin": {"plugin", "launchers"},
             }
             self.assertEqual(set(running), others[surface], surface)
+
+    def test_a_plugin_release_runs_the_launcher_checks_its_archive_embeds(self):
+        condition = re.search(r"(?m)^    if: (.*)$", jobs(CI)["launchers"]).group(1)
+        self.assertIn("inputs.surface == 'plugin'", condition)
+        # The plugin imports the launcher scripts as text, so they ship in its archive.
+        self.assertIn("../../../launchers/", (ROOT / "plugin" / "src" / "setup" / "assets.ts").read_text())
+
+    def test_the_macos_matrix_is_the_released_component_and_both_for_other_runs(self):
+        job = jobs(CI)["macos-package"]
+        expression = re.search(r"(?m)^        component: \$\{\{ fromJSON\((.*)\) \}\}$", job).group(1)
+        # `inputs.surface == 'a' && '[..]' || inputs.surface == 'b' && '[..]' || '[..]'`
+        arms = re.findall(r"inputs\.surface == '([a-z]+)' && '(\[[^']*\])'", expression)
+        fallback = re.search(r"\|\| '(\[[^']*\])'$", expression).group(1)
+        self.assertEqual(expression.count("&&"), len(arms))
+
+        def matrix(surface):
+            return json.loads(dict(arms).get(surface, fallback))
+
+        self.assertEqual(matrix("gui"), ["gui"])
+        self.assertEqual(matrix("web"), ["web"])
+        # Pull requests, pushes, the schedule and manual runs pass no surface.
+        self.assertEqual(matrix(""), ["gui", "web"])
+        self.assertEqual(matrix(None), ["gui", "web"])
+
+    def test_the_macos_components_have_build_steps_and_the_release_gate_expects_them(self):
+        job = jobs(CI)["macos-package"]
+        for component in ("gui", "web"):
+            self.assertIn(f"matrix.component == '{component}'", job)
+        # The release gate expects the macOS chain for exactly the surfaces whose matrix is non-empty.
+        for surface, expected in (("gui", "success"), ("web", "success"), ("launchers", "skipped"), ("plugin", "skipped")):
+            self.assertIn(f"verify-macos={expected}", re.search(rf"{surface}\) want=\"(.*?)\"", RELEASE).group(1), surface)
+
 
 if __name__ == "__main__":
     unittest.main()
