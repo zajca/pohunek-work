@@ -159,6 +159,7 @@ export function item(overrides: Partial<WorkItem> = {}): WorkItem {
     mergedPullRequest: null,
     joinedBy: null,
     noIssue: true,
+    issueKey: null,
     sessions: [],
     notifications: [],
     ...overrides,

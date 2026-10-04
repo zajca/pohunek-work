@@ -362,6 +362,8 @@ payload it cannot decode. `do` and `setup` version their envelopes separately
     "review_decision": "CHANGES_REQUESTED", "checks": "success", "mergeable": "MERGEABLE",
     "fix_delivered": false, "threads_answered": true, "rerequested": false
   },
+  "no_issue": false,
+  "issue_key": "DMD-2188",
   "sessions": [{"id": "s-...", "name": "PR-8605", "role": "babysit", "state": "terminal", "activity": null}],
   "on_turn": {"actor": "me", "reason": "respond", "rule": 4},
   "actions": [
@@ -371,6 +373,13 @@ payload it cannot decode. `do` and `setup` version their envelopes separately
   "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "pohunek": "ok"}
 }
 ```
+
+`issue_key` is the issue key the row resolved to (RFC 7.3), or null when
+nothing resolved. It is set on the `linear:<KEY>` row and also on the other
+pull requests of the same issue, whose own `key` is `github:` and whose `issue`
+is null because only one row may carry the `linear:<KEY>` key. The table
+prints it after the key (`github:acme/widgets#9 (ABC-11)`) and the TUI shows it
+in the key column and the detail pane.
 
 ### 9.2 Notifications
 

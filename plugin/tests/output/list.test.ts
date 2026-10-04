@@ -36,6 +36,7 @@ function sampleEnvelope(): unknown {
         issue: issue(),
         pullRequest: deliveredPr(),
         noIssue: false,
+        issueKey: "ABC-1",
         joinedBy: "branch_pattern",
         sessions: [session({ metadata: { "work.role": "babysit" } })],
       }),
@@ -45,13 +46,23 @@ function sampleEnvelope(): unknown {
       item({ pullRequest: pr({ isDraft: true, checks: [check("build", "success")] }) }),
       context,
     ),
-    buildListItem(item({ key: "linear:ABC-2", issue: issue({ id: "ABC-2" }), pullRequest: null, noIssue: false }), context),
+    buildListItem(item({ key: "linear:ABC-2", issue: issue({ id: "ABC-2" }), pullRequest: null, noIssue: false, issueKey: "ABC-2" }), context),
+    buildListItem(
+      item({
+        key: "github:acme/widgets#14",
+        pullRequest: pr({ id: "acme/widgets#14", number: 14 }),
+        noIssue: false,
+        issueKey: "ABC-1",
+      }),
+      context,
+    ),
     buildListItem(
       item({
         key: "linear:ABC-3",
         issue: issue({ id: "ABC-3", stateName: "On hold" }),
         pullRequest: pr({ id: "acme/widgets#13", number: 13, isDraft: true, mergeable: "CONFLICTING" }),
         noIssue: false,
+        issueKey: "ABC-3",
         joinedBy: "branch_pattern",
       }),
       context,
@@ -89,7 +100,7 @@ test("envelope carries the contract version and exactly one of ok or err", () =>
 test("a row has exactly the contract keys", () => {
   const row = buildListItem(item(), context);
   expect(Object.keys(row).sort()).toEqual(
-    ["actions", "issue", "key", "no_issue", "on_turn", "project", "pull_request", "sessions", "sources"].sort(),
+    ["actions", "issue", "issue_key", "key", "no_issue", "on_turn", "project", "pull_request", "sessions", "sources"].sort(),
   );
   expect(Object.keys(row.pull_request ?? {}).sort()).toEqual(
     ["checks", "draft", "fix_delivered", "id", "mergeable", "rerequested", "review_decision", "threads_answered", "title", "updated_at", "url"].sort(),
@@ -302,4 +313,16 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
       expect(owned.actions.map((a) => a.name)).toEqual([action]);
     }
   });
+});
+
+test("the table names the issue of a secondary pull request row and of no other row", () => {
+  const secondary = buildListItem(item({ key: "github:acme/widgets#14", pullRequest: pr({ id: "acme/widgets#14", number: 14 }), noIssue: false, issueKey: "ABC-1" }), context);
+  const winner = buildListItem(item({ key: "linear:ABC-1", issue: issue(), noIssue: false, issueKey: "ABC-1" }), context);
+  const plain = buildListItem(item(), context);
+  expect(secondary.issue_key).toBe("ABC-1");
+  expect(plain.issue_key).toBeNull();
+  const lines = renderTable([secondary, winner, plain], [], [], new Set()).split("\n");
+  expect(lines[1]).toStartWith("github:acme/widgets#14 (ABC-1)");
+  expect(lines[2]).toStartWith("linear:ABC-1 ");
+  expect(lines[3]).toStartWith("github:acme/widgets#12 (no issue)");
 });

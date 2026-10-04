@@ -104,6 +104,7 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
         : { id: issue.id, title: issue.title, state: issue.stateName, url: issue.url },
     pull_request: pullRequest,
     no_issue: item.noIssue,
+    issue_key: item.issueKey,
     sessions: item.sessions.map((session) => ({
       id: session.id,
       name: session.name,
@@ -159,6 +160,13 @@ function onTurnCell(item: ListItem): string {
   return actor === "me" || actor === "unknown" ? `${actor}: ${reason}${ruleText}` : `${actor}${ruleText}`;
 }
 
+/** Row key; a `github:` row that resolved to an issue names it, e.g. `github:o/r#9 (ABC-11)`. */
+function keyCell(item: ListItem): string {
+  if (item.no_issue) return `${item.key} (no issue)`;
+  if (item.issue_key !== null && item.key !== `linear:${item.issue_key}`) return `${item.key} (${item.issue_key})`;
+  return item.key;
+}
+
 function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
   if (item.sessions.length === 0) return "-";
   return item.sessions
@@ -176,7 +184,7 @@ export function renderTable(
   const rows = items.map((item) => {
     const pr = item.pull_request;
     return [
-      item.key + (item.no_issue ? " (no issue)" : ""),
+      keyCell(item),
       onTurnCell(item),
       pr === null ? "-" : pr.id + (pr.draft ? " draft" : ""),
       pr?.review_decision ?? "-",

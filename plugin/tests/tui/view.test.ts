@@ -228,3 +228,13 @@ test("every frame rendered in this file is printable ASCII within the terminal s
     }
   }
 });
+
+describe("secondary pull request row", () => {
+  const secondary = row("github:acme/widgets#1234567", { issue_key: "ABC-1" });
+
+  test.each(SIZES)("keeps the issue key visible in the KEY column at width %s", (_width, size) => {
+    const frame = render(`secondary-${_width}`, loaded(okOutcome(payload([secondary])), { size }));
+    const tableRow = frame.map((line) => line.split("|")[0] ?? "").find((cells) => cells.includes("github:acme"));
+    expect(tableRow).toContain("(ABC-1)");
+  });
+});
