@@ -22,11 +22,16 @@ export type TurnActor = "me" | "agent" | "reviewer" | "unknown";
 /** Rule numbers of RFC section 8.1. */
 export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
 
+/** Prefix of the rule 5 reason for a pull request whose only failures are policy checks. */
+export const POLICY_CHECK_REASON_PREFIX = "policy check: ";
+
 export type MeReason =
   | "answer agent"
   | "review"
   | "respond"
   | "fix CI"
+  /** Names the failing `policy_checks` entries, e.g. `policy check: Require label`. */
+  | `${typeof POLICY_CHECK_REASON_PREFIX}${string}`
   | "rebase"
   | "leave draft"
   | "merge"

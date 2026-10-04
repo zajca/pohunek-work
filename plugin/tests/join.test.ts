@@ -17,6 +17,7 @@ const project = {
   branchPattern: /^me\/(?<key>[A-Z]+-\d+)\//,
   branchPatternSource: "^me/(?P<key>[A-Z]+-\\d+)/",
   ignoredChecks: [],
+  policyChecks: [],
   aiReviewers: [],
   pausedStates: ["On hold"],
   policy: null,

@@ -310,7 +310,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "linear_team", "branch_pattern", "ignored_checks", "ai_reviewers", "paused_states"],
+    ["pohunek_label", "repo", "linear_team", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "paused_states"],
     file,
     path,
   );
@@ -319,6 +319,12 @@ function parseProject(root: Table, name: string): ProjectConfig {
     throw fail(file, [...path, "pohunek_label"], "must equal the file name without extension");
   }
   const branchPatternSource = readString(table, "branch_pattern", file, path);
+  const ignoredChecks = readStringArray(table, "ignored_checks", file, path);
+  const policyChecks = readStringArray(table, "policy_checks", file, path);
+  const both = policyChecks.find((name) => ignoredChecks.includes(name));
+  if (both !== undefined) {
+    throw fail(file, [...path, "policy_checks"], `must not repeat ${JSON.stringify(both)} from ignored_checks`);
+  }
   return {
     name,
     pohunekLabel,
@@ -326,7 +332,8 @@ function parseProject(root: Table, name: string): ProjectConfig {
     linearTeam: readString(table, "linear_team", file, path),
     branchPattern: compileBranchPattern(branchPatternSource, file),
     branchPatternSource,
-    ignoredChecks: readStringArray(table, "ignored_checks", file, path),
+    ignoredChecks,
+    policyChecks,
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
     pausedStates: readStringArray(table, "paused_states", file, path),
     policy: "policy" in root ? parsePolicy(root, file) : null,

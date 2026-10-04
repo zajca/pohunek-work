@@ -115,8 +115,35 @@ describe("rules one per rule", () => {
     expect(onTurn(it)).toEqual({ actor: "me", reason: "rebase", rule: 5 });
   });
 
-  test("rule 5: failing check and conflict report fix CI first", () => {
-    const it = item({ pullRequest: pr({ mergeable: "CONFLICTING", checks: [check("build", "failure")] }) });
+  test("rule 5: a conflict reports rebase before a failing CI or policy check", () => {
+    const failures = [check("build", "failure"), check("Require label", "failure")];
+    const it = item({ pullRequest: pr({ mergeable: "CONFLICTING", checks: failures }) });
+    expect(onTurn(it)).toEqual({ actor: "me", reason: "rebase", rule: 5 });
+  });
+
+  test("rule 5: a policy-only failure names the check once", () => {
+    const runs = [check("Require label", "failure"), check("Require label", "failure"), check("Require label", "failure")];
+    const it = item({ pullRequest: pr({ checks: [...runs, check("build", "success")] }) });
+    expect(onTurn(it)).toEqual({ actor: "me", reason: "policy check: Require label", rule: 5 });
+  });
+
+  test("rule 5: a policy failure with pending CI is still the policy reason", () => {
+    const it = item({ pullRequest: pr({ checks: [check("Require label", "failure"), check("build", "pending")] }) });
+    expect(onTurn(it)).toEqual({ actor: "me", reason: "policy check: Require label", rule: 5 });
+  });
+
+  test("rule 5: several failing policy checks are named in configuration order", () => {
+    const policyChecks = ["Require label", "Require milestone"];
+    const it = item({ pullRequest: pr({ checks: [check("Require milestone", "failure"), check("Require label", "failure")] }) });
+    expect(onTurn(it, allOk, { ...project, policyChecks })).toEqual({
+      actor: "me",
+      reason: "policy check: Require label, Require milestone",
+      rule: 5,
+    });
+  });
+
+  test("rule 5: a policy and a CI failure report fix CI", () => {
+    const it = item({ pullRequest: pr({ checks: [check("Require label", "failure"), check("build", "failure")] }) });
     expect(onTurn(it)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });
   });
 
@@ -516,7 +543,7 @@ describe("unknown on missing sources", () => {
 
   test("project config is read from the input", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
-    expect(onTurn(it, allOk, { ignoredChecks: ["build"], aiReviewers: [] }).rule).toBe(9);
+    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [] }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
   });
 });

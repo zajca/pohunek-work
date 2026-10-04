@@ -24,12 +24,12 @@ import {
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "aiReviewers" | "profiles">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "profiles">;
   /** Global [profiles]; a project's own table replaces it whole. */
   readonly profiles: ProfilesConfig;
 }
 
-/** The `do` action that moves a row on the owner's turn forward; null when the step is manual (7, 9). */
+/** The `do` action that moves a row on the owner's turn forward; null when the step is manual (7, 9, a rule 5 policy check). */
 function ruleAction(onTurn: OnTurn): string | null {
   if (onTurn.actor !== "me") return null;
   switch (onTurn.rule) {
@@ -38,7 +38,8 @@ function ruleAction(onTurn: OnTurn): string | null {
     case 4:
       return "babysit";
     case 5:
-      return onTurn.reason === "fix CI" ? "fix-ci" : "rebase";
+      if (onTurn.reason === "fix CI") return "fix-ci";
+      return onTurn.reason === "rebase" ? "rebase" : null;
     case 6:
       return "ready";
     case 8:

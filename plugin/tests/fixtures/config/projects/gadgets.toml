@@ -4,6 +4,7 @@ repo = "acme/gadgets"
 linear_team = "ABC"
 branch_pattern = "^alice/(?P<key>ABC-[0-9]+)/"
 ignored_checks = []
+policy_checks = []
 paused_states = []
 ai_reviewers = []
 

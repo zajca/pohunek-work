@@ -253,9 +253,9 @@ confirmed afterwards on GitHub.
 
 Implementation notes (M2b):
 
-- `fix-ci` needs rule 5 and a failing check after `ignored_checks` are removed; `rebase`
-  needs rule 5 and `mergeable = CONFLICTING` (also when a failing check gave rule 5 its
-  reason). Both start like `babysit` in the worktree of the owning session (`--cwd`, S2)
+- `fix-ci` needs rule 5, no merge conflict and a failing check after `ignored_checks` and
+  `policy_checks` are removed; `rebase` needs rule 5 and `mergeable = CONFLICTING`, which
+  rule 5 reports before any failing check (RFC 8.1). Both start like `babysit` in the worktree of the owning session (`--cwd`, S2)
   with the same refusals (`already_running`, `no_worktree`); the failing check names or
   the base branch go into the prompt's data block. No host actions are added (D15).
 - `review` needs rule 3 (`review_requested`) and launches per S8:

@@ -126,6 +126,11 @@ export interface ProjectConfig {
   readonly branchPatternSource: string;
   /** Exact check names (CheckRun name or StatusContext context) that never raise rule 5. */
   readonly ignoredChecks: readonly string[];
+  /**
+   * Exact check names an agent cannot fix (e.g. a required-label check): a failure
+   * raises rule 5 for the owner but never `fix-ci`. Disjoint from `ignoredChecks`.
+   */
+  readonly policyChecks: readonly string[];
   /** GitHub logins of AI reviewer accounts; compared case-insensitively, `[bot]` suffix ignored. */
   readonly aiReviewers: readonly string[];
   /** Linear state names whose issues without a pull request are left out of the table. */

@@ -66,12 +66,31 @@ test("fix-ci is refused unless the owner's pull request has a failing check at r
   await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), a.deps), "precondition_failed", "rule 5");
   // Rule 5 for a conflict, but no failing check.
   const b = setup({ prs: ok("github", [CONFLICTING]), sessions: [OWNER] });
-  await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), b.deps), "precondition_failed", "no check");
+  await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), b.deps), "precondition_failed", "rebase it first");
   // Only an ignored check fails: rule 5 does not hold.
   const ignored = pr({ headRefName: "feature/x", checks: [check("CI / Flaky", "failure")] });
   const c = setup({ prs: ok("github", [ignored]), sessions: [OWNER] });
   await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), c.deps), "precondition_failed");
   expect([a, b, c].map((h) => h.launches.length)).toEqual([0, 0, 0]);
+});
+
+test("fix-ci is refused on a conflict with a failing check and when only a policy check fails", async () => {
+  const conflicting = pr({ ...CONFLICTING, checks: [check("build", "failure")] });
+  const a = setup({ prs: ok("github", [conflicting]), sessions: [OWNER] });
+  await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), a.deps), "precondition_failed", "rebase it first");
+  const policyOnly = pr({ headRefName: "feature/x", headSha: SHA, checks: [check("Policy / Label", "failure")] });
+  const b = setup({ prs: ok("github", [policyOnly]), sessions: [OWNER] });
+  await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), b.deps), "precondition_failed", "only policy checks of acme/widgets#12 fail (Policy / Label)");
+  expect([a, b].map((h) => h.launches.length)).toEqual([0, 0]);
+});
+
+test("fix-ci on a policy and a CI failure lists only the CI check in the data block", async () => {
+  const mixed = pr({ ...FAILING, checks: [check("Policy / Label", "failure"), check("build", "failure"), check("build", "failure")] });
+  const { deps, launches } = setup({ prs: ok("github", [mixed]), sessions: [OWNER] });
+  await runDo(baseConfig, prOptions("fix-ci"), deps);
+  const prompt = launches[0]?.stdin ?? "";
+  expect(prompt).toContain("failing_checks: build\n");
+  expect(prompt).not.toContain("Policy / Label");
 });
 
 test("fix-ci is refused for a pull request of someone else, without a worktree and with a live session", async () => {

@@ -153,6 +153,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     [{ actor: "me", reason: "respond", rule: 4 }, ["babysit"]],
     [{ actor: "me", reason: "fix CI", rule: 5 }, ["fix-ci"]],
     [{ actor: "me", reason: "rebase", rule: 5 }, ["rebase"]],
+    [{ actor: "me", reason: "policy check: Require label", rule: 5 }, []],
     [{ actor: "me", reason: "leave draft", rule: 6 }, ["ready"]],
     [{ actor: "me", reason: "merge", rule: 7 }, []],
     [{ actor: "me", reason: "nothing runs", rule: 8 }, ["implement"]],
@@ -229,6 +230,14 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
         }
       }
     }
+  });
+
+  test("end to end through the rules: a policy-only failure lists no action even with a worktree", () => {
+    const policyOnly = pr({ checks: [check("Require label", "failure"), check("Require label", "failure")] });
+    const row = buildListItem(item({ pullRequest: policyOnly, sessions: [owner] }), context);
+    expect(row.on_turn).toEqual({ actor: "me", reason: "policy check: Require label", rule: 5 });
+    expect(row.pull_request?.checks).toBe("failure");
+    expect(row.actions).toEqual([]);
   });
 
   test("end to end through the rules: draft PR, started issue, idle agent, blocked agent", () => {

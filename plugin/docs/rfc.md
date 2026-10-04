@@ -231,13 +231,21 @@ Evaluated top to bottom; the first rule that holds decides.
 | 2 | A linked session is live with `activity = working` | agent | pohunek session state |
 | 3 | Someone else's PR requests a review from me | me: review | GitHub `reviewRequests` |
 | 4 | Changes requested and the fix is not fully delivered (8.2) | me: respond | reviews, timeline, threads, `reviewRequests` |
-| 5 | A non-ignored check failed, or the PR conflicts with its base | me: fix CI / rebase | `statusCheckRollup`, `mergeable` |
+| 5 | The PR conflicts with its base; otherwise a check failed that is neither ignored nor a policy check; otherwise a policy check failed | me: rebase / fix CI / policy check: `<names>` | `statusCheckRollup`, `mergeable` |
 | 6 | The PR is a draft | me: leave draft | `isDraft` |
 | 7 | Approved, checks green, mergeable | me: merge | `reviewDecision`, checks, `mergeable` |
 | 8 | Linear issue in a started state, assigned to me, with no PR and no live linked session | me: nothing runs | Linear state, assignee, join |
 | 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | Linear state, assignee, join, pohunek session state |
 | 9 | Open non-draft PR with no pending review request and no decision | me: request review | `reviewRequests`, `reviewDecision` |
 | 10 | Otherwise | reviewer | — |
+
+Rule 5 checks in that order. A conflict comes first because a rebase reruns
+every check, so fixing CI on a conflicting branch is wasted work. A policy
+check (`policy_checks`, for example a required-label check) is a merge blocker
+an agent cannot fix: when only policy checks fail, the reason names them in
+configuration order and the row has no `fix-ci` action; when a CI check fails
+as well, the reason is `fix CI` and the `fix-ci` prompt lists only the CI
+checks.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered
@@ -426,6 +434,7 @@ repo = "keboola/connection"
 linear_team = "DMD"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
+policy_checks = []        # merge blockers the owner meets; disjoint from ignored_checks
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
 paused_states = ["On hold", "Waiting for Support"]
 

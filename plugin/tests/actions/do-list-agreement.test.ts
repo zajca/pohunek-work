@@ -21,6 +21,18 @@ const CASES: readonly RuleCase[] = [
   { pullRequest: deliveredPr({ headRefName: BRANCH, headSha: SHA, timeline: [] }), rule: 4, reason: "respond", action: "babysit" },
   { pullRequest: pr({ headRefName: BRANCH, headSha: SHA, checks: [check("build", "failure")] }), rule: 5, reason: "fix CI", action: "fix-ci" },
   { pullRequest: pr({ headRefName: BRANCH, headSha: SHA, mergeable: "CONFLICTING" }), rule: 5, reason: "rebase", action: "rebase" },
+  {
+    pullRequest: pr({ headRefName: BRANCH, headSha: SHA, mergeable: "CONFLICTING", checks: [check("build", "failure")] }),
+    rule: 5,
+    reason: "rebase",
+    action: "rebase",
+  },
+  {
+    pullRequest: pr({ headRefName: BRANCH, headSha: SHA, checks: [check("Policy / Label", "failure"), check("build", "failure")] }),
+    rule: 5,
+    reason: "fix CI",
+    action: "fix-ci",
+  },
 ];
 
 function linked(pullRequest: PullRequest, worktreePath: string | null): PohunekSession {
@@ -76,3 +88,27 @@ for (const rule of CASES) {
     });
   }
 }
+
+/** Rule 5 rows that `list` gives no worktree action, with the worktree actions `do` must refuse. */
+const REFUSED: readonly [string, PullRequest, string][] = [
+  ["a conflict with a failing check", pr({ headRefName: BRANCH, headSha: SHA, mergeable: "CONFLICTING", checks: [check("build", "failure")] }), "rebase"],
+  ["a policy-only failure", pr({ headRefName: BRANCH, headSha: SHA, checks: [check("Policy / Label", "failure")] }), "policy check: Policy / Label"],
+];
+
+for (const [label, pullRequest, reason] of REFUSED) {
+  test(`rule 5 with ${label} lists no fix-ci and do --dry-run refuses it`, async () => {
+    const sessions = [linked(pullRequest, "/wt/owner")];
+    const row = await listedRow(pullRequest, sessions);
+    expect(row.on_turn).toEqual({ actor: "me", reason, rule: 5 });
+    expect(row.actions.map((action) => action.name)).not.toContain("fix-ci");
+    await expectRefusal(dryRun({ pullRequest, rule: 5, reason, action: "fix-ci" }, sessions), "precondition_failed", "fix-ci refused");
+  });
+}
+
+test("rule 5 with a policy-only failure lists no action and do --dry-run refuses rebase", async () => {
+  const pullRequest = pr({ headRefName: BRANCH, headSha: SHA, checks: [check("Policy / Label", "failure")] });
+  const sessions = [linked(pullRequest, "/wt/owner")];
+  expect((await listedRow(pullRequest, sessions)).actions).toEqual([]);
+  const rule: RuleCase = { pullRequest, rule: 5, reason: "policy check: Policy / Label", action: "rebase" };
+  await expectRefusal(dryRun(rule, sessions), "precondition_failed", "rebase refused");
+});
