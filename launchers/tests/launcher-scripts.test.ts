@@ -166,7 +166,7 @@ for arg in "$@"; do printf '%s\\n' "$arg" >>"$POHUNEK_TEST_TERMINAL_ARGS"; done
     ["host", "local"],
   ]);
 
-  const result = await runScript("pohunek-rofi-issue", ["ui"], box, configDir, {
+  const result = await runScript("pohunek-rofi-issue", ["ui", "linear"], box, configDir, {
     POHUNEK_TEST_LINEAR_ARGS: linearArgs,
     POHUNEK_TEST_ROFI_STDIN: rofiStdin,
     POHUNEK_TEST_TERMINAL_ARGS: terminalArgs,
@@ -233,7 +233,7 @@ for arg in "$@"; do printf '%s\\n' "$arg" >>"$POHUNEK_TEST_TERMINAL_ARGS"; done
     ["host", "local"],
   ]);
 
-  const result = await runScript("pohunek-rofi-issue", ["ui"], box, configDir, {
+  const result = await runScript("pohunek-rofi-issue", ["ui", "linear"], box, configDir, {
     POHUNEK_TEST_LINEAR_ARGS: linearArgs,
     POHUNEK_TEST_TERMINAL_ARGS: terminalArgs,
   });
@@ -243,6 +243,211 @@ for arg in "$@"; do printf '%s\\n' "$arg" >>"$POHUNEK_TEST_TERMINAL_ARGS"; done
   expect(largs).toContain("whoami\n");
   expect(largs).toContain("--assignee\nzajca\n");
   await waitForFileContains(terminalArgs, ["pohunek-launch-issue", "ui", "AI-9"], "rofi-issue derive terminal");
+});
+
+test("rofi-issue requires a known issue source and never defaults one", async () => {
+  const box = await sandbox("rofi-issue-source");
+  const configDir = await writeConfig(box.root, [["host", "local"]]);
+  const cases: [readonly string[], string][] = [
+    [["ui"], "usage: pohunek-rofi-issue <project> <linear|github> [action]"],
+    [["ui", "jira"], "unknown issue source 'jira'"],
+    [["ui", "github", "babysit"], "only starts the 'implement' action"],
+    [["ui", "linear", "a", "b"], "usage: pohunek-rofi-issue"],
+  ];
+  for (const [args, message] of cases) {
+    const result = await runScript("pohunek-rofi-issue", args, box, configDir);
+    expect(result.status, failureContext(result)).not.toBe(0);
+    expect(result.stderr).toContain(message);
+  }
+});
+
+const GITHUB_KEY = "github-issue:keboola/connection#42";
+
+/** Envelope of `pohunek-work list --json` (contract 3) with the given rows. */
+function listEnvelope(items: readonly object[], protocol = { minimum: 3, maximum: 3 }): string {
+  return JSON.stringify({ cli_version: "0.3.0", protocol, ok: { items, orphaned_sessions: [], unlinked_sessions: [], projects: [] } });
+}
+
+function issueRow(key: string, title: string, actions: readonly string[], state = "open"): object {
+  return {
+    key,
+    project: "ui",
+    issue: { id: key, title, state, url: "https://example.test/x" },
+    pull_request: null,
+    actions: actions.map((name) => ({ name, delegable: true })),
+  };
+}
+
+interface GithubPicker {
+  readonly box: Awaited<ReturnType<typeof sandbox>>;
+  readonly configDir: string;
+  readonly env: Record<string, string>;
+  readonly rofiStdin: string;
+  readonly terminalArgs: string;
+  readonly workArgs: string;
+}
+
+/** Stubs `pohunek-work`, rofi and the terminal; rofi selects `selection` (default: the first row). */
+async function githubPicker(tag: string, listJson: string, listStatus = 0, selection = ""): Promise<GithubPicker> {
+  const box = await sandbox(tag);
+  const work = join(box.bin, "pohunek-work");
+  const rofi = join(box.bin, "rofi");
+  const terminal = join(box.bin, "terminal");
+  const listFile = join(box.root, "list.json");
+  const rofiStdin = join(box.root, "rofi.stdin");
+  const terminalArgs = join(box.root, "terminal.args");
+  const workArgs = join(box.root, "work.args");
+  await Bun.write(listFile, listJson);
+  await writeExecutable(
+    work,
+    `#!/bin/sh
+for arg in "$@"; do printf '%s\\n' "$arg" >>"$POHUNEK_TEST_WORK_ARGS"; done
+cat "$POHUNEK_TEST_LIST_FILE"
+exit "$POHUNEK_TEST_LIST_STATUS"
+`,
+  );
+  await writeExecutable(
+    rofi,
+    `#!/bin/sh
+cat >"$POHUNEK_TEST_ROFI_STDIN"
+if [ -n "$POHUNEK_TEST_SELECTION" ]; then printf '%s\\n' "$POHUNEK_TEST_SELECTION"; else head -n 1 "$POHUNEK_TEST_ROFI_STDIN"; fi
+`,
+  );
+  await writeExecutable(
+    terminal,
+    `#!/bin/sh
+for arg in "$@"; do printf '%s\\n' "$arg" >>"$POHUNEK_TEST_TERMINAL_ARGS"; done
+`,
+  );
+  // No linear_cli: the GitHub path must not need it.
+  const configDir = await writeConfig(box.root, [
+    ["pohunek_work_bin", work],
+    ["rofi_bin", rofi],
+    ["terminal", terminal],
+    ["host", "local"],
+  ]);
+  const env = {
+    POHUNEK_TEST_LIST_FILE: listFile,
+    POHUNEK_TEST_LIST_STATUS: String(listStatus),
+    POHUNEK_TEST_ROFI_STDIN: rofiStdin,
+    POHUNEK_TEST_TERMINAL_ARGS: terminalArgs,
+    POHUNEK_TEST_WORK_ARGS: workArgs,
+    POHUNEK_TEST_SELECTION: selection,
+  };
+  return { box, configDir, env, rofiStdin, terminalArgs, workArgs };
+}
+
+test("rofi-issue github lists the rows that offer implement and runs `do <key> implement` in the terminal", async () => {
+  const listJson = listEnvelope([
+    issueRow(GITHUB_KEY, "Fix the\ttab\nbug", ["implement", "babysit"], "In progress"),
+    issueRow("github-issue:keboola/connection#43", "Already running", ["attach"]),
+    issueRow("linear:AI-1", "Linear row", ["implement"]),
+    issueRow("github:keboola/connection#9", "A pull request", ["implement"]),
+    issueRow("github-issue:keboola/connection#44; rm -rf ~", "Hostile key", ["implement"]),
+    issueRow("github-issue:keboola/$(touch x)#45", "Hostile owner", ["implement"]),
+  ]);
+  const picker = await githubPicker("rofi-gh", listJson);
+
+  const result = await runScript("pohunek-rofi-issue", ["ui", "github"], picker.box, picker.configDir, picker.env);
+
+  expect(result.status, failureContext(result)).toBe(0);
+  expect(await read(picker.workArgs)).toBe("list\n--json\n--project\nui\n");
+  // One row: key, state and title with the tab and newline flattened; every other row is dropped.
+  expect(await read(picker.rofiStdin)).toBe(`${GITHUB_KEY}\tIn progress\tFix the tab bug\n`);
+  await waitForFileContains(picker.terminalArgs, ["pohunek-work\ndo\n" + GITHUB_KEY + "\nimplement\n--project\nui\n"], "github rofi-issue terminal");
+  // `do` confirms on the terminal itself: no --yes.
+  expect(await read(picker.terminalArgs)).not.toContain("--yes");
+});
+
+test("rofi-issue github starts nothing when no row offers implement", async () => {
+  const picker = await githubPicker("rofi-gh-none", listEnvelope([issueRow(GITHUB_KEY, "Running", ["attach"])]));
+  const result = await runScript("pohunek-rofi-issue", ["ui", "github"], picker.box, picker.configDir, picker.env);
+  expect(result.status, failureContext(result)).toBe(0);
+  expect(await read(picker.rofiStdin)).toBe("");
+  expect(await read(picker.terminalArgs)).toBe("");
+});
+
+test("rofi-issue github refuses a hand-typed selection that is not a github-issue key", async () => {
+  const picker = await githubPicker("rofi-gh-typed", listEnvelope([issueRow(GITHUB_KEY, "T", ["implement"])]), 0, "github-issue:o/r#1; touch pwned");
+  const result = await runScript("pohunek-rofi-issue", ["ui", "github"], picker.box, picker.configDir, picker.env);
+  expect(result.status, failureContext(result)).not.toBe(0);
+  expect(result.stderr).toContain("invalid issue key");
+  expect(await read(picker.terminalArgs)).toBe("");
+});
+
+test("rofi-issue github refuses a multi-line selection whose first line is a valid key", async () => {
+  const picker = await githubPicker("rofi-gh-multiline", listEnvelope([issueRow(GITHUB_KEY, "T", ["implement"])]), 0, `${GITHUB_KEY}\njunk`);
+  const result = await runScript("pohunek-rofi-issue", ["ui", "github"], picker.box, picker.configDir, picker.env);
+  expect(result.status, failureContext(result)).not.toBe(0);
+  expect(result.stderr).toContain("more than one line");
+  expect(await read(picker.terminalArgs)).toBe("");
+});
+
+test("rofi-issue linear refuses a multi-line selection whose first line is a valid id", async () => {
+  const box = await sandbox("rofi-issue-linear-multiline");
+  const linear = join(box.bin, "linear-wrapper");
+  const rofi = join(box.bin, "rofi");
+  const terminal = join(box.bin, "terminal");
+  const terminalArgs = join(box.root, "terminal.args");
+  await writeExecutable(linear, `#!/bin/sh\nprintf '[{"identifier":"AI-1","title":"T","state":{"name":"Todo"}}]\\n'\n`);
+  await writeExecutable(rofi, `#!/bin/sh\ncat >/dev/null\nprintf 'AI-1\\njunk\\n'\n`);
+  await writeExecutable(terminal, `#!/bin/sh\nfor arg in "$@"; do printf '%s\\n' "$arg" >>"$POHUNEK_TEST_TERMINAL_ARGS"; done\n`);
+  const configDir = await writeConfig(box.root, [
+    ["linear_cli", linear],
+    ["rofi_bin", rofi],
+    ["terminal", terminal],
+    ["linear_assignee", "zajca"],
+    ["host", "local"],
+  ]);
+  const result = await runScript("pohunek-rofi-issue", ["ui", "linear"], box, configDir, { POHUNEK_TEST_TERMINAL_ARGS: terminalArgs });
+  expect(result.status, failureContext(result)).not.toBe(0);
+  expect(result.stderr).toContain("more than one line");
+  expect(await read(terminalArgs)).toBe("");
+});
+
+test("rofi-issue github fails clearly on an unusable list envelope", async () => {
+  // The error envelope has the shape of `reportError` in plugin/src/cli-errors.ts: `err` is `{class, code, msg}`.
+  const cases: [string, string, number, string][] = [
+    ["error envelope", JSON.stringify({ cli_version: "x", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", msg: "bad config" } }), 2, "reported an error: bad config"],
+    ["unsupported contract", listEnvelope([], { minimum: 4, maximum: 4 }), 0, "does not include supported version 3"],
+    ["not json", "not json", 0, "not valid JSON"],
+    ["no items", JSON.stringify({ protocol: { minimum: 3, maximum: 3 }, ok: {} }), 0, "no ok.items list"],
+    ["failed list", listEnvelope([issueRow(GITHUB_KEY, "T", ["implement"])]), 2, "failed with exit status 2"],
+  ];
+  for (const [label, json, status, message] of cases) {
+    const picker = await githubPicker(`rofi-gh-bad-${label.replaceAll(" ", "-")}`, json, status);
+    const result = await runScript("pohunek-rofi-issue", ["ui", "github"], picker.box, picker.configDir, picker.env);
+    expect(result.status, `${label}: ${failureContext(result)}`).not.toBe(0);
+    expect(result.stderr, label).toContain(message);
+    expect(await read(picker.rofiStdin), label).toBe("");
+    expect(await read(picker.terminalArgs), label).toBe("");
+  }
+});
+
+test("rofi-issue github accepts a partial list (exit 3) and still shows its rows", async () => {
+  const picker = await githubPicker("rofi-gh-partial", listEnvelope([issueRow(GITHUB_KEY, "T", ["implement"])]), 3);
+  const result = await runScript("pohunek-rofi-issue", ["ui", "github"], picker.box, picker.configDir, picker.env);
+  expect(result.status, failureContext(result)).toBe(0);
+  expect(await read(picker.rofiStdin)).toBe(`${GITHUB_KEY}\topen\tT\n`);
+});
+
+test("rofi-issue github needs pohunek_work_bin and linear needs no pohunek_work_bin", async () => {
+  const box = await sandbox("rofi-issue-keys");
+  const rofi = join(box.bin, "rofi");
+  await writeExecutable(rofi, "#!/bin/sh\ncat >/dev/null\nexit 1\n");
+  const noWork = await writeConfig(box.root, [
+    ["rofi_bin", rofi],
+    ["terminal", "unused-terminal"],
+  ]);
+  const github = await runScript("pohunek-rofi-issue", ["ui", "github"], box, noWork);
+  expect(github.status).not.toBe(0);
+  expect(github.stderr).toContain("missing required config key 'pohunek_work_bin'");
+
+  // The Linear path asks for linear_cli, never for pohunek_work_bin.
+  const linear = await runScript("pohunek-rofi-issue", ["ui", "linear"], box, noWork);
+  expect(linear.status).not.toBe(0);
+  expect(linear.stderr).toContain("missing required config key 'linear_cli'");
+  expect(linear.stderr).not.toContain("pohunek_work_bin");
 });
 
 test("rofi merges local and remote hosts, multi-selects and reconciles marks", async () => {

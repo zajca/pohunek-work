@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 function options(step: SetupStep, extra: Partial<SetupOptions> = {}): SetupOptions {
-  return { step, force: false, print: false, json: false, issueProject: null, ...DEFAULT_KEYBINDS, ...extra };
+  return { step, force: false, print: false, json: false, issueProject: null, issueSource: null, ...DEFAULT_KEYBINDS, ...extra };
 }
 
 const LINUX = { platform: "linux", cliVersion: "9.9.9" } as const;
@@ -77,17 +77,17 @@ test("setup sway binds the issue picker only with --issue-project", async () => 
   expect(plain.ok["issue_binding"]).toBe(false);
   expect(plain.ok["snippet"]).not.toContain("pohunek-rofi-issue");
 
-  const bound = await json("sway", { print: true, issueProject: "ui", issueKeybind: "$mod+g" });
+  const bound = await json("sway", { print: true, issueProject: "ui", issueSource: "github", issueKeybind: "$mod+g" });
   expect(bound.ok["issue_binding"]).toBe(true);
   expect(bound.ok["snippet"]).toContain("bindsym $mod+g exec exec '");
-  expect(bound.ok["snippet"]).toContain("pohunek-rofi-issue' 'ui'\n");
+  expect(bound.ok["snippet"]).toContain("pohunek-rofi-issue' 'ui' 'github'\n");
 });
 
 test("the full setup writes no issue binding and tells how to add one", async () => {
   const envelope = await json("all", {});
   const sway = envelope.ok["sway"] as { issue_binding: boolean };
   expect(sway.issue_binding).toBe(false);
-  expect((envelope.ok["next_steps"] as string[]).join("\n")).toContain("--issue-project <project>");
+  expect((envelope.ok["next_steps"] as string[]).join("\n")).toContain("--issue-project <project> --issue-source <linear|github>");
   expect(await readFile(join(root, "config", "sway", "config.d", "pohunek.conf"), "utf8")).not.toContain("pohunek-rofi-issue");
 });
 

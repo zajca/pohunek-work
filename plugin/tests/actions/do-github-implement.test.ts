@@ -47,6 +47,24 @@ function blockOf(prompt: string): string[] {
   return lines.slice(open, close + 1);
 }
 
+describe("two projects on one repository", () => {
+  const widgets = config.projects.find((project) => project.pohunekLabel === "widgets");
+  if (widgets === undefined) throw new Error("fixture has no widgets project");
+  const twin = { ...widgets, name: "widgets-two", pohunekLabel: "widgets-two" };
+  const twinConfig: PluginConfig = { ...config, projects: [...config.projects, twin] };
+  const registry = [
+    { id: "p-1", label: "widgets", originUrl: "git@github.com:acme/widgets.git", defaultBaseBranch: "main" },
+    { id: "p-3", label: "widgets-two", originUrl: "git@github.com:acme/widgets.git", defaultBaseBranch: "main" },
+  ];
+
+  test("the issue row is ambiguous without --project and resolves with it", async () => {
+    const { deps } = setup(worldWith(undefined, { registry }));
+    await expectRefusal(runDo(twinConfig, options({ ...dry, project: null }), deps), "ambiguous_item", "pass --project");
+    const out = await runDo(twinConfig, options({ ...dry, project: "widgets-two" }), setup(worldWith(undefined, { registry })).deps);
+    expect((JSON.parse(out.stdout) as Envelope).ok.plan.argv).toContain("widgets-two");
+  });
+});
+
 describe("the plan", () => {
   test("--dry-run prints the exact argv: branch from issue_number_prefix, name and issue link", async () => {
     const world = worldWith();

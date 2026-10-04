@@ -416,3 +416,21 @@ test("every project line names its issue source", async () => {
   expect(gadgets?.message).toContain("[issue source: github]");
   expect(calls.keyring).toBe(1);
 });
+
+test("a GitHub issue project makes doctor check pohunek_work_bin; a Linear-only config does not", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pohunek-work-doctor-launcher-"));
+  try {
+    const launcher = { env: { PATH: dir, HOME: dir }, platform: "linux" } as const;
+    const github = makeDeps({ config: { ...pluginConfig, projects: [project("widgets", "acme/widgets", "github")] } });
+    const withGithub = await runDoctor({ ...github.deps, launcher });
+    const check = withGithub.checks.find((candidate) => candidate.name === "pohunek_work_bin");
+    expect(check?.code).toBe("warn");
+    expect(withGithub.exitCode).toBe(0);
+
+    const linear = makeDeps();
+    const withLinear = await runDoctor({ ...linear.deps, launcher });
+    expect(withLinear.checks.map((candidate) => candidate.name)).not.toContain("pohunek_work_bin");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

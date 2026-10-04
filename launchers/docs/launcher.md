@@ -44,9 +44,11 @@ Use the split setup commands when diagnosing or applying changes:
    review-dispatch session's prompt.
 3. `pohunek-work setup sway` writes the sway drop-in, or
    `pohunek-work setup sway --print` prints the snippet for manual review.
-   `--keybind` chooses the session switcher key (default `$mod+p`). The Linear
-   issue picker needs a project (`pohunek-rofi-issue <project> [action]`), so its
-   binding is generated only with `--issue-project <project>`;
+   `--keybind` chooses the session switcher key (default `$mod+p`). The issue
+   picker needs a project and an issue source
+   (`pohunek-rofi-issue <project> <linear|github> [action]`; there is no
+   default source), so its binding is generated only with
+   `--issue-project <project> --issue-source <linear|github>`;
    `--issue-keybind` (default `$mod+i`) then chooses its key. Paths and the
    project are quoted so that both sway's config parser and `sh` read them back
    unchanged, whatever characters they contain; control characters and key
@@ -73,12 +75,34 @@ that never change the exit code: `bin:rofi`, `bin:swaymsg`, `bin:python3` (every
 script needs it), `terminal` (`terminal=` in `launcher.conf`, else `$TERMINAL`;
 the launcher runs the whole value as one program, so it is resolved as one
 executable and `kitty -e` is reported), `launcher_scripts` (every entrypoint is
-installed and executable and `lib.sh` is readable) and `sway_include` (an
+installed and executable and `lib.sh` is readable) and `pohunek_work_bin` (only when a configured project has
+`issue_source = "github"`: the `pohunek_work_bin=` value of `launcher.conf` is
+set and resolves to one executable), and `sway_include` (an
 `include` directive of the sway config, with sway variables, `~`, `$HOME` and
 globs expanded, covers the generated drop-in; a mention of `config.d` elsewhere
 does not count). When the install directories cannot be derived
 from the environment a single `launcher_paths` warning replaces the path-based
 checks.
+
+## Issue picker
+
+`pohunek-rofi-issue <project> <linear|github> [action]` lists my actionable
+issues in rofi and starts work on the selected one in a terminal. The source is
+an argument of every invocation; a missing or unknown source is a usage error.
+
+- `linear` runs `linear issue query` (config keys `linear_cli`,
+  `linear_assignee`, `linear_issue_states`) and hands the selection to
+  `pohunek-launch-issue <project> <id> [action]` (default action
+  `process-issue`), which is the Linear launcher.
+- `github` needs the `pohunek_work_bin` key of `launcher.conf` (the
+  `pohunek-work` binary) and no `linear_cli`. Rows come from
+  `pohunek-work list --json --project <project>`: the `github-issue:` rows whose
+  `actions` offer `implement`, shown as key, state and title. The envelope must
+  be an `ok` payload of `list` contract 3, and every key must match
+  `github-issue:<owner>/<name>#<n>`, before anything reaches rofi or an argv.
+  The selection runs `pohunek-work do <key> implement` in the terminal; `do`
+  asks for confirmation there, so prompt and `work.link.*` metadata are the
+  plugin's. Only the `implement` action is accepted.
 
 After setup, verify daemon health and project/action resolution before blaming
 the launcher UI. The launcher ultimately depends on the same daemon, project,
