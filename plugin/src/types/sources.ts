@@ -163,6 +163,16 @@ export interface Issue {
   readonly attachmentUrls: readonly string[];
 }
 
+/** One GitHub issue as read for the prompt of `implement`; the body is provider free text. */
+export interface IssueDetail {
+  /** `<owner/name>#<number>`. */
+  readonly id: string;
+  readonly title: string;
+  readonly url: string;
+  readonly open: boolean;
+  readonly body: string;
+}
+
 // --------------------------------------------------------------- Pohunek
 
 export type SessionState = "running" | "stopped" | "done" | (string & {});

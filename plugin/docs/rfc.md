@@ -188,7 +188,7 @@ writes metadata atomically:
 | `work.role` | `implement` |
 
 The session name is the key without the provider prefix (`DMD-2188`,
-`PR-8605`). Metadata values never contain secrets. Sessions launched by core's
+`PR-8605`; `acme/widgets#7` for a GitHub issue). Metadata values never contain secrets. Sessions launched by core's
 own provider launch path with `link.*` keys are also recognized until step 16
 removes that path.
 
@@ -199,7 +199,13 @@ from the main checkout.
 ### 7.2 Branch convention
 
 Branches are `zajca/<KEY>/<slug>`; the project configuration carries the
-pattern that extracts the key.
+pattern that extracts the key. A GitHub issue has a number, not a key, so its
+branch is `zajca/<issue_number_prefix><n>/<slug>` with `[actions]
+issue_number_prefix` (for example `issue-`, giving `zajca/issue-7/<slug>` and the
+project pattern `^zajca/issue-(?P<key>[0-9]+)/`). `do` refuses with
+`invalid_value` unless the project's `branch_pattern` captures exactly `<n>` from
+the branch it would launch, so the session and its pull request join back to the
+issue row.
 
 ### 7.3 Join precedence
 
@@ -410,10 +416,10 @@ For a project with `issue_source = "github"` the issue row is keyed
 paused label when there is one, else the first started label, spelled as on
 GitHub). The issue lookup reports its own status `sources.github_issues`; while
 it is not `ok` a row joined to an issue is `unknown` where rule 12 or rule 8
-needs the issue (8.3). `implement` is not offered on a `github-issue:` row (the
-launch of an implementation session for a GitHub issue is not implemented yet);
-the other actions are offered on it exactly as on a `linear:` row, and a session
-they start carries `work.link.provider = github`, `work.link.kind = issue` and
+needs the issue (8.3). `implement` is offered on a `github-issue:` row on rule 8 exactly as on a
+`linear:` row; the issue body is not part of the contract and is read only when
+`do implement` plans the launch (section 10). The other actions are offered on
+it exactly as on a `linear:` row, and a session they start carries `work.link.provider = github`, `work.link.kind = issue` and
 `work.link.id = <owner/name>#<number>`, so the next listing finds it. A pull
 request that resolves to no issue key is flagged `no_issue` while the issue
 lookup answered.
@@ -444,7 +450,7 @@ same set.
 
 | Action | Effect | Precondition |
 | --- | --- | --- |
-| `implement` | worktree on `zajca/<KEY>/<slug>`, session `role=implement` | no live linked session on the worktree |
+| `implement` | worktree on `zajca/<KEY>/<slug>` (GitHub issue: `zajca/<issue_number_prefix><n>/<slug>`), session `role=implement` | no live linked session on the worktree |
 | `babysit` | session `role=babysit` in the item's worktree | rule 4; no live linked session |
 | `fix-ci` | session `role=fix-ci` | rule 5 (failed check) |
 | `rebase` | session `role=rebase` | rule 5 (conflict) |
@@ -452,6 +458,21 @@ same set.
 | `ready` | mark PR ready for review | rule 6 |
 | `merge` | merge or enqueue | rule 7; never delegable by default |
 | `attach` | attach to the linked session | live linked session |
+
+`implement` on a `github-issue:` row reads the issue once at plan time
+(`repository(owner, name).issue(number)`: title, url, state, body) and refuses a
+closed issue with `precondition_failed` and a failed lookup with
+`source_unavailable`. The prompt (`work-implement-github.tmpl`) says "GitHub issue
+`<owner/name>#<n>`", carries title, url and body inside the untrusted-data block
+and tells the agent to read the issue and its comments with `gh issue view <n>
+--repo <owner/name> --comments`. The body keeps its lines, each behind a `| `
+prefix, so no body line can start or forge a fence; control characters become
+spaces and a body longer than `[actions] issue_body_max_length` characters is cut
+with the cut marked inside the block. The session is named `<owner/name>#<n>` and
+carries `work.link.provider = github`, `work.link.kind = issue`,
+`work.link.id = <owner/name>#<n>`, `work.link.url` = the issue URL,
+`work.link.branch` and `work.role = implement`; the Linear prompt is separate and
+unchanged. The body never enters `list`, logs or errors.
 
 Each launch action resolves its agent profile and prompt template through a
 per-project pohunek action with `provider = "none"` (for example
@@ -515,6 +536,15 @@ review_teams = []
 
 [watch]
 poll_interval_secs = 300
+
+[actions]
+branch_prefix = "zajca"
+review_branch_segment = "review"
+slug_max_length = 40
+issue_number_prefix = "issue-"   # GitHub issue branch: <branch_prefix>/<issue_number_prefix><n>/<slug>; may be ""
+issue_body_max_length = 8000     # characters of a GitHub issue body that reach the prompt
+launch_timeout_ms = 120000
+launch_kill_margin_ms = 10000
 
 [policy]                  # empty: every action needs the owner
 delegable = []

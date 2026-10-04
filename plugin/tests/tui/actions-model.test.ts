@@ -40,6 +40,14 @@ describe("Enter: primary action as a handover to do", () => {
     ]);
   });
 
+  test("a github-issue row on rule 8 runs `do implement` like a linear row", () => {
+    const key = "github-issue:acme/widgets#7";
+    const issueRow = row(key, { on_turn: { actor: "me", reason: "nothing runs", rule: 8 }, actions: [{ name: "implement", delegable: false }] });
+    expect(press(at(key, [issueRow]), ["<enter>"]).effects).toEqual([
+      { kind: "handover", mode: "write", row: `connection ${key}`, key, action: "implement", argv: [BIN, "do", key, "implement", "--project", "connection", "--json"] },
+    ]);
+  });
+
   test("a primary attach (rules 1 and 11) is an attach handover without --json", () => {
     for (const key of ["linear:DMD-101", "linear:DMD-112"]) {
       expect(press(at(key), ["<enter>"]).effects).toEqual([

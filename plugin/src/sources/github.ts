@@ -11,6 +11,7 @@ import type {
   Check,
   CheckOutcome,
   Issue,
+  IssueDetail,
   Mergeable,
   MergedPullRequest,
   PullRequest,
@@ -28,6 +29,7 @@ import type {
 import { exec as defaultExec, SpawnError, type Exec } from "../util/exec.ts";
 import {
   buildConnectionRequest,
+  buildIssueDetailRequest,
   buildIssueSearchRequest,
   buildMergedSearchRequest,
   buildSearchRequest,
@@ -54,6 +56,8 @@ export interface GithubSource {
   fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
   /** Open issues of the project's repository assigned to the owner that carry a started or paused label. */
   fetchIssues(project: GithubProject): Promise<SourceResult<readonly Issue[]>>;
+  /** One issue of the project's repository by number, with its body; used only when `implement` is planned. */
+  fetchIssueDetail(project: GithubProject, number: number): Promise<SourceResult<IssueDetail>>;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -841,6 +845,23 @@ function buildSearches(project: ProjectConfig, identity: IdentityConfig): Search
   ];
 }
 
+/** The issue of an `issue(number:)` lookup; an issue that does not exist (or no access to it) is a schema mismatch for the caller to report. */
+function toIssueDetail(data: JsonObject, project: GithubProject, number: number): IssueDetail {
+  const repository = data["repository"] === null ? null : asObject(data["repository"], "repository");
+  const raw = repository === null || repository["issue"] === null ? null : asObject(repository["issue"], "issue");
+  if (raw === null) {
+    throw new SourceFailureError("invalid_response", "GitHub has no such issue in the repository (or the token cannot read it)");
+  }
+  if (asInteger(raw["number"], "issue.number") !== number) throw schemaMismatch("issue.number");
+  return {
+    id: `${project.repo}#${number.toString()}`,
+    title: asString(raw["title"], "issue.title"),
+    url: asString(raw["url"], "issue.url"),
+    open: asOneOf(raw["state"], ["OPEN", "CLOSED"], "issue.state") === "OPEN",
+    body: asString(raw["body"], "issue.body"),
+  };
+}
+
 export function createGithubSource(
   config: { readonly github: GithubConfig; readonly identity: IdentityConfig },
   deps: GithubSourceDeps = {},
@@ -934,5 +955,31 @@ export function createGithubSource(
     }
   };
 
-  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues };
+  const fetchIssueDetail = async (project: GithubProject, number: number): Promise<SourceResult<IssueDetail>> => {
+    const startedAt = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - startedAt);
+    try {
+      validateInputs(project, config.identity);
+      if (!Number.isSafeInteger(number) || number <= 0) {
+        throw new SourceFailureError("not_configured", "the issue number is not a positive integer");
+      }
+      const [owner = "", name = ""] = project.repo.split("/");
+      const token = await obtainToken(config.github, execFn);
+      const transport: Transport = {
+        token,
+        config: config.github,
+        fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+      };
+      const data = await send(transport, buildIssueDetailRequest(owner, name, number));
+      const detail = toIssueDetail(data, project, number);
+      return { ok: true, source: "github_issues", data: detail, durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof SourceFailureError) {
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+      }
+      throw error;
+    }
+  };
+
+  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIssueDetail };
 }

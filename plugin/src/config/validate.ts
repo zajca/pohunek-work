@@ -50,6 +50,13 @@ export function readString(table: Table, name: string, file: string, path: KeyPa
   return value;
 }
 
+/** A required string that may be empty. */
+export function readStringAllowEmpty(table: Table, name: string, file: string, path: KeyPath): string {
+  const value = requireKey(table, name, file, path);
+  if (typeof value !== "string") throw fail(file, [...path, name], "must be a string");
+  return value;
+}
+
 export function readAbsolutePath(table: Table, name: string, file: string, path: KeyPath): string {
   const value = readString(table, name, file, path);
   if (!isAbsolute(value)) throw fail(file, [...path, name], "must be an absolute path");

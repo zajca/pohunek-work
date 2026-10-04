@@ -18,7 +18,7 @@ const config: PluginConfig = {
   ...baseConfig,
   projects: baseConfig.projects.map((project) =>
     project.pohunekLabel === "widgets"
-      ? { ...project, issueSource: githubIssueSource, branchPattern: /^alice\/(?<key>[0-9]+)\//, branchPatternSource: "^alice/(?P<key>[0-9]+)/" }
+      ? { ...project, issueSource: githubIssueSource, branchPattern: /^alice\/issue-(?<key>[0-9]+)\//, branchPatternSource: "^alice/issue-(?P<key>[0-9]+)/" }
       : project,
   ),
 };
@@ -49,16 +49,19 @@ function rowOf(items: readonly ListItem[]): ListItem {
   return row;
 }
 
-test("an issue-only row is on rule 8 but list offers no implement and do refuses it", async () => {
-  const world: World = { githubIssues: ok("github_issues", [githubIssue()]) };
+test("an issue-only row is on rule 8, and list offers implement exactly because do plans it", async () => {
+  const world: World = {
+    githubIssues: ok("github_issues", [githubIssue()]),
+    issueDetail: (number) => ok("github_issues", { id: ISSUE_KEY, title: "Widget cache", url: "https://example.invalid/acme/widgets/issues/7", open: number === 7, body: "Cache it." }),
+  };
   const row = rowOf(await listed(world));
   expect(row.on_turn).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
   expect(row.issue).toEqual({ id: ISSUE_KEY, title: "Widget cache", state: "in-progress", url: "https://example.invalid/acme/widgets/issues/7" });
   expect(row.issue_key).toBe(ISSUE_KEY);
-  expect(row.actions).toEqual([]);
+  expect(row.actions).toEqual([{ name: "implement", delegable: false, profile: "profile-a" }]);
   expect(row.sources).toMatchObject({ linear: "unused", github_issues: "ok" });
-  const attempt = runDo(config, options({ key: ROW, action: "implement", profile: "profile-a", dryRun: true, yes: false }), setup(world).deps);
-  await expectRefusal(attempt, "precondition_failed", "implement refused");
+  const out = await runDo(config, options({ key: ROW, action: "implement", profile: "profile-a", dryRun: true, yes: false }), setup(world).deps);
+  expect((JSON.parse(out.stdout) as Envelope).ok.plan.branch).toBe("alice/issue-7/widget-cache");
 });
 
 const WORKTREE_CASES = [

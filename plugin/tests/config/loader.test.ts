@@ -67,7 +67,7 @@ describe("loadConfig valid", () => {
       pohunek: { bin: "/usr/local/bin/pohunek", timeoutMs: 10000, notificationsPageSize: 25 },
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
-      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
+      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
       notify: { command: "/usr/bin/notify-send", timeoutMs: 5000 },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
@@ -132,6 +132,8 @@ describe("loadConfig missing keys", () => {
     ["config.toml", "max_string_length = 2000\n", "log.max_string_length", "[log] max_string_length is required"],
     ["config.toml", 'review_branch_segment = "review"\n', "actions.review_branch_segment", "[actions] review_branch_segment is required"],
     ["config.toml", "slug_max_length = 40\n", "actions.slug_max_length", "[actions] slug_max_length is required"],
+    ["config.toml", 'issue_number_prefix = "issue-"\n', "actions.issue_number_prefix", "[actions] issue_number_prefix is required"],
+    ["config.toml", "issue_body_max_length = 2000\n", "actions.issue_body_max_length", "[actions] issue_body_max_length is required"],
     ["config.toml", "launch_timeout_ms = 120000\n", "actions.launch_timeout_ms", "[actions] launch_timeout_ms is required"],
     ["config.toml", "launch_kill_margin_ms = 10000\n", "actions.launch_kill_margin_ms", "[actions] launch_kill_margin_ms is required"],
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
@@ -162,6 +164,28 @@ describe("loadConfig missing keys", () => {
     const error = await loadError(dir);
     expect(error.key).toBe("actions.review_branch_segment");
   });
+
+  test("actions.issue_number_prefix may be empty", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace('issue_number_prefix = "issue-"', 'issue_number_prefix = ""'));
+    expect((await loadConfig(dir)).global.actions.issueNumberPrefix).toBe("");
+  });
+
+  for (const bad of ["Issue-", "is/sue", "issue ", "1.2"]) {
+    test(`actions.issue_number_prefix ${JSON.stringify(bad)} fails naming the key`, async () => {
+      const dir = await copyFixture();
+      await editFile(dir, "config.toml", (t) => t.replace('issue_number_prefix = "issue-"', `issue_number_prefix = ${JSON.stringify(bad)}`));
+      expect((await loadError(dir)).key).toBe("actions.issue_number_prefix");
+    });
+  }
+
+  for (const bad of ["0", "-5", '"x"', "1.5"]) {
+    test(`actions.issue_body_max_length ${bad} fails naming the key`, async () => {
+      const dir = await copyFixture();
+      await editFile(dir, "config.toml", (t) => t.replace("issue_body_max_length = 2000", `issue_body_max_length = ${bad}`));
+      expect((await loadError(dir)).key).toBe("actions.issue_body_max_length");
+    });
+  }
 
   test("missing table fails naming the table", async () => {
     const dir = await copyFixture();

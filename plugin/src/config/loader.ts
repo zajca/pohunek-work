@@ -22,6 +22,7 @@ import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from
 import { ConfigError } from "./errors.ts";
 import {
   fail,
+  readStringAllowEmpty,
   isTable,
   readAbsolutePath,
   readBoolean,
@@ -190,12 +191,32 @@ function readBranchSegment(table: Table, key: string, file: string, path: readon
   return value;
 }
 
+/** Text before the issue number in a branch segment: lowercase letters, digits, `-` and `_`, possibly none. */
+const ISSUE_NUMBER_PREFIX = /^[a-z0-9_-]*$/;
+
+function readIssueNumberPrefix(table: Table, file: string, path: readonly string[]): string {
+  const key = "issue_number_prefix";
+  const value = readStringAllowEmpty(table, key, file, path);
+  if (!ISSUE_NUMBER_PREFIX.test(value)) {
+    throw fail(file, [...path, key], "must contain only lowercase letters, digits, - and _ (it may be empty)");
+  }
+  return value;
+}
+
 function parseActions(root: Table, file: string): ActionsConfig {
   const table = requireTable(root, "actions", file);
   const path = ["actions"];
   rejectUnknownKeys(
     table,
-    ["branch_prefix", "review_branch_segment", "slug_max_length", "launch_timeout_ms", "launch_kill_margin_ms"],
+    [
+      "branch_prefix",
+      "review_branch_segment",
+      "slug_max_length",
+      "issue_number_prefix",
+      "issue_body_max_length",
+      "launch_timeout_ms",
+      "launch_kill_margin_ms",
+    ],
     file,
     path,
   );
@@ -203,6 +224,8 @@ function parseActions(root: Table, file: string): ActionsConfig {
     branchPrefix: readBranchSegment(table, "branch_prefix", file, path),
     reviewBranchSegment: readBranchSegment(table, "review_branch_segment", file, path),
     slugMaxLength: readPositiveInt(table, "slug_max_length", file, path),
+    issueNumberPrefix: readIssueNumberPrefix(table, file, path),
+    issueBodyMaxLength: readPositiveInt(table, "issue_body_max_length", file, path),
     launchTimeoutMs: readPositiveInt(table, "launch_timeout_ms", file, path),
     launchKillMarginMs: readPositiveInt(table, "launch_kill_margin_ms", file, path),
   };

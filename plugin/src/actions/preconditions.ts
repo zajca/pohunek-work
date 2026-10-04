@@ -40,7 +40,7 @@ export function requireAuthoredPullRequest(row: CollectedRow, action: DoAction):
 }
 
 /** `owner/name`; also never an option, since it is passed as an argv value. */
-const REPO = /^[A-Za-z0-9_.][A-Za-z0-9_.-]*\/[A-Za-z0-9_.][A-Za-z0-9_.-]*$/;
+export const REPO = /^[A-Za-z0-9_.][A-Za-z0-9_.-]*\/[A-Za-z0-9_.][A-Za-z0-9_.-]*$/;
 
 /** The repository and number of a pull request, checked before they reach an argv. */
 export function pullRequestTarget(pr: PullRequest): { repo: string; number: string } {

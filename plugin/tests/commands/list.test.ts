@@ -61,6 +61,7 @@ function deps(world: World): Parameters<typeof runList>[2] {
       fetchPullRequests: () => Promise.resolve(world.prs ?? ok("github", [])),
       fetchMergedPullRequests: () => Promise.resolve(world.merged ?? ok("github", [])),
       fetchIssues: () => Promise.resolve(world.githubIssues ?? ok("github_issues", [])),
+      fetchIssueDetail: () => Promise.reject(new Error("an issue body is read only when implement is planned")),
     },
     linear: { fetchIssues: () => Promise.resolve(world.issues ?? ok("linear", [])) },
     logger: silentLogger,
