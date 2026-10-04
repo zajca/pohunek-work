@@ -255,6 +255,15 @@ test("review is refused as not_supported when the project hands reviews to an ex
   expect([launches.length, dry.launches.length]).toEqual([0, 0]);
 });
 
+test("external reviews are refused as not_supported even without a review profile", async () => {
+  const noProfile: PluginConfig = { ...externalReviewsConfig, global: { ...externalReviewsConfig.global, profiles: {} } };
+  for (const dryRun of [true, false]) {
+    const { deps, launches } = setup({ prs: ok("github", [THEIRS]) });
+    await expectRefusal(runDo(noProfile, reviewOptions({ profile: null, dryRun, yes: !dryRun }), deps), "not_supported", '[project] reviews = "external"');
+    expect(launches).toHaveLength(0);
+  }
+});
+
 test("review is refused while a linked review session is live", async () => {
   const idle = session({ id: "s-idle", activity: "idle", metadata: { "work.link.id": THEIRS.id, "work.link.provider": "github" } });
   const { deps, launches } = setup({ prs: ok("github", [THEIRS]), sessions: [idle] });
