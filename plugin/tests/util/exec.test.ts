@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, execInteractive, SpawnError } from "../../src/util/exec.ts";
@@ -63,20 +63,24 @@ test("the timeout is a hard bound even when a grandchild keeps the pipes open", 
 
 test("a timeout ends grandchildren in the process group", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pw-exec-"));
-  const pidFile = join(dir, "pid");
-  const script = `sleep 30 & echo $! > ${pidFile}; wait`;
-  const result = await exec(["/bin/sh", "-c", script], { timeoutMs: 400 });
-  expect(result.timedOut).toBe(true);
-  const grandchild = Number((await readFile(pidFile, "utf8")).trim());
-  expect(Number.isInteger(grandchild) && grandchild > 0).toBe(true);
-  await Bun.sleep(200);
-  const alive = ((): boolean => {
-    try {
-      process.kill(grandchild, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  expect(alive).toBe(false);
+  try {
+    const pidFile = join(dir, "pid");
+    const script = `sleep 30 & echo $! > ${pidFile}; wait`;
+    const result = await exec(["/bin/sh", "-c", script], { timeoutMs: 400 });
+    expect(result.timedOut).toBe(true);
+    const grandchild = Number((await readFile(pidFile, "utf8")).trim());
+    expect(Number.isInteger(grandchild) && grandchild > 0).toBe(true);
+    await Bun.sleep(200);
+    const alive = ((): boolean => {
+      try {
+        process.kill(grandchild, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    expect(alive).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

@@ -1,12 +1,13 @@
 // Behaviour of the launcher scripts against stub `pohunek`, `gh`, `linear`, `rofi`,
 // `swaymsg` and terminal binaries. Scenarios that stop before a prompt is rendered need
 // no real pohunek binary; the rendering scenarios are in launch-render.test.ts.
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   POHUNEK_STUB,
   read,
+  removeSandboxes,
   runScript,
   sandbox,
   scriptPath,
@@ -14,6 +15,8 @@ import {
   writeConfig,
   writeExecutable,
 } from "./helpers.ts";
+
+afterEach(removeSandboxes);
 
 function failureContext(result: { stdout: string; stderr: string }): string {
   return `stdout=${result.stdout} stderr=${result.stderr}`;

@@ -1,6 +1,6 @@
 // Shared harness for the launcher script tests. Each test runs a script from
 // launchers/ in a sandbox directory with stub binaries on a private PATH.
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,11 +44,20 @@ export interface Sandbox {
   readonly bin: string;
 }
 
+/** Sandbox roots created since the last `removeSandboxes()`. */
+const sandboxRoots: string[] = [];
+
+/** Creates a sandbox that `removeSandboxes()` deletes; register it in `afterEach`. */
 export async function sandbox(tag: string): Promise<Sandbox> {
   const root = await mkdtemp(join(tmpdir(), `pohunek-script-${tag}-`));
+  sandboxRoots.push(root);
   const bin = join(root, "bin");
   await mkdir(bin);
   return { root, bin };
+}
+
+export async function removeSandboxes(): Promise<void> {
+  await Promise.all(sandboxRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 }
 
 export async function writeExecutable(path: string, content: string): Promise<void> {
