@@ -24,7 +24,7 @@ import {
 } from "../rules/builders.ts";
 
 const GLOBAL_PROFILES = { implement: "profile-a", babysit: "profile-b", "fix-ci": "profile-c", rebase: "profile-d", review: "profile-e" };
-const context = { sources: allOk, identity, project: { ...project, profiles: null }, profiles: GLOBAL_PROFILES };
+const context = { sources: allOk, identity, project: { ...project, profiles: null }, profiles: GLOBAL_PROFILES, sessions: [] };
 
 const GOLDEN = new URL("../fixtures/output/list-contract.json", import.meta.url);
 
@@ -185,17 +185,14 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     [{ actor: "unknown", reason: "github:rate_limited", rule: null }, []],
   ];
 
-  /** Actions `do` starts in the worktree of a linked session. */
-  const worktreeActions: readonly string[] = ["babysit", "fix-ci", "rebase"];
   const owner = session({ state: "stopped", activity: null, worktreePath: "/wt/a" });
 
   test.each(meTurns)("%p with a stopped linked session that owns a worktree: %p", (onTurn, names) => {
     expect(rowActions(item({ sessions: [owner] }), onTurn, context).map((action) => action.name)).toEqual([...names]);
   });
 
-  test.each(meTurns)("%p without a linked session lists no worktree action", (onTurn, names) => {
-    const expected = names.filter((name) => !worktreeActions.includes(name));
-    expect(rowActions(item(), onTurn, context).map((action) => action.name)).toEqual(expected);
+  test.each(meTurns)("%p without a linked session lists the worktree action too: the head branch can be adopted", (onTurn, names) => {
+    expect(rowActions(item(), onTurn, context).map((action) => action.name)).toEqual([...names]);
   });
 
   test.each(meTurns)("%p with a live linked session that owns a worktree adds attach last", (onTurn, names) => {
@@ -203,9 +200,8 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     expect(rowActions(live, onTurn, context).map((action) => action.name)).toEqual([...names, "attach"]);
   });
 
-  test.each(meTurns)("%p with a live linked session without a worktree keeps attach only for worktree actions", (onTurn, names) => {
-    const expected = names.filter((name) => !worktreeActions.includes(name));
-    expect(rowActions(item({ sessions: [session()] }), onTurn, context).map((action) => action.name)).toEqual([...expected, "attach"]);
+  test.each(meTurns)("%p with a live linked session without a worktree adds attach last", (onTurn, names) => {
+    expect(rowActions(item({ sessions: [session()] }), onTurn, context).map((action) => action.name)).toEqual([...names, "attach"]);
   });
 
   test("any linked session that owns a worktree is enough, not only the implementing one", () => {
@@ -295,7 +291,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     expect(renderTable([paused], [], [], new Set())).toContain("paused (r12)");
   });
 
-  test("a rule 4 or 5 row without a worktree keeps its on_turn reason and lists no action", () => {
+  test("a rule 4 or 5 row without a worktree keeps its on_turn reason and lists the action for reuse or adoption", () => {
     const changesRequested = deliveredPr({ timeline: [] });
     const failing = pr({ checks: [check("build", "failure")] });
     const conflicting = pr({ mergeable: "CONFLICTING" });
@@ -307,11 +303,37 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     for (const [pullRequest, onTurn, action] of cases) {
       const bare = buildListItem(item({ pullRequest }), context);
       expect(bare.on_turn).toEqual(onTurn);
-      expect(bare.actions).toEqual([]);
+      expect(bare.actions.map((a) => a.name)).toEqual([action]);
       const owned = buildListItem(item({ pullRequest, sessions: [owner] }), context);
       expect(owned.on_turn).toEqual(onTurn);
       expect(owned.actions.map((a) => a.name)).toEqual([action]);
     }
+  });
+});
+
+describe("adoption refusals that list knows (the head branch cannot be adopted)", () => {
+  const onTurn: OnTurn = { actor: "me", reason: "respond", rule: 4 };
+  const names = (row: ReturnType<typeof item>, sessions: readonly ReturnType<typeof session>[] = []): string[] =>
+    rowActions(row, onTurn, { ...context, sessions }).map((action) => action.name);
+
+  test("a fork head, a branch that is not a plain ref and a head that is not a full SHA list no worktree action", () => {
+    expect(names(item({ pullRequest: pr({ isCrossRepository: true }) }))).toEqual([]);
+    expect(names(item({ pullRequest: pr({ headRefName: "--force" }) }))).toEqual([]);
+    expect(names(item({ pullRequest: pr({ headRefName: "a..b" }) }))).toEqual([]);
+    expect(names(item({ pullRequest: pr({ headSha: "abc" }) }))).toEqual([]);
+  });
+
+  test("a fork head still lists the action when a linked session owns a worktree: reuse needs no adoption", () => {
+    expect(names(item({ pullRequest: pr({ isCrossRepository: true }), sessions: [session({ state: "stopped", activity: null, worktreePath: "/wt/a" })] }))).toEqual(["babysit"]);
+  });
+
+  test("an unlinked session of the project that holds the head branch lists no action; another project's session does not", () => {
+    const head = pr().headRefName;
+    const holder = session({ id: "s-other", branch: head, worktreePath: "/wt/other" });
+    expect(names(item(), [holder])).toEqual([]);
+    expect(names(item(), [{ ...holder, projectLabel: "gadgets" }])).toEqual(["babysit"]);
+    expect(names(item(), [{ ...holder, worktreePath: null }])).toEqual(["babysit"]);
+    expect(names(item(), [{ ...holder, branch: "other-branch" }])).toEqual(["babysit"]);
   });
 });
 

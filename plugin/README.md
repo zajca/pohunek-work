@@ -45,7 +45,9 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   `branch_pattern` has to capture `<n>` from it) and the prompt carries the issue
   title and body, cut to `[actions] issue_body_max_length` characters, inside an
   untrusted-data block (both keys are required, `issue_number_prefix` may be empty); `review` starts in a fresh worktree of the pull
-  request head and checks the checked-out commit after the launch;
+  request head and checks the checked-out commit after the launch; `babysit`, `fix-ci` and
+  `rebase` start in the worktree of a linked session, or adopt the pull request's own head branch
+  in a fresh worktree when none owns one (RFC 7.5);
 - `pohunek-work do <key> ready [--dry-run]` runs `gh pr ready` on the owner's
   draft and re-reads the pull request to confirm it is no longer a draft;
 - `pohunek-work do <key> attach` attaches the terminal to the one live linked

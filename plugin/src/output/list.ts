@@ -4,8 +4,10 @@ import { configuredProfile } from "../config/profiles.ts";
 import { evaluateOnTurn, summarizeChecks } from "../rules.ts";
 import { isIssueRowOf } from "../config/row-key.ts";
 import { isLiveSession, worktreeOf } from "../sources/pohunek.ts";
+import { adoptRefusal } from "../actions/adopt.ts";
 import { toAscii } from "./sanitize.ts";
 import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
+import type { PohunekSession } from "../types/sources.ts";
 import {
   LIST_CONTRACT_VERSION,
   type ListAction,
@@ -25,9 +27,11 @@ import {
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "profiles">;
+  readonly project: Pick<ProjectConfig, "pohunekLabel" | "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "profiles">;
   /** Global [profiles]; a project's own table replaces it whole. */
   readonly profiles: ProfilesConfig;
+  /** Every session pohunek knows, linked or not: an unlinked session may hold a pull request's head branch. */
+  readonly sessions: readonly PohunekSession[];
 }
 
 /** The `do` action that moves a row on the owner's turn forward; null when the step is manual (7, 9, a rule 5 policy check). */
@@ -53,21 +57,29 @@ function ruleAction(onTurn: OnTurn): string | null {
 /** Actions that start a session carry the agent profile `do` would use. */
 const PROFILED_ACTIONS: readonly string[] = ["implement", "babysit", "fix-ci", "rebase", "review"];
 
-/** Actions that start in the worktree of a linked session; `do` refuses them with `no_worktree` otherwise. */
+/** Actions that start in the worktree of a linked session, or adopt the pull request's head branch in a new one. */
 const WORKTREE_ACTIONS: readonly string[] = ["babysit", "fix-ci", "rebase"];
+
+function worktreeActionable(item: WorkItem, context: Pick<RowContext, "project" | "sessions">): boolean {
+  if (worktreeOf(item.sessions) !== null) return true;
+  const pr = item.pullRequest;
+  return pr !== null && adoptRefusal(pr, context.sessions, context.project.pohunekLabel) === null;
+}
 
 /**
  * Named actions of a row, the primary first (docs/tui-plan.md 4.5). A worktree
- * action is listed only when a linked session owns a worktree; `on_turn` keeps
- * the reason either way. `attach` is listed whenever a live linked session
+ * action is listed when a linked session owns a worktree (`do` reuses it) or the
+ * pull request's head branch can be adopted (`adoptRefusal`); `do` additionally
+ * refuses an adoption when a worktree pohunek did not create holds the branch,
+ * which only `project show` reveals. `on_turn` keeps the reason either way. `attach` is listed whenever a live linked session
  * exists, which covers rules 1 and 11. A paused row (rule 12) has no action.
  * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
  */
-export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles">): ListAction[] {
+export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles" | "sessions">): ListAction[] {
   if (onTurn.actor === "paused") return [];
   const names: string[] = [];
   const primary = ruleAction(onTurn);
-  if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeOf(item.sessions) !== null)) names.push(primary);
+  if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeActionable(item, context))) names.push(primary);
   if (item.sessions.some(isLiveSession)) names.push("attach");
   return names.map((name) => {
     const profile = PROFILED_ACTIONS.includes(name) ? configuredProfile(name, context.project.profiles, context.profiles) : undefined;

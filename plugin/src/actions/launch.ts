@@ -11,6 +11,7 @@ import type { GithubSource } from "../sources/github.ts";
 import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { Issue, PohunekSession, PullRequest } from "../types/sources.ts";
+import { adoptRefusal, COMMIT_SHA, FETCHABLE_BRANCH } from "./adopt.ts";
 import { isIssueKey, slugify } from "./branch.ts";
 import { REPO, requireAuthoredPullRequest, requireGithub, requireTurn } from "./preconditions.ts";
 import { dataBlock, readTemplate, renderTemplate, type PromptName } from "./prompt.ts";
@@ -27,10 +28,6 @@ const FIX_RULE = 5;
 
 /** A profile name is a pohunek identifier, never an option. */
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-/** A full commit SHA as GitHub reports `headRefOid`. */
-const COMMIT_SHA = /^[0-9a-f]{40}$/;
-/** A branch name that can be passed as an argv value and fetched by name: no option, no `..`. */
-const FETCHABLE_BRANCH = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 
 export interface PlanOptions {
   /** `--profile`; overrides the configured profile of the action. */
@@ -39,6 +36,8 @@ export interface PlanOptions {
   readonly sessions: readonly PohunekSession[];
   /** Reads the issue body of a GitHub issue row; `implement` is the only action that does. */
   readonly github: GithubSource;
+  /** Reads the worktrees of a project; adopting a pull request's head branch is the only plan that does. */
+  readonly pohunek: Pick<PohunekClient, "listWorktrees">;
 }
 
 function profileFor(action: LaunchAction, row: CollectedRow, config: PluginConfig, override: string | null): string {
@@ -269,7 +268,7 @@ function requireFreeWorktree(action: LaunchAction, cwd: string, sessions: readon
   }
 }
 
-/** How one action that works in the existing worktree of the owner's pull request differs from the others. */
+/** How one action that works on the owner's own pull request differs from the others. */
 interface WorktreeSpec {
   readonly template: PromptName;
   /** Turn check on the fresh row; throws an `ActionError`. */
@@ -315,13 +314,35 @@ const WORKTREE_SPECS: Readonly<Record<Exclude<LaunchAction, "implement" | "revie
   },
 };
 
-/** babysit, fix-ci and rebase: a second session in the worktree of the owner's pull request (spike S2). */
+/**
+ * A pull request's head branch has to be free to check out: core refuses `--branch` for a branch that any
+ * worktree holds (spike S2), including the project's primary checkout, which only `project show` lists.
+ */
+async function requireHeadBranchFree(action: LaunchAction, pr: PullRequest, project: string, pohunek: PlanOptions["pohunek"]): Promise<void> {
+  const worktrees = await pohunek.listWorktrees(project);
+  if (!worktrees.ok) {
+    throw new ActionError("source_unavailable", `${action} refused: the worktrees of ${project} could not be read (${worktrees.code}: ${worktrees.message})`);
+  }
+  const holder = worktrees.data.find((w) => w.branch === pr.headRefName);
+  if (holder !== undefined) {
+    throw new ActionError(
+      "precondition_failed",
+      `${action} refused: ${pr.headRefName} is already checked out in ${holder.path}; start there or free the branch`,
+    );
+  }
+}
+
+/**
+ * babysit, fix-ci and rebase: a second session in the worktree of the owner's pull request (spike S2), or,
+ * when no linked session owns one, a fresh worktree that checks out the pull request's head branch itself
+ * (spike S9, adoption).
+ */
 async function planInWorktree(
   action: Exclude<LaunchAction, "implement" | "review">,
   row: CollectedRow,
   config: PluginConfig,
   profile: string,
-  sessions: readonly PohunekSession[],
+  options: PlanOptions,
 ): Promise<ActionPlan> {
   const spec = WORKTREE_SPECS[action];
   const pr = requireAuthoredPullRequest(row, action);
@@ -329,13 +350,17 @@ async function planInWorktree(
   requireNoLiveSession(row, action);
 
   const cwd = worktreeOf(row.item.sessions);
-  if (cwd === null) {
-    throw new ActionError("no_worktree", `${action} refused: no linked session of ${row.listItem.key} owns a worktree to start in`);
+  if (cwd !== null) {
+    if (!cwd.startsWith("/")) {
+      throw new ActionError("invalid_value", `worktree path ${JSON.stringify(cwd)} is not absolute`);
+    }
+    requireFreeWorktree(action, cwd, options.sessions);
+  } else {
+    const project = row.project.pohunekLabel;
+    const refusal = adoptRefusal(pr, options.sessions, project);
+    if (refusal !== null) throw new ActionError(refusal.code, `${action} refused: ${refusal.reason}`);
+    await requireHeadBranchFree(action, pr, project, options.pohunek);
   }
-  if (!cwd.startsWith("/")) {
-    throw new ActionError("invalid_value", `worktree path ${JSON.stringify(cwd)} is not absolute`);
-  }
-  requireFreeWorktree(action, cwd, sessions);
 
   const link = linkOfRow(row, pr);
   const name = `${link.id} ${action}`;
@@ -348,26 +373,33 @@ async function planInWorktree(
     [ROLE_KEY]: action,
     "work.rev": pr.headSha,
   };
+  const headCheck = cwd === null
+    ? `${renderTemplate(await readTemplate("work-adopt-head-check"), { rev: pr.headSha, branch: pr.headRefName })}\n`
+    : "";
   const prompt = renderTemplate(await readTemplate(spec.template), {
     key: row.listItem.key,
     project: row.project.pohunekLabel,
     branch: pr.headRefName,
     pr_url: pr.url,
+    head_check: headCheck,
     pr_block: dataBlock("github", { id: pr.id, title: pr.title, ...spec.fields(row, pr) }),
   });
+  const placement = cwd === null
+    ? ["--project", row.project.pohunekLabel, "--branch", pr.headRefName, "--base-branch", pr.headRefName]
+    : ["--cwd", cwd];
   return {
     action,
     key: row.listItem.key,
     project: row.project.pohunekLabel,
     profile,
-    branch: null,
-    baseBranch: null,
-    expectedHead: null,
+    branch: cwd === null ? pr.headRefName : null,
+    baseBranch: cwd === null ? pr.headRefName : null,
+    expectedHead: cwd === null ? pr.headSha : null,
     cwd,
     name,
     metadata,
     args: [
-      "--cwd", cwd,
+      ...placement,
       "--name", name,
       "--agent", profile,
       ...metaArgs(metadata),
@@ -486,7 +518,7 @@ export async function planLaunch(
     case "review":
       return planReview(row, config, profile, options.sessions);
     default:
-      return planInWorktree(action, row, config, profile, options.sessions);
+      return planInWorktree(action, row, config, profile, options);
   }
 }
 
@@ -497,10 +529,16 @@ export function displayArgv(bin: string, plan: ActionPlan): string[] {
 
 /**
  * The session runs once the daemon answered, so a wrong checkout can only be
- * reported: the review prompt tells the agent to stop on a different HEAD.
+ * reported: the review and adoption prompts tell the agent to stop on a different HEAD.
+ * A review session is read-only, so a differing head is a failed launch. An adopted session writes and
+ * core reports no head at creation, so a differing head may be the agent's own pull or rebase: it is
+ * returned for the caller to report and the agent's own check before any change stays the guard.
  */
-async function verifyHead(plan: ActionPlan, expected: string, result: ActionResult, pohunek: PohunekClient): Promise<void> {
-  const cleanup = `the session runs; remove it with \`pohunek session rm ${result.sessionId}\` and delete the local branch ${String(plan.branch)}`;
+async function verifyHead(plan: ActionPlan, expected: string, result: ActionResult, pohunek: PohunekClient): Promise<ActionResult["headMismatch"]> {
+  // A review branch exists only for the review; an adopted branch is the owner's and may hold unpushed commits.
+  const cleanup = plan.action === "review"
+    ? `the session runs; remove it with \`pohunek session rm ${result.sessionId}\` and delete the local branch ${String(plan.branch)}`
+    : `the session runs; remove it with \`pohunek session rm ${result.sessionId}\` (the local branch ${String(plan.branch)} stays) and bring that branch to ${expected} before retrying`;
   if (result.warnings.length > 0) {
     throw new ActionError(
       "launch_unverified",
@@ -515,10 +553,14 @@ async function verifyHead(plan: ActionPlan, expected: string, result: ActionResu
     );
   }
   const worktree = worktrees.data.find((w) => w.sessionId === result.sessionId || (result.worktreePath !== null && w.path === result.worktreePath));
+  if (worktree !== undefined && worktree.head !== expected && plan.action !== "review") {
+    return { expected, actual: worktree.head };
+  }
   if (worktree?.head !== expected) {
     const seen = worktree === undefined ? "no worktree of the session was listed" : `the worktree holds ${worktree.head}`;
     throw new ActionError("launch_unverified", `session ${result.sessionId} was created but ${seen} instead of ${expected}; ${cleanup}`);
   }
+  return null;
 }
 
 /**
@@ -562,9 +604,8 @@ export async function executePlan(
     worktreePath: session.worktreePath,
     metadata: session.metadata,
     warnings,
+    headMismatch: null,
   };
-  if (plan.expectedHead !== null) {
-    await verifyHead(plan, plan.expectedHead, result, pohunek);
-  }
-  return result;
+  if (plan.expectedHead === null) return result;
+  return { ...result, headMismatch: await verifyHead(plan, plan.expectedHead, result, pohunek) };
 }

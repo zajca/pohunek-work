@@ -97,8 +97,6 @@ test("fix-ci is refused for a pull request of someone else, without a worktree a
   const theirs = pr({ relation: "review_requested", checks: [check("build", "failure")] });
   const a = setup({ prs: ok("github", [theirs]) });
   await expectRefusal(runDo(baseConfig, prOptions("fix-ci", { key: `github:${theirs.id}` }), a.deps), "precondition_failed", "no pull request of yours");
-  const b = setup({ prs: ok("github", [FAILING]) });
-  await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), b.deps), "no_worktree", "fix-ci refused");
   const live = session({ ...OWNER, state: "running", activity: "idle" });
   const c = setup({ prs: ok("github", [FAILING]), sessions: [live] });
   await expectRefusal(runDo(baseConfig, prOptions("fix-ci"), c.deps), "already_running", "s-owner");

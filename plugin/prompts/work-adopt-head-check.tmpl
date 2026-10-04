@@ -1,0 +1,9 @@
+## Before anything else
+This worktree was created for this session and checks out the pull request branch
+`${branch}` itself.
+- Run `git rev-parse HEAD`. It must print `${rev}`, the head of the pull request when this
+  session was started. If it prints anything else, stop and report the mismatch; do not
+  change any code.
+- The branch may have no upstream. Run
+  `git branch --set-upstream-to=origin/${branch} ${branch}` once, so that `git pull` and
+  `git push` work in this worktree.

@@ -207,6 +207,6 @@ export interface Envelope {
       session_id?: string;
       pull_request?: string;
     };
-    result?: { session_id: string; metadata: Record<string, string>; warnings?: string[]; is_draft?: boolean };
+    result?: { session_id: string; metadata: Record<string, string>; warnings?: string[]; is_draft?: boolean; head_mismatch?: { expected: string; actual: string } };
   };
 }

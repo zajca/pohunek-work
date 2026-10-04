@@ -64,7 +64,7 @@ function planText(plan: ActionPlan, argv: readonly string[]): string {
     `project: ${plan.project}`,
     `profile: ${plan.profile}`,
     ...(plan.branch === null ? [] : [`branch:  ${plan.branch}`]),
-    ...(plan.baseBranch === null ? [] : [`from:    ${plan.baseBranch} (fetched from origin)`]),
+    ...(plan.baseBranch === null ? [] : [`from:    ${plan.baseBranch} (fetched from origin when the branch is created)`]),
     ...(plan.expectedHead === null ? [] : [`head:    ${plan.expectedHead} (checked after the launch)`]),
     ...(plan.cwd === null ? [] : [`cwd:     ${plan.cwd}`]),
     `command: ${commandLine(argv)}`,
@@ -89,7 +89,7 @@ function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unk
     project: plan.project,
     profile: plan.profile,
     branch: plan.branch,
-    // Only review plans have a base branch and an expected head; other launch plans omit both keys.
+    // Only plans that create a worktree of a pull request head (review, adoption) have a base branch and an expected head; other launch plans omit both keys.
     ...(plan.baseBranch === null ? {} : { base_branch: plan.baseBranch }),
     ...(plan.expectedHead === null ? {} : { expected_head: plan.expectedHead }),
     cwd: plan.cwd,
@@ -100,6 +100,11 @@ function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unk
   };
 }
 
+function headMismatchWarning(sessionId: string, mismatch: NonNullable<ActionResult["headMismatch"]>): string {
+  return `session ${sessionId} runs in a worktree at ${mismatch.actual}, not at the pull request head ${mismatch.expected}; ` +
+    "the session may have advanced the branch itself, and its prompt makes it stop when it started on another commit. Check the session before acting";
+}
+
 function resultJson(result: ActionResult): Record<string, unknown> {
   return {
     session_id: result.sessionId,
@@ -108,6 +113,7 @@ function resultJson(result: ActionResult): Record<string, unknown> {
     worktree_path: result.worktreePath,
     metadata: result.metadata,
     ...(result.warnings.length === 0 ? {} : { warnings: result.warnings }),
+    ...(result.headMismatch === null ? {} : { head_mismatch: result.headMismatch }),
   };
 }
 
@@ -151,7 +157,7 @@ async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Prom
 async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps, action: ActionPlan["action"]): Promise<DoOutput> {
   const { logger } = deps;
   const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, deps);
-  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github });
+  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github, pohunek: deps.pohunek });
   const argv = displayArgv(config.global.pohunek.bin, plan);
   logger.info("do_plan", { key: plan.key, action: plan.action, profile: plan.profile, branch: plan.branch, cwd: plan.cwd, argv });
 
@@ -167,7 +173,8 @@ async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps,
   const stdout = options.json
     ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
     : display(`started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`);
-  return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`)] };
+  const mismatch = result.headMismatch === null ? [] : [headMismatchWarning(result.sessionId, result.headMismatch)];
+  return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`), ...mismatch] };
 }
 
 function readyText(plan: ReadyPlan): string {

@@ -202,7 +202,7 @@ export async function collectRows(
     const issues: readonly Issue[] = issueResult.ok ? issueResult.data : [];
     const joined = joinItems({ project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources });
     for (const item of joined.items) {
-      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles }) });
+      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles, sessions }) });
     }
     orphans.push(...joined.orphanedSessions);
     unlinked.push(

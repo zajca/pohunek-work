@@ -3,6 +3,7 @@
 // cannot contain its own closing line.
 import { createHash } from "node:crypto";
 import { sanitizeCell } from "../output/sanitize.ts";
+import adoptHeadCheck from "../../prompts/work-adopt-head-check.tmpl" with { type: "text" };
 import babysit from "../../prompts/work-babysit.tmpl" with { type: "text" };
 import fixCi from "../../prompts/work-fix-ci.tmpl" with { type: "text" };
 import implementGithub from "../../prompts/work-implement-github.tmpl" with { type: "text" };
@@ -13,10 +14,11 @@ import review from "../../prompts/work-review.tmpl" with { type: "text" };
 const FENCE_HASH_LENGTH = 16;
 const PLACEHOLDER = /\$\{([a-z_]+)\}/g;
 
-export type PromptName = "work-implement" | "work-implement-github" | "work-babysit" | "work-fix-ci" | "work-rebase" | "work-review";
+export type PromptName = "work-adopt-head-check" | "work-implement" | "work-implement-github" | "work-babysit" | "work-fix-ci" | "work-rebase" | "work-review";
 
 /** Templates are bundled into the program text, so a compiled binary needs no files beside it. */
 const TEMPLATES: Readonly<Record<PromptName, string>> = {
+  "work-adopt-head-check": adoptHeadCheck,
   "work-implement": implement,
   "work-implement-github": implementGithub,
   "work-babysit": babysit,

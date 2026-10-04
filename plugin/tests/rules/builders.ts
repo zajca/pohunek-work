@@ -22,7 +22,7 @@ export const identity: IdentityConfig = {
   reviewTeams: ["acme/reviewers"],
 };
 
-export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], reviews: "session" as const, issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource };
+export const project = { pohunekLabel: "widgets", ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], reviews: "session" as const, issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource };
 
 /** Issues of the project come from GitHub issues carrying these labels. */
 export const githubIssueSource = { kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] } as const satisfies IssueSource;

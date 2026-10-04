@@ -222,11 +222,6 @@ test("babysit is refused with already_running while any linked session is live",
   expect(launches).toHaveLength(0);
 });
 
-test("babysit is refused without a worktree to start in", async () => {
-  const { deps } = setup({ issues: ok("linear", [issue()]), prs: ok("github", [MY_PR]), sessions: [SECOND] });
-  await expectRefusal(runDo(baseConfig, babysitOptions(), deps), "no_worktree");
-});
-
 test("babysit is refused for a row without a pull request of the owner", async () => {
   const { deps } = setup({ issues: ok("linear", [issue()]), sessions: [OWNER] });
   await expectRefusal(runDo(baseConfig, babysitOptions(), deps), "precondition_failed", "no pull request");

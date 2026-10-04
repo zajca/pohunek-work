@@ -174,6 +174,25 @@ the CLI rejects (`incomplete_origin_environment`); the spikes ran with
   prompt also tells the agent to stop when `HEAD` differs, because the session is already
   running when the plugin checks. A pull request from a fork is refused up front: its
   head branch is not on origin, and a same-named origin branch would be fetched instead.
+- **S9 (adopting a pull request's head branch, core 0.33.1).** Isolated daemon (own
+  `XDG_*` directories and socket, `POHUNEK_WORKER_LAUNCHER=subprocess`), scratch bare remote,
+  project clone and a second clone that pushed the head branches. Results of
+  `session new --project P --branch H --base-branch H --agent shell`:
+  - H not local and not fetched, or only `origin/H` known: `H` is created at the remote head
+    (fetched), no upstream configured, no warning; the worktree holds the remote head.
+  - H local and equal to the remote: checked out as it is, no warning.
+  - H local and **stale** (the remote moved ahead) or ahead: checked out as it is, **no
+    warning**, the worktree holds the local commit; `--base-branch` is ignored (as in S8 G).
+    Only the head comparison after the launch detects it.
+  - H checked out in another worktree, including the primary checkout: refused with
+    `worktree_branch_in_use`; `project show --json` lists the primary checkout with
+    `owned: false` and no `session_id`.
+  - In the worktree of a created H there is no upstream: `git pull` and a plain `git push`
+    fail, `git push --force-with-lease origin H` works, `refs/remotes/origin/H` exists.
+  - `session new --json` (`ok`), `session show --json` and `session list --json` carry no head or
+    base commit of the worktree; only `project show` reports a head, at read time.
+  Consequence for adoption: launch with `--branch H --base-branch H`, refuse when any listed
+  worktree holds H, report a differing head after the launch as a warning, and let the prompt guard the start and set the upstream.
 
 ## 4. Architecture additions
 
@@ -255,8 +274,8 @@ Implementation notes (M2b):
 
 - `fix-ci` needs rule 5, no merge conflict and a failing check after `ignored_checks` and
   `policy_checks` are removed; `rebase` needs rule 5 and `mergeable = CONFLICTING`, which
-  rule 5 reports before any failing check (RFC 8.1). Both start like `babysit` in the worktree of the owning session (`--cwd`, S2)
-  with the same refusals (`already_running`, `no_worktree`); the failing check names or
+  rule 5 reports before any failing check (RFC 8.1). Both start like `babysit` in the worktree of the owning session (`--cwd`, S2),
+  or adopt the head branch when none owns one (S9, RFC 7.5), with the same refusals (`already_running`); the failing check names or
   the base branch go into the prompt's data block. No host actions are added (D15).
 - `review` needs rule 3 (`review_requested`) and launches per S8:
   `--branch <branch_prefix>/<review_branch_segment>/<number>-<head SHA> --base-branch
