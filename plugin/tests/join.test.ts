@@ -20,6 +20,7 @@ const project = {
   ignoredChecks: [],
   policyChecks: [],
   aiReviewers: [],
+  reviews: "session",
   policy: null,
   profiles: null,
 } satisfies ProjectConfig;

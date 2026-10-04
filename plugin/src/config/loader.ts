@@ -14,6 +14,7 @@ import type {
   PolicyConfig,
   ProfilesConfig,
   ProjectConfig,
+  ReviewsMode,
   TuiConfig,
   TuiInitialView,
   WatchConfig,
@@ -259,6 +260,7 @@ function readTimerValue(table: Table, key: string, unitMs: number, file: string,
 }
 
 const ISSUE_SOURCES: readonly IssueSource["kind"][] = ["linear", "github"];
+const REVIEWS_MODES: readonly ReviewsMode[] = ["session", "external"];
 const TUI_INITIAL_VIEWS: readonly TuiInitialView[] = ["mine", "all"];
 
 /** A host name as `URL.hostname` returns it: lowercase labels, no port, no scheme. */
@@ -389,7 +391,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels"],
+    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels"],
     file,
     path,
   );
@@ -414,6 +416,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     pohunekLabel,
     repo: readRepo(table, "repo", file, path),
     issueSource,
+    reviews: readEnum(table, "reviews", REVIEWS_MODES, file, path),
     branchPattern: compileBranchPattern(branchPatternSource, file),
     branchPatternSource,
     ignoredChecks,

@@ -26,6 +26,12 @@ export function fail(source: "github" | "github_issues" | "linear" | "pohunek", 
   return { ok: false, source, code, message, durationMs: 1 };
 }
 
+/** `baseConfig` with the widgets project handing its reviews to an external pipeline. */
+export const externalReviewsConfig: PluginConfig = {
+  ...baseConfig,
+  projects: baseConfig.projects.map((p) => (p.name === "widgets" ? { ...p, reviews: "external" } : p)),
+};
+
 const silentLogger: Logger = {
   info: () => undefined,
   error: () => undefined,

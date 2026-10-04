@@ -94,6 +94,7 @@ describe("loadConfig valid", () => {
     expect(widgets?.ignoredChecks).toEqual(["CI / Flaky"]);
     expect(widgets?.policyChecks).toEqual(["Policy / Label"]);
     expect(widgets?.aiReviewers).toEqual(["review-bot"]);
+    expect(widgets?.reviews).toBe("session");
     expect(widgets?.policy).toBeNull();
     expect(widgets?.profiles).toBeNull();
   });
@@ -609,6 +610,30 @@ describe("loadConfig issue_source", () => {
     const error = await loadError(dir);
     expect(error.file).toBe("projects/widgets.toml");
     expect(error.key).toBe("project.issue_source");
+  });
+
+  test("reviews accepts session and external", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('reviews = "session"', 'reviews = "external"'));
+    const config = await loadConfig(dir);
+    expect(config.projects.map((p) => [p.name, p.reviews])).toEqual([["gadgets", "session"], ["widgets", "external"]]);
+  });
+
+  test("a missing reviews is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('reviews = "session"\n', ""));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.reviews");
+  });
+
+  test("an unknown reviews is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('reviews = "session"', 'reviews = "pipeline"'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.reviews");
+    expect(error.message).not.toContain("pipeline");
   });
 
   test("an unknown issue_source is rejected", async () => {

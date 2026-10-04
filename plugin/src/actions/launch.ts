@@ -390,6 +390,12 @@ async function planReview(
   profile: string,
   sessions: readonly PohunekSession[],
 ): Promise<ActionPlan> {
+  if (row.project.reviews === "external") {
+    throw new ActionError(
+      "not_supported",
+      `review refused: project ${row.project.pohunekLabel} hands reviews to an external pipeline ([project] reviews = "external")`,
+    );
+  }
   requireGithub(row, "review");
   const pr = row.item.pullRequest;
   if (pr === null || pr.relation !== "review_requested") {

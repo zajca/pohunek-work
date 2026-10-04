@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { runDo, type DoOptions } from "../../src/commands/do.ts";
 import type { PluginConfig } from "../../src/types/config.ts";
 import { check, issue, pr, session } from "../rules/builders.ts";
-import { BIN, baseConfig, expectRefusal, fail, HOSTILE_TITLE, ok, options, setup, type Envelope } from "./harness.ts";
+import { BIN, baseConfig, expectRefusal, externalReviewsConfig, fail, HOSTILE_TITLE, ok, options, setup, type Envelope } from "./harness.ts";
 
 const SHA = "a".repeat(40);
 const FAILING = pr({ headRefName: "feature/x", headSha: SHA, title: HOSTILE_TITLE, checks: [check("build", "failure"), check("lint", "success")] });
@@ -245,6 +245,14 @@ test("review is refused unless a review is requested from the owner at rule 3", 
   const b = setup({ prs: ok("github", [THEIRS]), sessions: [working] });
   await expectRefusal(runDo(baseConfig, reviewOptions(), b.deps), "precondition_failed", "rule 3");
   expect([a.launches.length, b.launches.length]).toEqual([0, 0]);
+});
+
+test("review is refused as not_supported when the project hands reviews to an external pipeline", async () => {
+  const { deps, launches } = setup({ prs: ok("github", [THEIRS]) });
+  await expectRefusal(runDo(externalReviewsConfig, reviewOptions(), deps), "not_supported", '[project] reviews = "external"');
+  const dry = setup({ prs: ok("github", [THEIRS]) });
+  await expectRefusal(runDo(externalReviewsConfig, reviewOptions({ dryRun: true, yes: false }), dry.deps), "not_supported", "widgets");
+  expect([launches.length, dry.launches.length]).toEqual([0, 0]);
 });
 
 test("review is refused while a linked review session is live", async () => {

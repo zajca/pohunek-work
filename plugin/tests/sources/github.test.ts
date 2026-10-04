@@ -33,6 +33,7 @@ const project: ProjectConfig = {
   ignoredChecks: [],
   policyChecks: [],
   aiReviewers: [],
+  reviews: "session",
   policy: null,
   profiles: null,
 };
