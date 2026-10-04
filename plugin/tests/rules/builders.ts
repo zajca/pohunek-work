@@ -4,7 +4,7 @@ import type { SourceStatuses, WorkItem } from "../../src/types/item.ts";
 import type {
   Actor,
   Check,
-  LinearIssue,
+  Issue,
   MergedPullRequest,
   PohunekNotification,
   PohunekSession,
@@ -106,17 +106,16 @@ export function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   };
 }
 
-export function issue(overrides: Partial<LinearIssue> = {}): LinearIssue {
+export function issue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: "ABC-1",
     title: "Widget cache",
     url: "https://example.invalid/issue/ABC-1",
-    stateName: "In Progress",
-    stateType: "started",
-    teamKey: "ABC",
+    state: "In Progress",
+    started: true,
+    paused: false,
     assigneeIsMe: true,
-    cycle: null,
-    attachments: [],
+    attachmentUrls: [],
     ...overrides,
   };
 }

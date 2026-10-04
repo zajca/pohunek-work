@@ -4,7 +4,7 @@ import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
 import type {
-  LinearIssue,
+  Issue,
   MergedPullRequest,
   PohunekProject,
   PohunekSession,
@@ -40,7 +40,7 @@ const registry: PohunekProject[] = [
 interface World {
   prs?: SourceResult<readonly PullRequest[]>;
   merged?: SourceResult<readonly MergedPullRequest[]>;
-  issues?: SourceResult<readonly LinearIssue[]>;
+  issues?: SourceResult<readonly Issue[]>;
   sessions?: SourceResult<readonly PohunekSession[]>;
   registry?: SourceResult<readonly PohunekProject[]>;
 }
@@ -231,7 +231,7 @@ test("live sessions without a link are listed as unlinked, hidden under --mine",
   expect((JSON.parse(mine.stdout) as { ok: { unlinked_sessions: unknown[] } }).ok.unlinked_sessions).toEqual([]);
 });
 
-const onHold = issue({ stateName: "On hold" });
+const onHold = issue({ state: "On hold", paused: true });
 const working = session({ id: "s-work", activity: "working", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear" } });
 
 test("a paused issue with a conflicting draft pull request is paused with no action and left out of --mine", async () => {

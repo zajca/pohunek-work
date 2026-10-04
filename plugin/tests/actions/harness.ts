@@ -7,7 +7,7 @@ import type { Logger } from "../../src/log.ts";
 import type { LaunchRequest, PohunekClient, PohunekWorktree } from "../../src/sources/pohunek.ts";
 import type { PluginConfig } from "../../src/types/config.ts";
 import type {
-  LinearIssue,
+  Issue,
   MergedPullRequest,
   PohunekSession,
   PullRequest,
@@ -41,7 +41,7 @@ const REGISTRY = [
 export interface World {
   prs?: SourceResult<readonly PullRequest[]>;
   merged?: SourceResult<readonly MergedPullRequest[]>;
-  issues?: SourceResult<readonly LinearIssue[]>;
+  issues?: SourceResult<readonly Issue[]>;
   sessions?: readonly PohunekSession[];
   launch?: (request: LaunchRequest) => SourceResult<PohunekSession>;
   /** Warning kinds the fake daemon reports with a created session. */

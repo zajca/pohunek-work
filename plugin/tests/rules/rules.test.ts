@@ -213,7 +213,7 @@ describe("rules one per rule", () => {
   test("rule 13: an idle live session keeps rule 11, other state or assignee give nothing", () => {
     const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null, mergedPullRequest: mergedPr() };
     expect(onTurn(item({ ...base, sessions: [session()] })).rule).toBe(11);
-    expect(onTurn(item({ ...base, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, issue: issue({ started: false }) })).rule).toBe(10);
     expect(onTurn(item({ ...base, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
   });
 
@@ -223,7 +223,7 @@ describe("rules one per rule", () => {
     expect(onTurn(issueRow, down)).toEqual({ actor: "unknown", reason: "github_merged:rate_limited", rule: null });
     expect(onTurn(item({ pullRequest: pr({ isDraft: true }) }), down).rule).toBe(6);
     expect(onTurn(item({ ...issueRow, sessions: [session()] }), down).rule).toBe(11);
-    expect(onTurn(item({ ...issueRow, issue: issue({ stateType: "unstarted" }) }), down).rule).toBe(10);
+    expect(onTurn(item({ ...issueRow, issue: issue({ started: false }) }), down).rule).toBe(10);
   });
 
   test("rule 13: an open pull request wins over a merged one", () => {
@@ -240,7 +240,7 @@ describe("rules one per rule", () => {
 
   test("rule 11: needs a started issue assigned to me and no PR", () => {
     const base = { key: "linear:ABC-1", issue: issue(), sessions: [session()] };
-    expect(onTurn(item({ ...base, pullRequest: null, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, pullRequest: null, issue: issue({ started: false }) })).rule).toBe(10);
     expect(onTurn(item({ ...base, pullRequest: null, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
     expect(onTurn(item({ ...base, pullRequest: pr({ reviewRequests: [user("x")] }) })).rule).toBe(10);
   });
@@ -248,7 +248,7 @@ describe("rules one per rule", () => {
   test("rule 8: a lost session, a PR, other state or other assignee do not block or give it", () => {
     const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null };
     expect(onTurn(item({ ...base, sessions: [session({ runtimeState: "lost" })] })).rule).toBe(8);
-    expect(onTurn(item({ ...base, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, issue: issue({ started: false }) })).rule).toBe(10);
     expect(onTurn(item({ ...base, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
     expect(onTurn(item({ ...base, pullRequest: pr({ reviewRequests: [user("x")] }) })).rule).toBe(10);
   });
@@ -329,7 +329,7 @@ describe("rule precedence", () => {
 });
 
 describe("rule 12: paused issues", () => {
-  const PAUSED = { stateName: "On hold" } as const;
+  const PAUSED = { state: "On hold", paused: true } as const;
   const conflicting = pr({ isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
   const joined = { key: "linear:ABC-1", joinedBy: "branch_pattern", noIssue: false } as const;
   const pausedRow = item({ ...joined, issue: issue(PAUSED), pullRequest: conflicting });
@@ -386,7 +386,7 @@ describe("rule 12: paused issues", () => {
 
   test("only a configured paused state pauses, matched exactly", () => {
     expect(onTurn(pausedRow, allOk, { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(5);
-    expect(onTurn(item({ ...pausedRow, issue: issue({ stateName: "on hold" }) })).rule).toBe(5);
+    expect(onTurn(item({ ...pausedRow, issue: issue({ state: "on hold" }) })).rule).toBe(5);
   });
 });
 

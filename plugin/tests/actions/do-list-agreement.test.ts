@@ -115,7 +115,7 @@ test("rule 5 with a policy-only failure lists no action and do --dry-run refuses
 
 test("a pull request joined to a paused issue lists no action and do --dry-run refuses every action", async () => {
   const pullRequest = pr({ headRefName: "alice/ABC-1/work", headSha: SHA, isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
-  const world = { prs: ok("github", [pullRequest]), issues: ok("linear", [issue({ stateName: "On hold" })]), sessions: [linked(pullRequest, "/wt/owner")] };
+  const world = { prs: ok("github", [pullRequest]), issues: ok("linear", [issue({ state: "On hold", paused: true })]), sessions: [linked(pullRequest, "/wt/owner")] };
   const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
   expect(out.items.map((item) => [item.key, item.on_turn, item.actions])).toEqual([
     ["linear:ABC-1", { actor: "paused", reason: "paused", rule: 12 }, []],

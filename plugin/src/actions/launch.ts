@@ -15,6 +15,8 @@ import { ActionError, type ActionPlan, type ActionResult, type LaunchAction } fr
 
 /** Rule of RFC section 8.1 that has to hold for `implement`: issue in progress, nothing runs. */
 const IMPLEMENT_RULE = 8;
+/** `work.rev` of an implement session: rule 8 holds only for a started issue. */
+const IMPLEMENT_REV = "started";
 /** Rule for a review requested from the owner. */
 const REVIEW_RULE = 3;
 /** Rule for a failing check or a merge conflict on the owner's pull request. */
@@ -116,7 +118,7 @@ async function planImplement(row: CollectedRow, config: PluginConfig, profile: s
     "work.link.url": issue.url,
     "work.link.branch": branch,
     [ROLE_KEY]: "implement",
-    "work.rev": issue.stateType,
+    "work.rev": IMPLEMENT_REV,
   };
   const prompt = renderTemplate(await readTemplate("work-implement"), {
     key,
