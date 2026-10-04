@@ -78,6 +78,19 @@ export function isLiveSession(session: PohunekSession): boolean {
   return session.state === "running" && session.runtimeState !== "lost";
 }
 
+/** Session metadata key that names what a session was started for (`implement`, `babysit`, ...). */
+export const ROLE_KEY = "work.role";
+
+/**
+ * The worktree of an item, given its linked sessions: the session that owns
+ * one, the implementing session first; null when none owns a worktree.
+ */
+export function worktreeOf(sessions: readonly PohunekSession[]): string | null {
+  const owners = sessions.filter((s) => s.worktreePath !== null);
+  const owner = owners.find((s) => s.metadata[ROLE_KEY] === "implement") ?? owners[0];
+  return owner?.worktreePath ?? null;
+}
+
 const REPO_SEGMENT = "[A-Za-z0-9_.-]+";
 const ORIGIN_PATTERNS: readonly RegExp[] = [
   new RegExp(`^git@github\\.com:(${REPO_SEGMENT})/(${REPO_SEGMENT}?)(?:\\.git)?/?$`),

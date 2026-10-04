@@ -2,7 +2,7 @@
 // (RFC 9.1) and the terminal table.
 import { configuredProfile } from "../config/profiles.ts";
 import { evaluateOnTurn, summarizeChecks } from "../rules.ts";
-import { isLiveSession } from "../sources/pohunek.ts";
+import { isLiveSession, worktreeOf } from "../sources/pohunek.ts";
 import { toAscii } from "./sanitize.ts";
 import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
 import {
@@ -51,15 +51,20 @@ function ruleAction(onTurn: OnTurn): string | null {
 /** Actions that start a session carry the agent profile `do` would use. */
 const PROFILED_ACTIONS: readonly string[] = ["implement", "babysit", "fix-ci", "rebase", "review"];
 
+/** Actions that start in the worktree of a linked session; `do` refuses them with `no_worktree` otherwise. */
+const WORKTREE_ACTIONS: readonly string[] = ["babysit", "fix-ci", "rebase"];
+
 /**
- * Named actions of a row, the primary first (docs/tui-plan.md 4.5). `attach`
- * is listed whenever a live linked session exists, which covers rules 1 and 11.
- * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
+ * Named actions of a row, the primary first (docs/tui-plan.md 4.5). A worktree
+ * action is listed only when a linked session owns a worktree; `on_turn` keeps
+ * the reason either way. `attach` is listed whenever a live linked session
+ * exists, which covers rules 1 and 11. `merge` is never listed. Delegation
+ * policy is empty, so nothing is delegable.
  */
 export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles">): ListAction[] {
   const names: string[] = [];
   const primary = ruleAction(onTurn);
-  if (primary !== null) names.push(primary);
+  if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeOf(item.sessions) !== null)) names.push(primary);
   if (item.sessions.some(isLiveSession)) names.push("attach");
   return names.map((name) => {
     const profile = PROFILED_ACTIONS.includes(name) ? configuredProfile(name, context.project.profiles, context.profiles) : undefined;

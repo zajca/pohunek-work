@@ -1,0 +1,78 @@
+// `list` advertises a worktree action (babysit, fix-ci, rebase) exactly when `do --dry-run` accepts it.
+import { expect, test } from "bun:test";
+import { runDo, type DoOutput } from "../../src/commands/do.ts";
+import { runList } from "../../src/commands/list.ts";
+import type { PohunekSession, PullRequest } from "../../src/types/sources.ts";
+import type { ListItem, RuleNumber } from "../../src/types/item.ts";
+import { check, deliveredPr, pr, session } from "../rules/builders.ts";
+import { baseConfig, expectRefusal, ok, options, setup, type Envelope } from "./harness.ts";
+
+const SHA = "a".repeat(40);
+const BRANCH = "feature/x";
+
+interface RuleCase {
+  readonly pullRequest: PullRequest;
+  readonly rule: RuleNumber;
+  readonly reason: string;
+  readonly action: "babysit" | "fix-ci" | "rebase";
+}
+
+const CASES: readonly RuleCase[] = [
+  { pullRequest: deliveredPr({ headRefName: BRANCH, headSha: SHA, timeline: [] }), rule: 4, reason: "respond", action: "babysit" },
+  { pullRequest: pr({ headRefName: BRANCH, headSha: SHA, checks: [check("build", "failure")] }), rule: 5, reason: "fix CI", action: "fix-ci" },
+  { pullRequest: pr({ headRefName: BRANCH, headSha: SHA, mergeable: "CONFLICTING" }), rule: 5, reason: "rebase", action: "rebase" },
+];
+
+function linked(pullRequest: PullRequest, worktreePath: string | null): PohunekSession {
+  return session({
+    id: worktreePath === null ? "s-plain" : "s-owner",
+    state: "stopped",
+    activity: null,
+    branch: BRANCH,
+    worktreePath,
+    metadata: { "work.link.id": pullRequest.id, "work.link.provider": "github", "work.role": "implement" },
+  });
+}
+
+async function listedRow(pullRequest: PullRequest, sessions: readonly PohunekSession[]): Promise<ListItem> {
+  const { deps } = setup({ prs: ok("github", [pullRequest]), sessions });
+  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, deps);
+  const row = out.items.find((item) => item.key === `github:${pullRequest.id}`);
+  if (row === undefined) throw new Error(`no row for ${pullRequest.id}`);
+  return row;
+}
+
+function dryRun(rule: RuleCase, sessions: readonly PohunekSession[]): Promise<DoOutput> {
+  const { deps } = setup({ prs: ok("github", [rule.pullRequest]), sessions });
+  const doOptions = options({ key: `github:${rule.pullRequest.id}`, action: rule.action, profile: "profile-a", dryRun: true, yes: false });
+  return runDo(baseConfig, doOptions, deps);
+}
+
+const WITHOUT_WORKTREE: readonly [string, (pullRequest: PullRequest) => readonly PohunekSession[]][] = [
+  ["no linked session", () => []],
+  ["a linked session without a worktree", (pullRequest) => [linked(pullRequest, null)]],
+];
+
+for (const rule of CASES) {
+  const name = `rule ${String(rule.rule)} (${rule.reason})`;
+
+  test(`${name} lists ${rule.action} and do --dry-run accepts it with a worktree-owning linked session`, async () => {
+    const sessions = [linked(rule.pullRequest, "/wt/owner")];
+    const row = await listedRow(rule.pullRequest, sessions);
+    expect(row.on_turn).toEqual({ actor: "me", reason: rule.reason, rule: rule.rule });
+    expect(row.actions.map((action) => action.name)).toEqual([rule.action]);
+    const envelope = JSON.parse((await dryRun(rule, sessions)).stdout) as Envelope;
+    expect(envelope.ok.dry_run).toBe(true);
+    expect(envelope.ok.plan.cwd).toBe("/wt/owner");
+  });
+
+  for (const [label, sessionsOf] of WITHOUT_WORKTREE) {
+    test(`${name} with ${label} keeps on_turn, lists no ${rule.action}, and do refuses with no_worktree`, async () => {
+      const sessions = sessionsOf(rule.pullRequest);
+      const row = await listedRow(rule.pullRequest, sessions);
+      expect(row.on_turn).toEqual({ actor: "me", reason: rule.reason, rule: rule.rule });
+      expect(row.actions).toEqual([]);
+      await expectRefusal(dryRun(rule, sessions), "no_worktree", `${rule.action} refused`);
+    });
+  }
+}

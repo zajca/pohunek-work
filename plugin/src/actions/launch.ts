@@ -5,7 +5,7 @@ import type { CollectedRow } from "../commands/list.ts";
 import { configuredProfile } from "../config/profiles.ts";
 import { keyFromBranch } from "../join.ts";
 import { summarizeChecks } from "../rules.ts";
-import { isLiveSession, type PohunekClient } from "../sources/pohunek.ts";
+import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { PohunekSession, PullRequest } from "../types/sources.ts";
 import { isIssueKey, slugify } from "./branch.ts";
@@ -26,8 +26,6 @@ const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 /** A branch name that can be passed as an argv value and fetched by name: no option, no `..`. */
 const FETCHABLE_BRANCH = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
-
-const ROLE_KEY = "work.role";
 
 export interface PlanOptions {
   /** `--profile`; overrides the configured profile of the action. */
@@ -149,13 +147,6 @@ async function planImplement(row: CollectedRow, config: PluginConfig, profile: s
     ],
     prompt,
   };
-}
-
-/** The worktree of the item: the session that owns one, the implementing session first. */
-function worktreeOf(sessions: readonly PohunekSession[]): string | null {
-  const owners = sessions.filter((s) => s.worktreePath !== null);
-  const owner = owners.find((s) => s.metadata[ROLE_KEY] === "implement") ?? owners[0];
-  return owner?.worktreePath ?? null;
 }
 
 /** The daemon accepts a second live session in a worktree, so the plugin refuses it, whoever started the first. */
