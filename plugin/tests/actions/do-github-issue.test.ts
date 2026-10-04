@@ -146,3 +146,43 @@ test("a bare owner/name#number never resolves to a github-issue row", async () =
   const world: World = { githubIssues: ok("github_issues", [githubIssue()]) };
   await expectRefusal(runDo(config, options({ key: ISSUE_KEY, action: "implement", dryRun: true, yes: false }), setup(world).deps), "unknown_item");
 });
+
+const SECOND_BRANCH = "feature/y";
+
+test("a secondary pull request of a paused GitHub issue is paused, lists no action and do refuses every action", async () => {
+  const winner = closing({ number: 12, id: "acme/widgets#12", isDraft: true });
+  const secondary = closing({ number: 13, id: "acme/widgets#13", headRefName: SECOND_BRANCH, isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
+  const second = ownerSession({ id: "s-second", branch: SECOND_BRANCH, worktreePath: "/wt/second", metadata: { "work.link.provider": "github", "work.link.kind": "pull_request", "work.link.id": secondary.id, "work.link.branch": SECOND_BRANCH } });
+  const world: World = {
+    githubIssues: ok("github_issues", [githubIssue({ started: false, paused: true, state: "on-hold" })]),
+    prs: ok("github", [winner, secondary]),
+    sessions: [second],
+  };
+  const row = (await listed(world)).find((item) => item.key === "github:acme/widgets#13");
+  expect(row).toMatchObject({ issue: null, issue_key: ISSUE_KEY, on_turn: { actor: "paused", reason: "paused", rule: 12 }, actions: [] });
+  for (const action of ["babysit", "fix-ci", "rebase", "ready", "attach"] as const) {
+    await expectRefusal(runDo(config, options({ key: "github:acme/widgets#13", action, profile: "profile-a", dryRun: true, yes: false }), setup(world).deps), "precondition_failed", `${action} refused`);
+  }
+  const unpaused = { ...world, githubIssues: ok("github_issues", [githubIssue()]) };
+  expect((await listed(unpaused)).find((item) => item.key === "github:acme/widgets#13")?.actions.map((a) => a.name)).toEqual(["rebase"]);
+});
+
+test("a secondary pull request is unknown and offers nothing while the issue source is down", async () => {
+  const winner = closing({ number: 12, id: "acme/widgets#12" });
+  const secondary = closing({ number: 13, id: "acme/widgets#13", headRefName: SECOND_BRANCH, mergeable: "CONFLICTING" });
+  const world: World = { githubIssues: fail("github_issues", "timeout"), prs: ok("github", [winner, secondary]) };
+  const row = (await listed(world)).find((item) => item.key === "github:acme/widgets#13");
+  expect(row?.on_turn).toEqual({ actor: "unknown", reason: "github_issues:timeout", rule: null });
+  expect(row?.actions).toEqual([]);
+  await expectRefusal(runDo(config, options({ key: "github:acme/widgets#13", action: "rebase", profile: "profile-a", dryRun: true, yes: false }), setup(world).deps), "source_unavailable");
+});
+
+test("a session link spelled with another repository case plans a worktree action on the issue row", async () => {
+  const mixed = ownerSession({ metadata: { "work.link.provider": "github", "work.link.kind": "issue", "work.link.id": "Acme/Widgets#7", "work.link.branch": BRANCH } });
+  const world: World = { githubIssues: ok("github_issues", [githubIssue()]), prs: ok("github", [pr({ headRefName: BRANCH, headSha: SHA, mergeable: "CONFLICTING" })]), sessions: [mixed] };
+  const row = rowOf(await listed(world));
+  expect(row).toMatchObject({ issue: { id: ISSUE_KEY }, actions: [{ name: "rebase" }] });
+  const out = await runDo(config, options({ key: ROW, action: "rebase", profile: "profile-a", dryRun: true, yes: false }), setup(world).deps);
+  expect((JSON.parse(out.stdout) as Envelope).ok.plan.metadata["work.link.id"]).toBe(ISSUE_KEY);
+});
+

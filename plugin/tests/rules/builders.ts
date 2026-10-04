@@ -163,6 +163,7 @@ export function item(overrides: Partial<WorkItem> = {}): WorkItem {
     joinedBy: null,
     noIssue: true,
     issueKey: null,
+    resolvedIssue: null,
     sessions: [],
     notifications: [],
     ...overrides,

@@ -696,3 +696,18 @@ describe("github issue source", () => {
     });
   });
 });
+
+describe("rule 12 on a secondary pull request row", () => {
+  const conflicting = pr({ mergeable: "CONFLICTING" });
+  const secondary = { key: "github:acme/widgets#12", issue: null, issueKey: "ABC-1", joinedBy: null, noIssue: false, pullRequest: conflicting } as const;
+
+  test("is paused when the issue it resolved to is paused, and unaffected when it is not", () => {
+    expect(onTurn(item({ ...secondary, resolvedIssue: issue({ state: "On hold", paused: true }) }))).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    expect(onTurn(item({ ...secondary, resolvedIssue: issue() })).rule).toBe(5);
+  });
+
+  test("is unknown, not the owner's rebase, while the issue source is down and the issue is not known", () => {
+    expect(onTurn(item({ ...secondary, resolvedIssue: null }), { ...allOk, linear: "timeout" })).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
+    expect(onTurn(item({ ...secondary, resolvedIssue: null })).rule).toBe(5);
+  });
+});

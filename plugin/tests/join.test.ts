@@ -763,4 +763,42 @@ describe("github issue source", () => {
     const { items } = gh({ pullRequests: [pr(1, "feature/x")], sessions: [session("s1", link("ABC-1", "issue", "feature/x", "linear"))] });
     expect(items.map((i) => i.key)).toEqual(["github:acme/widgets#1"]);
   });
+
+  test("a session link id spelled with another repository case joins the configured issue key", () => {
+    const { items, orphanedSessions } = gh({
+      issues: [ghIssue(7)],
+      pullRequests: [pr(1, "feature/x")],
+      sessions: [session("s1", link("Acme/Widgets#7", "issue", "feature/x")), session("s2", link("ACME/WIDGETS#7", "issue", "other"))],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "github-issue:acme/widgets#7", issueKey: "acme/widgets#7", joinedBy: "session_link" });
+    expect(items[0]?.issue?.id).toBe("acme/widgets#7");
+    expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(orphanedSessions).toEqual([]);
+  });
+
+  test("a mixed-case link to a paused issue is not orphaned and a mixed-case link resolves a merged pull request", () => {
+    const sessions = [session("s1", link("Acme/Widgets#7", "issue", "feature/x"))];
+    expect(gh({ issues: [ghIssue(7, { started: false, paused: true })], sessions }).orphanedSessions).toEqual([]);
+    const row = gh({ issues: [ghIssue(7)], mergedPullRequests: [merged(5, "feature/x")], sessions }).items[0];
+    expect(row?.mergedPullRequest?.number).toBe(5);
+  });
 });
+
+describe("secondary pull request rows", () => {
+  const linearPaused = issue("ABC-1");
+  test("a secondary row of a Linear issue carries the issue it resolved to without showing it", () => {
+    const paused = { ...linearPaused, paused: true, state: "On hold" };
+    const { items } = run({ issues: [paused], pullRequests: [pr(1, "me/ABC-1/a"), pr(2, "me/ABC-1/b")] });
+    expect(items.map((i) => [i.key, i.issue === null, i.resolvedIssue?.id, i.issueKey, i.joinedBy])).toEqual([
+      ["linear:ABC-1", false, "ABC-1", "ABC-1", "branch_pattern"],
+      ["github:acme/widgets#2", true, "ABC-1", "ABC-1", null],
+    ]);
+  });
+
+  test("a secondary row of an issue the source did not return has no resolved issue", () => {
+    const { items } = run({ pullRequests: [pr(1, "me/ABC-1/a"), pr(2, "me/ABC-1/b")] });
+    expect(items[1]).toMatchObject({ issue: null, resolvedIssue: null, issueKey: "ABC-1" });
+  });
+});
+

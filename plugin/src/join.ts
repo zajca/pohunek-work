@@ -70,9 +70,13 @@ function linkOf(project: ProjectConfig, session: PohunekSession): Omit<LinkedSes
   const id = plugin ?? nonEmpty(session.metadata[LEGACY_KEYS.id]);
   if (id === null) return null;
   const provider = nonEmpty(session.metadata[keys.provider]);
-  const linkId =
-    keys === LEGACY_KEYS && provider === "github" && /^\d+$/.test(id) ? `${project.repo}#${id}` : id;
-  return { provider, kind: nonEmpty(session.metadata[keys.kind]), linkId, branch: nonEmpty(session.metadata[keys.branch]) };
+  const kind = nonEmpty(session.metadata[keys.kind]);
+  let linkId = keys === LEGACY_KEYS && provider === "github" && /^\d+$/.test(id) ? `${project.repo}#${id}` : id;
+  // GitHub repository names are case-insensitive; an issue link id takes the configured spelling so it equals the issue key.
+  if (provider === "github" && kind === "issue" && isOwnGithubIssueKey(project, linkId)) {
+    linkId = githubIssueKey(project, Number(linkId.slice(linkId.lastIndexOf("#") + 1)));
+  }
+  return { provider, kind, linkId, branch: nonEmpty(session.metadata[keys.branch]) };
 }
 
 /** Sessions of the project that carry a link id; the rest never take part in the join. */
@@ -199,6 +203,8 @@ interface RowDraft {
   readonly issueKey: string | null;
   /** Issue key the row resolved to, including on a secondary pull request row; null without a match. */
   readonly resolvedKey: string | null;
+  /** The issue behind `resolvedKey` when the issue source returned it, including on a secondary pull request row. */
+  readonly resolvedIssue: Issue | null;
   readonly pullRequest: PullRequest | null;
   readonly mergedPullRequest: MergedPullRequest | null;
   readonly joinedBy: JoinMatch | null;
@@ -308,6 +314,7 @@ export function joinItems(input: JoinInput): JoinResult {
         issue: null,
         issueKey: null,
         resolvedKey: null,
+        resolvedIssue: null,
         pullRequest: pr,
         mergedPullRequest: null,
         joinedBy: null,
@@ -323,6 +330,7 @@ export function joinItems(input: JoinInput): JoinResult {
         issue: null,
         issueKey: null,
         resolvedKey: resolution.key,
+        resolvedIssue: issuesById.get(resolution.key) ?? null,
         pullRequest: pr,
         mergedPullRequest: null,
         joinedBy: null,
@@ -336,6 +344,7 @@ export function joinItems(input: JoinInput): JoinResult {
       issue: issuesById.get(resolution.key) ?? null,
       issueKey: resolution.key,
       resolvedKey: resolution.key,
+      resolvedIssue: issuesById.get(resolution.key) ?? null,
       pullRequest: pr,
       mergedPullRequest: null,
       joinedBy: resolution.joinedBy,
@@ -353,6 +362,7 @@ export function joinItems(input: JoinInput): JoinResult {
       issue,
       issueKey: issue.id,
       resolvedKey: issue.id,
+      resolvedIssue: issue,
       pullRequest: null,
       mergedPullRequest: mergedByKey.get(issue.id) ?? null,
       joinedBy: null,
@@ -392,6 +402,7 @@ export function joinItems(input: JoinInput): JoinResult {
       joinedBy: draft.joinedBy,
       noIssue: draft.noIssue,
       issueKey: draft.resolvedKey,
+      resolvedIssue: draft.resolvedIssue,
       sessions: rowSessions,
       notifications: notifications.filter(
         (n) => n.sessionId !== null && sessionIds.has(n.sessionId),

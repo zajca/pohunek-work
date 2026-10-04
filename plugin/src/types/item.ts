@@ -99,6 +99,11 @@ export interface WorkItem {
    * own key is `github:`; null when nothing resolved.
    */
   readonly issueKey: string | null;
+  /**
+   * The issue behind `issueKey` when the issue source returned it. Equals `issue` on an
+   * issue row and is also set on a secondary pull request row, whose `issue` is null.
+   */
+  readonly resolvedIssue: Issue | null;
   /** Sessions linked to this item, in pohunek order. */
   readonly sessions: readonly PohunekSession[];
   /** Notifications of the linked sessions. */
