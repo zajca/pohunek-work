@@ -54,6 +54,7 @@
           "github": "ok",
           "github_merged": "ok",
           "linear": "ok",
+          "github_issues": "unused",
           "pohunek": "ok"
         }
       },
@@ -92,6 +93,7 @@
           "github": "ok",
           "github_merged": "ok",
           "linear": "ok",
+          "github_issues": "unused",
           "pohunek": "ok"
         }
       },
@@ -124,6 +126,7 @@
           "github": "ok",
           "github_merged": "ok",
           "linear": "ok",
+          "github_issues": "unused",
           "pohunek": "ok"
         }
       },
@@ -157,6 +160,7 @@
           "github": "ok",
           "github_merged": "ok",
           "linear": "ok",
+          "github_issues": "unused",
           "pohunek": "ok"
         }
       },
@@ -195,6 +199,7 @@
           "github": "ok",
           "github_merged": "ok",
           "linear": "ok",
+          "github_issues": "unused",
           "pohunek": "ok"
         }
       }
@@ -222,6 +227,7 @@
           "github": "ok",
           "github_merged": "ok",
           "linear": "ok",
+          "github_issues": "unused",
           "pohunek": "ok"
         }
       }

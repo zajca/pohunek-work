@@ -5,11 +5,12 @@
 // in the Authorization header to the configured endpoint. Failure messages are
 // static text plus a short GraphQL error type; provider text never reaches them.
 
-import type { GithubConfig, IdentityConfig, ProjectConfig } from "../types/config.ts";
+import type { GithubConfig, GithubProject, IdentityConfig, ProjectConfig } from "../types/config.ts";
 import type {
   Actor,
   Check,
   CheckOutcome,
+  Issue,
   Mergeable,
   MergedPullRequest,
   PullRequest,
@@ -27,6 +28,7 @@ import type {
 import { exec as defaultExec, SpawnError, type Exec } from "../util/exec.ts";
 import {
   buildConnectionRequest,
+  buildIssueSearchRequest,
   buildMergedSearchRequest,
   buildSearchRequest,
   CONNECTION_KINDS,
@@ -35,7 +37,7 @@ import {
   type GraphqlRequest,
   type SearchSpec,
 } from "./github-query.ts";
-import { estimateConnectionNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
+import { estimateConnectionNodes, estimateRequestNodes, GITHUB_MAX_NODES, type SearchShape } from "../util/github-budget.ts";
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -50,6 +52,8 @@ export interface GithubSource {
   fetchPullRequests(project: ProjectConfig): Promise<SourceResult<readonly PullRequest[]>>;
   /** Pull requests of the owner merged within `merged_lookback_days`. */
   fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
+  /** Open issues of the project's repository assigned to the owner that carry a started or paused label. */
+  fetchIssues(project: GithubProject): Promise<SourceResult<readonly Issue[]>>;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -276,7 +280,27 @@ function rollupOf(commit: JsonObject | null): JsonObject | null {
   return rollup === null || rollup === undefined ? null : asObject(rollup, "statusCheckRollup");
 }
 
-function toPullRequest(pr: JsonObject, relation: PullRequestRelation): PullRequest {
+/** Numbers of the issues of `repo` among the closing references; GitHub repository names are case-insensitive. */
+function closingIssueNumbers(pr: JsonObject, repo: string, withClosing: boolean): number[] {
+  if (!withClosing) {
+    return [];
+  }
+  const numbers = new Set<number>();
+  for (const raw of connectionNodes(pr, "closingIssuesReferences", "closingIssuesReferences")) {
+    const reference = asObject(raw, "closing reference");
+    const owner = asString(
+      asObject(reference["repository"], "closing reference repository")["nameWithOwner"],
+      "closing reference repository.nameWithOwner",
+    );
+    const number = asInteger(reference["number"], "closing reference number");
+    if (owner.toLowerCase() === repo.toLowerCase()) {
+      numbers.add(number);
+    }
+  }
+  return [...numbers].sort((a, b) => a - b);
+}
+
+function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: ProjectConfig): PullRequest {
   const repo = asString(asObject(pr["repository"], "repository")["nameWithOwner"], "repository.nameWithOwner");
   const number = asInteger(pr["number"], "number");
   const rollup = rollupOf(latestCommit(pr));
@@ -309,6 +333,7 @@ function toPullRequest(pr: JsonObject, relation: PullRequestRelation): PullReque
     timeline: connectionNodes(pr, "timelineItems", "timelineItems").map(toTimelineEvent),
     reviewRequests: requests,
     checks: rollup === null ? [] : connectionNodes(rollup, "contexts", "contexts").map(toCheck),
+    closingIssueNumbers: closingIssueNumbers(pr, project.repo, project.issueSource.kind === "github"),
     updatedAt: asString(pr["updatedAt"], "updatedAt"),
   };
 }
@@ -471,15 +496,33 @@ interface PendingPage {
   readonly after: string;
 }
 
-function collectPending(prs: readonly JsonObject[], seen: SeenCursors): PendingPage[] {
-  const pending: PendingPage[] = [];
-  const check = (kind: ConnectionKind, nodeId: string, container: JsonObject, connectionKey: string): void => {
+type CollectPending = (roots: readonly JsonObject[], seen: SeenCursors) => PendingPage[];
+
+type CheckConnection = (kind: ConnectionKind, nodeId: string, container: JsonObject, connectionKey: string) => void;
+
+function pendingChecker(pending: PendingPage[], seen: SeenCursors): CheckConnection {
+  return (kind: ConnectionKind, nodeId: string, container: JsonObject, connectionKey: string): void => {
     const connection = asObject(container[connectionKey], kind);
     const after = nextCursor(connection, kind, seen);
     if (after !== null) {
       pending.push({ kind, nodeId, container, connectionKey, after });
     }
   };
+}
+
+/** Pages still missing from the labels of issues: a label page cut short could hide a started or paused label. */
+function collectPendingIssues(issues: readonly JsonObject[], seen: SeenCursors): PendingPage[] {
+  const pending: PendingPage[] = [];
+  const check = pendingChecker(pending, seen);
+  for (const issue of issues) {
+    check("issueLabels", asString(issue["id"], "id"), issue, "labels");
+  }
+  return pending;
+}
+
+function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursors, withClosing: boolean): PendingPage[] {
+  const pending: PendingPage[] = [];
+  const check = pendingChecker(pending, seen);
 
   for (const pr of prs) {
     const prId = asString(pr["id"], "id");
@@ -487,6 +530,9 @@ function collectPending(prs: readonly JsonObject[], seen: SeenCursors): PendingP
     check("reviewRequests", prId, pr, "reviewRequests");
     check("timelineItems", prId, pr, "timelineItems");
     check("reviewThreads", prId, pr, "reviewThreads");
+    if (withClosing) {
+      check("closingIssues", prId, pr, "closingIssuesReferences");
+    }
     for (const raw of connectionNodes(pr, "reviewThreads", "reviewThreads")) {
       const thread = asObject(raw, "thread");
       check("threadComments", asString(thread["id"], "thread.id"), thread, "comments");
@@ -540,11 +586,12 @@ function batchPending(pending: readonly PendingPage[], config: GithubConfig): Pe
 
 async function completeNestedConnections(
   transport: Transport,
-  prs: readonly JsonObject[],
+  roots: readonly JsonObject[],
   seen: SeenCursors,
+  collect: CollectPending,
 ): Promise<void> {
   for (;;) {
-    const pending = collectPending(prs, seen);
+    const pending = collect(roots, seen);
     if (pending.length === 0) {
       return;
     }
@@ -590,6 +637,7 @@ interface CollectedPullRequest {
 async function runSearches(
   transport: Transport,
   searches: SearchState[],
+  shape: SearchShape,
 ): Promise<Map<string, CollectedPullRequest>> {
   const collected = new Map<string, CollectedPullRequest>();
   const searchCursors = new WeakMap<SearchState, Set<string>>();
@@ -610,7 +658,7 @@ async function runSearches(
         pullRequestPageSize: transport.config.pullRequestPageSize,
         nestedPageSize: transport.config.nestedPageSize,
         threadCommentPageSize: transport.config.threadCommentPageSize,
-      }),
+      }, shape),
     );
 
     for (const search of active) {
@@ -688,6 +736,65 @@ async function runMergedSearch(transport: Transport, queryString: string): Promi
   }
 }
 
+/** Follows the issue search to its end; a page that cannot be followed fails instead of dropping results. */
+async function runIssueSearch(transport: Transport, queryString: string): Promise<JsonObject[]> {
+  const found: JsonObject[] = [];
+  const used = new Set<string>();
+  let after: string | null = null;
+  for (;;) {
+    const data = await send(transport, buildIssueSearchRequest(queryString, after, transport.config));
+    const connection = asObject(data["issues"], "issue search");
+    for (const node of asArray(connection["nodes"], "issue search.nodes")) {
+      found.push(asObject(node, "issue search node"));
+    }
+    const info = readPageInfo(connection, "issue search");
+    if (!info.hasNextPage) {
+      if (found.length < asInteger(connection["issueCount"], "issue search.issueCount")) {
+        throw truncated("issue search results");
+      }
+      return found;
+    }
+    if (info.endCursor === null || info.endCursor === "" || used.has(info.endCursor)) {
+      throw truncated("issue search results");
+    }
+    used.add(info.endCursor);
+    after = info.endCursor;
+  }
+}
+
+/** The first configured label the issue carries, spelled as GitHub returns it; label names compare case-insensitively. */
+function firstLabelOf(labels: readonly string[], wanted: readonly string[]): string | null {
+  const folded = wanted.map((label) => label.toLowerCase());
+  return labels.find((label) => folded.includes(label.toLowerCase())) ?? null;
+}
+
+/**
+ * Started: a started label and no paused label. Paused: a paused label. An
+ * issue with neither kind of label is not on the table and yields null. `state`
+ * is the deciding label.
+ */
+function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
+  const labels = connectionNodes(raw, "labels", "labels").map((node) =>
+    asString(asObject(node, "label")["name"], "label.name"),
+  );
+  const paused = firstLabelOf(labels, project.issueSource.pausedLabels);
+  const started = firstLabelOf(labels, project.issueSource.startedLabels);
+  const state = paused ?? started;
+  if (state === null) {
+    return null;
+  }
+  return {
+    id: `${project.repo}#${asInteger(raw["number"], "number")}`,
+    title: asString(raw["title"], "title"),
+    url: asString(raw["url"], "url"),
+    state,
+    started: paused === null,
+    paused: paused !== null,
+    assigneeIsMe: true,
+    attachmentUrls: [],
+  };
+}
+
 // ------------------------------------------------------------------ source
 
 function validateInputs(project: ProjectConfig, identity: IdentityConfig): void {
@@ -746,7 +853,8 @@ export function createGithubSource(
     try {
       validateInputs(project, config.identity);
       const searches = buildSearches(project, config.identity);
-      if (estimateRequestNodes(config.github, searches.length) > GITHUB_MAX_NODES) {
+      const shape: SearchShape = { closingReferences: project.issueSource.kind === "github" };
+      if (estimateRequestNodes(config.github, searches.length, shape) > GITHUB_MAX_NODES) {
         throw new SourceFailureError(
           "not_configured",
           "github page sizes exceed the GitHub node limit for the configured review teams; lower the page sizes",
@@ -758,10 +866,12 @@ export function createGithubSource(
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
       };
-      const collected = await runSearches(transport, searches);
+      const collected = await runSearches(transport, searches, shape);
       const raws = [...collected.values()].map((entry) => entry.raw);
-      await completeNestedConnections(transport, raws, new WeakMap());
-      const data = [...collected.values()].map((entry) => toPullRequest(entry.raw, entry.relation));
+      await completeNestedConnections(transport, raws, new WeakMap(), (roots, seen) =>
+        collectPendingPullRequests(roots, seen, shape.closingReferences),
+      );
+      const data = [...collected.values()].map((entry) => toPullRequest(entry.raw, entry.relation, project));
       return { ok: true, source: "github", data, durationMs: elapsed() };
     } catch (error) {
       if (error instanceof SourceFailureError) {
@@ -800,5 +910,29 @@ export function createGithubSource(
     }
   };
 
-  return { fetchPullRequests, fetchMergedPullRequests };
+  const fetchIssues = async (project: GithubProject): Promise<SourceResult<readonly Issue[]>> => {
+    const startedAt = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - startedAt);
+    try {
+      validateInputs(project, config.identity);
+      const queryString = `repo:${project.repo} is:issue is:open assignee:${config.identity.githubLogin}`;
+      const token = await obtainToken(config.github, execFn);
+      const transport: Transport = {
+        token,
+        config: config.github,
+        fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+      };
+      const raws = await runIssueSearch(transport, queryString);
+      await completeNestedConnections(transport, raws, new WeakMap(), collectPendingIssues);
+      const data = raws.flatMap((raw) => toIssue(raw, project) ?? []);
+      return { ok: true, source: "github_issues", data, durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof SourceFailureError) {
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+      }
+      throw error;
+    }
+  };
+
+  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues };
 }

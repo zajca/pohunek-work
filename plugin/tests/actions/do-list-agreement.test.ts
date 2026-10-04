@@ -5,7 +5,7 @@ import { runList } from "../../src/commands/list.ts";
 import type { PohunekSession, PullRequest } from "../../src/types/sources.ts";
 import type { ListItem, RuleNumber } from "../../src/types/item.ts";
 import { check, deliveredPr, issue, pr, session } from "../rules/builders.ts";
-import { baseConfig, expectRefusal, ok, options, setup, type Envelope } from "./harness.ts";
+import { baseConfig, expectRefusal, fail, ok, options, setup, type Envelope } from "./harness.ts";
 
 const SHA = "a".repeat(40);
 const BRANCH = "feature/x";
@@ -125,3 +125,27 @@ test("a pull request joined to a paused issue lists no action and do --dry-run r
     await expectRefusal(runDo(baseConfig, doOptions, setup(world).deps), "precondition_failed", `${action} refused`);
   }
 });
+
+test("a secondary pull request of a paused Linear issue is paused, lists no action and do refuses every action", async () => {
+  const winner = pr({ id: "acme/widgets#12", number: 12, headRefName: "alice/ABC-1/a", headSha: SHA, isDraft: true });
+  const secondary = pr({ id: "acme/widgets#13", number: 13, headRefName: "alice/ABC-1/b", headSha: SHA, isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
+  const owner = session({ id: "s-sec", state: "stopped", activity: null, branch: secondary.headRefName, worktreePath: "/wt/sec", metadata: { "work.link.id": secondary.id, "work.link.provider": "github", "work.role": "implement" } });
+  const world = { prs: ok("github", [winner, secondary]), issues: ok("linear", [issue({ state: "On hold", paused: true })]), sessions: [owner] };
+  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
+  const row = out.items.find((item) => item.key === "github:acme/widgets#13");
+  expect(row).toMatchObject({ issue: null, issue_key: "ABC-1", on_turn: { actor: "paused", reason: "paused", rule: 12 }, actions: [] });
+  for (const action of ["babysit", "fix-ci", "rebase", "ready", "attach"] as const) {
+    const doOptions = options({ key: "github:acme/widgets#13", action, profile: "profile-a", dryRun: true, yes: false });
+    await expectRefusal(runDo(baseConfig, doOptions, setup(world).deps), "precondition_failed", `${action} refused`);
+  }
+});
+
+test("a secondary pull request of a Linear issue is unknown while Linear is down", async () => {
+  const winner = pr({ id: "acme/widgets#12", number: 12, headRefName: "alice/ABC-1/a", headSha: SHA });
+  const secondary = pr({ id: "acme/widgets#13", number: 13, headRefName: "alice/ABC-1/b", headSha: SHA, mergeable: "CONFLICTING" });
+  const world = { prs: ok("github", [winner, secondary]), issues: fail("linear", "timeout") };
+  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
+  const row = out.items.find((item) => item.key === "github:acme/widgets#13");
+  expect(row).toMatchObject({ on_turn: { actor: "unknown", reason: "linear:timeout", rule: null }, actions: [] });
+});
+

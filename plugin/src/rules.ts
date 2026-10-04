@@ -185,10 +185,9 @@ function evaluateChangesRequested(
   };
 }
 
-/** Failure text of the project's issue source; null when it is `ok` or the project has none. */
+/** Failure text of the project's issue source; null when it is `ok`. */
 function issueSourceFailure(sources: SourceStatuses, project: Pick<ProjectConfig, "issueSource">): string | null {
-  const key = issueSourceStatusKey(project);
-  return key === null ? null : failedSources(sources, [key]);
+  return failedSources(sources, [issueSourceStatusKey(project)]);
 }
 
 function failedSources(
@@ -242,14 +241,16 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     return result({ actor: "agent", reason: "working", rule: 2 });
   }
 
-  // Rule 12: issue source. A row joined to an issue key whose issue the source did not
-  // return may be paused, so it is unknown while the source is down.
+  // Rule 12: issue source. A row that resolved to an issue key (its own issue row or a
+  // secondary pull request row of that issue) whose issue the source did not return may
+  // be paused, so it is unknown while the source is down.
   if (canPauseIssues(project)) {
-    if (item.issue === null && item.joinedBy !== null) {
+    const resolved = item.issue ?? item.resolvedIssue;
+    if (resolved === null && (item.joinedBy !== null || item.issueKey !== null)) {
       const issueFailure = issueSourceFailure(sources, project);
       if (issueFailure !== null) return unknown(issueFailure);
     }
-    if (item.issue !== null && item.issue.paused) {
+    if (resolved !== null && resolved.paused) {
       return result({ actor: "paused", reason: "paused", rule: 12 });
     }
   }

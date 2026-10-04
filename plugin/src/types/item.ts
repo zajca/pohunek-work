@@ -70,11 +70,16 @@ export interface ChangesRequestedProgress {
   readonly rerequested: boolean;
 }
 
-export type JoinMatch = "session_link" | "linear_attachment" | "branch_pattern";
+/**
+ * Level of the RFC 7.3 precedence that attached a pull request to an issue key:
+ * `issue_reference` is a Linear attachment of the issue or a GitHub closing
+ * reference of the pull request.
+ */
+export type JoinMatch = "session_link" | "issue_reference" | "branch_pattern";
 
 /** One table row before rules run. */
 export interface WorkItem {
-  /** `linear:DMD-2188` or `github:keboola/connection#8605`. */
+  /** `linear:DMD-2188`, `github-issue:keboola/connection#42` or `github:keboola/connection#8605`. */
   readonly key: string;
   /** Pohunek project label. */
   readonly project: string;
@@ -87,13 +92,18 @@ export interface WorkItem {
   readonly mergedPullRequest: MergedPullRequest | null;
   /** How the pull request was attached to the issue; null without a join. */
   readonly joinedBy: JoinMatch | null;
-  /** A pull request without a Linear issue. */
+  /** An authored pull request that resolved to no issue key while the issue source answered. */
   readonly noIssue: boolean;
   /**
    * Issue key the row resolved to, also on a secondary pull request row whose
    * own key is `github:`; null when nothing resolved.
    */
   readonly issueKey: string | null;
+  /**
+   * The issue behind `issueKey` when the issue source returned it. Equals `issue` on an
+   * issue row and is also set on a secondary pull request row, whose `issue` is null.
+   */
+  readonly resolvedIssue: Issue | null;
   /** Sessions linked to this item, in pohunek order. */
   readonly sessions: readonly PohunekSession[];
   /** Notifications of the linked sessions. */

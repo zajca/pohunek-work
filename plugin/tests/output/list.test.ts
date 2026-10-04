@@ -326,3 +326,20 @@ test("the table names the issue of a secondary pull request row and of no other 
   expect(lines[2]).toStartWith("linear:ABC-1 ");
   expect(lines[3]).toStartWith("github:acme/widgets#12 (no issue)");
 });
+
+test("the table shows a github-issue row under its own key and names the issue on a secondary pull request row", () => {
+  const issueRow = buildListItem(item({ key: "github-issue:acme/widgets#7", issue: issue({ id: "acme/widgets#7" }), noIssue: false, issueKey: "acme/widgets#7" }), context);
+  const secondary = buildListItem(item({ key: "github:acme/widgets#14", pullRequest: pr({ id: "acme/widgets#14", number: 14 }), noIssue: false, issueKey: "acme/widgets#7" }), context);
+  const lines = renderTable([issueRow, secondary], [], [], new Set()).split("\n");
+  expect(lines[1]).toStartWith("github-issue:acme/widgets#7 ");
+  expect(lines[1]).not.toContain("(acme/widgets#7)");
+  expect(lines[2]).toStartWith("github:acme/widgets#14 (acme/widgets#7)");
+});
+
+test("implement is not listed on a github-issue row, while a linear row on rule 8 still lists it", () => {
+  const github = buildListItem(item({ key: "github-issue:acme/widgets#7", issue: issue({ id: "acme/widgets#7" }), pullRequest: null, noIssue: false, issueKey: "acme/widgets#7" }), context);
+  const linear = buildListItem(item({ key: "linear:ABC-1", issue: issue(), pullRequest: null, noIssue: false, issueKey: "ABC-1" }), context);
+  expect(github.on_turn.rule).toBe(8);
+  expect(github.actions).toEqual([]);
+  expect(linear.actions.map((action) => action.name)).toEqual(["implement"]);
+});

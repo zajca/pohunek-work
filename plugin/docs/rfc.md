@@ -154,8 +154,8 @@ side covers most of the need. Two things are missing:
   owner is assigned to, authored, or was asked to review, in a configured
   project.
 - **Item key.** Project-scoped identity: `linear:DMD-2188`,
-  `github:keboola/connection#8605`. A PR linked to a Linear issue is shown on
-  the issue's row.
+  `github-issue:keboola/connection#42`, `github:keboola/connection#8605`. A PR
+  linked to an issue is shown on the issue's row.
 - **Link.** Plugin-namespaced session metadata binding a session to an item
   key.
 - **Role.** Purpose of a linked session: `implement`, `babysit`, `review`,
@@ -203,11 +203,29 @@ pattern that extracts the key.
 
 ### 7.3 Join precedence
 
-For each pull request, the Linear issue is the first match of:
+For each pull request, the issue is the first match of the precedence of the
+project's `issue_source`.
+
+For `linear`:
 
 1. `work.link.id` of a session whose `work.link.branch` equals the PR head ref;
 2. a Linear attachment on the issue pointing at the PR URL;
 3. the branch pattern applied to the PR head ref.
+
+For `github` (the issue key is `<owner/name>#<number>` of the project's `repo`):
+
+1. `work.link.id` of a session with `work.link.provider = github` and
+   `work.link.kind = issue` whose `work.link.branch` equals the PR head ref and
+   whose id names an issue of `repo`; a link of kind `pull_request` (or without a
+   kind) carries a PR id of the same shape and never resolves to an issue;
+2. the PR's `closingIssuesReferences` that point into `repo`; a PR that closes
+   several issues joins the lowest-numbered one that is on the table, else the
+   lowest-numbered one. GitHub fills the references only when the PR targets
+   the repository's default branch, so a stacked PR (base branch other than the
+   default) has none and falls through to the next level;
+3. the branch pattern applied to the PR head ref, when its `key` capture is a
+   decimal number `N` (resolves to `<repo>#N`); any other capture does not
+   resolve.
 
 A PR without a match is its own row flagged "no issue"; an issue without a PR
 is its own row; a linked session whose key matches no row is listed as
@@ -217,7 +235,9 @@ Merged PRs of the owner (`merged_lookback_days` window, one search per project)
 are resolved by the same precedence, but only to explain an issue's row: a
 merged PR never becomes a row of its own, and it is attached only to an issue
 without an open PR. When several merged PRs resolve to one issue, the most
-recently merged one is kept.
+recently merged one is kept. The merged lookup carries no closing references,
+so for a `github` project a merged PR resolves by session link and branch
+pattern only.
 
 ### 7.4 One worktree, one writer
 
@@ -236,15 +256,15 @@ Evaluated top to bottom; the first rule that holds decides.
 | --- | --- | --- | --- |
 | 1 | A linked session has an unacknowledged `agent_blocked` or `approval_required` notification | me: answer agent | pohunek notifications |
 | 2 | A linked session is live with `activity = working` | agent | pohunek session state |
-| 12 | Evaluated right after 2: the row's Linear issue is in a configured `paused_states` state | paused (no actions) | Linear state, join |
+| 12 | Evaluated right after 2: the row's issue is paused (Linear: a configured `paused_states` state; GitHub: a configured `paused_labels` label) | paused (no actions) | issue state or labels, join |
 | 3 | Someone else's PR requests a review from me | me: review | GitHub `reviewRequests` |
 | 4 | Changes requested and the fix is not fully delivered (8.2) | me: respond | reviews, timeline, threads, `reviewRequests` |
 | 5 | The PR conflicts with its base; otherwise a check failed that is neither ignored nor a policy check; otherwise a policy check failed | me: rebase / fix CI / policy check: `<names>` | `statusCheckRollup`, `mergeable` |
 | 6 | The PR is a draft | me: leave draft | `isDraft` |
 | 7 | Approved, checks green, mergeable | me: merge | `reviewDecision`, checks, `mergeable` |
-| 8 | Linear issue in a started state, assigned to me, with no PR and no live linked session | me: nothing runs | Linear state, assignee, join |
-| 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | Linear state, assignee, join, pohunek session state |
-| 13 | Evaluated right after 8: same issue conditions and no live linked session, and a merged PR resolves to the issue (7.3) | me: close or follow up | Linear state, assignee, join, merged PR search |
+| 8 | Issue in a started state (Linear: state type `started`; GitHub: a `started_labels` label and no `paused_labels` label), assigned to me, with no PR and no live linked session | me: nothing runs | issue state or labels, assignee, join |
+| 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | issue state or labels, assignee, join, pohunek session state |
+| 13 | Evaluated right after 8: same issue conditions and no live linked session, and a merged PR resolves to the issue (7.3) | me: close or follow up | issue state or labels, assignee, join, merged PR search |
 | 9 | Open non-draft PR with no pending review request and no decision | me: request review | `reviewRequests`, `reviewDecision` |
 | 10 | Otherwise | reviewer | — |
 
@@ -262,7 +282,9 @@ rules 3-11 never apply to its row, whatever its pull request needs (a conflict,
 a failing check, a draft). On a row of a paused issue rules 1 and 2 still win:
 a blocked agent still needs an answer and a working agent is still shown as
 working. A paused row lists no actions and `do` refuses every action on it,
-`attach` included. The state name must match a `paused_states` entry exactly.
+`attach` included. A Linear state name must match a `paused_states` entry
+exactly; a GitHub label is matched against `paused_labels` case-insensitively,
+as GitHub treats label names.
 A paused issue without a pull request gets no row at all, so a session linked
 to it, blocked or working, is not shown in `list`; it is not reported as
 orphaned either. When the issue leaves the paused state, the row is evaluated
@@ -323,11 +345,13 @@ checks green or none) the row is `unknown` with the reason
 
 If a source needed by a rule is unavailable, the row shows `on_turn =
 unknown` with the stable error code of that source. Rules are never evaluated
-on partial data and `unknown` is never shown as `reviewer`. Rule 12 needs Linear
-for every row joined to an issue key: while Linear is unavailable such a row
-is `unknown` with the Linear code, because its issue may be paused. Rows not
+on partial data and `unknown` is never shown as `reviewer`. Rule 12 needs the
+project's issue source (`linear`, or `github_issues` for a `github` project)
+for every row joined to an issue key: while it is unavailable such a row is
+`unknown` with the source's code, because its issue may be paused. Rows not
 joined to an issue (review requests, pull requests without an issue key) and
-projects with an empty `paused_states` do not depend on Linear for rule 12.
+projects with an empty `paused_states` (or `paused_labels`) do not depend on the
+issue source for rule 12. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 
@@ -349,8 +373,10 @@ Versioned envelope matching the pohunek CLI (`{cli_version, protocol,
 ok|err}`, with the plugin's own contract version). The `list` contract is
 version 3: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
 version 3 adds the source status `unused`, which a source reports for a project
-that does not use it (for example `sources.linear` of a project with
-`issue_source = "github"`). `unused` is not a failure: it never appears in the
+that does not use it (`sources.linear` of a project with `issue_source =
+"github"`, `sources.github_issues` of a project with `issue_source = "linear"`),
+the source `github_issues` (the GitHub issue lookup of a `github` project) and the
+`github-issue:` row key. `unused` is not a failure: it never appears in the
 list of unavailable sources and never makes `list` exit partial. A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload
 it cannot decode. `do` and `setup` version their envelopes separately
@@ -374,19 +400,31 @@ it cannot decode. `do` and `setup` version their envelopes separately
     {"name": "babysit", "delegable": false, "profile": "claude-otel"},
     {"name": "attach", "delegable": true}
   ],
-  "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "pohunek": "ok"}
+  "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "github_issues": "unused", "pohunek": "ok"}
 }
 ```
 
-A pull request of a project with `issue_source = "github"` is a `github:` row
-with `issue_key` null and `no_issue` false; no issue key is resolved for it.
+For a project with `issue_source = "github"` the issue row is keyed
+`github-issue:<owner/name>#<number>`; `issue.id` and `issue_key` are
+`<owner/name>#<number>` and `issue.state` is the label that decided the row (the
+paused label when there is one, else the first started label, spelled as on
+GitHub). The issue lookup reports its own status `sources.github_issues`; while
+it is not `ok` a row joined to an issue is `unknown` where rule 12 or rule 8
+needs the issue (8.3). `implement` is not offered on a `github-issue:` row (the
+launch of an implementation session for a GitHub issue is not implemented yet);
+the other actions are offered on it exactly as on a `linear:` row, and a session
+they start carries `work.link.provider = github`, `work.link.kind = issue` and
+`work.link.id = <owner/name>#<number>`, so the next listing finds it. A pull
+request that resolves to no issue key is flagged `no_issue` while the issue
+lookup answered.
 
 `issue_key` is the issue key the row resolved to (RFC 7.3), or null when
-nothing resolved. It is set on the `linear:<KEY>` row and also on the other
-pull requests of the same issue, whose own `key` is `github:` and whose `issue`
-is null because only one row may carry the `linear:<KEY>` key. The table
-prints it after the key (`github:acme/widgets#9 (ABC-11)`) and the TUI shows it
-in the key column and the detail pane.
+nothing resolved. It is set on the issue row (`linear:<KEY>` or
+`github-issue:<owner/name>#<n>`) and also on the other pull requests of the
+same issue, whose own `key` is `github:` and whose `issue` is null because only
+one row may carry the issue key. The table prints it after the key
+(`github:acme/widgets#9 (ABC-11)`) and the TUI shows it in the key column and the
+detail pane.
 
 ### 9.2 Notifications
 
@@ -496,6 +534,8 @@ pohunek_label = "connection"
 repo = "keboola/connection"
 issue_source = "linear"   # "linear" or "github"; required
 linear_team = "DMD"       # only with issue_source = "linear"
+# started_labels = ["in progress"]   # only with issue_source = "github"; at least one
+# paused_labels = ["on hold"]        # only with issue_source = "github"; may be empty
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 policy_checks = []        # merge blockers the owner meets; disjoint from ignored_checks
@@ -517,10 +557,26 @@ Rules:
   the project is left out; it is never guessed.
 - **`issue_source` selects where a project's issues come from.** It is
   required and has no default. `linear` requires `linear_team` and
-  `paused_states` and queries Linear; `github` rejects both keys (an unknown-key
-  error naming the file and key) and queries no issue tracker, so its rows are
-  pull requests only. `branch_pattern`, `ignored_checks`, `policy_checks` and
-  `ai_reviewers` are required for both sources. The global `[linear]` table of
+  `paused_states` and queries Linear; `github` rejects both keys (an error naming
+  the file and key) and requires `started_labels` and `paused_labels` instead,
+  which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
+  `policy_checks` and `ai_reviewers` are required for both sources.
+- **A `github` project lists the owner's open issues of `repo` that are
+  assigned to `identity.github_login` and carry a label.** `started_labels` (a
+  non-empty list) marks an issue as started: rule 8 applies to it. `paused_labels`
+  (a list that may be empty) marks it as paused: rule 12 applies, and a paused
+  label outranks a started one. Label names are compared case-insensitively
+  and a label may not appear in both lists. An issue that is not assigned to the
+  owner, or has neither kind of label, produces no row, exactly like a Linear
+  issue outside a started state: an issue has to be assigned **and** labelled
+  before it appears. The issue search and its labels are bounded
+  by the global `[github]` page sizes: `issue_page_size` (1 to 100, required) for
+  the search and `nested_page_size` for the labels of an issue; a label list longer
+  than one page is followed to its end, and anything that cannot be followed
+  makes `github_issues` `truncated`. The node budget of the pull request search
+  is validated at load with the closing issue references of 7.3 included, whether
+  or not a `github` project exists, so the global file is valid or not independently
+  of the project files; the issue search is validated against the same limit. The global `[linear]` table of
   `config.toml` and its keyring entry are required only while at least one
   project uses `issue_source = "linear"`; the table is validated whenever it is
   present, and `pohunek-work doctor` checks the keyring only when a Linear

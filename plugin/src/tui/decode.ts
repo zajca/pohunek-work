@@ -82,6 +82,7 @@ function sources(value: unknown, path: string): SourceStatuses {
     github: string(fields["github"], `${path}.github`),
     github_merged: string(fields["github_merged"], `${path}.github_merged`),
     linear: string(fields["linear"], `${path}.linear`),
+    github_issues: string(fields["github_issues"], `${path}.github_issues`),
     pohunek: string(fields["pohunek"], `${path}.pohunek`),
   } as SourceStatuses;
 }

@@ -15,6 +15,7 @@ const githubConfig: GithubConfig = {
   ghBin: "/fake/bin/gh",
   timeoutMs: 5000,
   pullRequestPageSize: 7,
+  issuePageSize: 4,
   nestedPageSize: 5,
   threadCommentPageSize: 3,
   mergedLookbackDays: 30,
@@ -181,6 +182,7 @@ describe("normalization", () => {
         { name: "CI / Build", outcome: "success" },
         { name: "legacy/ci", outcome: "failure" },
       ],
+      closingIssueNumbers: [],
       updatedAt: "2026-09-30T10:00:00Z",
     });
   });

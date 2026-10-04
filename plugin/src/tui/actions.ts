@@ -11,8 +11,8 @@ export function isTuiAction(name: string): name is TuiAction {
   return TUI_ACTIONS.some((action) => action === name);
 }
 
-/** `linear:<TEAM>-<n>` or `github:<owner>/<name>#<n>`; never starts with `-`. */
-const KEY_SHAPE = /^(linear:[A-Z][A-Z0-9]*-[0-9]+|github:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+)$/;
+/** `linear:<TEAM>-<n>`, `github-issue:<owner>/<name>#<n>` or `github:<owner>/<name>#<n>`; never starts with `-`. */
+const KEY_SHAPE = /^(linear:[A-Z][A-Z0-9]*-[0-9]+|github(-issue)?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+)$/;
 /** A pohunek project label; never starts with `-`. */
 const PROJECT_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 

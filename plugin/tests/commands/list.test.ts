@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { runList, selectProjects } from "../../src/commands/list.ts";
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
@@ -11,16 +11,16 @@ import type {
   PullRequest,
   SourceResult,
 } from "../../src/types/sources.ts";
-import { check, issue, mergedPr, pr, session } from "../rules/builders.ts";
+import { check, githubIssueSource, issue, mergedPr, pr, session } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 const widgets = config.projects.find((p) => p.pohunekLabel === "widgets");
 if (widgets === undefined) throw new Error("fixture project widgets missing");
 
-function ok<T>(source: "github" | "linear" | "pohunek", data: T): SourceResult<T> {
+function ok<T>(source: "github" | "github_issues" | "linear" | "pohunek", data: T): SourceResult<T> {
   return { ok: true, source, data, durationMs: 1 };
 }
-function fail(source: "github" | "linear" | "pohunek", code: "rate_limited" | "timeout"): SourceResult<never> {
+function fail(source: "github" | "github_issues" | "linear" | "pohunek", code: "rate_limited" | "timeout"): SourceResult<never> {
   return { ok: false, source, code, message: "failed", durationMs: 1 };
 }
 
@@ -41,6 +41,7 @@ interface World {
   prs?: SourceResult<readonly PullRequest[]>;
   merged?: SourceResult<readonly MergedPullRequest[]>;
   issues?: SourceResult<readonly Issue[]>;
+  githubIssues?: SourceResult<readonly Issue[]>;
   sessions?: SourceResult<readonly PohunekSession[]>;
   registry?: SourceResult<readonly PohunekProject[]>;
 }
@@ -59,6 +60,7 @@ function deps(world: World): Parameters<typeof runList>[2] {
     github: {
       fetchPullRequests: () => Promise.resolve(world.prs ?? ok("github", [])),
       fetchMergedPullRequests: () => Promise.resolve(world.merged ?? ok("github", [])),
+      fetchIssues: () => Promise.resolve(world.githubIssues ?? ok("github_issues", [])),
     },
     linear: { fetchIssues: () => Promise.resolve(world.issues ?? ok("linear", [])) },
     logger: silentLogger,
@@ -101,7 +103,7 @@ test("a failed github source turns every row unknown with the source code", asyn
   );
   expect(result.items).toHaveLength(1);
   expect(result.items[0]?.on_turn).toEqual({ actor: "unknown", reason: "github:rate_limited", rule: null });
-  expect(result.items[0]?.sources).toEqual({ github: "rate_limited", github_merged: "ok", linear: "ok", pohunek: "ok" });
+  expect(result.items[0]?.sources).toEqual({ github: "rate_limited", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "ok" });
 });
 
 test("a failed pohunek call marks pohunek unknown but rules not needing it still decide only after rules 1-2", async () => {
@@ -183,7 +185,7 @@ test("failed sources are reported regardless of the --mine filter", async () => 
   const envelope = JSON.parse(result.stdout) as { ok: { projects: { project: string; sources: Record<string, string> }[] } };
   expect(envelope.ok.projects[0]).toEqual({
     project: "widgets",
-    sources: { github: "rate_limited", github_merged: "ok", linear: "ok", pohunek: "timeout" },
+    sources: { github: "rate_limited", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "timeout" },
   });
 });
 
@@ -208,7 +210,7 @@ test("a failed linear source marks issue rows unknown with the linear code", asy
     deps({ prs: ok("github", [draftPr]), issues: fail("linear", "timeout") }),
   );
   expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
-  expect(result.items[0]?.sources).toEqual({ github: "ok", github_merged: "ok", linear: "timeout", pohunek: "ok" });
+  expect(result.items[0]?.sources).toEqual({ github: "ok", github_merged: "ok", linear: "timeout", github_issues: "unused", pohunek: "ok" });
   expect(result.items[0]?.no_issue).toBe(false);
   expect(result.sourceFailures).toEqual(["widgets linear: timeout"]);
 });
@@ -315,15 +317,15 @@ test("a failed merged lookup makes only the issue-only row unknown and PR rows k
   expect(byKey.get("github:acme/widgets#12")?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
   expect(byKey.get("linear:ABC-2")?.on_turn).toEqual({ actor: "unknown", reason: "github_merged:rate_limited", rule: null });
   expect(byKey.get("linear:ABC-2")?.actions).toEqual([]);
-  expect(byKey.get("linear:ABC-2")?.sources).toEqual({ github: "ok", github_merged: "rate_limited", linear: "ok", pohunek: "ok" });
+  expect(byKey.get("linear:ABC-2")?.sources).toEqual({ github: "ok", github_merged: "rate_limited", linear: "ok", github_issues: "unused", pohunek: "ok" });
   expect(out.sourceFailures).toEqual(["widgets github_merged: rate_limited"]);
 });
 
 const gadgets = config.projects.find((p) => p.pohunekLabel === "gadgets");
 if (gadgets === undefined) throw new Error("fixture project gadgets missing");
-const githubGadgets = { ...gadgets, issueSource: { kind: "github" } } as const;
-const githubOnly = { ...config, global: { ...config.global, linear: null }, projects: [{ ...widgets, issueSource: { kind: "github" } }, githubGadgets] } as const;
-const mixed = { ...config, projects: [widgets, githubGadgets] } as const;
+const githubGadgets = { ...gadgets, issueSource: githubIssueSource };
+const githubOnly = { ...config, global: { ...config.global, linear: null }, projects: [{ ...widgets, issueSource: githubIssueSource }, githubGadgets] };
+const mixed = { ...config, projects: [widgets, githubGadgets] };
 
 function spiedDeps(world: World): { deps: Parameters<typeof runList>[2]; fetched: string[] } {
   const fetched: string[] = [];
@@ -351,7 +353,8 @@ test("a github-only configuration never touches Linear and reports no source fai
     ok: { projects: { project: string; sources: Record<string, string> }[]; items: { key: string; issue_key: unknown; no_issue: boolean }[] };
   };
   expect(envelope.ok.projects.map((p) => p.sources["linear"])).toEqual(["unused", "unused"]);
-  expect(envelope.ok.items.every((i) => i.key.startsWith("github:") && i.issue_key === null && !i.no_issue)).toBe(true);
+  expect(envelope.ok.projects.map((p) => p.sources["github_issues"])).toEqual(["ok", "ok"]);
+  expect(envelope.ok.items.every((i) => i.key.startsWith("github:") && i.issue_key === null && i.no_issue)).toBe(true);
 });
 
 test("a github-only configuration does not call the Linear source even when one is supplied", async () => {
@@ -379,4 +382,47 @@ test("a Linear project without a Linear source is a programming error, not a sil
   );
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain("uses Linear");
+});
+
+describe("a project whose issues come from GitHub", () => {
+  const numeric = { branchPattern: /^alice\/(?<key>[0-9]+)\//, branchPatternSource: "^alice/(?P<key>[0-9]+)/" };
+  const githubWidgets = { ...config, projects: [{ ...widgets, ...numeric, issueSource: githubIssueSource }, githubGadgets] };
+  const startedIssue = issue({ id: "acme/widgets#7", state: "in-progress", title: "Cache widgets" });
+  const run = (world: World): Promise<Awaited<ReturnType<typeof runList>>> =>
+    runList(githubWidgets, { mine: false, staleDays: null, json: true, project: "widgets" }, deps(world));
+
+  test("a started issue is a github-issue row on rule 8 and the sources name github_issues", async () => {
+    const out = await run({ githubIssues: ok("github_issues", [startedIssue]) });
+    expect(out.items.map((item) => [item.key, item.issue_key, item.on_turn.rule])).toEqual([["github-issue:acme/widgets#7", "acme/widgets#7", 8]]);
+    expect(out.items[0]?.issue).toEqual({ id: "acme/widgets#7", title: "Cache widgets", state: "in-progress", url: startedIssue.url });
+    expect(out.items[0]?.sources).toEqual({ github: "ok", github_merged: "ok", linear: "unused", github_issues: "ok", pohunek: "ok" });
+  });
+
+  test("rule 13: a started issue whose branch already merged is close or follow up, not nothing runs", async () => {
+    const out = await run({ githubIssues: ok("github_issues", [startedIssue]), merged: ok("github", [mergedPr({ headRefName: "alice/7/cache" })]) });
+    expect(out.items[0]?.on_turn).toEqual({ actor: "me", reason: "close or follow up", rule: 13 });
+  });
+
+  test("a failing issue source is a source failure and leaves a pull request joined by branch pattern unknown, never the reviewer's", async () => {
+    const waiting = pr({ headRefName: "alice/7/cache", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
+    const out = await run({ githubIssues: fail("github_issues", "timeout"), prs: ok("github", [waiting]) });
+    expect(out.sourceFailures).toEqual(["widgets github_issues: timeout"]);
+    expect(out.items[0]?.key).toBe("github-issue:acme/widgets#7");
+    expect(out.items[0]?.on_turn).toEqual({ actor: "unknown", reason: "github_issues:timeout", rule: null });
+    expect(out.items[0]?.sources).toMatchObject({ linear: "unused", github_issues: "timeout" });
+  });
+
+  test("a pull request that closes an issue is joined to its row", async () => {
+    const closes = pr({ headRefName: "feature/cache", isDraft: true, closingIssueNumbers: [7] });
+    const out = await run({ githubIssues: ok("github_issues", [startedIssue]), prs: ok("github", [closes]) });
+    expect(out.items.map((item) => [item.key, item.pull_request?.id, item.on_turn.rule])).toEqual([["github-issue:acme/widgets#7", "acme/widgets#12", 6]]);
+  });
+
+  test("the Linear source is never called and the project reports linear unused", async () => {
+    const calls: string[] = [];
+    const spied = { ...deps({ githubIssues: ok("github_issues", []) }), linear: { fetchIssues: () => { calls.push("linear"); return Promise.resolve(ok("linear", [])); } } };
+    const out = await runList(githubWidgets, { mine: false, staleDays: null, json: true, project: "widgets" }, spied);
+    expect(calls).toEqual([]);
+    expect((JSON.parse(out.stdout) as { ok: { projects: { sources: Record<string, string> }[] } }).ok.projects[0]?.sources["linear"]).toBe("unused");
+  });
 });

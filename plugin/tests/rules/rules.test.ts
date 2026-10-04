@@ -10,6 +10,7 @@ import {
   check,
   commit,
   deliveredPr,
+  githubIssueSource,
   input,
   issue,
   mergedPr,
@@ -627,7 +628,7 @@ describe("unknown on missing sources", () => {
   });
 
   test("reason lists only the sources the rule needs", () => {
-    const all = { github: "timeout", github_merged: "timeout", linear: "timeout", pohunek: "unavailable" } as const;
+    const all = { github: "timeout", github_merged: "timeout", linear: "timeout", github_issues: "timeout", pohunek: "unavailable" } as const;
     expect(onTurn(item(), all)).toEqual({ actor: "unknown", reason: "pohunek:unavailable", rule: null });
   });
 
@@ -635,5 +636,78 @@ describe("unknown on missing sources", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
     expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
+  });
+});
+
+describe("github issue source", () => {
+  const ghProject = { ...project, issueSource: githubIssueSource };
+  const ghOk = { ...allOk, linear: "unused", github_issues: "ok" } as const;
+  const ghIssue = (overrides: Parameters<typeof issue>[0] = {}): ReturnType<typeof issue> =>
+    issue({ id: "acme/widgets#7", state: "in-progress", ...overrides });
+  const issueRow = { key: "github-issue:acme/widgets#7", issue: ghIssue(), pullRequest: null } as const;
+  const joined = { key: "github-issue:acme/widgets#7", joinedBy: "issue_reference", noIssue: false } as const;
+  const conflicting = pr({ mergeable: "CONFLICTING" });
+
+  test("rule 8: a started issue with nothing running", () => {
+    expect(onTurn(item(issueRow), ghOk, ghProject)).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
+  });
+
+  test("a started issue whose label is not started is not rule 8", () => {
+    expect(onTurn(item({ ...issueRow, issue: ghIssue({ started: false }) }), ghOk, ghProject).rule).toBe(10);
+  });
+
+  test("rule 13: a merged pull request of a started issue is close or follow up, not nothing runs", () => {
+    expect(onTurn(item({ ...issueRow, mergedPullRequest: mergedPr() }), ghOk, ghProject)).toEqual({
+      actor: "me",
+      reason: "close or follow up",
+      rule: 13,
+    });
+  });
+
+  test("rule 12: a paused label pauses the joined pull request", () => {
+    const paused = item({ ...joined, issue: ghIssue({ started: false, paused: true, state: "on-hold" }), pullRequest: conflicting });
+    expect(onTurn(paused, ghOk, ghProject)).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    expect(onTurn(item({ ...joined, issue: ghIssue(), pullRequest: conflicting }), ghOk, ghProject).rule).toBe(5);
+  });
+
+  test("without paused labels no row is paused and a source outage does not stop the github rules", () => {
+    const noPause = { ...ghProject, issueSource: { ...githubIssueSource, pausedLabels: [] } };
+    const row = item({ ...joined, issue: null, pullRequest: conflicting });
+    expect(onTurn(row, { ...ghOk, github_issues: "timeout" }, noPause).rule).toBe(5);
+  });
+
+  test("a row joined to an issue the source did not return is unknown, never the reviewer's, while github_issues is down", () => {
+    const waiting = pr({ reviewRequests: [user("x")] });
+    const row = item({ ...joined, issue: null, pullRequest: waiting });
+    expect(onTurn(row, ghOk, ghProject).rule).toBe(10);
+    expect(onTurn(row, { ...ghOk, github_issues: "timeout" }, ghProject)).toEqual({
+      actor: "unknown",
+      reason: "github_issues:timeout",
+      rule: null,
+    });
+  });
+
+  test("an issue row never reads the linear status", () => {
+    expect(onTurn(item(issueRow), { ...ghOk, linear: "timeout" }, ghProject).rule).toBe(8);
+    expect(onTurn(item(issueRow), { ...ghOk, github_issues: "rate_limited" }, ghProject)).toEqual({
+      actor: "unknown",
+      reason: "github_issues:rate_limited",
+      rule: null,
+    });
+  });
+});
+
+describe("rule 12 on a secondary pull request row", () => {
+  const conflicting = pr({ mergeable: "CONFLICTING" });
+  const secondary = { key: "github:acme/widgets#12", issue: null, issueKey: "ABC-1", joinedBy: null, noIssue: false, pullRequest: conflicting } as const;
+
+  test("is paused when the issue it resolved to is paused, and unaffected when it is not", () => {
+    expect(onTurn(item({ ...secondary, resolvedIssue: issue({ state: "On hold", paused: true }) }))).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    expect(onTurn(item({ ...secondary, resolvedIssue: issue() })).rule).toBe(5);
+  });
+
+  test("is unknown, not the owner's rebase, while the issue source is down and the issue is not known", () => {
+    expect(onTurn(item({ ...secondary, resolvedIssue: null }), { ...allOk, linear: "timeout" })).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
+    expect(onTurn(item({ ...secondary, resolvedIssue: null })).rule).toBe(5);
   });
 });

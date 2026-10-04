@@ -26,6 +26,10 @@ describe("argv builders", () => {
       ok: true,
       argv: [BIN, "do", "github:keboola/connection#12", "ready", "--project", "connection", "--json"],
     });
+    expect(previewArgv(BIN, "github-issue:keboola/connection#42", "babysit", "connection")).toEqual({
+      ok: true,
+      argv: [BIN, "do", "github-issue:keboola/connection#42", "babysit", "--project", "connection", "--dry-run", "--json"],
+    });
     expect(attachArgv(BIN, "linear:DMD-1", "connection")).toEqual({
       ok: true,
       argv: [BIN, "do", "linear:DMD-1", "attach", "--project", "connection"],
@@ -44,6 +48,10 @@ describe("argv builders", () => {
     "linear:DMD-",
     "github:owner/name",
     "github:owner/name#1;rm",
+    "github-issue:owner/name",
+    "github-issue:owner/name#1;rm",
+    "github-issue:-owner/name#1 x",
+    "github-issue:#1",
     "github:-owner/name#1 x",
     "jira:ABC-1",
     "",

@@ -11,11 +11,11 @@ me 10  agent 1  reviewer 1  unknown 1  data <1m old refreshing  view: all  /105
                                                                                                        |sessions: none
                                                                                                        |actions: fix-ci* (claude-otel), merge [not run by the
                                                                                                        |TUI], attach
-                                                                                                       |sources: github=ok github_merged=ok linear=ok pohunek=ok
+                                                                                                       |sources: github=ok github_merged=ok linear=ok
+                                                                                                       |github_issues=unused pohunek=ok
                                                                                                        |
                                                                                                        |--- refused: precondition_failed
                                                                                                        |fix-ci refused: no check fails any more
-                                                                                                       |
                                                                                                        |
                                                                                                        |
                                                                                                        |

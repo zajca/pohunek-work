@@ -1,21 +1,21 @@
-import type { LinearProject, ProjectConfig } from "../types/config.ts";
+import type { GithubProject, LinearProject, ProjectConfig } from "../types/config.ts";
 import type { SourceName } from "../types/sources.ts";
 
 export function isLinearProject(project: ProjectConfig): project is LinearProject {
   return project.issueSource.kind === "linear";
 }
 
-/** Linear state names that pause an issue; empty for a project without Linear. */
-export function pausedStatesOf(project: Pick<ProjectConfig, "issueSource">): readonly string[] {
-  return project.issueSource.kind === "linear" ? project.issueSource.pausedStates : [];
+export function isGithubProject(project: ProjectConfig): project is GithubProject {
+  return project.issueSource.kind === "github";
 }
 
-/** Key in `SourceStatuses` of the project's issue source; null when the project fetches no issues. */
-export function issueSourceStatusKey(project: Pick<ProjectConfig, "issueSource">): SourceName | null {
-  return project.issueSource.kind === "linear" ? "linear" : null;
+/** Key in `SourceStatuses` of the project's issue source. */
+export function issueSourceStatusKey(project: Pick<ProjectConfig, "issueSource">): SourceName {
+  return project.issueSource.kind === "linear" ? "linear" : "github_issues";
 }
 
-/** Whether the project's issue source can mark an issue as paused. */
+/** Whether the project's issue source can mark an issue as paused: it has paused states or paused labels. */
 export function canPauseIssues(project: Pick<ProjectConfig, "issueSource">): boolean {
-  return pausedStatesOf(project).length > 0;
+  const { issueSource } = project;
+  return (issueSource.kind === "linear" ? issueSource.pausedStates : issueSource.pausedLabels).length > 0;
 }

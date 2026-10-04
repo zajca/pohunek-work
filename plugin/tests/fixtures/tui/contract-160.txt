@@ -1,15 +1,15 @@
 me 3  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
-   KEY                      TURN                    PR    REVIEW  CHECKS  SESSIONS     TITLE           |github:acme/widgets#12  (project widgets)  no Linear
->  github:acme/widgets#12   me: leave draft (r6)    #12 d -       success -            Add widget cache|issue
-   github:acme/w... (ABC-1) me: request review (r9) #14   -       none    -            Add widget cache|turn: me: leave draft (r6)
-   linear:ABC-2             me: nothing runs (r8)   -     -       -       -            Widget cache    |  the pull request is a draft: mark it ready when done
-   linear:ABC-1             reviewer (r10)          #12   changes success babysit:idle Widget cache    |pr: acme/widgets#12 (draft) Add widget cache
-   linear:ABC-3             paused (r12)            #13 d -       none    -            Widget cache    |  review=- checks=success mergeable=MERGEABLE
-                                                                                                       |  fix_delivered=- threads_answered=- rerequested=-
+   KEY                      TURN                    PR    REVIEW  CHECKS  SESSIONS     TITLE           |github:acme/widgets#12  (project widgets)  no issue
+>  github:acme/widgets#12   me: leave draft (r6)    #12 d -       success -            Add widget cache|turn: me: leave draft (r6)
+   github:acme/w... (ABC-1) me: request review (r9) #14   -       none    -            Add widget cache|  the pull request is a draft: mark it ready when done
+   linear:ABC-2             me: nothing runs (r8)   -     -       -       -            Widget cache    |pr: acme/widgets#12 (draft) Add widget cache
+   linear:ABC-1             reviewer (r10)          #12   changes success babysit:idle Widget cache    |  review=- checks=success mergeable=MERGEABLE
+   linear:ABC-3             paused (r12)            #13 d -       none    -            Widget cache    |  fix_delivered=- threads_answered=- rerequested=-
                                                                                                        |  https://example.invalid/acme/widgets/pull/12
                                                                                                        |sessions: none
                                                                                                        |actions: ready*
-                                                                                                       |sources: github=ok github_merged=ok linear=ok pohunek=ok
+                                                                                                       |sources: github=ok github_merged=ok linear=ok
+                                                                                                       |github_issues=unused pohunek=ok
                                                                                                        |
                                                                                                        |
                                                                                                        |

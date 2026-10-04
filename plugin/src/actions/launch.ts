@@ -4,6 +4,7 @@
 import type { CollectedRow } from "../commands/list.ts";
 import { configuredProfile } from "../config/profiles.ts";
 import { keyFromBranch } from "../join.ts";
+import { isGithubIssueRowKey } from "../config/row-key.ts";
 import { failingChecks } from "../rules.ts";
 import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
@@ -65,6 +66,23 @@ function issueKeyOf(row: CollectedRow): string {
   return key;
 }
 
+/** `<owner/name>#<n>` of a GitHub issue row; it has to name an issue of the project's own repository. */
+function githubIssueKeyOf(row: CollectedRow): string {
+  const key = row.item.issueKey;
+  const prefix = `${row.project.repo}#`;
+  if (key === null || !key.startsWith(prefix) || !/^[0-9]+$/.test(key.slice(prefix.length))) {
+    throw new ActionError("invalid_value", `${JSON.stringify(key)} is not an issue of ${row.project.repo}`);
+  }
+  return key;
+}
+
+/** The `work.link.*` identity of the row a worktree action works on: its issue when it is an issue row, else the pull request. */
+function linkOfRow(row: CollectedRow, pr: PullRequest): { provider: string; kind: string; id: string } {
+  if (row.listItem.key.startsWith("linear:")) return { provider: "linear", kind: "issue", id: issueKeyOf(row) };
+  if (isGithubIssueRowKey(row.listItem.key)) return { provider: "github", kind: "issue", id: githubIssueKeyOf(row) };
+  return { provider: "github", kind: "pull_request", id: pr.id };
+}
+
 function metaArgs(metadata: Readonly<Record<string, string>>): string[] {
   return Object.entries(metadata).flatMap(([key, value]) => ["--meta", `${key}=${value}`]);
 }
@@ -88,6 +106,10 @@ function requireNoWorktree(row: CollectedRow): void {
 }
 
 async function planImplement(row: CollectedRow, config: PluginConfig, profile: string): Promise<ActionPlan> {
+  // @TODO launch `implement` for GitHub issue rows (zajca/pohunek-work#58)
+  if (isGithubIssueRowKey(row.listItem.key)) {
+    throw new ActionError("precondition_failed", `implement refused: ${row.listItem.key} is a GitHub issue row; implement launches Linear issues only`);
+  }
   const issue = row.item.issue;
   if (issue === null || row.item.pullRequest !== null) {
     throw new ActionError("precondition_failed", `implement refused: ${row.listItem.key} is not an issue without a pull request`);
@@ -227,13 +249,12 @@ async function planInWorktree(
   }
   requireFreeWorktree(action, cwd, sessions);
 
-  const onIssue = row.listItem.key.startsWith("linear:");
-  const linkId = onIssue ? issueKeyOf(row) : pr.id;
-  const name = `${linkId} ${action}`;
+  const link = linkOfRow(row, pr);
+  const name = `${link.id} ${action}`;
   const metadata: Record<string, string> = {
-    "work.link.provider": onIssue ? "linear" : "github",
-    "work.link.kind": onIssue ? "issue" : "pull_request",
-    "work.link.id": linkId,
+    "work.link.provider": link.provider,
+    "work.link.kind": link.kind,
+    "work.link.id": link.id,
     "work.link.url": pr.url,
     "work.link.branch": pr.headRefName,
     [ROLE_KEY]: action,

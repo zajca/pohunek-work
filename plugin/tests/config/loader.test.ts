@@ -51,6 +51,7 @@ describe("loadConfig valid", () => {
         ghBin: "/usr/bin/gh",
         timeoutMs: 20000,
         pullRequestPageSize: 20,
+        issuePageSize: 30,
         nestedPageSize: 50,
         threadCommentPageSize: 10,
         mergedLookbackDays: 30,
@@ -172,7 +173,7 @@ describe("loadConfig missing keys", () => {
 });
 
 describe("loadConfig github page sizes", () => {
-  test.each(["pull_request_page_size = 20", "nested_page_size = 50", "thread_comment_page_size = 10"])(
+  test.each(["pull_request_page_size = 20", "issue_page_size = 30", "nested_page_size = 50", "thread_comment_page_size = 10"])(
     "%s above 100 fails naming the key",
     async (line) => {
       const dir = await copyFixture();
@@ -206,6 +207,35 @@ describe("loadConfig github node budget", () => {
     expect(error).toBeInstanceOf(ConfigError);
     expect((error as ConfigError).key).toBe("github.pull_request_page_size");
     expect((error as ConfigError).message).toContain("500000");
+  });
+});
+
+describe("loadConfig github issue page size", () => {
+  test("issue_page_size is required", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace("issue_page_size = 30\n", ""));
+    const error = await loadError(dir);
+    expect(error.file).toBe("config.toml");
+    expect(error.key).toBe("github.issue_page_size");
+  });
+
+  test("issue_page_size must be positive", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace("issue_page_size = 30", "issue_page_size = 0"));
+    expect((await loadError(dir)).key).toBe("github.issue_page_size");
+  });
+
+  test("page sizes that fit only without the closing issue references fail naming the key", async () => {
+    // Two searches of 50 pull requests: 490,200 possible nodes without the references, 500,200 with them.
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) =>
+      t.replace("pull_request_page_size = 20", "pull_request_page_size = 50")
+        .replace("nested_page_size = 50", "nested_page_size = 100")
+        .replace("thread_comment_page_size = 10", "thread_comment_page_size = 44"),
+    );
+    const error = await loadError(dir);
+    expect(error.key).toBe("github.pull_request_page_size");
+    expect(error.message).toContain("500000");
   });
 });
 
@@ -507,7 +537,7 @@ describe("loadConfig [tui]", () => {
 describe("loadConfig issue_source", () => {
   const githubProject = (text: string): string =>
     text
-      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', 'issue_source = "github"\n')
+      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', 'issue_source = "github"\nstarted_labels = ["in-progress"]\npaused_labels = ["on-hold"]\n')
       .replace(/paused_states = .*\n/, "");
   const withoutLinearTable = (text: string): string => text.replace(/\[linear\]\n(?:.+\n)+\n/, "");
 
@@ -515,7 +545,7 @@ describe("loadConfig issue_source", () => {
     const dir = await copyFixture();
     await editFile(dir, "projects/gadgets.toml", githubProject);
     const config = await loadConfig(dir);
-    expect(config.projects.find((p) => p.name === "gadgets")?.issueSource).toEqual({ kind: "github" });
+    expect(config.projects.find((p) => p.name === "gadgets")?.issueSource).toEqual({ kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] });
     expect(config.projects.find((p) => p.name === "widgets")?.issueSource.kind).toBe("linear");
   });
 
@@ -603,5 +633,42 @@ describe("loadConfig issue_source", () => {
     await editFile(dir, "projects/widgets.toml", (t) => githubProject(t).replace(/branch_pattern = .*\n/, ""));
     const error = await loadError(dir);
     expect(error.key).toBe("project.branch_pattern");
+  });
+});
+
+describe("loadConfig github issue labels", () => {
+  const githubProject = (extra: string): ((text: string) => string) => (text) =>
+    text
+      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', `issue_source = "github"\n${extra}`)
+      .replace(/paused_states = .*\n/, "");
+  const labelsOf = async (dir: string): Promise<unknown> =>
+    (await loadConfig(dir)).projects.find((p) => p.name === "gadgets")?.issueSource;
+
+  test("started_labels and paused_labels are read as written", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject('started_labels = ["In Progress", "wip"]\npaused_labels = []\n'));
+    expect(await labelsOf(dir)).toEqual({ kind: "github", startedLabels: ["In Progress", "wip"], pausedLabels: [] });
+  });
+
+  test.each([
+    ["started_labels is missing", 'paused_labels = []\n', "project.started_labels"],
+    ["started_labels is empty", 'started_labels = []\npaused_labels = []\n', "project.started_labels"],
+    ["paused_labels is missing", 'started_labels = ["wip"]\n', "project.paused_labels"],
+    ["started_labels repeats a label by case", 'started_labels = ["wip", "WIP"]\npaused_labels = []\n', "project.started_labels"],
+    ["paused_labels repeats a started label", 'started_labels = ["wip"]\npaused_labels = ["Wip"]\n', "project.paused_labels"],
+  ])("%s", async (_name, extra, key) => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject(extra));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/gadgets.toml");
+    expect(error.key).toBe(key);
+  });
+
+  test.each(["started_labels", "paused_labels"])("%s on a linear project is rejected", async (key) => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('issue_source = "linear"\n', `issue_source = "linear"\n${key} = ["wip"]\n`));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe(`project.${key}`);
   });
 });

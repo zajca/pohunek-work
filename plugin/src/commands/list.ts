@@ -1,6 +1,6 @@
 // `pohunek-work list`: fetch every source once per project, join, evaluate
 // the rules and render. Read-only: no pohunek mutation, no provider write.
-import { isLinearProject } from "../config/issue-source.ts";
+import { isGithubProject, isLinearProject, issueSourceStatusKey } from "../config/issue-source.ts";
 import { joinItems } from "../join.ts";
 import { isStalePullRequest, staleCutoff } from "../output/stale.ts";
 import {
@@ -68,14 +68,15 @@ function statusOf(result: SourceResult<unknown>): SourceStatus {
   return result.ok ? "ok" : result.code;
 }
 
-/** Linear is queried only for a Linear project; any other project reports `unused`. */
-async function fetchIssues(
+/** Issues come from the project's own issue source; the other issue source reports `unused`. */
+async function fetchProjectIssues(
   project: ProjectConfig,
-  linear: LinearSource | null,
-): Promise<SourceResult<readonly Issue[]> | null> {
-  if (!isLinearProject(project)) return null;
-  if (linear === null) throw new Error(`project ${project.pohunekLabel} uses Linear but no Linear source is configured`);
-  return linear.fetchIssues(project);
+  deps: Pick<ListDeps, "github" | "linear">,
+): Promise<SourceResult<readonly Issue[]>> {
+  if (isGithubProject(project)) return deps.github.fetchIssues(project);
+  if (!isLinearProject(project)) throw new Error(`project ${project.pohunekLabel} has an unknown issue source`);
+  if (deps.linear === null) throw new Error(`project ${project.pohunekLabel} uses Linear but no Linear source is configured`);
+  return deps.linear.fetchIssues(project);
 }
 
 /** First failing pohunek call decides the pohunek status. */
@@ -170,32 +171,35 @@ export async function collectRows(
   if (pohunek !== "ok") sourceFailures.push(`pohunek: ${pohunek}`);
   const perProject = await Promise.all(
     projects.map(async (project) => {
-      const [github, merged, linear] = await Promise.all([
+      const [github, merged, issues] = await Promise.all([
         deps.github.fetchPullRequests(project),
         deps.github.fetchMergedPullRequests(project),
-        fetchIssues(project, deps.linear),
+        fetchProjectIssues(project, deps),
       ]);
       logger.sourceResult(github);
       logger.sourceResult(merged);
-      if (linear !== null) logger.sourceResult(linear);
-      return { project, github, merged, linear };
+      logger.sourceResult(issues);
+      return { project, github, merged, issues };
     }),
   );
 
-  for (const { project, github, merged, linear } of perProject) {
+  for (const { project, github, merged, issues: issueResult } of perProject) {
+    const issueSource = issueSourceStatusKey(project);
+    const issueStatus = (key: typeof issueSource): SourceStatus => (key === issueSource ? statusOf(issueResult) : "unused");
     const sources: SourceStatuses = {
       github: statusOf(github),
       github_merged: statusOf(merged),
-      linear: linear === null ? "unused" : statusOf(linear),
+      linear: issueStatus("linear"),
+      github_issues: issueStatus("github_issues"),
       pohunek,
     };
     projectStatuses.push({ project: project.pohunekLabel, sources });
     if (sources.github !== "ok") sourceFailures.push(`${project.pohunekLabel} github: ${sources.github}`);
     if (sources.github_merged !== "ok") sourceFailures.push(`${project.pohunekLabel} github_merged: ${sources.github_merged}`);
-    if (isSourceFailure(sources.linear)) sourceFailures.push(`${project.pohunekLabel} linear: ${sources.linear}`);
+    if (isSourceFailure(sources[issueSource])) sourceFailures.push(`${project.pohunekLabel} ${issueSource}: ${sources[issueSource]}`);
     const pullRequests: readonly PullRequest[] = github.ok ? github.data : [];
     const mergedPullRequests: readonly MergedPullRequest[] = merged.ok ? merged.data : [];
-    const issues: readonly Issue[] = linear?.ok === true ? linear.data : [];
+    const issues: readonly Issue[] = issueResult.ok ? issueResult.data : [];
     const joined = joinItems({ project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources });
     for (const item of joined.items) {
       rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles }) });

@@ -6,7 +6,7 @@ issue: DMD-101 [In Progress] Agent asks a question
 sessions:
   s-01ABC DMD-101 role=implement state=running activity=idle
 actions: attach*
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-102  (project connection)
 turn: agent (r2)
@@ -16,9 +16,9 @@ issue: DMD-102 [In Progress] Agent is working
 sessions:
   s-02 DMD-101 role=implement state=running activity=working
 actions: attach*
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
-github:keboola/connection#9003  (project connection)  no Linear issue
+github:keboola/connection#9003  (project connection)  no issue
 turn: me: review (r3)
   your review is requested
 pr: keboola/connection#9003 Review me please
@@ -27,7 +27,7 @@ pr: keboola/connection#9003 Review me please
   https://github.com/keboola/connection/pull/9003
 sessions: none
 actions: review* (codex-pr-review)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-104  (project connection)
 turn: me: respond (r4)
@@ -40,7 +40,7 @@ pr: keboola/connection#9004 PR 9004
   https://github.com/keboola/connection/pull/9004
 sessions: none
 actions: babysit* (claude-otel)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-105  (project connection)
 turn: me: fix CI (r5)
@@ -53,7 +53,7 @@ pr: keboola/connection#9005 PR 9005
   https://github.com/keboola/connection/pull/9005
 sessions: none
 actions: fix-ci* (claude-otel)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-106  (project connection)
 turn: me: rebase (r5)
@@ -66,7 +66,7 @@ pr: keboola/connection#9006 PR 9006
   https://github.com/keboola/connection/pull/9006
 sessions: none
 actions: rebase* (claude-otel)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-107  (project connection)
 turn: me: leave draft (r6)
@@ -79,7 +79,7 @@ pr: keboola/connection#9007 (draft) PR 9007
   https://github.com/keboola/connection/pull/9007
 sessions: none
 actions: ready*
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-108  (project connection)
 turn: me: merge (r7)
@@ -92,7 +92,7 @@ pr: keboola/connection#9008 PR 9008
   https://github.com/keboola/connection/pull/9008
 sessions: none
 actions: none (manual)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-109  (project connection)
 turn: me: nothing runs (r8)
@@ -101,7 +101,7 @@ issue: DMD-109 [In Progress] Nothing runs yet
   https://linear.app/acme/issue/DMD-109
 sessions: none
 actions: implement* (claude-otel)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-110  (project connection)
 turn: me: request review (r9)
@@ -114,7 +114,7 @@ pr: keboola/connection#9010 PR 9010
   https://github.com/keboola/connection/pull/9010
 sessions: none
 actions: none (manual)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-111  (project connection)
 turn: reviewer (r10)
@@ -127,7 +127,7 @@ pr: keboola/connection#9011 PR 9011
   https://github.com/keboola/connection/pull/9011
 sessions: none
 actions: none (manual)
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:DMD-112  (project connection)
 turn: me: check agent (r11)
@@ -137,7 +137,7 @@ issue: DMD-112 [In Progress] Agent went idle
 sessions:
   s-12 DMD-101 role=implement state=running activity=idle
 actions: attach*
-sources: github=ok github_merged=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
 linear:OPS-7  (project ops)
 turn: unknown: github:rate_limited
@@ -146,4 +146,4 @@ issue: OPS-7 [In Progress] Rate limited source
   https://linear.app/acme/issue/OPS-7
 sessions: none
 actions: none (manual)
-sources: github=rate_limited github_merged=ok linear=ok pohunek=ok
+sources: github=rate_limited github_merged=ok linear=ok github_issues=unused pohunek=ok
