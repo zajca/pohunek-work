@@ -159,6 +159,20 @@ test("rule 5 has a line per reason, a policy check included", () => {
   expect(line("policy check: Require label")).toBe("a policy check failed: meet it on GitHub (manual)");
 });
 
+test("a paused row decodes, sorts last, shows its rule and is counted in the header", () => {
+  const paused = row("linear:DMD-140", { on_turn: { actor: "paused", reason: "paused", rule: 12 } });
+  const decoded = decodeListEnvelope(envelopeText(payload([paused, ...RULE_ROWS])));
+  expect(decoded.kind).toBe("ok");
+  const state = loaded(okOutcome(payload([paused, ...RULE_ROWS])), { size: WIDE });
+  const frame = view(state);
+  expect(frame[0]).toContain("reviewer 1  paused 1  unknown 1");
+  const rows = frame.filter((line) => line.includes("linear:DMD-1"));
+  expect(rows.at(-1)).toContain("linear:DMD-140");
+  expect(rows.at(-1)).toContain("paused (r12)");
+  expect(ruleLine(paused)).toBe("the issue is in a paused state: nobody's turn until it leaves that state");
+  expect(view(loaded(okOutcome(payload(RULE_ROWS)), { size: WIDE }))[0]).not.toContain("paused");
+});
+
 const ESC = "\u001b";
 const HOSTILE_TITLES = [
   `${ESC}[2J${ESC}[31mred${ESC}[0m`,

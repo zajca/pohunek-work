@@ -150,14 +150,15 @@ describe("keys and filters", () => {
     expect(view(moved).some((line) => line.startsWith(">"))).toBe(true);
   });
 
-  test("m toggles mine and all; f cycles all, me, agent, reviewer, unknown", () => {
+  test("m toggles mine and all; f cycles all, me, agent, reviewer, paused, unknown", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)));
     expect(state.filters.actor).toBe("all");
     expect(press(state, ["m"]).state.filters.actor).toBe("me");
     expect(press(state, ["m", "m"]).state.filters.actor).toBe("all");
-    const cycled = ["f", "f", "f", "f", "f"].map((_, index) => press(state, Array<string>(index + 1).fill("f")).state.filters.actor);
-    expect(cycled).toEqual(["me", "agent", "reviewer", "unknown", "all"]);
-    expect(keysOf(press(state, ["f", "f", "f", "f"]).state)).toEqual(["linear:OPS-7"]);
+    const cycled = ["f", "f", "f", "f", "f", "f"].map((_, index) => press(state, Array<string>(index + 1).fill("f")).state.filters.actor);
+    expect(cycled).toEqual(["me", "agent", "reviewer", "paused", "unknown", "all"]);
+    expect(keysOf(press(state, ["f", "f", "f", "f"]).state)).toEqual([]);
+    expect(keysOf(press(state, ["f", "f", "f", "f", "f"]).state)).toEqual(["linear:OPS-7"]);
   });
 
   test("initial_view mine starts on the owner's rows", () => {

@@ -300,6 +300,68 @@ describe("rule precedence", () => {
   });
 });
 
+describe("rule 12: paused issues", () => {
+  const PAUSED = { stateName: "On hold" } as const;
+  const conflicting = pr({ isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
+  const joined = { key: "linear:ABC-1", joinedBy: "branch_pattern", noIssue: false } as const;
+  const pausedRow = item({ ...joined, issue: issue(PAUSED), pullRequest: conflicting });
+
+  test("a pull request joined to a paused issue is paused, not the owner's rebase", () => {
+    expect(onTurn(pausedRow)).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    expect(onTurn(item({ ...joined, issue: issue(), pullRequest: conflicting }))).toEqual({ actor: "me", reason: "rebase", rule: 5 });
+  });
+
+  test("rules 3 to 9 never decide a paused row", () => {
+    const prs = [
+      deliveredPr({ timeline: [] }),
+      pr({ checks: [check("Require label", "failure")] }),
+      pr({ isDraft: true }),
+      pr({ reviewDecision: "APPROVED" }),
+      pr({ reviewDecision: "APPROVED", mergeable: "UNKNOWN" }),
+      pr(),
+      pr({ reviewRequests: [user("x")] }),
+    ];
+    for (const pullRequest of prs) {
+      expect(onTurn(item({ ...joined, issue: issue(PAUSED), pullRequest }))).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    }
+    const issueOnly = item({ key: "linear:ABC-1", issue: issue(PAUSED), pullRequest: null, noIssue: false });
+    expect(onTurn(issueOnly).rule).toBe(12);
+    expect(onTurn(item({ ...issueOnly, sessions: [session()] })).rule).toBe(12);
+  });
+
+  test("rules 1 and 2 still win over a paused issue", () => {
+    expect(onTurn(item({ ...pausedRow, sessions: [session({ activity: "working" })] }))).toEqual({
+      actor: "agent",
+      reason: "working",
+      rule: 2,
+    });
+    expect(onTurn(item({ ...pausedRow, sessions: [session()], notifications: [notification()] }))).toEqual({
+      actor: "me",
+      reason: "answer agent",
+      rule: 1,
+    });
+    expect(onTurn(item({ ...pausedRow, sessions: [session()] })).rule).toBe(12);
+  });
+
+  test("a paused row is decided without github and is unknown without pohunek", () => {
+    expect(onTurn(pausedRow, { ...allOk, github: "rate_limited" }).rule).toBe(12);
+    expect(onTurn(pausedRow, { ...allOk, pohunek: "timeout" })).toEqual({ actor: "unknown", reason: "pohunek:timeout", rule: null });
+  });
+
+  test("a row joined to an issue Linear did not return is unknown while Linear is down", () => {
+    const missing = item({ ...joined, issue: null, pullRequest: conflicting });
+    expect(onTurn(missing, { ...allOk, linear: "timeout" })).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
+    expect(onTurn(missing).rule).toBe(5);
+    expect(onTurn(missing, { ...allOk, linear: "timeout" }, { ...project, pausedStates: [] }).rule).toBe(5);
+    expect(onTurn(item({ pullRequest: conflicting }), { ...allOk, linear: "timeout" }).rule).toBe(5);
+  });
+
+  test("only a configured paused state pauses, matched exactly", () => {
+    expect(onTurn(pausedRow, allOk, { ...project, pausedStates: [] }).rule).toBe(5);
+    expect(onTurn(item({ ...pausedRow, issue: issue({ stateName: "on hold" }) })).rule).toBe(5);
+  });
+});
+
 describe("rule 4 sub-conditions", () => {
   const run = (pullRequest: ReturnType<typeof pr>): ReturnType<typeof evaluateOnTurn> =>
     evaluateOnTurn(input(item({ pullRequest })));
@@ -543,7 +605,7 @@ describe("unknown on missing sources", () => {
 
   test("project config is read from the input", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
-    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [] }).rule).toBe(9);
+    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], pausedStates: [] }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
   });
 });

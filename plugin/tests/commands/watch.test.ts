@@ -3,9 +3,9 @@ import { notificationArgv, runWatch, unknownProject, watchTick, type Baseline, t
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
-import type { PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
+import type { LinearIssue, PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type ExecResult } from "../../src/util/exec.ts";
-import { check, pr } from "../rules/builders.ts";
+import { check, issue, pr } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 
@@ -25,7 +25,7 @@ interface Recorded {
 
 interface Harness {
   deps: WatchDeps;
-  world: { prs: SourceResult<readonly PullRequest[]> };
+  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly LinearIssue[]> };
   argvs: (readonly string[])[];
   logs: Recorded[];
   setExec(next: () => Promise<ExecResult>): void;
@@ -35,8 +35,12 @@ function githubOk(prs: readonly PullRequest[]): SourceResult<readonly PullReques
   return { ok: true, source: "github", data: prs, durationMs: 1 };
 }
 
+function linearOk(issues: readonly LinearIssue[]): SourceResult<readonly LinearIssue[]> {
+  return { ok: true, source: "linear", data: issues, durationMs: 1 };
+}
+
 function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
-  const world = { prs: githubOk(prs) };
+  const world = { prs: githubOk(prs), issues: linearOk([]) };
   const argvs: (readonly string[])[] = [];
   const logs: Recorded[] = [];
   let execNext: () => Promise<ExecResult> = () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
@@ -65,7 +69,7 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
     deps: {
       pohunek,
       github: { fetchPullRequests: () => Promise.resolve(world.prs) },
-      linear: { fetchIssues: () => Promise.resolve({ ok: true, source: "linear", data: [], durationMs: 1 }) },
+      linear: { fetchIssues: () => Promise.resolve(world.issues) },
       logger,
       exec: (argv) => {
         argvs.push(argv);
@@ -110,6 +114,21 @@ test("a transition to the owner notifies once with key and reason and without th
   const third = await tick(h, state);
   expect(third.notified).toEqual([]);
   expect(h.argvs).toHaveLength(1);
+});
+
+test("pausing an issue notifies nobody and resuming it notifies once", async () => {
+  const conflicting = pr({ headRefName: "alice/ABC-1/work", mergeable: "CONFLICTING" });
+  const h = harness([conflicting]);
+  h.world.issues = linearOk([issue()]);
+  let state = (await tick(h, null)).baseline;
+  h.world.issues = linearOk([issue({ stateName: "On hold" })]);
+  const paused = await tick(h, state);
+  state = paused.baseline;
+  expect(paused.notified).toEqual([]);
+  expect(state?.get("widgets linear:ABC-1")).toBe("paused");
+  h.world.issues = linearOk([issue()]);
+  const resumed = await tick(h, state);
+  expect(resumed.notified).toEqual(["widgets linear:ABC-1"]);
 });
 
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {

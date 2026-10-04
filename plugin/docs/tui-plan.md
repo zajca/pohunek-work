@@ -164,8 +164,8 @@ The TUI checks independently:
 ### 4.6 Screen, data display and keys
 
 **Rows:** `*`, KEY, PROJECT (with more than one project), TURN (`me: respond (r4)`), PR, REVIEW, CHECKS,
-SESSIONS, TITLE (truncated); sorted `me`, `unknown`, `agent`, `reviewer`, then key. **Header:** counts per
-actor, filters, data age, `STALE`; a **partial banner** with `project: source=code` for each non-`ok`
+SESSIONS, TITLE (truncated); sorted `me`, `unknown`, `agent`, `reviewer`, `paused`, then key. **Header:** counts per
+actor (`paused` only when non-zero), filters, data age, `STALE`; a **partial banner** with `project: source=code` for each non-`ok`
 `projects[]` entry; in the `mine` view **`N unknown rows hidden (f)`**, because an unknown row may be the
 owner's turn. **Detail pane** (full screen on Tab below `detail_min_width`): `on_turn` with a one-line rule
 description; issue (id, state, title, URL); PR (draft, review decision, checks, mergeable, `fix_delivered` /
@@ -179,7 +179,7 @@ marked; the row's `sources`; the last preview, refusal or child stderr. `s` show
 | Enter | primary action (handover to `do`) | `a` | choose among the row's actions |
 | `p` | preview (`--dry-run`) into the detail pane | `t` | attach (only when listed) |
 | `o` | open PR or issue URL | `r` | refresh now |
-| `m` | toggle mine / all | `f` | actor filter: all, me, agent, reviewer, unknown |
+| `m` | toggle mine / all | `f` | actor filter: all, me, agent, reviewer, paused, unknown |
 | `P` | cycle project filter | `/` | text filter on key and title; Esc clears |
 | `s` | sessions view | Tab | detail pane focus / full screen |
 | `?` | help | `q`, Ctrl-C | quit (outside a handover) |

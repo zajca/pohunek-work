@@ -13,6 +13,10 @@ export function planAttach(row: CollectedRow, config: PluginConfig): AttachPlan 
   if (pohunek !== "ok") {
     throw new ActionError("source_unavailable", `attach refused: pohunek did not answer (${pohunek})`);
   }
+  // `list` advertises no action on a paused row (rule 12), so `do` accepts none either.
+  if (row.listItem.on_turn.actor === "paused") {
+    throw new ActionError("precondition_failed", `attach refused: ${row.listItem.key} is paused (rule 12)`);
+  }
   const live = row.item.sessions.filter(isLiveSession);
   const [only] = live;
   if (only === undefined) {

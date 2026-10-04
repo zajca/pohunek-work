@@ -6,10 +6,10 @@ import { toSafe } from "./safe.ts";
 
 export type ActorFilter = "all" | TurnActor;
 
-export const ACTOR_FILTERS: readonly ActorFilter[] = ["all", "me", "agent", "reviewer", "unknown"];
+export const ACTOR_FILTERS: readonly ActorFilter[] = ["all", "me", "agent", "reviewer", "paused", "unknown"];
 
-/** Row order of section 4.6: the owner's turn first, then rows that may be. */
-const ACTOR_ORDER: readonly TurnActor[] = ["me", "unknown", "agent", "reviewer"];
+/** Row order of section 4.6: the owner's turn first, then rows that may be; paused rows last. */
+const ACTOR_ORDER: readonly TurnActor[] = ["me", "unknown", "agent", "reviewer", "paused"];
 
 export interface Filters {
   readonly actor: ActorFilter;
@@ -87,7 +87,7 @@ export function projectLabels(payload: ListPayload): string[] {
 }
 
 export function actorCounts(payload: ListPayload): Readonly<Record<TurnActor, number>> {
-  const counts: Record<TurnActor, number> = { me: 0, agent: 0, reviewer: 0, unknown: 0 };
+  const counts: Record<TurnActor, number> = { me: 0, agent: 0, reviewer: 0, paused: 0, unknown: 0 };
   for (const item of payload.items) counts[item.on_turn.actor] += 1;
   return counts;
 }

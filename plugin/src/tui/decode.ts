@@ -65,9 +65,9 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], path: st
   return match;
 }
 
-const ACTORS: readonly TurnActor[] = ["me", "agent", "reviewer", "unknown"];
+const ACTORS: readonly TurnActor[] = ["me", "agent", "reviewer", "paused", "unknown"];
 const CHECKS: readonly ListPullRequest["checks"][] = ["success", "failure", "pending", "none"];
-const MAX_RULE = 11;
+const MAX_RULE = 12;
 
 function rule(value: unknown, path: string): RuleNumber | null {
   if (value === null) return null;

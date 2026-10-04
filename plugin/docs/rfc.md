@@ -161,7 +161,8 @@ side covers most of the need. Two things are missing:
 - **Role.** Purpose of a linked session: `implement`, `babysit`, `review`,
   `fix-ci`, `rebase`, `manager`.
 - **On turn.** Derived actor who must act next: `me` (with a reason),
-  `agent`, `reviewer`, or `unknown`.
+  `agent`, `reviewer`, or `unknown`; `paused` when the row's issue is in a
+  configured paused state and nobody has to act.
 - **Action.** A named, idempotent plugin operation on a work item.
 - **Policy.** Owner configuration: which actions an agent may run without
   confirmation, with which profile, within which limits.
@@ -229,6 +230,7 @@ Evaluated top to bottom; the first rule that holds decides.
 | --- | --- | --- | --- |
 | 1 | A linked session has an unacknowledged `agent_blocked` or `approval_required` notification | me: answer agent | pohunek notifications |
 | 2 | A linked session is live with `activity = working` | agent | pohunek session state |
+| 12 | Evaluated right after 2: the row's Linear issue is in a configured `paused_states` state | paused (no actions) | Linear state, join |
 | 3 | Someone else's PR requests a review from me | me: review | GitHub `reviewRequests` |
 | 4 | Changes requested and the fix is not fully delivered (8.2) | me: respond | reviews, timeline, threads, `reviewRequests` |
 | 5 | The PR conflicts with its base; otherwise a check failed that is neither ignored nor a policy check; otherwise a policy check failed | me: rebase / fix CI / policy check: `<names>` | `statusCheckRollup`, `mergeable` |
@@ -246,6 +248,17 @@ an agent cannot fix: when only policy checks fail, the reason names them in
 configuration order and the row has no `fix-ci` action; when a CI check fails
 as well, the reason is `fix CI` and the `fix-ci` prompt lists only the CI
 checks.
+
+Rule 12 is numbered last to keep the other numbers stable but is evaluated
+right after rule 2: an issue the owner put on hold is not on anyone's turn, so
+rules 3-11 never apply to its row, whatever its pull request needs (a conflict,
+a failing check, a draft). Rules 1 and 2 still win: a blocked agent still needs
+an answer and a working agent is still shown as working. A paused row lists no
+actions and `do` refuses every action on it, `attach` included. The state name
+must match a `paused_states` entry exactly. A paused issue without a pull
+request gets no row at all, and a session linked to it is not
+reported as orphaned. When the issue leaves the paused state, the row is
+evaluated again and `watch` notifies if it lands on the owner's turn.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered
@@ -286,7 +299,11 @@ checks green or none) the row is `unknown` with the reason
 
 If a source needed by a rule is unavailable, the row shows `on_turn =
 unknown` with the stable error code of that source. Rules are never evaluated
-on partial data and `unknown` is never shown as `reviewer`.
+on partial data and `unknown` is never shown as `reviewer`. Rule 12 needs Linear
+for every row joined to an issue key: while Linear is unavailable such a row
+is `unknown` with the Linear code, because its issue may be paused. Rows not
+joined to an issue (review requests, pull requests without an issue key) and
+projects with an empty `paused_states` do not depend on Linear for rule 12.
 
 ## 9. Interfaces
 

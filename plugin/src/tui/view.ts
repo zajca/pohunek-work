@@ -28,6 +28,7 @@ const RULE_LINES: Readonly<Record<string, string>> = {
   "9": "no review requested and no decision: request a review on GitHub (manual)",
   "10": "waiting for reviewers",
   "11": "issue started and assigned to you, no pull request, the linked agent is idle: check it",
+  "12": "the issue is in a paused state: nobody's turn until it leaves that state",
 };
 
 export function ruleLine(item: ListItem): string {
@@ -167,8 +168,10 @@ function emptyMessage(state: State, payload: ListPayload): string {
 
 function headerLine(state: State, payload: ListPayload, receivedAt: number): SafeText {
   const counts = actorCounts(payload);
+  // Paused rows are nobody's turn; their count is shown only when there are some, to keep the line short.
+  const paused = counts.paused > 0 ? `  paused ${counts.paused.toString()}` : "";
   const parts = [
-    `me ${counts.me.toString()}  agent ${counts.agent.toString()}  reviewer ${counts.reviewer.toString()}  unknown ${counts.unknown.toString()}`,
+    `me ${counts.me.toString()}  agent ${counts.agent.toString()}  reviewer ${counts.reviewer.toString()}${paused}  unknown ${counts.unknown.toString()}`,
     `data ${formatAge(state.now - receivedAt)} old${isStale(state) ? " STALE" : ""}${state.refreshing ? " refreshing" : ""}`,
     `view: ${state.filters.actor === "me" ? "mine" : state.filters.actor}`,
     ...(state.filters.project === null ? [] : [`project: ${state.filters.project}`]),
