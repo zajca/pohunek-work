@@ -139,38 +139,23 @@ export interface MergedPullRequest {
   readonly mergedAt: string;
 }
 
-// ---------------------------------------------------------------- Linear
+// ----------------------------------------------------------------- Issue
 
-export type LinearStateType =
-  | "triage"
-  | "backlog"
-  | "unstarted"
-  | "started"
-  | "completed"
-  | "canceled";
-
-export interface LinearCycle {
-  readonly number: number;
-  readonly name: string | null;
-  readonly startsAt: string;
-  readonly endsAt: string;
-}
-
-export interface LinearAttachment {
-  readonly url: string;
-}
-
-export interface LinearIssue {
-  /** Team-scoped identifier, e.g. `DMD-2188`. */
+/** An issue of the project's issue source, independent of the provider. */
+export interface Issue {
+  /** Provider key, e.g. the Linear identifier `DMD-2188`. */
   readonly id: string;
   readonly title: string;
   readonly url: string;
-  readonly stateName: string;
-  readonly stateType: LinearStateType;
-  readonly teamKey: string;
+  /** Display text for the list contract; never matched by rules or join. */
+  readonly state: string;
+  /** The issue is being worked on: the owner's turn to implement it. */
+  readonly started: boolean;
+  /** The issue is parked: it is on nobody's turn and gets no row of its own. */
+  readonly paused: boolean;
   readonly assigneeIsMe: boolean;
-  readonly cycle: LinearCycle | null;
-  readonly attachments: readonly LinearAttachment[];
+  /** URLs of pull requests the issue links to; they join by URL equality. */
+  readonly attachmentUrls: readonly string[];
 }
 
 // --------------------------------------------------------------- Pohunek

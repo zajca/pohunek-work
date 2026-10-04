@@ -8,8 +8,6 @@
           "title": "Fix widget layout",
           "url": "https://linear.example/acme/issue/ABC-2",
           "state": { "name": "In Review", "type": "started" },
-          "team": { "key": "ABC" },
-          "cycle": null,
           "attachments": {
             "nodes": [],
             "pageInfo": { "hasNextPage": false, "endCursor": null }

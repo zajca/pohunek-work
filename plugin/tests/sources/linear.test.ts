@@ -65,7 +65,7 @@ async function expectFailure(
   return result.message;
 }
 
-test("normalizes issues across two pages, with cycle null and attachments", async () => {
+test("normalizes issues across two pages, with attachment URLs", async () => {
   const pages = [await fixture("page1"), await fixture("page2")];
   const { fetch: f, calls } = fetcher((_c, i) => json(pages[i]));
   const result = await source(f).fetchIssues(project);
@@ -78,28 +78,21 @@ test("normalizes issues across two pages, with cycle null and attachments", asyn
       id: "ABC-1",
       title: "Add widget cache",
       url: "https://linear.example/acme/issue/ABC-1",
-      stateName: "In Progress",
-      stateType: "started",
-      teamKey: "ABC",
+      state: "In Progress",
+      started: true,
+      paused: false,
       assigneeIsMe: true,
-      cycle: {
-        number: 7,
-        name: "Cycle seven",
-        startsAt: "2026-09-28T00:00:00.000Z",
-        endsAt: "2026-10-12T00:00:00.000Z",
-      },
-      attachments: [{ url: "https://github.com/acme/widgets/pull/12" }],
+      attachmentUrls: ["https://github.com/acme/widgets/pull/12"],
     },
     {
       id: "ABC-2",
       title: "Fix widget layout",
       url: "https://linear.example/acme/issue/ABC-2",
-      stateName: "In Review",
-      stateType: "started",
-      teamKey: "ABC",
+      state: "In Review",
+      started: true,
+      paused: false,
       assigneeIsMe: true,
-      cycle: null,
-      attachments: [],
+      attachmentUrls: [],
     },
   ]);
   expect(calls).toHaveLength(2);
@@ -139,9 +132,9 @@ test("follows attachment pagination for an issue", async () => {
   if (!result.ok) {
     return;
   }
-  expect(result.data[0]?.attachments).toEqual([
-    { url: "https://github.com/acme/widgets/pull/30" },
-    { url: "https://github.com/acme/widgets/pull/31" },
+  expect(result.data[0]?.attachmentUrls).toEqual([
+    "https://github.com/acme/widgets/pull/30",
+    "https://github.com/acme/widgets/pull/31",
   ]);
   expect(calls[1]?.body.variables).toEqual({
     id: "00000000-0000-0000-0000-000000000003",
@@ -270,4 +263,28 @@ test("an unknown state type is invalid_response", async () => {
   node.state.type = "weird";
   const { fetch: f } = fetcher(() => json(page));
   await expectFailure(f, "invalid_response");
+});
+
+test("started follows the state type and paused the configured state names, matched exactly", async () => {
+  const page = (await fixture("page2")) as { data: { issues: { nodes: { state: { name: string; type: string } }[] } } };
+  const node = page.data.issues.nodes[0];
+  if (node === undefined) throw new Error("fixture has no node");
+  const withState = async (
+    name: string,
+    type: string,
+    pausedStates: string[],
+  ): Promise<{ state: string; started: boolean; paused: boolean }> => {
+    node.state = { name, type };
+    const paused = { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates } } as unknown as LinearProject;
+    const { fetch: f } = fetcher(() => json(page));
+    const result = await source(f).fetchIssues(paused);
+    if (!result.ok) throw new Error("expected success");
+    const issue = result.data[0];
+    if (issue === undefined) throw new Error("expected an issue");
+    return { state: issue.state, started: issue.started, paused: issue.paused };
+  };
+  expect(await withState("On hold", "started", ["On hold"])).toEqual({ state: "On hold", started: true, paused: true });
+  expect(await withState("on hold", "started", ["On hold"])).toEqual({ state: "on hold", started: true, paused: false });
+  expect(await withState("In Progress", "started", [])).toEqual({ state: "In Progress", started: true, paused: false });
+  expect(await withState("Todo", "unstarted", ["On hold"])).toEqual({ state: "Todo", started: false, paused: false });
 });

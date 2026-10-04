@@ -101,7 +101,7 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
     issue:
       issue === null
         ? null
-        : { id: issue.id, title: issue.title, state: issue.stateName, url: issue.url },
+        : { id: issue.id, title: issue.title, state: issue.state, url: issue.url },
     pull_request: pullRequest,
     no_issue: item.noIssue,
     issue_key: item.issueKey,

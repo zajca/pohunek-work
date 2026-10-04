@@ -21,7 +21,7 @@ import {
   type WorkItem,
 } from "../types/item.ts";
 import type {
-  LinearIssue,
+  Issue,
   MergedPullRequest,
   PohunekNotification,
   PohunekProject,
@@ -69,10 +69,10 @@ function statusOf(result: SourceResult<unknown>): SourceStatus {
 }
 
 /** Linear is queried only for a Linear project; any other project reports `unused`. */
-async function fetchLinearIssues(
+async function fetchIssues(
   project: ProjectConfig,
   linear: LinearSource | null,
-): Promise<SourceResult<readonly LinearIssue[]> | null> {
+): Promise<SourceResult<readonly Issue[]> | null> {
   if (!isLinearProject(project)) return null;
   if (linear === null) throw new Error(`project ${project.pohunekLabel} uses Linear but no Linear source is configured`);
   return linear.fetchIssues(project);
@@ -173,7 +173,7 @@ export async function collectRows(
       const [github, merged, linear] = await Promise.all([
         deps.github.fetchPullRequests(project),
         deps.github.fetchMergedPullRequests(project),
-        fetchLinearIssues(project, deps.linear),
+        fetchIssues(project, deps.linear),
       ]);
       logger.sourceResult(github);
       logger.sourceResult(merged);
@@ -195,7 +195,7 @@ export async function collectRows(
     if (isSourceFailure(sources.linear)) sourceFailures.push(`${project.pohunekLabel} linear: ${sources.linear}`);
     const pullRequests: readonly PullRequest[] = github.ok ? github.data : [];
     const mergedPullRequests: readonly MergedPullRequest[] = merged.ok ? merged.data : [];
-    const issues: readonly LinearIssue[] = linear?.ok === true ? linear.data : [];
+    const issues: readonly Issue[] = linear?.ok === true ? linear.data : [];
     const joined = joinItems({ project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources });
     for (const item of joined.items) {
       rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles }) });

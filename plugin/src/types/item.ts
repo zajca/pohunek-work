@@ -7,7 +7,7 @@ import type {
   ReviewDecision,
   SourceErrorCode,
   SourceName,
-  LinearIssue,
+  Issue,
   MergedPullRequest,
 } from "./sources.ts";
 
@@ -78,7 +78,7 @@ export interface WorkItem {
   readonly key: string;
   /** Pohunek project label. */
   readonly project: string;
-  readonly issue: LinearIssue | null;
+  readonly issue: Issue | null;
   readonly pullRequest: PullRequest | null;
   /**
    * Merged pull request that resolves to the issue of a row without an open

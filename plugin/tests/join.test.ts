@@ -3,7 +3,7 @@ import { joinItems, type JoinInput } from "../src/join.ts";
 import type { ProjectConfig } from "../src/types/config.ts";
 import type { SourceStatuses } from "../src/types/item.ts";
 import type {
-  LinearIssue,
+  Issue,
   MergedPullRequest,
   PohunekNotification,
   PohunekSession,
@@ -26,17 +26,16 @@ const project = {
 
 const okSources: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
 
-function issue(id: string, attachmentUrls: string[] = []): LinearIssue {
+function issue(id: string, attachmentUrls: string[] = []): Issue {
   return {
     id,
     title: "Add widget cache",
     url: `https://linear.example/${id}`,
-    stateName: "In Progress",
-    stateType: "started",
-    teamKey: "ABC",
+    state: "In Progress",
+    started: true,
+    paused: false,
     assigneeIsMe: true,
-    cycle: null,
-    attachments: attachmentUrls.map((url) => ({ url })),
+    attachmentUrls,
   };
 }
 
@@ -534,7 +533,7 @@ describe("orphans with failed sources", () => {
 });
 
 describe("paused issue states", () => {
-  const paused = { ...issue("ABC-7"), stateName: "On hold" };
+  const paused = { ...issue("ABC-7"), state: "On hold", paused: true };
 
   test("a paused issue without a pull request gets no row", () => {
     const { items } = run({ issues: [paused, issue("ABC-8")] });

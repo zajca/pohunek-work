@@ -6,20 +6,21 @@ import {
   type SourceStatuses,
   type WorkItem,
 } from "./types/item.ts";
-import { isLinearProject, pausedStatesOf } from "./config/issue-source.ts";
+import { isLinearProject, issueSourceStatusKey } from "./config/issue-source.ts";
 import type { ProjectConfig } from "./types/config.ts";
 import { isLiveSession } from "./sources/pohunek.ts";
 import type {
-  LinearIssue,
+  Issue,
   MergedPullRequest,
   PohunekNotification,
   PohunekSession,
   PullRequest,
+  SourceName,
 } from "./types/sources.ts";
 
 export interface JoinInput {
   readonly project: ProjectConfig;
-  readonly issues: readonly LinearIssue[];
+  readonly issues: readonly Issue[];
   readonly pullRequests: readonly PullRequest[];
   /** Merged pull requests of the owner; they explain issue-only rows and never form rows. */
   readonly mergedPullRequests: readonly MergedPullRequest[];
@@ -98,7 +99,7 @@ export function keyFromBranch(pattern: RegExp, headRefName: string): string | nu
 function resolveIssueKey(
   pr: Pick<PullRequest, "url" | "headRefName">,
   project: ProjectConfig,
-  issues: readonly LinearIssue[],
+  issues: readonly Issue[],
   linked: readonly LinkedSession[],
 ): PrResolution | null {
   // A github-provider link carries no Linear key, so this level yields nothing for it.
@@ -110,7 +111,7 @@ function resolveIssueKey(
   }
 
   const byAttachment = issues.find((issue) =>
-    issue.attachments.some((attachment) => attachment.url === pr.url),
+    issue.attachmentUrls.includes(pr.url),
   );
   if (byAttachment !== undefined) {
     return { key: byAttachment.id, joinedBy: "linear_attachment" };
@@ -125,7 +126,7 @@ function resolveIssueKey(
 
 interface RowDraft {
   readonly key: string;
-  readonly issue: LinearIssue | null;
+  readonly issue: Issue | null;
   /** Key sessions attach to; null on a secondary pull request row, which no session may claim by key. */
   readonly issueKey: string | null;
   /** Issue key the row resolved to, including on a secondary pull request row; null without a match. */
@@ -173,7 +174,7 @@ function claimWinners(candidates: readonly Candidate[]): Map<string, PullRequest
 function claimMerged(
   merged: readonly MergedPullRequest[],
   project: ProjectConfig,
-  issues: readonly LinearIssue[],
+  issues: readonly Issue[],
   linked: readonly LinkedSession[],
 ): Map<string, MergedPullRequest> {
   const winners = new Map<string, MergedPullRequest>();
@@ -190,9 +191,9 @@ function claimMerged(
 }
 
 /** Source that must be `ok` before a session without a row may be called orphaned. */
-function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | "linear")[] {
-  if (provider === "github") return ["github"];
-  return ["github", "linear"];
+function sourcesToConcludeOrphan(provider: string | null, issueSource: SourceName | null): readonly SourceName[] {
+  if (provider === "github" || issueSource === null) return ["github"];
+  return ["github", issueSource];
 }
 
 /**
@@ -211,8 +212,9 @@ function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | 
 export function joinItems(input: JoinInput): JoinResult {
   const { project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources } = input;
   const usesLinear = isLinearProject(project);
+  const issueSource = issueSourceStatusKey(project);
   const linked = linkedSessionsOf(project, sessions);
-  const issuesById = new Map<string, LinearIssue>();
+  const issuesById = new Map<string, Issue>();
   for (const issue of issues) {
     if (!issuesById.has(issue.id)) issuesById.set(issue.id, issue);
   }
@@ -240,7 +242,7 @@ export function joinItems(input: JoinInput): JoinResult {
         joinedBy: null,
         // Review requests of others are never joined; for authored pull requests
         // without Linear data the absence of an issue cannot be concluded.
-        noIssue: pr.relation === "authored" && sources.linear === "ok",
+        noIssue: pr.relation === "authored" && issueSource !== null && sources[issueSource] === "ok",
       });
       continue;
     }
@@ -271,10 +273,7 @@ export function joinItems(input: JoinInput): JoinResult {
   }
 
   // Issues in a configured paused state are not on anyone's turn; without a pull request they get no row.
-  const pausedStates = pausedStatesOf(project);
-  const pausedIds = new Set(
-    issues.filter((issue) => pausedStates.includes(issue.stateName)).map((issue) => issue.id),
-  );
+  const pausedIds = new Set(issues.filter((issue) => issue.paused).map((issue) => issue.id));
   for (const issue of issues) {
     if (claimedKeys.has(issue.id) || pausedIds.has(issue.id)) continue;
     claimedKeys.add(issue.id);
@@ -304,7 +303,7 @@ export function joinItems(input: JoinInput): JoinResult {
       sessionsByRow.set(target, [...(sessionsByRow.get(target) ?? []), l.session]);
     } else if (
       !pausedIds.has(l.linkId) &&
-      sourcesToConcludeOrphan(l.provider).every((name) => !isSourceFailure(sources[name]))
+      sourcesToConcludeOrphan(l.provider, issueSource).every((name) => !isSourceFailure(sources[name]))
     ) {
       orphanedSessions.push({ id: l.session.id, name: l.session.name, linkId: l.linkId });
     }

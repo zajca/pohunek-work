@@ -188,7 +188,7 @@ test("attach is refused without a live linked session, with several, and without
 });
 
 test("attach is refused on a paused row, which lists no action", async () => {
-  const onHold = issue({ stateName: "On hold" });
+  const onHold = issue({ state: "On hold", paused: true });
   const joined = pr({ headRefName: "alice/ABC-1/work", mergeable: "CONFLICTING" });
   const { deps, attached } = setup({ issues: ok("linear", [onHold]), prs: ok("github", [joined]), sessions: [LIVE], terminal: true });
   await expectRefusal(runDo(baseConfig, attachOptions(), deps), "precondition_failed", "paused");

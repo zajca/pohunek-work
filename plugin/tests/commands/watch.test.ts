@@ -3,7 +3,7 @@ import { notificationArgv, runWatch, unknownProject, watchTick, type Baseline, t
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
-import type { LinearIssue, PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
+import type { Issue, PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type ExecResult } from "../../src/util/exec.ts";
 import { check, issue, pr } from "../rules/builders.ts";
 
@@ -25,7 +25,7 @@ interface Recorded {
 
 interface Harness {
   deps: WatchDeps;
-  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly LinearIssue[]> };
+  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]> };
   argvs: (readonly string[])[];
   logs: Recorded[];
   setExec(next: () => Promise<ExecResult>): void;
@@ -35,7 +35,7 @@ function githubOk(prs: readonly PullRequest[]): SourceResult<readonly PullReques
   return { ok: true, source: "github", data: prs, durationMs: 1 };
 }
 
-function linearOk(issues: readonly LinearIssue[]): SourceResult<readonly LinearIssue[]> {
+function linearOk(issues: readonly Issue[]): SourceResult<readonly Issue[]> {
   return { ok: true, source: "linear", data: issues, durationMs: 1 };
 }
 
@@ -124,7 +124,7 @@ test("pausing an issue notifies nobody and resuming it notifies once", async () 
   const h = harness([conflicting]);
   h.world.issues = linearOk([issue()]);
   let state = (await tick(h, null)).baseline;
-  h.world.issues = linearOk([issue({ stateName: "On hold" })]);
+  h.world.issues = linearOk([issue({ state: "On hold", paused: true })]);
   const paused = await tick(h, state);
   state = paused.baseline;
   expect(paused.notified).toEqual([]);
@@ -139,7 +139,7 @@ test("a paused issue without a pull request disappears and notifies once when it
   h.world.issues = linearOk([issue()]);
   let state = (await tick(h, null)).baseline;
   expect(state?.get("widgets linear:ABC-1")).toBe("me");
-  h.world.issues = linearOk([issue({ stateName: "On hold" })]);
+  h.world.issues = linearOk([issue({ state: "On hold", paused: true })]);
   const paused = await tick(h, state);
   state = paused.baseline;
   expect(paused.notified).toEqual([]);

@@ -59,7 +59,7 @@ function sampleEnvelope(): unknown {
     buildListItem(
       item({
         key: "linear:ABC-3",
-        issue: issue({ id: "ABC-3", stateName: "On hold" }),
+        issue: issue({ id: "ABC-3", state: "On hold", paused: true }),
         pullRequest: pr({ id: "acme/widgets#13", number: 13, isDraft: true, mergeable: "CONFLICTING" }),
         noIssue: false,
         issueKey: "ABC-3",
@@ -275,7 +275,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
 
   test("a paused row lists no action, not even attach, while rules 1 and 2 keep theirs", () => {
     const conflicting = pr({ isDraft: true, mergeable: "CONFLICTING" });
-    const pausedRow = { key: "linear:ABC-1", issue: issue({ stateName: "On hold" }), pullRequest: conflicting, joinedBy: "branch_pattern", noIssue: false } as const;
+    const pausedRow = { key: "linear:ABC-1", issue: issue({ state: "On hold", paused: true }), pullRequest: conflicting, joinedBy: "branch_pattern", noIssue: false } as const;
     const idleOwner = session({ worktreePath: "/wt/a" });
     const paused = buildListItem(item({ ...pausedRow, sessions: [idleOwner] }), context);
     expect(paused.on_turn).toEqual({ actor: "paused", reason: "paused", rule: 12 });
@@ -291,7 +291,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
   });
 
   test("the table shows a paused row as paused with its rule", () => {
-    const paused = buildListItem(item({ key: "linear:ABC-1", issue: issue({ stateName: "On hold" }), joinedBy: "branch_pattern", noIssue: false }), context);
+    const paused = buildListItem(item({ key: "linear:ABC-1", issue: issue({ state: "On hold", paused: true }), joinedBy: "branch_pattern", noIssue: false }), context);
     expect(renderTable([paused], [], [], new Set())).toContain("paused (r12)");
   });
 

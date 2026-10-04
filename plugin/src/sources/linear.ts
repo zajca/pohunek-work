@@ -2,19 +2,12 @@
 // The API key is sent as the raw Authorization value (personal API key form).
 
 import type { LinearConfig, LinearProject } from "../types/config.ts";
-import type {
-  LinearAttachment,
-  LinearCycle,
-  LinearIssue,
-  LinearStateType,
-  SourceErrorCode,
-  SourceResult,
-} from "../types/sources.ts";
+import type { Issue, SourceErrorCode, SourceResult } from "../types/sources.ts";
 import type { Exec } from "../util/exec.ts";
 import { readKeyringSecret } from "./keyring.ts";
 
 export interface LinearSource {
-  fetchIssues(project: LinearProject): Promise<SourceResult<readonly LinearIssue[]>>;
+  fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>>;
 }
 
 export interface LinearDeps {
@@ -39,8 +32,6 @@ query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFi
       title
       url
       state { name type }
-      team { key }
-      cycle { number name startsAt endsAt }
       attachments(first: $attachmentsFirst) {
         nodes { url }
         pageInfo { hasNextPage endCursor }
@@ -128,28 +119,8 @@ function parsePageInfo(value: unknown, what: string): PageInfo {
   return { hasNextPage, endCursor: typeof endCursor === "string" ? endCursor : null };
 }
 
-function parseAttachmentNodes(value: unknown, what: string): LinearAttachment[] {
-  return arr(value, what).map((node) => ({ url: str(obj(node, what), "url", what) }));
-}
-
-function parseCycle(value: unknown): LinearCycle | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  const cycle = obj(value, "cycle");
-  const { number, name } = cycle;
-  if (typeof number !== "number") {
-    throw invalid("cycle.number");
-  }
-  if (name !== null && name !== undefined && typeof name !== "string") {
-    throw invalid("cycle.name");
-  }
-  return {
-    number,
-    name: typeof name === "string" ? name : null,
-    startsAt: str(cycle, "startsAt", "cycle.startsAt"),
-    endsAt: str(cycle, "endsAt", "cycle.endsAt"),
-  };
+function parseAttachmentNodes(value: unknown, what: string): string[] {
+  return arr(value, what).map((node) => str(obj(node, what), "url", what));
 }
 
 /** Failure code for a GraphQL error list; only error codes and paths are used. */
@@ -229,8 +200,8 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     token: string,
     issueId: string,
     start: PageInfo,
-  ): Promise<LinearAttachment[]> {
-    const collected: LinearAttachment[] = [];
+  ): Promise<string[]> {
+    const collected: string[] = [];
     const seen = new Set<string>();
     let page = start;
     while (page.hasNextPage) {
@@ -251,7 +222,11 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     return collected;
   }
 
-  async function parseIssue(token: string, value: unknown): Promise<LinearIssue> {
+  async function parseIssue(
+    token: string,
+    value: unknown,
+    pausedStates: readonly string[],
+  ): Promise<Issue> {
     const node = obj(value, "issue");
     const state = obj(node["state"], "issue.state");
     const stateType = str(state, "type", "issue.state.type");
@@ -265,21 +240,25 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       str(node, "id", "issue.id"),
       parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
     );
+    const stateName = str(state, "name", "issue.state.name");
     return {
       id: str(node, "identifier", "issue.identifier"),
       title: str(node, "title", "issue.title"),
       url: str(node, "url", "issue.url"),
-      stateName: str(state, "name", "issue.state.name"),
-      stateType: stateType as LinearStateType,
-      teamKey: str(obj(node["team"], "issue.team"), "key", "issue.team.key"),
+      state: stateName,
+      started: stateType === "started",
+      paused: pausedStates.includes(stateName),
       assigneeIsMe: true,
-      cycle: parseCycle(node["cycle"]),
-      attachments: [...first, ...rest],
+      attachmentUrls: [...first, ...rest],
     };
   }
 
-  async function collectIssues(token: string, teamKey: string): Promise<LinearIssue[]> {
-    const issues: LinearIssue[] = [];
+  async function collectIssues(
+    token: string,
+    teamKey: string,
+    pausedStates: readonly string[],
+  ): Promise<Issue[]> {
+    const issues: Issue[] = [];
     const seen = new Set<string>();
     let after: string | null = null;
     for (;;) {
@@ -291,7 +270,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       });
       const connection = obj(data["issues"], "issues");
       for (const node of arr(connection["nodes"], "issues.nodes")) {
-        issues.push(await parseIssue(token, node));
+        issues.push(await parseIssue(token, node, pausedStates));
       }
       const page = parsePageInfo(connection["pageInfo"], "issues.pageInfo");
       if (!page.hasNextPage) {
@@ -325,7 +304,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
         return fail("unauthenticated", "Linear token from keyring is not a valid API key");
       }
       try {
-        const data = await collectIssues(secret.secret, project.issueSource.team);
+        const data = await collectIssues(secret.secret, project.issueSource.team, project.issueSource.pausedStates);
         return { ok: true, source: "linear", data, durationMs: elapsed() };
       } catch (error) {
         if (error instanceof LinearFailure) {

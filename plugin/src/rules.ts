@@ -1,5 +1,5 @@
 // The `on_turn` rules of RFC section 8: a pure function over normalized data.
-import { pausedStatesOf } from "./config/issue-source.ts";
+import { canPauseIssues, issueSourceStatusKey } from "./config/issue-source.ts";
 import type { IdentityConfig, ProjectConfig } from "./types/config.ts";
 import {
   isSourceFailure,
@@ -185,6 +185,12 @@ function evaluateChangesRequested(
   };
 }
 
+/** Failure text of the project's issue source; null when it is `ok` or the project has none. */
+function issueSourceFailure(sources: SourceStatuses, project: Pick<ProjectConfig, "issueSource">): string | null {
+  const key = issueSourceStatusKey(project);
+  return key === null ? null : failedSources(sources, [key]);
+}
+
 function failedSources(
   sources: SourceStatuses,
   needed: readonly SourceName[],
@@ -236,15 +242,14 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     return result({ actor: "agent", reason: "working", rule: 2 });
   }
 
-  // Rule 12: linear. A row joined to an issue key whose issue Linear did not
-  // return may be paused, so it is unknown while Linear is down.
-  const pausedStates = pausedStatesOf(project);
-  if (pausedStates.length > 0) {
+  // Rule 12: issue source. A row joined to an issue key whose issue the source did not
+  // return may be paused, so it is unknown while the source is down.
+  if (canPauseIssues(project)) {
     if (item.issue === null && item.joinedBy !== null) {
-      const linearFailure = failedSources(sources, ["linear"]);
-      if (linearFailure !== null) return unknown(linearFailure);
+      const issueFailure = issueSourceFailure(sources, project);
+      if (issueFailure !== null) return unknown(issueFailure);
     }
-    if (item.issue !== null && pausedStates.includes(item.issue.stateName)) {
+    if (item.issue !== null && item.issue.paused) {
       return result({ actor: "paused", reason: "paused", rule: 12 });
     }
   }
@@ -277,12 +282,12 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     }
   }
 
-  // Rule 8: github and pohunek, plus linear when the row has an issue.
+  // Rule 8: github and pohunek, plus the issue source when the row has an issue.
   const issue = item.issue;
   if (issue !== null) {
-    const linearFailure = failedSources(sources, ["linear"]);
-    if (linearFailure !== null) return unknown(linearFailure);
-    if (issue.stateType === "started" && issue.assigneeIsMe && pr === null) {
+    const issueFailure = issueSourceFailure(sources, project);
+    if (issueFailure !== null) return unknown(issueFailure);
+    if (issue.started && issue.assigneeIsMe && pr === null) {
       if (liveSessions.length === 0) {
         // Rule 13 needs the merged lookup: without it a merged pull request cannot be told from none.
         if (sources.github_merged !== "ok") return unknown(`github_merged:${sources.github_merged}`);

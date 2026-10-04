@@ -8,8 +8,6 @@
           "title": "Tune widget pool",
           "url": "https://linear.example/acme/issue/ABC-3",
           "state": { "name": "In Progress", "type": "started" },
-          "team": { "key": "ABC" },
-          "cycle": null,
           "attachments": {
             "nodes": [{ "url": "https://github.com/acme/widgets/pull/30" }],
             "pageInfo": { "hasNextPage": true, "endCursor": "att-1" }
