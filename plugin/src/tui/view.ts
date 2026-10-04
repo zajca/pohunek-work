@@ -19,6 +19,7 @@ const RULE_LINES: Readonly<Record<string, string>> = {
   "1": "a linked agent is blocked or asks for approval: answer it (attach)",
   "2": "a linked agent is working",
   "3": "your review is requested",
+  "3:external review": "your review is requested; the project's external pipeline handles it",
   "4": "changes requested: deliver a fix, answer every thread, re-request review",
   "5:fix CI": "a check failed on the pull request",
   "5:rebase": "the pull request conflicts with its base branch",

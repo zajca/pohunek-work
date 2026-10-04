@@ -263,7 +263,7 @@ Evaluated top to bottom; the first rule that holds decides.
 | 1 | A linked session has an unacknowledged `agent_blocked` or `approval_required` notification | me: answer agent | pohunek notifications |
 | 2 | A linked session is live with `activity = working` | agent | pohunek session state |
 | 12 | Evaluated right after 2: the row's issue is paused (Linear: a configured `paused_states` state; GitHub: a configured `paused_labels` label) | paused (no actions) | issue state or labels, join |
-| 3 | Someone else's PR requests a review from me | me: review | GitHub `reviewRequests` |
+| 3 | Someone else's PR requests a review from me | me: review; with `reviews = "external"` (11.3): agent: external review | GitHub `reviewRequests`, project `reviews` |
 | 4 | Changes requested and the fix is not fully delivered (8.2) | me: respond | reviews, timeline, threads, `reviewRequests` |
 | 5 | The PR conflicts with its base; otherwise a check failed that is neither ignored nor a policy check; otherwise a policy check failed | me: rebase / fix CI / policy check: `<names>` | `statusCheckRollup`, `mergeable` |
 | 6 | The PR is a draft | me: leave draft | `isDraft` |
@@ -281,6 +281,15 @@ an agent cannot fix: when only policy checks fail, the reason names them in
 configuration order and the row has no `fix-ci` action; when a CI check fails
 as well, the reason is `fix CI` and the `fix-ci` prompt lists only the CI
 checks.
+
+Rule 3 depends on the project's `reviews` setting (11.3). With `reviews =
+"session"` the review is the owner's and `review` is offered. With `reviews =
+"external"` the project's own pipeline reviews the pull request, so the row is on
+the agent's turn with the reason `external review`: it offers no `review`
+action, `watch` does not notify it (it never becomes the owner's turn) and the
+TUI shows the reason. A live linked session that is working still wins through
+rule 2, so a session the pipeline starts with `work.link.*` metadata joins the
+row.
 
 Rule 12 is numbered last to keep the other numbers stable but is evaluated
 right after rule 2: an issue the owner put on hold is not on anyone's turn, so
@@ -381,8 +390,9 @@ version 3: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
 version 3 adds the source status `unused`, which a source reports for a project
 that does not use it (`sources.linear` of a project with `issue_source =
 "github"`, `sources.github_issues` of a project with `issue_source = "linear"`),
-the source `github_issues` (the GitHub issue lookup of a `github` project) and the
-`github-issue:` row key. `unused` is not a failure: it never appears in the
+the source `github_issues` (the GitHub issue lookup of a `github` project), the
+`github-issue:` row key and the `on_turn` value `{"actor": "agent", "reason":
+"external review", "rule": 3}` of a project with `reviews = "external"`. `unused` is not a failure: it never appears in the
 list of unavailable sources and never makes `list` exit partial. A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload
 it cannot decode. `do` and `setup` version their envelopes separately
@@ -454,7 +464,7 @@ same set.
 | `babysit` | session `role=babysit` in the item's worktree | rule 4; no live linked session |
 | `fix-ci` | session `role=fix-ci` | rule 5 (failed check) |
 | `rebase` | session `role=rebase` | rule 5 (conflict) |
-| `review` | session `role=review` on someone else's PR | rule 3 |
+| `review` | session `role=review` on someone else's PR | rule 3; refused with `not_supported` when the project has `reviews = "external"` |
 | `ready` | mark PR ready for review | rule 6 |
 | `merge` | merge or enqueue | rule 7; never delegable by default |
 | `attach` | attach to the linked session | live linked session |
@@ -563,6 +573,7 @@ review = "codex-pr-review"
 pohunek_label = "connection"
 repo = "keboola/connection"
 issue_source = "linear"   # "linear" or "github"; required
+reviews = "session"       # "session" or "external"; required
 linear_team = "DMD"       # only with issue_source = "linear"
 # started_labels = ["in progress"]   # only with issue_source = "github"; at least one
 # paused_labels = ["on hold"]        # only with issue_source = "github"; may be empty
@@ -591,6 +602,16 @@ Rules:
   the file and key) and requires `started_labels` and `paused_labels` instead,
   which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
   `policy_checks` and `ai_reviewers` are required for both sources.
+- **`reviews` says who reviews the project's pull requests.** It is required
+  and has no default. `session`: `do <key> review` launches a pohunek review
+  session with the `review` profile and rule 3 is the owner's turn. `external`:
+  the project reviews pull requests through its own pipeline (for example a
+  service that runs reviewer agents and publishes a combined review). Rule 3
+  then gives `agent: external review`, `list` offers no `review` action and
+  `do <key> review` refuses with `not_supported`, naming the setting. Sessions
+  the pipeline starts with `work.link.*` metadata still join the row (rule 2).
+  The key is a fact about the project's review process, so it lives in
+  `[project]` and not in the global `[actions]` table.
 - **A `github` project lists the owner's open issues of `repo` that are
   assigned to `identity.github_login` and carry a label.** `started_labels` (a
   non-empty list) marks an issue as started: rule 8 applies to it. `paused_labels`

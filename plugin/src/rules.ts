@@ -24,7 +24,7 @@ export interface RuleInput {
   readonly item: WorkItem;
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews">;
 }
 
 export interface RuleResult {
@@ -259,7 +259,9 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   const githubFailure = failedSources(sources, ["github"]);
   if (githubFailure !== null) return unknown(githubFailure);
 
-  if (pr !== null && pr.relation === "review_requested") return result(me("review", 3));
+  if (pr !== null && pr.relation === "review_requested") {
+    return result(project.reviews === "external" ? { actor: "agent", reason: "external review", rule: 3 } : me("review", 3));
+  }
 
   if (authored !== null) {
     if (progress !== null && !(progress.fixDelivered && progress.threadsAnswered && progress.rerequested)) {

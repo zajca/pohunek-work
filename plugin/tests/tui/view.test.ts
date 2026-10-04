@@ -159,6 +159,15 @@ test("rule 5 has a line per reason, a policy check included", () => {
   expect(line("policy check: Require label")).toBe("a policy check failed: meet it on GitHub (manual)");
 });
 
+test("an external review row decodes, shows the agent actor and explains the reason", () => {
+  const external = row("github:acme/x#1", { on_turn: { actor: "agent", reason: "external review", rule: 3 }, actions: [] });
+  const decoded = decodeListEnvelope(envelopeText(payload([external])));
+  expect(decoded.kind === "ok" ? decoded.payload.items : null).toEqual([external]);
+  expect(ruleLine(external)).toBe("your review is requested; the project's external pipeline handles it");
+  const frame = view(loaded(okOutcome(payload([external])), { size: WIDE }));
+  expect(frame.some((line) => line.includes("agent (r3)"))).toBe(true);
+});
+
 test("a paused row decodes, sorts last, shows its rule and is counted in the header", () => {
   const paused = row("linear:DMD-140", { on_turn: { actor: "paused", reason: "paused", rule: 12 } });
   const decoded = decodeListEnvelope(envelopeText(payload([paused, ...RULE_ROWS])));
