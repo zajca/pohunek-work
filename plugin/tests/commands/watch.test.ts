@@ -68,7 +68,10 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
     },
     deps: {
       pohunek,
-      github: { fetchPullRequests: () => Promise.resolve(world.prs) },
+      github: {
+        fetchPullRequests: () => Promise.resolve(world.prs),
+        fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
+      },
       linear: { fetchIssues: () => Promise.resolve(world.issues) },
       logger,
       exec: (argv) => {
@@ -204,6 +207,7 @@ test("a failing poll is logged and the loop continues with the next one", async 
   h.deps = {
     ...h.deps,
     github: {
+      fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
       fetchPullRequests: () => {
         calls += 1;
         return calls === 1 ? Promise.reject(new Error("boom")) : Promise.resolve(githubOk([waiting]));

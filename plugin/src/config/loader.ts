@@ -90,6 +90,7 @@ function parseGithub(root: Table, file: string): GithubConfig {
     "pull_request_page_size",
     "nested_page_size",
     "thread_comment_page_size",
+    "merged_lookback_days",
   ], file, path);
   const config: GithubConfig = {
     endpoint: readHttpsUrl(table, "endpoint", file, path),
@@ -98,6 +99,7 @@ function parseGithub(root: Table, file: string): GithubConfig {
     pullRequestPageSize: readGithubPageSize(table, "pull_request_page_size", file, path),
     nestedPageSize: readGithubPageSize(table, "nested_page_size", file, path),
     threadCommentPageSize: readGithubPageSize(table, "thread_comment_page_size", file, path),
+    mergedLookbackDays: readPositiveInt(table, "merged_lookback_days", file, path),
   };
   // The authored and the directly requested searches always run in one request.
   if (estimateRequestNodes(config, 2) > GITHUB_MAX_NODES) {

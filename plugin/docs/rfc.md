@@ -213,6 +213,12 @@ A PR without a match is its own row flagged "no issue"; an issue without a PR
 is its own row; a linked session whose key matches no row is listed as
 orphaned.
 
+Merged PRs of the owner (`merged_lookback_days` window, one search per project)
+are resolved by the same precedence, but only to explain an issue's row: a
+merged PR never becomes a row of its own, and it is attached only to an issue
+without an open PR. When several merged PRs resolve to one issue, the most
+recently merged one is kept.
+
 ### 7.4 One worktree, one writer
 
 A worktree is used by one live session at a time. A babysit session starts in
@@ -238,6 +244,7 @@ Evaluated top to bottom; the first rule that holds decides.
 | 7 | Approved, checks green, mergeable | me: merge | `reviewDecision`, checks, `mergeable` |
 | 8 | Linear issue in a started state, assigned to me, with no PR and no live linked session | me: nothing runs | Linear state, assignee, join |
 | 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | Linear state, assignee, join, pohunek session state |
+| 13 | Evaluated right after 8: same issue conditions and no live linked session, and a merged PR resolves to the issue (7.3) | me: close or follow up | Linear state, assignee, join, merged PR search |
 | 9 | Open non-draft PR with no pending review request and no decision | me: request review | `reviewRequests`, `reviewDecision` |
 | 10 | Otherwise | reviewer | — |
 
@@ -260,6 +267,16 @@ A paused issue without a pull request gets no row at all, so a session linked
 to it, blocked or working, is not shown in `list`; it is not reported as
 orphaned either. When the issue leaves the paused state, the row is evaluated
 again and `watch` notifies if it lands on the owner's turn.
+
+Rule 13 is numbered last to keep the other numbers stable but is evaluated right
+after rule 8's conditions: a started issue assigned to the owner whose work
+already merged is not "nothing runs", because `implement` would start a second
+implementation of merged work. The row offers no action; the owner closes the
+issue or decides on follow-up work. An open PR of the issue wins (it is the
+row's PR and rules 3-10 apply), and a live linked session keeps rules 2 and 11.
+The merged lookup is part of the GitHub source: when it fails, the row's
+GitHub source is not `ok` and the row is `unknown`, so a failed lookup never
+falls back to rule 8. A merge older than `merged_lookback_days` is not seen.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered

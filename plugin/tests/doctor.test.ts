@@ -14,7 +14,7 @@ const FAKE_SECRET = "fake-token-not-real";
 const GH_STDOUT = "fake-gh-stdout-not-real";
 
 const global = {
-  github: { endpoint: "https://gh.example", ghBin: "/bin/gh-fake", timeoutMs: 111, pullRequestPageSize: 1, nestedPageSize: 1, threadCommentPageSize: 1 },
+  github: { endpoint: "https://gh.example", ghBin: "/bin/gh-fake", timeoutMs: 111, pullRequestPageSize: 1, nestedPageSize: 1, threadCommentPageSize: 1, mergedLookbackDays: 1 },
   linear: {
     endpoint: "https://linear.example",
     secretToolBin: "/bin/st-fake",

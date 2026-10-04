@@ -11,6 +11,7 @@ import type {
   Check,
   CheckOutcome,
   Mergeable,
+  MergedPullRequest,
   PullRequest,
   PullRequestRelation,
   Review,
@@ -26,6 +27,7 @@ import type {
 import { exec as defaultExec, SpawnError, type Exec } from "../util/exec.ts";
 import {
   buildConnectionRequest,
+  buildMergedSearchRequest,
   buildSearchRequest,
   CONNECTION_KINDS,
   type ConnectionKind,
@@ -40,10 +42,14 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 export interface GithubSourceDeps {
   readonly exec?: Exec;
   readonly fetch?: FetchLike;
+  /** Clock for the merged lookback window; the system clock when absent. */
+  readonly now?: () => number;
 }
 
 export interface GithubSource {
   fetchPullRequests(project: ProjectConfig): Promise<SourceResult<readonly PullRequest[]>>;
+  /** Pull requests of the owner merged within `merged_lookback_days`. */
+  fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -641,6 +647,47 @@ async function runSearches(
   }
 }
 
+const MS_PER_DAY = 86_400_000;
+
+function toMergedPullRequest(raw: unknown): MergedPullRequest {
+  const pr = asObject(raw, "merged search node");
+  const repo = asString(asObject(pr["repository"], "repository")["nameWithOwner"], "repository.nameWithOwner");
+  const number = asInteger(pr["number"], "number");
+  return {
+    id: `${repo}#${number}`,
+    number,
+    url: asString(pr["url"], "url"),
+    title: asString(pr["title"], "title"),
+    headRefName: asString(pr["headRefName"], "headRefName"),
+    mergedAt: asString(pr["mergedAt"], "mergedAt"),
+  };
+}
+
+/** Follows the merged search to its end; a page that cannot be followed fails instead of dropping results. */
+async function runMergedSearch(transport: Transport, queryString: string): Promise<MergedPullRequest[]> {
+  const found: MergedPullRequest[] = [];
+  const used = new Set<string>();
+  let after: string | null = null;
+  for (;;) {
+    const data = await send(transport, buildMergedSearchRequest(queryString, after, transport.config.pullRequestPageSize));
+    const connection = asObject(data["merged"], "merged search");
+    const nodes = asArray(connection["nodes"], "merged search.nodes");
+    for (const node of nodes) found.push(toMergedPullRequest(node));
+    const info = readPageInfo(connection, "merged search");
+    if (!info.hasNextPage) {
+      if (found.length < asInteger(connection["issueCount"], "merged search.issueCount")) {
+        throw truncated("merged search results");
+      }
+      return found;
+    }
+    if (info.endCursor === null || info.endCursor === "" || used.has(info.endCursor)) {
+      throw truncated("merged search results");
+    }
+    used.add(info.endCursor);
+    after = info.endCursor;
+  }
+}
+
 // ------------------------------------------------------------------ source
 
 function validateInputs(project: ProjectConfig, identity: IdentityConfig): void {
@@ -725,5 +772,33 @@ export function createGithubSource(
     }
   };
 
-  return { fetchPullRequests };
+  const fetchMergedPullRequests = async (
+    project: ProjectConfig,
+  ): Promise<SourceResult<readonly MergedPullRequest[]>> => {
+    const startedAt = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - startedAt);
+    try {
+      validateInputs(project, config.identity);
+      const since = new Date((deps.now ?? Date.now)() - config.github.mergedLookbackDays * MS_PER_DAY)
+        .toISOString()
+        .slice(0, 10);
+      const queryString =
+        `repo:${project.repo} is:pr is:merged author:${config.identity.githubLogin} merged:>=${since} sort:updated-desc`;
+      const token = await obtainToken(config.github, execFn);
+      const transport: Transport = {
+        token,
+        config: config.github,
+        fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+      };
+      const data = await runMergedSearch(transport, queryString);
+      return { ok: true, source: "github", data, durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof SourceFailureError) {
+        return { ok: false, source: "github", code: error.code, message: error.message, durationMs: elapsed() };
+      }
+      throw error;
+    }
+  };
+
+  return { fetchPullRequests, fetchMergedPullRequests };
 }

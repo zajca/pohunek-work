@@ -18,6 +18,8 @@ export interface GithubConfig {
   readonly nestedPageSize: number;
   /** Page size of the comments nested in a review thread. */
   readonly threadCommentPageSize: number;
+  /** Only pull requests merged within this many days are looked up to explain an issue without an open pull request. */
+  readonly mergedLookbackDays: number;
 }
 
 export interface LinearConfig {

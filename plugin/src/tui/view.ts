@@ -29,6 +29,7 @@ const RULE_LINES: Readonly<Record<string, string>> = {
   "10": "waiting for reviewers",
   "11": "issue started and assigned to you, no pull request, the linked agent is idle: check it",
   "12": "the issue is in a paused state: nobody's turn until it leaves that state",
+  "13": "issue started and assigned to you, its pull request is merged, nothing runs: close it or plan follow-up work",
 };
 
 export function ruleLine(item: ListItem): string {

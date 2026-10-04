@@ -4,6 +4,7 @@ import type { ProjectConfig } from "../src/types/config.ts";
 import type { SourceStatuses } from "../src/types/item.ts";
 import type {
   LinearIssue,
+  MergedPullRequest,
   PohunekNotification,
   PohunekSession,
   PullRequest,
@@ -103,6 +104,7 @@ function run(partial: Partial<JoinInput>): ReturnType<typeof joinItems> {
     project,
     issues: [],
     pullRequests: [],
+    mergedPullRequests: [],
     sessions: [],
     notifications: [],
     sources: okSources,
@@ -185,6 +187,7 @@ describe("join precedence", () => {
       project: globalProject,
       issues: [issue("ABC-4"), issue("ABC-5")],
       pullRequests: [pr(3, "me/ABC-4/a"), pr(4, "me/ABC-5/b")],
+      mergedPullRequests: [],
       sessions: [],
       notifications: [],
       sources: okSources,
@@ -220,6 +223,58 @@ describe("join precedence", () => {
     expect(row?.key).toBe("linear:ABC-5");
     expect(row?.joinedBy).toBe("linear_attachment");
     expect(items.map((i) => i.key)).toEqual(["linear:ABC-5", "linear:ABC-6"]);
+  });
+});
+
+function merged(number: number, headRefName: string, mergedAt = "2026-10-02T10:00:00Z"): MergedPullRequest {
+  return {
+    id: `acme/widgets#${number}`,
+    number,
+    url: `https://github.example/acme/widgets/pull/${number}`,
+    title: "Add widget cache",
+    headRefName,
+    mergedAt,
+  };
+}
+
+describe("merged pull requests", () => {
+  test("an issue-only row carries the merged pull request matched by branch pattern", () => {
+    const { items } = run({ issues: [issue("ABC-1")], mergedPullRequests: [merged(7, "me/ABC-1/slug")] });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.key).toBe("linear:ABC-1");
+    expect(items[0]?.mergedPullRequest?.id).toBe("acme/widgets#7");
+    expect(items[0]?.pullRequest).toBeNull();
+  });
+
+  test("a Linear attachment matches a merged pull request whose branch does not", () => {
+    const attached = merged(8, "unrelated");
+    const { items } = run({ issues: [issue("ABC-1", [attached.url])], mergedPullRequests: [attached] });
+    expect(items[0]?.mergedPullRequest?.id).toBe("acme/widgets#8");
+  });
+
+  test("an open pull request keeps its own row and the merged one is not attached", () => {
+    const { items } = run({
+      issues: [issue("ABC-1")],
+      pullRequests: [pr(9, "me/ABC-1/next")],
+      mergedPullRequests: [merged(7, "me/ABC-1/first")],
+    });
+    expect(items.map((i) => [i.key, i.mergedPullRequest])).toEqual([["linear:ABC-1", null]]);
+  });
+
+  test("with no merged pull request the row has none, and an unmatched one never forms a row", () => {
+    const none = run({ issues: [issue("ABC-1")] });
+    expect(none.items[0]?.mergedPullRequest).toBeNull();
+    const stray = run({ issues: [issue("ABC-1")], mergedPullRequests: [merged(7, "other/branch")] });
+    expect(stray.items.map((i) => i.key)).toEqual(["linear:ABC-1"]);
+    expect(stray.items[0]?.mergedPullRequest).toBeNull();
+  });
+
+  test("the most recently merged pull request wins", () => {
+    const { items } = run({
+      issues: [issue("ABC-1")],
+      mergedPullRequests: [merged(7, "me/ABC-1/a", "2026-09-01T00:00:00Z"), merged(5, "me/ABC-1/b", "2026-10-01T00:00:00Z")],
+    });
+    expect(items[0]?.mergedPullRequest?.id).toBe("acme/widgets#5");
   });
 });
 

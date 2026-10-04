@@ -5,12 +5,13 @@ import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
 import type {
   LinearIssue,
+  MergedPullRequest,
   PohunekProject,
   PohunekSession,
   PullRequest,
   SourceResult,
 } from "../../src/types/sources.ts";
-import { check, issue, pr, session } from "../rules/builders.ts";
+import { check, issue, mergedPr, pr, session } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 const widgets = config.projects.find((p) => p.pohunekLabel === "widgets");
@@ -38,6 +39,7 @@ const registry: PohunekProject[] = [
 
 interface World {
   prs?: SourceResult<readonly PullRequest[]>;
+  merged?: SourceResult<readonly MergedPullRequest[]>;
   issues?: SourceResult<readonly LinearIssue[]>;
   sessions?: SourceResult<readonly PohunekSession[]>;
   registry?: SourceResult<readonly PohunekProject[]>;
@@ -54,7 +56,10 @@ function deps(world: World): Parameters<typeof runList>[2] {
   };
   return {
     pohunek,
-    github: { fetchPullRequests: () => Promise.resolve(world.prs ?? ok("github", [])) },
+    github: {
+      fetchPullRequests: () => Promise.resolve(world.prs ?? ok("github", [])),
+      fetchMergedPullRequests: () => Promise.resolve(world.merged ?? ok("github", [])),
+    },
     linear: { fetchIssues: () => Promise.resolve(world.issues ?? ok("linear", [])) },
     logger: silentLogger,
     cliVersion: "0.1.0",
@@ -279,4 +284,30 @@ test("a pull request joined by branch is unknown while Linear is down, since its
   expect(result.items.map((i) => [i.key, i.on_turn, i.actions])).toEqual([
     ["linear:ABC-1", { actor: "unknown", reason: "linear:timeout", rule: null }, []],
   ]);
+});
+
+test("an issue whose pull request is merged is on my turn to close or follow up and offers no implement", async () => {
+  const world = {
+    issues: ok("linear", [issue()]),
+    merged: ok("github", [mergedPr({ headRefName: "alice/ABC-1/widget-cache" })]),
+  };
+  const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, deps(world));
+  expect(out.items).toHaveLength(1);
+  expect(out.items[0]?.on_turn).toEqual({ actor: "me", reason: "close or follow up", rule: 13 });
+  expect(out.items[0]?.actions).toEqual([]);
+});
+
+test("an issue with no merged pull request still offers implement", async () => {
+  const world = { issues: ok("linear", [issue()]) };
+  const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, deps(world));
+  expect(out.items[0]?.on_turn.rule).toBe(8);
+  expect(out.items[0]?.actions.map((a) => a.name)).toEqual(["implement"]);
+});
+
+test("a failed merged lookup makes the row unknown instead of offering implement", async () => {
+  const world = { issues: ok("linear", [issue()]), merged: fail("github", "rate_limited") };
+  const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, deps(world));
+  expect(out.items[0]?.on_turn).toEqual({ actor: "unknown", reason: "github:rate_limited", rule: null });
+  expect(out.items[0]?.actions).toEqual([]);
+  expect(out.sourceFailures).toEqual(["widgets github: rate_limited"]);
 });

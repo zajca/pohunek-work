@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGithubSource, type FetchLike } from "../../src/sources/github.ts";
 import type { GithubConfig, IdentityConfig, ProjectConfig } from "../../src/types/config.ts";
-import type { PullRequest, SourceResult } from "../../src/types/sources.ts";
+import type { MergedPullRequest, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type Exec, type ExecOptions, type ExecResult } from "../../src/util/exec.ts";
 import { estimateConnectionNodes, GITHUB_MAX_NODES } from "../../src/util/github-budget.ts";
 import type { ConnectionKind } from "../../src/sources/github-query.ts";
@@ -17,6 +17,7 @@ const githubConfig: GithubConfig = {
   pullRequestPageSize: 7,
   nestedPageSize: 5,
   threadCommentPageSize: 3,
+  mergedLookbackDays: 30,
 };
 
 const identity: IdentityConfig = { githubLogin: "owner-user", agentIdentities: [], reviewTeams: [] };
@@ -724,5 +725,76 @@ describe("token handling", () => {
   test("a gh timeout is timeout", async () => {
     const { result } = await run(() => reply({}), { exec: fakeExec({ exitCode: null, stdout: "", timedOut: true }).exec });
     expectFailure(result, "timeout");
+  });
+});
+
+describe("merged pull requests", () => {
+  function mergedNode(number: number, headRefName: string): Json {
+    return {
+      number,
+      url: `https://github.example/acme/widgets/pull/${number}`,
+      title: "Add widget cache",
+      headRefName,
+      mergedAt: "2026-10-02T10:00:00Z",
+      repository: { nameWithOwner: "acme/widgets" },
+    };
+  }
+
+  function page(nodes: Json[], issueCount: number, hasNextPage = false, endCursor: string | null = null): Response {
+    return reply({ data: { rateLimit: { remaining: 100 }, merged: { issueCount, pageInfo: { hasNextPage, endCursor }, nodes } } });
+  }
+
+  async function runMerged(
+    responder: Responder,
+  ): Promise<{ result: SourceResult<readonly MergedPullRequest[]>; requests: RecordedRequest[] }> {
+    const { fetch: fetchFn, requests } = fakeFetch(responder);
+    const source = createGithubSource(
+      { github: githubConfig, identity },
+      { exec: fakeExec().exec, fetch: fetchFn, now: () => Date.parse("2026-10-04T12:00:00Z") },
+    );
+    return { result: await source.fetchMergedPullRequests(project), requests };
+  }
+
+  test("the search is bounded by author, merged state and the lookback window", async () => {
+    const { result, requests } = await runMerged(() => page([mergedNode(7, "owner/ABC-1/x")], 1));
+    expect(result.ok).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.variables).toEqual({
+      q: "repo:acme/widgets is:pr is:merged author:owner-user merged:>=2026-09-04 sort:updated-desc",
+      top: 7,
+      after: null,
+    });
+    if (result.ok) {
+      expect(result.data).toEqual([
+        {
+          id: "acme/widgets#7",
+          number: 7,
+          url: "https://github.example/acme/widgets/pull/7",
+          title: "Add widget cache",
+          headRefName: "owner/ABC-1/x",
+          mergedAt: "2026-10-02T10:00:00Z",
+        },
+      ]);
+    }
+  });
+
+  test("further pages are followed with the cursor", async () => {
+    const { result, requests } = await runMerged((_request, index) =>
+      index === 0 ? page([mergedNode(7, "a")], 2, true, "C1") : page([mergedNode(8, "b")], 2),
+    );
+    expect(requests[1]?.variables["after"]).toBe("C1");
+    expect(result.ok && result.data.map((p) => p.number)).toEqual([7, 8]);
+  });
+
+  test("a repeated cursor fails as truncated instead of returning a partial list", async () => {
+    const { result } = await runMerged(() => page([mergedNode(7, "a")], 5, true, "C1"));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("truncated");
+  });
+
+  test("an HTTP failure is reported with its code", async () => {
+    const { result } = await runMerged(() => reply({}, 429));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("rate_limited");
   });
 });

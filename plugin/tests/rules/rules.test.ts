@@ -12,6 +12,7 @@ import {
   deliveredPr,
   input,
   issue,
+  mergedPr,
   item,
   notification,
   pr,
@@ -201,6 +202,24 @@ describe("rules one per rule", () => {
   test("rule 8: started issue assigned to me with nothing running", () => {
     const it = item({ key: "linear:ABC-1", issue: issue(), pullRequest: null });
     expect(onTurn(it)).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
+  });
+
+  test("rule 13: a merged pull request replaces rule 8 and rule 8 stays without one", () => {
+    const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null };
+    expect(onTurn(item({ ...base, mergedPullRequest: mergedPr() }))).toEqual({ actor: "me", reason: "close or follow up", rule: 13 });
+    expect(onTurn(item({ ...base, mergedPullRequest: null })).rule).toBe(8);
+  });
+
+  test("rule 13: an idle live session keeps rule 11, other state or assignee give nothing", () => {
+    const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null, mergedPullRequest: mergedPr() };
+    expect(onTurn(item({ ...base, sessions: [session()] })).rule).toBe(11);
+    expect(onTurn(item({ ...base, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
+  });
+
+  test("rule 13: an open pull request wins over a merged one", () => {
+    const it = item({ key: "linear:ABC-1", issue: issue(), pullRequest: pr({ isDraft: true }), mergedPullRequest: mergedPr() });
+    expect(onTurn(it).rule).toBe(6);
   });
 
   test("rule 11: started issue assigned to me with an idle live session and no PR", () => {

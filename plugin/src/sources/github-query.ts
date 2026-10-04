@@ -83,6 +83,22 @@ export function buildSearchRequest(
   return { query, variables };
 }
 
+/** One page of the merged pull request search; only the fields the join needs. */
+export function buildMergedSearchRequest(
+  queryString: string,
+  after: string | null,
+  pageSize: number,
+): GraphqlRequest {
+  const query = `query PohunekWorkMergedPullRequests($q: String!, $top: Int!, $after: String) {
+  rateLimit { remaining }
+  merged: search(query: $q, type: ISSUE, first: $top, after: $after) {
+    issueCount ${PAGE_INFO}
+    nodes { ... on PullRequest { number url title headRefName mergedAt repository { nameWithOwner } } }
+  }
+}`;
+  return { query, variables: { q: queryString, top: pageSize, after } };
+}
+
 interface KindSpec {
   /** GraphQL type of the node the connection hangs off. */
   readonly parentType: string;

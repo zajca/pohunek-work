@@ -125,6 +125,20 @@ export interface PullRequest {
   readonly updatedAt: string;
 }
 
+/**
+ * A merged pull request of the owner. It never becomes a row: it only explains
+ * an issue without an open pull request (rule 13).
+ */
+export interface MergedPullRequest {
+  /** `owner/name#number`. */
+  readonly id: string;
+  readonly number: number;
+  readonly url: string;
+  readonly title: string;
+  readonly headRefName: string;
+  readonly mergedAt: string;
+}
+
 // ---------------------------------------------------------------- Linear
 
 export type LinearStateType =
