@@ -101,10 +101,13 @@ const WS_SEND_HIGH_WATER_BYTES = 1024 * 1024;
 // this is closed fail-closed rather than allowed to grow memory without limit.
 const DAEMON_WRITE_QUEUE_CAP_BYTES = 8 * 1024 * 1024;
 
-const RESPONSE_NOT_FOUND = new Response("unknown relay target", { status: 404 });
-const RESPONSE_UPGRADE_REQUIRED = new Response("websocket upgrade required", { status: 426 });
-const RESPONSE_BAD_UPGRADE = new Response("websocket upgrade failed", { status: 400 });
-const RESPONSE_TARGET_UNAVAILABLE = new Response("relay target unavailable", { status: 503 });
+// A Response body can be sent only once, so every refusal builds a fresh Response.
+const responseNotFound = (): Response => new Response("unknown relay target", { status: 404 });
+const responseUpgradeRequired = (): Response =>
+  new Response("websocket upgrade required", { status: 426 });
+const responseBadUpgrade = (): Response => new Response("websocket upgrade failed", { status: 400 });
+const responseTargetUnavailable = (): Response =>
+  new Response("relay target unavailable", { status: 503 });
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
@@ -124,20 +127,20 @@ export function startRelay(options: StartRelayOptions): Promise<RelayHandle> {
       async fetch(request, upgradeServer): Promise<Response | undefined> {
         const route = parseRelayRoute(request.url);
         if (route === undefined) {
-          return await options.httpHandler?.(request) ?? RESPONSE_NOT_FOUND;
+          return await options.httpHandler?.(request) ?? responseNotFound();
         }
         if (!isWebSocketUpgrade(request)) {
-          return RESPONSE_UPGRADE_REQUIRED;
+          return responseUpgradeRequired();
         }
 
         let target: DaemonTarget | undefined;
         try {
           target = await targetForHost(route.host);
         } catch {
-          return RESPONSE_TARGET_UNAVAILABLE;
+          return responseTargetUnavailable();
         }
         if (target === undefined) {
-          return RESPONSE_NOT_FOUND;
+          return responseNotFound();
         }
 
         const upgraded = upgradeServer.upgrade(request, {
@@ -151,7 +154,7 @@ export function startRelay(options: StartRelayOptions): Promise<RelayHandle> {
             pendingWriteBytes: 0,
           },
         });
-        return upgraded ? undefined : RESPONSE_BAD_UPGRADE;
+        return upgraded ? undefined : responseBadUpgrade();
       },
       websocket: {
         open(ws): void {
