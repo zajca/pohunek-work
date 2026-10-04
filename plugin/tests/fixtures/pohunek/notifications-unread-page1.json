@@ -1,5 +1,5 @@
 {
   "cli_version": "0.31.6",
-  "protocol": { "minimum": 3, "maximum": 3 },
+  "protocol": { "minimum": 4, "maximum": 4 },
   "ok": { "notifications": [ { "id": "ntf_1", "source": { "provider": "agent", "provider_event": "e", "host_local_source_id": "h" }, "kind": "agent_blocked", "severity": "info", "status": "unread", "title": "Synthetic", "body": "", "metadata": {}, "created_at": "2026-01-01T00:00:00Z", "session_id": "ses_1", "source_id": "s", "dedupe_key": "d" }, { "id": "ntf_2", "source": { "provider": "agent", "provider_event": "e", "host_local_source_id": "h" }, "kind": "turn_completed", "severity": "info", "status": "unread", "title": "Synthetic", "body": "", "metadata": {}, "created_at": "2026-01-01T00:00:00Z", "session_id": "ses_1", "source_id": "s", "dedupe_key": "d" } ], "next_cursor": "cursor-unread-2" }
 }

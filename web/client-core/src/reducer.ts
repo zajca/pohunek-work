@@ -105,7 +105,7 @@ function updateSubagentState(
   }
   if (
     runtime === undefined
-    || existing.session.runtime?.runtime_id !== runtime.runtime_id
+    || existing.session.runtime?.worker_instance_id !== runtime.worker_instance_id
     || existing.session.runtime.runtime_generation !== runtime.runtime_generation
   ) {
     return state;
@@ -170,8 +170,8 @@ function changedRuntimeContinuity(
   previous: ReducedSession | undefined,
   session: SessionInfo,
 ): RuntimeContinuity | undefined {
-  const priorId = previous?.session.runtime?.runtime_id;
-  const nextId = session.runtime?.runtime_id;
+  const priorId = previous?.session.runtime?.worker_instance_id;
+  const nextId = session.runtime?.worker_instance_id;
   if (priorId !== undefined && nextId !== undefined && priorId !== nextId) {
     return "recovered";
   }

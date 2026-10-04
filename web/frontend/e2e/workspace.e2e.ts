@@ -298,7 +298,7 @@ async function reportNativeIdentity(
     const session = await client.call("session.inspect", sessionId);
     const result = await client.call("session.report_native_id", {
       session_id: sessionId,
-      runtime_id: `runtime-${sessionId}`,
+      worker_instance_id: `runtime-${sessionId}`,
       agent,
       pid: session.pid,
       pid_start_identity: "playwright-start-identity",

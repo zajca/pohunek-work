@@ -14,7 +14,7 @@ runs the checks of another.
 ## Public contracts only
 
 Every surface consumes pohunek through its public contracts: the CLI with
-`--json` and the public protocol (v3), through the SDKs of one pinned core
+`--json` and the public protocol (v4), through the SDKs of one pinned core
 release. Core internals are never imported, and core ships no UI.
 
 ## Core pin

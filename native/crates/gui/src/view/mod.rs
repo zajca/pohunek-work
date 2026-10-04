@@ -15,7 +15,7 @@ use iced::widget::{
 };
 use iced::{Background, Center, Color, Element, Fill, Shrink, Theme};
 use pohunek_gui_core::ConnState;
-use protocol::{AgentKind, SessionInfo};
+use protocol::{RuntimeRef, SessionInfo};
 
 use crate::message::{AppMode, Message, ModalView};
 use crate::PohunekApp;
@@ -27,20 +27,17 @@ use modals::{assistant_modal_content, keymap_modal_content, start_modal_content}
 use selectable_text::selectable_text;
 use session::{confirm_delete_modal_content, session_modal_content};
 
-/// Returns a provider-neutral label for an agent kind received from the wire.
-fn agent_kind_label(kind: &AgentKind) -> String {
+/// Returns a provider-neutral label for a runtime reference received from the wire.
+fn agent_kind_label(kind: &RuntimeRef) -> String {
     match kind {
-        AgentKind::Shell => "shell".to_owned(),
-        AgentKind::Codex => "codex".to_owned(),
-        AgentKind::Claude => "claude".to_owned(),
-        AgentKind::Hermes => "hermes".to_owned(),
-        AgentKind::Unknown(value) => format!("Unknown agent ({value})"),
+        RuntimeRef::Id(id) => id.as_str().to_owned(),
+        RuntimeRef::Historical(label) => format!("Unknown agent ({label})"),
     }
 }
 
-/// Returns the launch profile for known agents and a neutral future-agent label.
+/// Returns the launch profile for known runtimes and a neutral label for historical ones.
 fn session_agent_label(session: &SessionInfo) -> String {
-    if session.agent_base.is_known() {
+    if session.agent_base.id().is_some() {
         session.agent.clone()
     } else {
         agent_kind_label(&session.agent_base)
@@ -285,13 +282,13 @@ mod tests {
     #[test]
     fn unknown_agent_kind_has_neutral_label() {
         assert_eq!(
-            agent_kind_label(&AgentKind::Unknown("future-agent".to_owned())),
-            "Unknown agent (future-agent)"
+            agent_kind_label(&RuntimeRef::from_wire("Future Agent")),
+            "Unknown agent (Future Agent)"
         );
     }
 
     #[test]
     fn hermes_agent_kind_has_a_stable_label() {
-        assert_eq!(agent_kind_label(&AgentKind::Hermes), "hermes");
+        assert_eq!(agent_kind_label(&RuntimeRef::hermes()), "hermes");
     }
 }

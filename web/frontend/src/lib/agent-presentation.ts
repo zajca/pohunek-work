@@ -1,4 +1,4 @@
-import type { AgentKind, AgentRuntime } from "@pohunek/protocol";
+import type { RuntimeRef, AgentRuntime } from "@pohunek/protocol";
 
 const KNOWN_AGENT_LABELS: Readonly<Record<string, string>> = {
   shell: "Shell",
@@ -7,35 +7,35 @@ const KNOWN_AGENT_LABELS: Readonly<Record<string, string>> = {
   hermes: "Hermes",
 };
 
-/** Returns a neutral, forward-compatible label for a protocol agent kind. */
-export function agentKindLabel(agent: AgentKind): string {
+/** Returns a neutral, forward-compatible label for a protocol runtime reference. */
+export function agentKindLabel(agent: RuntimeRef): string {
   return KNOWN_AGENT_LABELS[agent] ?? `Unknown agent (${agent})`;
 }
 
 /** Labels a profile while keeping its resolved base kind understandable. */
-export function agentProfileLabel(profile: string, base: AgentKind): string {
+export function agentProfileLabel(profile: string, base: RuntimeRef): string {
   const baseLabel = agentKindLabel(base);
   return profile === base ? baseLabel : `${profile} · ${baseLabel}`;
 }
 
 /** Labels a session agent while tolerating legacy peers that omitted its base. */
-export function sessionAgentLabel(profile: string, base?: AgentKind): string {
+export function sessionAgentLabel(profile: string, base?: RuntimeRef): string {
   return base === undefined ? profile : agentProfileLabel(profile, base);
 }
 
 /** Returns whether a daemon-advertised agent base is safe to launch from this client. */
-export function isLaunchableAgentKind(agent: AgentKind): boolean {
+export function isLaunchableAgentKind(agent: RuntimeRef): boolean {
   return Object.hasOwn(KNOWN_AGENT_LABELS, agent);
 }
 
 /** Returns whether both persisted and active agent bases have known mutation semantics. */
-export function hasKnownSessionAgentBases(base: AgentKind, activeBase?: AgentKind): boolean {
+export function hasKnownSessionAgentBases(base: RuntimeRef, activeBase?: RuntimeRef): boolean {
   return isLaunchableAgentKind(base)
     && (activeBase === undefined || isLaunchableAgentKind(activeBase));
 }
 
 /** Allows attach unless a persisted or active base is explicitly unknown. */
-export function hasAttachableSessionAgentBases(base?: AgentKind, activeBase?: AgentKind): boolean {
+export function hasAttachableSessionAgentBases(base?: RuntimeRef, activeBase?: RuntimeRef): boolean {
   return (base === undefined || isLaunchableAgentKind(base))
     && (activeBase === undefined || isLaunchableAgentKind(activeBase));
 }

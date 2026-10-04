@@ -140,7 +140,7 @@ fn duration_label(millis: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use protocol::{AgentKind, SubagentRevision};
+    use protocol::{RuntimeRef, SubagentRevision};
 
     use super::*;
 
@@ -148,7 +148,7 @@ mod tests {
         SubagentInfo {
             id: "a".to_owned(),
             parent_id: None,
-            provider: AgentKind::Claude,
+            provider: RuntimeRef::claude(),
             agent_type: None,
             lifecycle,
             activity: None,

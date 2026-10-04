@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use protocol::{AgentKind, SubagentInfo, SubagentLifecycle};
+use protocol::{RuntimeRef, SubagentInfo, SubagentLifecycle};
 
 /// One subagent placed in the display tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub fn subagent_counts(subagents: &[SubagentInfo]) -> SubagentCounts {
 /// cycle are appended as roots, so every input appears exactly once.
 #[must_use]
 pub fn subagent_tree(subagents: &[SubagentInfo]) -> Vec<SubagentNode<'_>> {
-    let index: HashMap<(&AgentKind, &str), usize> = subagents
+    let index: HashMap<(&RuntimeRef, &str), usize> = subagents
         .iter()
         .enumerate()
         .map(|(position, subagent)| ((&subagent.provider, subagent.id.as_str()), position))
@@ -118,7 +118,12 @@ mod tests {
 
     use super::*;
 
-    fn subagent(provider: AgentKind, id: &str, parent: Option<&str>, started: u64) -> SubagentInfo {
+    fn subagent(
+        provider: RuntimeRef,
+        id: &str,
+        parent: Option<&str>,
+        started: u64,
+    ) -> SubagentInfo {
         SubagentInfo {
             id: id.to_owned(),
             parent_id: parent.map(str::to_owned),
@@ -143,10 +148,10 @@ mod tests {
     #[test]
     fn children_follow_their_parent_in_start_order() {
         let list = [
-            subagent(AgentKind::Claude, "child-b", Some("root"), 30),
-            subagent(AgentKind::Claude, "grandchild", Some("child-a"), 40),
-            subagent(AgentKind::Claude, "root", None, 10),
-            subagent(AgentKind::Claude, "child-a", Some("root"), 20),
+            subagent(RuntimeRef::claude(), "child-b", Some("root"), 30),
+            subagent(RuntimeRef::claude(), "grandchild", Some("child-a"), 40),
+            subagent(RuntimeRef::claude(), "root", None, 10),
+            subagent(RuntimeRef::claude(), "child-a", Some("root"), 20),
         ];
 
         assert_eq!(
@@ -163,8 +168,8 @@ mod tests {
     #[test]
     fn a_missing_or_own_parent_makes_a_root() {
         let list = [
-            subagent(AgentKind::Claude, "orphan", Some("evicted"), 10),
-            subagent(AgentKind::Claude, "selfish", Some("selfish"), 20),
+            subagent(RuntimeRef::claude(), "orphan", Some("evicted"), 10),
+            subagent(RuntimeRef::claude(), "selfish", Some("selfish"), 20),
         ];
 
         assert_eq!(
@@ -176,9 +181,9 @@ mod tests {
     #[test]
     fn a_parent_cycle_still_lists_every_subagent_once() {
         let list = [
-            subagent(AgentKind::Claude, "a", Some("b"), 10),
-            subagent(AgentKind::Claude, "b", Some("a"), 20),
-            subagent(AgentKind::Claude, "free", None, 5),
+            subagent(RuntimeRef::claude(), "a", Some("b"), 10),
+            subagent(RuntimeRef::claude(), "b", Some("a"), 20),
+            subagent(RuntimeRef::claude(), "free", None, 5),
         ];
 
         let nodes = subagent_tree(&list);
@@ -193,9 +198,9 @@ mod tests {
     #[test]
     fn the_same_id_under_two_providers_is_two_subagents() {
         let list = [
-            subagent(AgentKind::Claude, "shared", None, 10),
-            subagent(AgentKind::Codex, "shared", None, 20),
-            subagent(AgentKind::Codex, "kid", Some("shared"), 30),
+            subagent(RuntimeRef::claude(), "shared", None, 10),
+            subagent(RuntimeRef::codex(), "shared", None, 20),
+            subagent(RuntimeRef::codex(), "kid", Some("shared"), 30),
         ];
 
         let nodes = subagent_tree(&list);
@@ -206,18 +211,18 @@ mod tests {
                 .map(|node| (node.info.provider.clone(), node.depth))
                 .collect::<Vec<_>>(),
             [
-                (AgentKind::Claude, 0),
-                (AgentKind::Codex, 0),
-                (AgentKind::Codex, 1)
+                (RuntimeRef::claude(), 0),
+                (RuntimeRef::codex(), 0),
+                (RuntimeRef::codex(), 1)
             ]
         );
     }
 
     #[test]
     fn counts_only_running_subagents_as_running() {
-        let mut done = subagent(AgentKind::Claude, "done", None, 10);
+        let mut done = subagent(RuntimeRef::claude(), "done", None, 10);
         done.lifecycle = SubagentLifecycle::Completed;
-        let list = [done, subagent(AgentKind::Claude, "live", None, 20)];
+        let list = [done, subagent(RuntimeRef::claude(), "live", None, 20)];
 
         assert_eq!(
             subagent_counts(&list),

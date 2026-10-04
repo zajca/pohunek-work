@@ -225,8 +225,9 @@ fn session_runtime_details<'a>(
     if let Some(reason) = &runtime.loss_reason {
         detail = detail.push(selectable_text(format!("runtime reason: {reason}")).size(14));
     }
-    if let Some(runtime_id) = &runtime.runtime_id {
-        detail = detail.push(selectable_text(format!("runtime id: {runtime_id}")).size(14));
+    if let Some(worker_instance_id) = &runtime.worker_instance_id {
+        detail = detail
+            .push(selectable_text(format!("worker instance id: {worker_instance_id}")).size(14));
     }
     if let Some(worker_id) = &runtime.worker_id {
         detail = detail.push(selectable_text(format!("worker id: {worker_id}")).size(14));

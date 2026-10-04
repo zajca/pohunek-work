@@ -35,8 +35,8 @@ def envelope(payload):
     return json.dumps({"cli_version": "0.31.6", "protocol": {"min": 3, "max": 3}, "ok": payload})
 
 
-def session(session_id, agent_base, state, runtime_id, pid, reason=None, resume=False, reference=None):
-    runtime = {"state": state, "runtime_generation": 1, "runtime_id": runtime_id}
+def session(session_id, agent_base, state, worker_instance_id, pid, reason=None, resume=False, reference=None):
+    runtime = {"state": state, "runtime_generation": 1, "worker_instance_id": worker_instance_id}
     if reason:
         runtime["loss_reason"] = reason
     entry = {
