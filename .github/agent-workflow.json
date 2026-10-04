@@ -1,0 +1,61 @@
+{
+  "comment": [
+    "Configuration for the repository's agent work-tracking workflow (GitHub Issues + GitHub Projects).",
+    "Skills under .claude/skills/ reference this file instead of hardcoding project or field identifiers.",
+    "Opaque identifiers (project item/field/status IDs, view IDs) are never stored here or in skills; agents resolve them at runtime with `gh` from the names below."
+  ],
+  "repository": "zajca/pohunek-work",
+  "coreRepository": "zajca/pohunek",
+  "issueTracker": {
+    "kind": "github-issues",
+    "baseUrl": "https://github.com/zajca/pohunek-work/issues",
+    "role": "canonical record for work scope, decisions, acceptance criteria, plans, verification evidence, blockers, and handoffs"
+  },
+  "defaultProject": {
+    "owner": "zajca",
+    "number": 1,
+    "url": "https://github.com/users/zajca/projects/1",
+    "name": "Pohunek",
+    "role": "delivery tracking shared with zajca/pohunek"
+  },
+  "authorization": {
+    "standing": "The repository owner durably pre-authorizes agents to create issues, edit their own body sections, comment, add native sub-issue/dependency links on the repository above, and add items to / set status in the default project, without asking first.",
+    "neverAsk": "Never ask whether to file an issue or offer a follow-up instead of filing it; verified out-of-scope findings and verified defects noticed incidentally are filed automatically after dedup.",
+    "askOnly": "Ask only which issue applies when competing matches or a genuinely ambiguous scope make that unclear.",
+    "notCovered": "Releases, tags, force-pushes to main, and destructive project edits are not covered."
+  },
+  "pullRequests": {
+    "shape": "stacked",
+    "policy": "Deliver work as a stack of small, sequential PRs, each one coherent concern, landed bottom-up. A single PR is right only when the whole change is already one small concern.",
+    "sliceRules": "Every PR is complete production code for its slice: it builds, passes the gate of every surface it touches on its own, and has tests. No stubs, dead code, or placeholders a later PR fills in. A slice touches one surface unless the change is a cross-surface contract.",
+    "softMaxChangedLines": 400,
+    "softMaxNote": "Hand-written changed lines per PR, excluding tests, lockfiles, and generated files. A cue to split, not a hard limit.",
+    "issueReferences": "Non-final PRs use 'Refs #N'; only the final PR of the stack uses 'Closes #N'.",
+    "deleteBranchOnMerge": false,
+    "retargetNote": "Head branches are not deleted on merge, so GitHub never auto-retargets the next stacked PR: retarget it to main explicitly after the PR below it merges."
+  },
+  "review": {
+    "automatedReviewMarker": "<!-- hermes-codex-review:<repo>#<pr>:<sha> -->",
+    "note": "An automated PR review lands per head commit, usually minutes after CI. Merging requires CI green and the review of the exact head."
+  },
+  "surfaces": {
+    "plugin": { "path": "plugin", "tagPrefix": "plugin-v", "versionSource": "plugin/package.json" },
+    "launchers": { "path": "launchers", "tagPrefix": "launchers-v", "versionSource": "launchers/package.json" },
+    "web": { "path": "web", "tagPrefix": "web-v", "versionSource": "web/package.json" },
+    "gui": { "path": "native", "tagPrefix": "gui-v", "versionSource": "native/Cargo.toml" }
+  },
+  "statusOptions": ["Todo", "In Progress", "Done"],
+  "statusSemantics": {
+    "Todo": "Tracked, actionable work that has not started yet.",
+    "In Progress": "Work is being implemented, reviewed, or awaiting verification. Review findings and blockers are issue comments while status stays In Progress; there is no Review or Blocked status.",
+    "Done": "The issue is closed as completed: for any repository change, verified landing on main with all DoD items met. Never Done when only a PR is open."
+  },
+  "issueClosure": {
+    "order": "DoD verified -> close issue as completed -> sync Project status Done.",
+    "noDodShuffling": "Unmet original DoD items are never moved to follow-up issues to claim the current issue done."
+  },
+  "issueBodyRoles": {
+    "body": "Full scope, accepted decisions with rationale, definition-of-done items with stable IDs (D1, D2, ...), dependencies, and the plan including the PR stack slice plan. Long-lived; edit own sections rather than rewriting.",
+    "comments": "Progress, verification evidence (commands and results), handoffs, blockers, status-change rationale. Append, never overwrite others' comments."
+  }
+}

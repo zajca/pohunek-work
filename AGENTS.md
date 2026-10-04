@@ -40,7 +40,22 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 eval "$(scripts/build-core-binaries)"   # builds the pinned pohunekd, pohunek-sessiond, pohunek; exports their paths
 cargo nextest run --workspace --all-features
 cargo test --doc --workspace
+
+# web/ (Bun; core binaries and SDK tarballs come from web/core-sdk.json)
+cd web
+eval "$(bun scripts/build-core-binaries.ts)"
+bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
+bun run typecheck && bun run lint && bun test
+bun run test:e2e                                           # Playwright Chromium
+POHUNEK_E2E=1 bun test backend/test/real-daemon.e2e.test.ts
+
+# packaging/ (shared release scripts)
+python3 -m unittest discover -s packaging/tests
+python3 -m unittest discover -s native/scripts/tests
 ```
+
+The `gates` skill (`.claude/skills/gates/SKILL.md`) maps changed paths to the
+surfaces whose gate to run and lists the full CI-mirror commands.
 
 ## Rust rules (native/)
 
@@ -49,6 +64,41 @@ Guidelines: `.agents/rust-guidelines/SKILL.md` is the index; always read
 `11_universal_guidelines.md`. Apply `M-CANONICAL-DOCS`, prefer
 `#[expect(..., reason = "...")]` over `#[allow]`, keep headless state and I/O in
 `gui-core` and the Iced view in `gui`, and use typed `thiserror` errors.
+
+## Agent workflow
+
+Development runs through the skills in `.claude/skills/`, which mirror the core
+repository's loop and read `.github/agent-workflow.json` (repository, project,
+surfaces, pull request rules; no project or field IDs are hardcoded):
+
+- `plan-phase` records a plan and a DoD (`D1`, `D2`, ...) as a GitHub issue.
+- `milestone` implements an issue in a sibling worktree (`../pohunek-work-<slug>`
+  on `zajca/<slug>`) through parallel subagents, as a stack of small PRs.
+- `gates` runs the CI gate of every touched surface; `milestone-review` checks
+  a branch against its DoD.
+- `pr-handoff` publishes the stack; `merge-advance` merges it bottom-up and
+  verifies the landing; `release` cuts one surface's tag.
+- `deliver-issue` chains all of it autonomously: plan, implement, gate,
+  publish, loop on CI and the automated review of every pushed head, merge
+  bottom-up, verify, close the issue and file follow-ups.
+- `github-workflow` holds the shared rules for issues and the Pohunek Project
+  (user `zajca`, project 1, shared with `zajca/pohunek`).
+
+A need that belongs to core goes to an issue in `zajca/pohunek`, never into a
+workaround here.
+
+### Accepted harness trade-offs
+
+- Invoking `deliver-issue` is the owner's explicit request to commit, push,
+  open the issue's pull requests and merge them once CI is green and the
+  automated review of the exact head (the `hermes-codex-review` review) has no
+  unanswered actionable finding. It never authorizes releases, tags,
+  force-pushes to `main` or work outside the issue.
+- The same invocation lets agents create issues, comment, link sub-issues and
+  set the project status on `zajca/pohunek-work` (and file follow-ups in
+  `zajca/pohunek`) without asking; destructive project edits stay excluded.
+- `pr-handoff` publishes without a further ask only when invoked by
+  `deliver-issue` or on the owner's request.
 
 ## Releases and macOS signing
 

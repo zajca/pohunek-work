@@ -4,6 +4,7 @@ logs/
 *.log
 .env
 .env.*
-.claude/
+.claude/*
+!.claude/skills/
 native/target/
 __pycache__/
