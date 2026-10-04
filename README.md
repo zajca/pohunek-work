@@ -118,5 +118,12 @@ identity, so macOS treats a new version of the app as a new program: after an
 upgrade the Keychain asks once more for permission to use the stored
 credentials; choose Always Allow again.
 
+A published `gui-vX.Y.Z` or `web-vX.Y.Z` release is passed on to the tap by
+`.github/workflows/notify-tap.yml`: it sends a `pohunek-work-release` repository
+dispatch (formula and tag) with the repository secret `TAP_DISPATCH_PAT`, a
+fine-grained token limited to `zajca/homebrew-pohunek`, and the tap bumps that
+formula. `launchers-v*` and `plugin-v*` releases have no formula and send
+nothing.
+
 The packaging scripts and their tests live in `packaging/`, shared by every
 surface's release.
