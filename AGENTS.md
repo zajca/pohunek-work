@@ -122,7 +122,11 @@ only `publish` holds `contents: write`. `packaging/tests/test_release_workflow.p
 pins these boundaries; changing a job's permissions or steps means updating its
 allowlist on purpose. Distribution is the Homebrew tap `zajca/homebrew-pohunek`
 (formulae `pohunek-gui`, `pohunek-web`), owned by core, which consumes the
-`gui-v*` and `web-v*` release assets. Verify a release asset
+`gui-v*` and `web-v*` release assets. After a published `gui-v*` or `web-v*`
+release, `.github/workflows/notify-tap.yml` (a `workflow_run` of `Release`, the
+only workflow with a secret, `TAP_DISPATCH_PAT`) sends the tap a
+`pohunek-work-release` repository dispatch with the formula and the tag; the tap
+bumps that formula. `packaging/tests/test_notify_tap_workflow.py` pins it. Verify a release asset
 with `gh attestation verify <archive> --repo zajca/pohunek-work`.
 
 ## Conventions

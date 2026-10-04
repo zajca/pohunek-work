@@ -1,0 +1,66 @@
+name: Notify the Homebrew tap
+
+# Tells the tap zajca/homebrew-pohunek to bump a formula after a `gui-vX.Y.Z` or
+# `web-vX.Y.Z` release has been published. It is a separate workflow so that
+# `release.yml` keeps no secret: the only credential here is the dispatch token,
+# which can only start a workflow in the tap. The job checks out nothing, runs
+# no code from this repository or from a release asset, and reads the tag name
+# only through `env`, after the shell has matched it against a strict pattern.
+# `launchers-v*` and `plugin-v*` releases have no formula and are skipped.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Dispatch the tap bump
+    # A manual run of the release workflow is a dry run and publishes nothing.
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event.workflow_run.head_branch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Select the formula and build the payload
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            gui-v[0-9]*) formula=pohunek-gui ;;
+            web-v[0-9]*) formula=pohunek-web ;;
+            *)
+              echo "tag $TAG has no formula; nothing to dispatch"
+              exit 0
+              ;;
+          esac
+          version="${TAG#*-v}"
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::the tag must look like <surface>-vX.Y.Z, got: $TAG"
+            exit 1
+          fi
+          # The release must exist and be published, not only a green run.
+          is_draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+          if [ "$is_draft" != "false" ]; then
+            echo "::error::release $TAG is not published"
+            exit 1
+          fi
+          {
+            echo "formula=$formula"
+            echo "payload=$(jq -cn --arg formula "$formula" --arg tag "$TAG" '{formula: $formula, tag: $tag}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch the bump to the tap
+        if: ${{ steps.select.outputs.formula != '' }}
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.TAP_DISPATCH_PAT }}
+          repository: zajca/homebrew-pohunek
+          event-type: pohunek-work-release
+          client-payload: ${{ steps.select.outputs.payload }}
