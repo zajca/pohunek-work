@@ -79,14 +79,51 @@ for (const rule of CASES) {
   });
 
   for (const [label, sessionsOf] of WITHOUT_WORKTREE) {
-    test(`${name} with ${label} keeps on_turn, lists no ${rule.action}, and do refuses with no_worktree`, async () => {
+    test(`${name} with ${label} lists ${rule.action} and do --dry-run plans the adoption of the head branch`, async () => {
       const sessions = sessionsOf(rule.pullRequest);
       const row = await listedRow(rule.pullRequest, sessions);
       expect(row.on_turn).toEqual({ actor: "me", reason: rule.reason, rule: rule.rule });
-      expect(row.actions).toEqual([]);
-      await expectRefusal(dryRun(rule, sessions), "no_worktree", `${rule.action} refused`);
+      expect(row.actions.map((action) => action.name)).toEqual([rule.action]);
+      const { plan } = (JSON.parse((await dryRun(rule, sessions)).stdout) as Envelope).ok;
+      expect(plan).toMatchObject({ cwd: null, branch: BRANCH, base_branch: BRANCH, expected_head: SHA });
+      expect(plan.argv).toContain("--base-branch");
     });
   }
+}
+
+/** Pull requests whose head branch cannot be adopted: `list` offers no action and `do` refuses with the same typed code. */
+const UNADOPTABLE: readonly [string, Partial<PullRequest>, "precondition_failed" | "invalid_value", string][] = [
+  ["a fork head", { isCrossRepository: true }, "precondition_failed", "fork"],
+  ["a head branch that is not a plain ref", { headRefName: "--upload-pack=x" }, "invalid_value", "cannot be fetched by name safely"],
+  ["a head branch with a parent segment", { headRefName: "a/../b" }, "invalid_value", "cannot be fetched by name safely"],
+  ["a head commit that is not a full SHA", { headSha: "abc" }, "invalid_value", "not a full SHA"],
+];
+
+for (const rule of CASES) {
+  for (const [label, overrides, code, fragment] of UNADOPTABLE) {
+    test(`rule ${String(rule.rule)} (${rule.reason}) with ${label} lists no ${rule.action} and do --dry-run refuses it with ${code}`, async () => {
+      const pullRequest = { ...rule.pullRequest, ...overrides };
+      const row = await listedRow(pullRequest, []);
+      expect(row.on_turn).toEqual({ actor: "me", reason: rule.reason, rule: rule.rule });
+      expect(row.actions).toEqual([]);
+      await expectRefusal(dryRun({ ...rule, pullRequest }, []), code, fragment);
+    });
+  }
+
+  test(`rule ${String(rule.rule)} (${rule.reason}) with an unlinked session on the head branch lists no ${rule.action} and do --dry-run refuses it`, async () => {
+    const holder = session({ id: "s-holder", branch: BRANCH, worktreePath: "/wt/holder", metadata: {} });
+    const row = await listedRow(rule.pullRequest, [holder]);
+    expect(row.actions).toEqual([]);
+    await expectRefusal(dryRun(rule, [holder]), "precondition_failed", "s-holder");
+  });
+
+  test(`rule ${String(rule.rule)} (${rule.reason}) with the head branch checked out by a worktree only project show lists: list offers ${rule.action}, do refuses`, async () => {
+    const row = await listedRow(rule.pullRequest, []);
+    expect(row.actions.map((action) => action.name)).toEqual([rule.action]);
+    const world = { prs: ok("github", [rule.pullRequest]), worktrees: () => ok("pohunek", [{ path: "/repo/main", branch: BRANCH, head: SHA, sessionId: null }]) };
+    const doOptions = options({ key: `github:${rule.pullRequest.id}`, action: rule.action, profile: "profile-a", dryRun: true, yes: false });
+    await expectRefusal(runDo(baseConfig, doOptions, setup(world).deps), "precondition_failed", "/repo/main");
+  });
 }
 
 /** Rule 5 rows that `list` gives no worktree action, with the worktree actions `do` must refuse. */

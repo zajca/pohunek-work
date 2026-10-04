@@ -87,11 +87,14 @@ for (const testCase of WORKTREE_CASES) {
     });
   });
 
-  test(`${testCase.name} on a github-issue row without a worktree is listed nowhere and do refuses with no_worktree`, async () => {
+  test(`${testCase.name} on a github-issue row without a worktree is listed and do adopts the head branch with the issue link`, async () => {
     const world: World = { githubIssues: ok("github_issues", [githubIssue()]), prs: ok("github", [testCase.pullRequest]), sessions: [ownerSession({ worktreePath: null })] };
     const row = rowOf(await listed(world));
-    expect(row.actions).toEqual([]);
-    await expectRefusal(runDo(config, options({ key: ROW, action: testCase.name, profile: "profile-a", dryRun: true, yes: false }), setup(world).deps), "no_worktree");
+    expect(row.actions.map((action) => action.name)).toEqual([testCase.name]);
+    const out = await runDo(config, options({ key: ROW, action: testCase.name, profile: "profile-a", dryRun: true, yes: false }), setup(world).deps);
+    const { plan } = (JSON.parse(out.stdout) as Envelope).ok;
+    expect(plan).toMatchObject({ cwd: null, branch: BRANCH, base_branch: BRANCH, expected_head: SHA });
+    expect(plan.metadata).toMatchObject({ "work.link.provider": "github", "work.link.kind": "issue", "work.link.id": ISSUE_KEY, "work.link.branch": BRANCH, "work.role": testCase.name });
   });
 }
 

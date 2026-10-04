@@ -192,6 +192,10 @@ The session name is the key without the provider prefix (`DMD-2188`,
 own provider launch path with `link.*` keys are also recognized until step 16
 removes that path.
 
+`babysit`, `fix-ci` and `rebase` on a pull request whose linked sessions own no worktree launch
+with `--project`, `--branch` and `--base-branch` naming the pull request's head branch and the same
+metadata (7.5).
+
 Agent skills that start work (`babysit-pr`, `ship-task`, `linear-issue` in
 connection) call the plugin action instead of starting untracked subagents
 from the main checkout.
@@ -251,6 +255,38 @@ A worktree is used by one live session at a time. A babysit session starts in
 the implementation worktree only after the implementation session ended. The
 plugin refuses a second live linked session on a worktree; with the task layer
 the daemon enforces it (`task.start { worktree_of }`, task RFC invariant 11).
+
+### 7.5 Adopting an existing pull request
+
+`babysit`, `fix-ci` and `rebase` start in the worktree of a linked session that owns one
+(`--cwd`). When no linked session owns a worktree, which is the case for a pull request opened
+by hand or whose session was removed, the plugin adopts the pull request: it starts a fresh
+worktree with `--project <p> --branch <head branch> --base-branch <head branch>`, so the local
+branch is the pull request's head branch itself, not a copy. The session carries the usual
+`work.link.*`, `work.role` and `work.rev` metadata, so it joins the row and the next action
+reuses its worktree.
+
+Adoption is refused with a typed code when the head branch cannot be checked out safely:
+
+| Case | Code | Known to `list` |
+| --- | --- | --- |
+| the head lives in a fork (`isCrossRepository`) | `precondition_failed` | yes |
+| the head branch is not a plain ref (option-like, `..`) or the head commit is not a full SHA | `invalid_value` | yes |
+| an unlinked session of the project holds a worktree on the head branch | `precondition_failed` | yes |
+| any other worktree holds the head branch (the primary checkout, a manual worktree) | `precondition_failed` | no, `project show` only |
+| the worktrees cannot be read | `source_unavailable` | no |
+
+`list` offers the action exactly when `do` would plan it, except for the last two rows: they need
+`project show`, which `list` does not call for every row, so `list` still offers the action and
+`do` refuses it. Core's own `worktree_branch_in_use` refusal is the backstop for a race.
+
+Core checks an existing local branch out as it is (spike S9), so a stale local branch of the
+same name yields a worktree at another commit without a warning. After the launch the plugin
+compares the worktree head from `project show` with the pull request head SHA and reports
+`launch_unverified` on a difference or on any daemon warning; the advice then is to remove the
+session and bring the branch to the pull request head, never to delete it. The prompt makes
+the agent run `git rev-parse HEAD` first and stop on a difference, and set the branch's
+upstream, which core does not set for a branch it creates from `--base-branch`.
 
 ## 8. The `on_turn` Column
 
@@ -461,9 +497,9 @@ same set.
 | Action | Effect | Precondition |
 | --- | --- | --- |
 | `implement` | worktree on `zajca/<KEY>/<slug>` (GitHub issue: `zajca/<issue_number_prefix><n>/<slug>`), session `role=implement` | no live linked session on the worktree |
-| `babysit` | session `role=babysit` in the item's worktree | rule 4; no live linked session |
-| `fix-ci` | session `role=fix-ci` | rule 5 (failed check) |
-| `rebase` | session `role=rebase` | rule 5 (conflict) |
+| `babysit` | session `role=babysit` in the item's worktree, or in a fresh worktree of the pull request head branch when no linked session owns one (7.5) | rule 4; no live linked session |
+| `fix-ci` | session `role=fix-ci`, worktree as for `babysit` | rule 5 (failed check) |
+| `rebase` | session `role=rebase`, worktree as for `babysit` | rule 5 (conflict) |
 | `review` | session `role=review` on someone else's PR | rule 3; refused with `not_supported` when the project has `reviews = "external"` |
 | `ready` | mark PR ready for review | rule 6 |
 | `merge` | merge or enqueue | rule 7; never delegable by default |

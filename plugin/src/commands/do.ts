@@ -64,7 +64,7 @@ function planText(plan: ActionPlan, argv: readonly string[]): string {
     `project: ${plan.project}`,
     `profile: ${plan.profile}`,
     ...(plan.branch === null ? [] : [`branch:  ${plan.branch}`]),
-    ...(plan.baseBranch === null ? [] : [`from:    ${plan.baseBranch} (fetched from origin)`]),
+    ...(plan.baseBranch === null ? [] : [`from:    ${plan.baseBranch} (fetched from origin when the branch is created)`]),
     ...(plan.expectedHead === null ? [] : [`head:    ${plan.expectedHead} (checked after the launch)`]),
     ...(plan.cwd === null ? [] : [`cwd:     ${plan.cwd}`]),
     `command: ${commandLine(argv)}`,
@@ -89,7 +89,7 @@ function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unk
     project: plan.project,
     profile: plan.profile,
     branch: plan.branch,
-    // Only review plans have a base branch and an expected head; other launch plans omit both keys.
+    // Only plans that create a worktree of a pull request head (review, adoption) have a base branch and an expected head; other launch plans omit both keys.
     ...(plan.baseBranch === null ? {} : { base_branch: plan.baseBranch }),
     ...(plan.expectedHead === null ? {} : { expected_head: plan.expectedHead }),
     cwd: plan.cwd,
@@ -151,7 +151,7 @@ async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Prom
 async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps, action: ActionPlan["action"]): Promise<DoOutput> {
   const { logger } = deps;
   const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, deps);
-  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github });
+  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github, pohunek: deps.pohunek });
   const argv = displayArgv(config.global.pohunek.bin, plan);
   logger.info("do_plan", { key: plan.key, action: plan.action, profile: plan.profile, branch: plan.branch, cwd: plan.cwd, argv });
 

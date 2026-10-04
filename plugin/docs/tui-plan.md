@@ -146,8 +146,8 @@ and refuses an unknown version; `tests/tui/do-contract.test.ts` decodes real `ru
 `fix-ci` (failed check) or `rebase` (conflict), r6 `ready`, r8 `implement`, r7 and r9 none (manual), and
 `attach` last on every row with a live linked session, which covers r1 and r11 (a row without one gets no
 `attach`, because `do` would refuse it). `babysit`, `fix-ci` and `rebase` start in the worktree of a linked
-session, so they are listed only when a linked session owns one (`do` refuses with `no_worktree` otherwise);
-the row keeps its `on_turn` reason. `merge` is never listed. Every action carries `delegable: false`
+session, or adopt the pull request's head branch in a fresh one (RFC 7.5), so they are listed when a linked
+session owns a worktree or the head branch can be adopted; the row keeps its `on_turn` reason. `merge` is never listed. Every action carries `delegable: false`
 (empty policy); launch actions carry the `profile` `do` would use (project `[profiles]` replacing the global
 table), omitted when none is configured. One implementation serves the TUI, rofi (c.4) and `/work` (c.5);
 `do` stays the authority and can still refuse.

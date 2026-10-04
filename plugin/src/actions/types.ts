@@ -23,7 +23,6 @@ export type RefusalCode =
   | "source_unavailable"
   | "precondition_failed"
   | "already_running"
-  | "no_worktree"
   | "no_profile"
   | "invalid_value"
   | "confirmation_required"
@@ -57,13 +56,13 @@ export interface ActionPlan {
   readonly key: string;
   readonly project: string;
   readonly profile: string;
-  /** New branch (implement, review); null when the session starts in an existing worktree. */
+  /** Branch of the new worktree (implement, review, an adopted pull request head); null when the session starts in an existing worktree. */
   readonly branch: string | null;
-  /** Branch the daemon fetches from origin and creates `branch` from (review); null otherwise. */
+  /** Branch the daemon fetches from origin and creates `branch` from when it does not exist locally (review, adoption); null otherwise. */
   readonly baseBranch: string | null;
-  /** Commit the new worktree must hold after the launch (review); null when it is not checked. */
+  /** Commit the new worktree must hold after the launch (review, adoption); null when it is not checked. */
   readonly expectedHead: string | null;
-  /** Existing worktree (babysit, fix-ci, rebase); null when the daemon creates one. */
+  /** Existing worktree (babysit, fix-ci, rebase on a row whose linked session owns one); null when the daemon creates one. */
   readonly cwd: string | null;
   readonly name: string;
   readonly metadata: Readonly<Record<string, string>>;
