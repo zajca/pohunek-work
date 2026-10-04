@@ -157,9 +157,10 @@ async function checkKeyring(
   );
 }
 
-async function launcherChecks(deps: DoctorDeps): Promise<DoctorCheck[]> {
+async function launcherChecks(deps: DoctorDeps, config: PluginConfig | null): Promise<DoctorCheck[]> {
   if (deps.launcher === undefined) return [];
-  const found = await runLauncherChecks(deps.launcher);
+  const githubIssuePicker = config?.projects.some((project) => project.issueSource.kind === "github") ?? false;
+  const found = await runLauncherChecks(deps.launcher, githubIssuePicker);
   return found.map((check) => (check.ok ? pass(check.name, check.message) : advisory(check.name, check.message)));
 }
 
@@ -177,7 +178,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     if (error instanceof ConfigError) {
       checks.push(failed("config", "config_invalid", `${error.file}: key ${error.key}: ${error.message}`));
       // The launcher requirements do not depend on the plugin configuration.
-      checks.push(...(await launcherChecks(deps)));
+      checks.push(...(await launcherChecks(deps, null)));
       return finish(checks);
     }
     throw error;
@@ -227,7 +228,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   } else {
     checks.push(pass("linear keyring", "not needed: no project uses issue_source = \"linear\""));
   }
-  checks.push(...(await launcherChecks(deps)));
+  checks.push(...(await launcherChecks(deps, config)));
   return finish(checks);
 }
 

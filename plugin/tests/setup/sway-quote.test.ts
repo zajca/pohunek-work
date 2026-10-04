@@ -62,28 +62,28 @@ test("the generated switcher command line runs the installed script from every n
     const dir = join(root, `${String(index)} ${name}`);
     const out = await recorder(dir, "pohunek-rofi");
     await recorder(dir, "pohunek-rofi-issue");
-    const snippet = buildSwaySnippet(pathsIn(dir), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: null });
+    const snippet = buildSwaySnippet(pathsIn(dir), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: null, issueSource: null });
     expect(await run(execText(snippet, "$mod+p"))).toBe(0);
     expect((await readFile(out, "utf8")).split("\n").slice(0, 2)).toEqual([join(dir, "pohunek-rofi"), "0"]);
   }
 });
 
-test("the generated issue command line passes the required project argument unchanged", async () => {
+test("the generated issue command line passes the project and source arguments unchanged", async () => {
   const projects = ["ui", "my proj", "it's", 'q"uote', "$mod ${x} `z`", "a;b,c #d", "back\\slash"];
   for (const [index, name] of NASTY_DIRS.entries()) {
     const project = projects[index % projects.length] ?? "ui";
     const dir = join(root, `${String(index)} ${name}`);
     await recorder(dir, "pohunek-rofi");
     const out = await recorder(dir, "pohunek-rofi-issue");
-    const snippet = buildSwaySnippet(pathsIn(dir), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: project });
+    const snippet = buildSwaySnippet(pathsIn(dir), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: project, issueSource: "github" });
     expect(await run(execText(snippet, "$mod+i"))).toBe(0);
-    expect((await readFile(out, "utf8")).split("\n").slice(0, 3)).toEqual([join(dir, "pohunek-rofi-issue"), "1", project]);
+    expect((await readFile(out, "utf8")).split("\n").slice(0, 4)).toEqual([join(dir, "pohunek-rofi-issue"), "2", project, "github"]);
   }
 });
 
 test("sway sees each binding as one command and never meets a variable reference", () => {
   for (const name of NASTY_DIRS) {
-    const snippet = buildSwaySnippet(pathsIn(join(root, name)), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: `p ${name}` });
+    const snippet = buildSwaySnippet(pathsIn(join(root, name)), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: `p ${name}`, issueSource: "linear" });
     for (const line of snippet.split("\n").filter((candidate) => candidate.startsWith("bindsym"))) {
       expect(swayCommandCount(line.slice(line.indexOf(" exec ") + 1))).toBe(1);
       expect(line.slice(line.indexOf(" exec ")).match(/\$[A-Za-z_{]/g)).toBeNull();

@@ -162,7 +162,11 @@ test("setup rejects unknown steps and options that do not apply", async () => {
     ["setup", "sway", "--print", "--force"],
     ["setup", "scripts", "--issue-project", "ui"],
     ["setup", "sway", "--issue-keybind", "$mod+g"],
-    ["setup", "sway", "--issue-project", ""],
+    ["setup", "sway", "--issue-project", "", "--issue-source", "github"],
+    ["setup", "sway", "--issue-project", "ui"],
+    ["setup", "sway", "--issue-source", "github"],
+    ["setup", "sway", "--issue-project", "ui", "--issue-source", "jira"],
+    ["setup", "config", "--issue-source", "github"],
   ];
   for (const args of cases) {
     const result = await run(args, dir);
