@@ -354,7 +354,7 @@ test("rofi-issue github lists the rows that offer implement and runs `do <key> i
   expect(await read(picker.workArgs)).toBe("list\n--json\n--project\nui\n");
   // One row: key, state and title with the tab and newline flattened; every other row is dropped.
   expect(await read(picker.rofiStdin)).toBe(`${GITHUB_KEY}\tIn progress\tFix the tab bug\n`);
-  await waitForFileContains(picker.terminalArgs, ["pohunek-work\ndo\n" + GITHUB_KEY + "\nimplement\n"], "github rofi-issue terminal");
+  await waitForFileContains(picker.terminalArgs, ["pohunek-work\ndo\n" + GITHUB_KEY + "\nimplement\n--project\nui\n"], "github rofi-issue terminal");
   // `do` confirms on the terminal itself: no --yes.
   expect(await read(picker.terminalArgs)).not.toContain("--yes");
 });
@@ -406,8 +406,9 @@ test("rofi-issue linear refuses a multi-line selection whose first line is a val
 });
 
 test("rofi-issue github fails clearly on an unusable list envelope", async () => {
+  // The error envelope has the shape of `reportError` in plugin/src/cli-errors.ts: `err` is `{class, code, msg}`.
   const cases: [string, string, number, string][] = [
-    ["error envelope", JSON.stringify({ cli_version: "x", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", message: "bad config" } }), 2, "reported an error: bad config"],
+    ["error envelope", JSON.stringify({ cli_version: "x", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", msg: "bad config" } }), 2, "reported an error: bad config"],
     ["unsupported contract", listEnvelope([], { minimum: 4, maximum: 4 }), 0, "does not include supported version 3"],
     ["not json", "not json", 0, "not valid JSON"],
     ["no items", JSON.stringify({ protocol: { minimum: 3, maximum: 3 }, ok: {} }), 0, "no ok.items list"],

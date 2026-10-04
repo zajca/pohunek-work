@@ -40,6 +40,8 @@ const REGISTRY = [
 ];
 
 export interface World {
+  /** Projects registered in pohunek; defaults to `widgets` and `gadgets`. */
+  registry?: typeof REGISTRY;
   prs?: SourceResult<readonly PullRequest[]>;
   merged?: SourceResult<readonly MergedPullRequest[]>;
   issues?: SourceResult<readonly Issue[]>;
@@ -104,7 +106,7 @@ export function setup(world: World): Harness {
     return value;
   };
   const pohunek: PohunekClient = {
-    listProjects: () => Promise.resolve(count(ok("pohunek", REGISTRY))),
+    listProjects: () => Promise.resolve(count(ok("pohunek", world.registry ?? REGISTRY))),
     listSessions: () => Promise.resolve(count(ok("pohunek", world.sessions ?? []))),
     listNotifications: () => Promise.resolve(count(ok("pohunek", []))),
     launchSession: (request) => {

@@ -153,7 +153,7 @@ if not isinstance(envelope, dict):
     fail("output is not a JSON object")
 if "err" in envelope:
     err = envelope["err"]
-    detail = flatten(err.get("message")) if isinstance(err, dict) else ""
+    detail = flatten(err.get("msg")) if isinstance(err, dict) else ""
     fail(f"reported an error: {detail or 'no message'}")
 if LIST_STATUS not in (0, 3):
     fail(f"failed with exit status {LIST_STATUS}")
@@ -212,7 +212,7 @@ if [ "$issue_source" = "linear" ]; then
 else
   printf '%s' "$issue_id" | grep -Eq '^github-issue:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$' || pohunek_fail "invalid issue key: $issue_id"
   # `do` asks for confirmation on the terminal (no --yes), so the plan is shown.
-  set -- "$work_bin" do "$issue_id" "$action"
+  set -- "$work_bin" do "$issue_id" "$action" --project "$project"
 fi
 
 # Run the launch in a terminal: it may prompt for confirmation (needs a tty), and
