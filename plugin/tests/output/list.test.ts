@@ -163,13 +163,33 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     [{ actor: "unknown", reason: "github:rate_limited", rule: null }, []],
   ];
 
-  test.each(meTurns)("%p without a live linked session: %p", (onTurn, names) => {
-    expect(rowActions(item(), onTurn, context).map((action) => action.name)).toEqual([...names]);
+  /** Actions `do` starts in the worktree of a linked session. */
+  const worktreeActions: readonly string[] = ["babysit", "fix-ci", "rebase"];
+  const owner = session({ state: "stopped", activity: null, worktreePath: "/wt/a" });
+
+  test.each(meTurns)("%p with a stopped linked session that owns a worktree: %p", (onTurn, names) => {
+    expect(rowActions(item({ sessions: [owner] }), onTurn, context).map((action) => action.name)).toEqual([...names]);
   });
 
-  test.each(meTurns)("%p with a live linked session adds attach last", (onTurn, names) => {
-    const live = item({ sessions: [session()] });
+  test.each(meTurns)("%p without a linked session lists no worktree action", (onTurn, names) => {
+    const expected = names.filter((name) => !worktreeActions.includes(name));
+    expect(rowActions(item(), onTurn, context).map((action) => action.name)).toEqual(expected);
+  });
+
+  test.each(meTurns)("%p with a live linked session that owns a worktree adds attach last", (onTurn, names) => {
+    const live = item({ sessions: [session({ worktreePath: "/wt/a" })] });
     expect(rowActions(live, onTurn, context).map((action) => action.name)).toEqual([...names, "attach"]);
+  });
+
+  test.each(meTurns)("%p with a live linked session without a worktree keeps attach only for worktree actions", (onTurn, names) => {
+    const expected = names.filter((name) => !worktreeActions.includes(name));
+    expect(rowActions(item({ sessions: [session()] }), onTurn, context).map((action) => action.name)).toEqual([...expected, "attach"]);
+  });
+
+  test("any linked session that owns a worktree is enough, not only the implementing one", () => {
+    const onTurn: OnTurn = { actor: "me", reason: "respond", rule: 4 };
+    const sessions = [session({ id: "s-2", state: "stopped", worktreePath: null }), session({ id: "s-3", state: "exited", worktreePath: "/wt/b", metadata: { "work.role": "babysit" } })];
+    expect(rowActions(item({ sessions }), onTurn, context).map((action) => action.name)).toEqual(["babysit"]);
   });
 
   test("a session that is not live (exited or lost) gives no attach", () => {
@@ -180,7 +200,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
 
   test("never delegable; launch actions carry the global profile, ready and attach none", () => {
     const actions = [
-      ...rowActions(item({ sessions: [session()] }), { actor: "me", reason: "fix CI", rule: 5 }, context),
+      ...rowActions(item({ sessions: [session({ worktreePath: "/wt/a" })] }), { actor: "me", reason: "fix CI", rule: 5 }, context),
       ...rowActions(item(), { actor: "me", reason: "leave draft", rule: 6 }, context),
     ];
     expect(actions).toEqual([
@@ -195,7 +215,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     expect(rowActions(item(), { actor: "me", reason: "nothing runs", rule: 8 }, own)).toEqual([
       { name: "implement", delegable: false, profile: "project-x" },
     ]);
-    expect(rowActions(item(), { actor: "me", reason: "respond", rule: 4 }, own)).toEqual([{ name: "babysit", delegable: false }]);
+    expect(rowActions(item({ sessions: [owner] }), { actor: "me", reason: "respond", rule: 4 }, own)).toEqual([{ name: "babysit", delegable: false }]);
   });
 
   test("property: no rule, reason or session state ever lists merge", () => {
@@ -221,5 +241,24 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     const blocked = buildListItem(item({ sessions: [session()], notifications: [notification()] }), context);
     expect(blocked.on_turn.rule).toBe(1);
     expect(blocked.actions).toEqual([{ name: "attach", delegable: false }]);
+  });
+
+  test("a rule 4 or 5 row without a worktree keeps its on_turn reason and lists no action", () => {
+    const changesRequested = deliveredPr({ timeline: [] });
+    const failing = pr({ checks: [check("build", "failure")] });
+    const conflicting = pr({ mergeable: "CONFLICTING" });
+    const cases: readonly [ReturnType<typeof pr>, OnTurn, string][] = [
+      [changesRequested, { actor: "me", reason: "respond", rule: 4 }, "babysit"],
+      [failing, { actor: "me", reason: "fix CI", rule: 5 }, "fix-ci"],
+      [conflicting, { actor: "me", reason: "rebase", rule: 5 }, "rebase"],
+    ];
+    for (const [pullRequest, onTurn, action] of cases) {
+      const bare = buildListItem(item({ pullRequest }), context);
+      expect(bare.on_turn).toEqual(onTurn);
+      expect(bare.actions).toEqual([]);
+      const owned = buildListItem(item({ pullRequest, sessions: [owner] }), context);
+      expect(owned.on_turn).toEqual(onTurn);
+      expect(owned.actions.map((a) => a.name)).toEqual([action]);
+    }
   });
 });
