@@ -24,7 +24,7 @@ import {
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "pausedStates" | "profiles">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "profiles">;
   /** Global [profiles]; a project's own table replaces it whole. */
   readonly profiles: ProfilesConfig;
 }

@@ -318,3 +318,65 @@ test("a failed merged lookup makes only the issue-only row unknown and PR rows k
   expect(byKey.get("linear:ABC-2")?.sources).toEqual({ github: "ok", github_merged: "rate_limited", linear: "ok", pohunek: "ok" });
   expect(out.sourceFailures).toEqual(["widgets github_merged: rate_limited"]);
 });
+
+const gadgets = config.projects.find((p) => p.pohunekLabel === "gadgets");
+if (gadgets === undefined) throw new Error("fixture project gadgets missing");
+const githubGadgets = { ...gadgets, issueSource: { kind: "github" } } as const;
+const githubOnly = { ...config, global: { ...config.global, linear: null }, projects: [{ ...widgets, issueSource: { kind: "github" } }, githubGadgets] } as const;
+const mixed = { ...config, projects: [widgets, githubGadgets] } as const;
+
+function spiedDeps(world: World): { deps: Parameters<typeof runList>[2]; fetched: string[] } {
+  const fetched: string[] = [];
+  const base = deps(world);
+  return {
+    fetched,
+    deps: {
+      ...base,
+      linear: {
+        fetchIssues: (project) => {
+          fetched.push(project.pohunekLabel);
+          return Promise.resolve(world.issues ?? ok("linear", []));
+        },
+      },
+    },
+  };
+}
+
+test("a github-only configuration never touches Linear and reports no source failure", async () => {
+  const { deps: spied, fetched } = spiedDeps({ prs: ok("github", [draftPr]) });
+  const output = await runList(githubOnly, { mine: false, staleDays: null, json: true, project: null }, { ...spied, linear: null });
+  expect(fetched).toEqual([]);
+  expect(output.sourceFailures).toEqual([]);
+  const envelope = JSON.parse(output.stdout) as {
+    ok: { projects: { project: string; sources: Record<string, string> }[]; items: { key: string; issue_key: unknown; no_issue: boolean }[] };
+  };
+  expect(envelope.ok.projects.map((p) => p.sources["linear"])).toEqual(["unused", "unused"]);
+  expect(envelope.ok.items.every((i) => i.key.startsWith("github:") && i.issue_key === null && !i.no_issue)).toBe(true);
+});
+
+test("a github-only configuration does not call the Linear source even when one is supplied", async () => {
+  const { deps: spied, fetched } = spiedDeps({ prs: ok("github", [draftPr]) });
+  const output = await runList(githubOnly, { mine: false, staleDays: null, json: false, project: null }, spied);
+  expect(fetched).toEqual([]);
+  expect(output.sourceFailures).toEqual([]);
+});
+
+test("a mixed configuration queries Linear only for the Linear project", async () => {
+  const { deps: spied, fetched } = spiedDeps({ issues: fail("linear", "timeout") });
+  const output = await runList(mixed, { mine: false, staleDays: null, json: true, project: null }, spied);
+  expect(fetched).toEqual(["widgets"]);
+  expect(output.sourceFailures).toEqual(["widgets linear: timeout"]);
+  const envelope = JSON.parse(output.stdout) as { ok: { projects: { project: string; sources: Record<string, string> }[] } };
+  const byProject = Object.fromEntries(envelope.ok.projects.map((p) => [p.project, p.sources["linear"]]));
+  expect(byProject).toEqual({ widgets: "timeout", gadgets: "unused" });
+});
+
+test("a Linear project without a Linear source is a programming error, not a silent skip", async () => {
+  const run = runList(mixed, { mine: false, staleDays: null, json: true, project: null }, { ...deps({}), linear: null });
+  const error = await run.then(
+    () => null,
+    (caught: unknown) => caught,
+  );
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain("uses Linear");
+});

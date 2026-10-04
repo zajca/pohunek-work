@@ -1,6 +1,7 @@
 [project]
 pohunek_label = "gadgets"
 repo = "acme/gadgets"
+issue_source = "linear"
 linear_team = "ABC"
 branch_pattern = "^alice/(?P<key>ABC-[0-9]+)/"
 ignored_checks = []

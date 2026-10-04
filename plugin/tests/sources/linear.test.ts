@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createLinearSource } from "../../src/sources/linear.ts";
-import type { LinearConfig, ProjectConfig } from "../../src/types/config.ts";
+import type { LinearConfig, LinearProject } from "../../src/types/config.ts";
 import type { Exec } from "../../src/util/exec.ts";
 
 const FAKE = "fake-token-not-real";
@@ -12,7 +12,7 @@ const config: LinearConfig = {
   timeoutMs: 500,
   pageSize: 1,
 };
-const project = { name: "widgets", linearTeam: "ABC" } as unknown as ProjectConfig;
+const project = { name: "widgets", issueSource: { kind: "linear", team: "ABC", pausedStates: [] } } as unknown as LinearProject;
 
 async function fixture(name: string): Promise<unknown> {
   return (await Bun.file(new URL(`../fixtures/linear/${name}.json`, import.meta.url)).json()) as unknown;

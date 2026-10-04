@@ -1,7 +1,7 @@
 // TUI state and the pure reducer: update(state, event) -> [state, effects].
 // Every side effect (children, timers, bell, quit) is returned as data and run
 // by src/commands/tui.ts, so the whole interaction is testable without a TTY.
-import type { ListError, ListItem, ListPayload, TurnActor } from "../types/item.ts";
+import { isSourceFailure, type ListError, type ListItem, type ListPayload, type TurnActor } from "../types/item.ts";
 import { attachArgv, checkOpenUrl, isTuiAction, listArgv, previewArgv, writeArgv, type Argv } from "./actions.ts";
 import { decodeDoEnvelope, type DoField, type DoOutcome, type ListOutcome } from "./decode.ts";
 import { columnsFor, computeLayout, headerFlags, overlayHeight, type Layout } from "./layout.ts";
@@ -487,7 +487,7 @@ function listDone(state: State, run: ChildRun, outcome: ListOutcome | null, now:
     const transitions = transitionsToMe(
       state.baseline,
       outcome.payload.items,
-      outcome.payload.projects.every((project) => Object.values(project.sources).every((source) => source === "ok")),
+      outcome.payload.projects.every((project) => Object.values(project.sources).every((source) => !isSourceFailure(source))),
     );
     const meNow = new Set(outcome.payload.items.filter((item) => item.on_turn.actor === "me").map(rowId));
     const marked = new Set([...state.marked, ...transitions.marked].filter((id) => meNow.has(id)));

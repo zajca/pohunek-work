@@ -11,6 +11,11 @@ together:
 - **pohunek** — which agent session works on the item and whether it waits
   for an answer.
 
+Each project file selects its issue source with the required key
+`issue_source` (`linear` or `github`). `linear_team` and `paused_states` belong
+to `linear` only, and the global `[linear]` table and keyring entry are needed
+only while a Linear project is configured; see RFC 11.3.
+
 The result is one table with a derived `on_turn` column, a set of named
 actions (`implement`, `babysit`, `fix-ci`, `rebase`, `review`, `ready`,
 `attach`) shared by the CLI, rofi, notifications and an agent skill (merging

@@ -1,7 +1,7 @@
 // view(state) -> Frame: the whole screen as lines of SafeText, at most
 // `size.rows` lines of at most `size.columns` characters. Pure; every piece of
 // contract text goes through toSafe before it is placed.
-import type { ListAction, ListItem, ListPayload } from "../types/item.ts";
+import { isSourceFailure, type ListAction, type ListItem, type ListPayload } from "../types/item.ts";
 import { isTuiAction } from "./actions.ts";
 import { columnsFor, overlayHeight, tableWidthOf, COLUMN_GAP, DROP_ORDER, type ColumnId, type ColumnSpec, type Layout } from "./layout.ts";
 import { isStale, layoutOf, selectedRow, staleBefore, visibleRows, MS_PER_MINUTE, type State } from "./model.ts";
@@ -193,7 +193,7 @@ function headerLine(state: State, payload: ListPayload, receivedAt: number): Saf
 function bannerLines(state: State, payload: ListPayload, dataVersion: string): SafeText[] {
   const lines: SafeText[] = [];
   const failures = payload.projects.flatMap((project) => {
-    const failed = Object.entries(project.sources).filter(([, code]) => code !== "ok");
+    const failed = Object.entries(project.sources).filter(([, code]) => isSourceFailure(code));
     return failed.length === 0 ? [] : [`${project.project}: ${failed.map(([source, code]) => `${source}=${code}`).join(" ")}`];
   });
   if (failures.length > 0) lines.push(toSafe(`PARTIAL DATA ${failures.join("; ")}`));

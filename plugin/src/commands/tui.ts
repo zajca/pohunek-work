@@ -4,6 +4,7 @@
 import type { Logger } from "../log.ts";
 import { toAscii } from "../output/sanitize.ts";
 import type { TuiConfig } from "../types/config.ts";
+import { isSourceFailure } from "../types/item.ts";
 import type { Exec } from "../util/exec.ts";
 import { openUrl, runHandover, runList, runPreview, type DetachedSpawn, type ForegroundSpawn } from "../tui/children.ts";
 import { decodeDoEnvelope } from "../tui/decode.ts";
@@ -53,7 +54,7 @@ export function settingsFrom(config: TuiConfig, cliVersion: string): Settings {
 function sourceFailures(event: Extract<Event, { kind: "listDone" }>): number {
   if (event.outcome?.kind !== "ok") return 0;
   return event.outcome.payload.projects.reduce(
-    (sum, project) => sum + Object.values(project.sources).filter((code) => code !== "ok").length,
+    (sum, project) => sum + Object.values(project.sources).filter(isSourceFailure).length,
     0,
   );
 }

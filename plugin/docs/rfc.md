@@ -347,9 +347,13 @@ All interfaces use the same plugin library and the same actions.
 
 Versioned envelope matching the pohunek CLI (`{cli_version, protocol,
 ok|err}`, with the plugin's own contract version). The `list` contract is
-version 2: `on_turn.actor` gained `paused` and `on_turn.rule` gained 12, so a
-consumer pinned to version 1 gets an `incompatible` outcome instead of a
-payload it cannot decode. `do` and `setup` version their envelopes separately
+version 3: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
+version 3 adds the source status `unused`, which a source reports for a project
+that does not use it (for example `sources.linear` of a project with
+`issue_source = "github"`). `unused` is not a failure: it never appears in the
+list of unavailable sources and never makes `list` exit partial. A consumer
+pinned to an older version gets an `incompatible` outcome instead of a payload
+it cannot decode. `do` and `setup` version their envelopes separately
 (both 1). Illustrative item:
 
 ```json
@@ -373,6 +377,9 @@ payload it cannot decode. `do` and `setup` version their envelopes separately
   "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "pohunek": "ok"}
 }
 ```
+
+A pull request of a project with `issue_source = "github"` is a `github:` row
+with `issue_key` null and `no_issue` false; no issue key is resolved for it.
 
 `issue_key` is the issue key the row resolved to (RFC 7.3), or null when
 nothing resolved. It is set on the `linear:<KEY>` row and also on the other
@@ -487,12 +494,13 @@ review = "codex-pr-review"
 [project]
 pohunek_label = "connection"
 repo = "keboola/connection"
-linear_team = "DMD"
+issue_source = "linear"   # "linear" or "github"; required
+linear_team = "DMD"       # only with issue_source = "linear"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 policy_checks = []        # merge blockers the owner meets; disjoint from ignored_checks
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
-paused_states = ["On hold", "Waiting for Support"]
+paused_states = ["On hold", "Waiting for Support"]   # only with issue_source = "linear"
 
 # Optional per-project overrides; a table here replaces the global table whole.
 # [profiles]
@@ -507,6 +515,16 @@ Rules:
   `projects/<label>.toml` file. A file without a matching project, or a label
   mismatch after `project rename`, is reported by `pohunek-work doctor` and
   the project is left out; it is never guessed.
+- **`issue_source` selects where a project's issues come from.** It is
+  required and has no default. `linear` requires `linear_team` and
+  `paused_states` and queries Linear; `github` rejects both keys (an unknown-key
+  error naming the file and key) and queries no issue tracker, so its rows are
+  pull requests only. `branch_pattern`, `ignored_checks`, `policy_checks` and
+  `ai_reviewers` are required for both sources. The global `[linear]` table of
+  `config.toml` and its keyring entry are required only while at least one
+  project uses `issue_source = "linear"`; the table is validated whenever it is
+  present, and `pohunek-work doctor` checks the keyring only when a Linear
+  project exists.
 - **Tables are not field-merged.** A `[policy]` or `[profiles]` table in a
   project file replaces the global table as a whole, matching the
   per-project actions resolution rule (most specific wins whole), so what

@@ -1,10 +1,12 @@
 // Joins normalized source data into table rows (RFC section 7).
-import type {
-  JoinMatch,
-  OrphanedSession,
-  SourceStatuses,
-  WorkItem,
+import {
+  isSourceFailure,
+  type JoinMatch,
+  type OrphanedSession,
+  type SourceStatuses,
+  type WorkItem,
 } from "./types/item.ts";
+import { isLinearProject, pausedStatesOf } from "./config/issue-source.ts";
 import type { ProjectConfig } from "./types/config.ts";
 import { isLiveSession } from "./sources/pohunek.ts";
 import type {
@@ -208,6 +210,7 @@ function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | 
  */
 export function joinItems(input: JoinInput): JoinResult {
   const { project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources } = input;
+  const usesLinear = isLinearProject(project);
   const linked = linkedSessionsOf(project, sessions);
   const issuesById = new Map<string, LinearIssue>();
   for (const issue of issues) {
@@ -216,11 +219,11 @@ export function joinItems(input: JoinInput): JoinResult {
 
   const candidates: Candidate[] = pullRequests.map((pr) => ({
     pr,
-    resolution: pr.relation === "authored" ? resolveIssueKey(pr, project, issues, linked) : null,
+    resolution: pr.relation === "authored" && usesLinear ? resolveIssueKey(pr, project, issues, linked) : null,
   }));
   const winners = claimWinners(candidates);
 
-  const mergedByKey = claimMerged(mergedPullRequests, project, issues, linked);
+  const mergedByKey = usesLinear ? claimMerged(mergedPullRequests, project, issues, linked) : new Map<string, MergedPullRequest>();
 
   const drafts: RowDraft[] = [];
   const claimedKeys = new Set<string>();
@@ -268,8 +271,9 @@ export function joinItems(input: JoinInput): JoinResult {
   }
 
   // Issues in a configured paused state are not on anyone's turn; without a pull request they get no row.
+  const pausedStates = pausedStatesOf(project);
   const pausedIds = new Set(
-    issues.filter((issue) => project.pausedStates.includes(issue.stateName)).map((issue) => issue.id),
+    issues.filter((issue) => pausedStates.includes(issue.stateName)).map((issue) => issue.id),
   );
   for (const issue of issues) {
     if (claimedKeys.has(issue.id) || pausedIds.has(issue.id)) continue;
@@ -300,7 +304,7 @@ export function joinItems(input: JoinInput): JoinResult {
       sessionsByRow.set(target, [...(sessionsByRow.get(target) ?? []), l.session]);
     } else if (
       !pausedIds.has(l.linkId) &&
-      sourcesToConcludeOrphan(l.provider).every((name) => sources[name] === "ok")
+      sourcesToConcludeOrphan(l.provider).every((name) => !isSourceFailure(sources[name]))
     ) {
       orphanedSessions.push({ id: l.session.id, name: l.session.name, linkId: l.linkId });
     }

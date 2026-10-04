@@ -88,12 +88,11 @@ describe("loadConfig valid", () => {
     const widgets = config.projects[1];
     expect(widgets?.pohunekLabel).toBe("widgets");
     expect(widgets?.repo).toBe("acme/widgets");
-    expect(widgets?.linearTeam).toBe("ABC");
+    expect(widgets?.issueSource).toEqual({ kind: "linear", team: "ABC", pausedStates: ["On hold"] });
     expect(widgets?.branchPatternSource).toBe("^alice/(?P<key>ABC-[0-9]+)/");
     expect(widgets?.ignoredChecks).toEqual(["CI / Flaky"]);
     expect(widgets?.policyChecks).toEqual(["Policy / Label"]);
     expect(widgets?.aiReviewers).toEqual(["review-bot"]);
-    expect(widgets?.pausedStates).toEqual(["On hold"]);
     expect(widgets?.policy).toBeNull();
     expect(widgets?.profiles).toBeNull();
   });
@@ -502,5 +501,107 @@ describe("loadConfig [tui]", () => {
     const config = await loadConfig(dir);
     expect(config.global.tui.initialView).toBe("all");
     expect(config.global.tui.bellOnTransition).toBe(true);
+  });
+});
+
+describe("loadConfig issue_source", () => {
+  const githubProject = (text: string): string =>
+    text
+      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', 'issue_source = "github"\n')
+      .replace(/paused_states = .*\n/, "");
+  const withoutLinearTable = (text: string): string => text.replace(/\[linear\]\n(?:.+\n)+\n/, "");
+
+  test("a github project loads with no Linear keys", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject);
+    const config = await loadConfig(dir);
+    expect(config.projects.find((p) => p.name === "gadgets")?.issueSource).toEqual({ kind: "github" });
+    expect(config.projects.find((p) => p.name === "widgets")?.issueSource.kind).toBe("linear");
+  });
+
+  test("[linear] may be absent when every project uses github", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject);
+    await editFile(dir, "projects/widgets.toml", githubProject);
+    await editFile(dir, "config.toml", withoutLinearTable);
+    const config = await loadConfig(dir);
+    expect(config.global.linear).toBeNull();
+    expect(config.projects.every((p) => p.issueSource.kind === "github")).toBe(true);
+  });
+
+  test("[linear] is required while a project uses linear", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject);
+    await editFile(dir, "config.toml", withoutLinearTable);
+    const error = await loadError(dir);
+    expect(error.file).toBe("config.toml");
+    expect(error.key).toBe("linear");
+    expect(error.message).toContain("projects/widgets.toml");
+  });
+
+  test("a present [linear] table is still validated when every project uses github", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject);
+    await editFile(dir, "projects/widgets.toml", githubProject);
+    await editFile(dir, "config.toml", (t) => t.replace("page_size = 40", "page_size = 0"));
+    const error = await loadError(dir);
+    expect(error.file).toBe("config.toml");
+    expect(error.key).toBe("linear.page_size");
+  });
+
+  test("a missing issue_source is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('issue_source = "linear"\n', ""));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.issue_source");
+  });
+
+  test("an unknown issue_source is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('issue_source = "linear"', 'issue_source = "jira"'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.issue_source");
+    expect(error.message).not.toContain("jira");
+  });
+
+  test("linear_team on a github project is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => githubProject(t).replace('issue_source = "github"\n', 'issue_source = "github"\nlinear_team = "ABC"\n'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.linear_team");
+  });
+
+  test("paused_states on a github project is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => githubProject(t).replace('issue_source = "github"\n', 'issue_source = "github"\npaused_states = []\n'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.paused_states");
+  });
+
+  test("a linear project without linear_team is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('linear_team = "ABC"\n', ""));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.linear_team");
+  });
+
+  test("a linear project without paused_states is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace(/paused_states = .*\n/, ""));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.paused_states");
+  });
+
+  test("branch_pattern stays required for a github project", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => githubProject(t).replace(/branch_pattern = .*\n/, ""));
+    const error = await loadError(dir);
+    expect(error.key).toBe("project.branch_pattern");
   });
 });
