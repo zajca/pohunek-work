@@ -7,7 +7,8 @@ name: CI
 # skipped surface never leaves a missing status. The release workflow calls
 # this workflow as its gate and passes the `surface` it releases: only that
 # surface's jobs run, plus `packaging`, which tests the scripts every release
-# uses. A call without a surface runs every job.
+# uses. The plugin archive embeds the launcher scripts, so a plugin release also
+# runs the launcher checks. A call without a surface runs every job.
 on:
   pull_request:
   push:
@@ -102,7 +103,7 @@ jobs:
 
   launchers:
     needs: changes
-    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.launchers == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'launchers')) }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.launchers == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'launchers' || inputs.surface == 'plugin')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -590,7 +591,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [gui, web]
+        # A release builds only its own component; every other run builds both.
+        component: ${{ fromJSON(inputs.surface == 'gui' && '["gui"]' || inputs.surface == 'web' && '["web"]' || '["gui", "web"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
