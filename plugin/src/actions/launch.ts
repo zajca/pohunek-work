@@ -4,13 +4,15 @@
 import type { CollectedRow } from "../commands/list.ts";
 import { configuredProfile } from "../config/profiles.ts";
 import { keyFromBranch } from "../join.ts";
+import { isGithubProject } from "../config/issue-source.ts";
 import { isGithubIssueRowKey } from "../config/row-key.ts";
 import { failingChecks } from "../rules.ts";
+import type { GithubSource } from "../sources/github.ts";
 import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
-import type { PohunekSession, PullRequest } from "../types/sources.ts";
+import type { Issue, PohunekSession, PullRequest } from "../types/sources.ts";
 import { isIssueKey, slugify } from "./branch.ts";
-import { requireAuthoredPullRequest, requireGithub, requireTurn } from "./preconditions.ts";
+import { REPO, requireAuthoredPullRequest, requireGithub, requireTurn } from "./preconditions.ts";
 import { dataBlock, readTemplate, renderTemplate, type PromptName } from "./prompt.ts";
 import { ActionError, type ActionPlan, type ActionResult, type LaunchAction } from "./types.ts";
 
@@ -35,6 +37,8 @@ export interface PlanOptions {
   readonly profile: string | null;
   /** Every session pohunek knows, linked or not: one worktree must not get a second writer. */
   readonly sessions: readonly PohunekSession[];
+  /** Reads the issue body of a GitHub issue row; `implement` is the only action that does. */
+  readonly github: GithubSource;
 }
 
 function profileFor(action: LaunchAction, row: CollectedRow, config: PluginConfig, override: string | null): string {
@@ -105,11 +109,18 @@ function requireNoWorktree(row: CollectedRow): void {
   }
 }
 
-async function planImplement(row: CollectedRow, config: PluginConfig, profile: string): Promise<ActionPlan> {
-  // @TODO launch `implement` for GitHub issue rows (zajca/pohunek-work#58)
-  if (isGithubIssueRowKey(row.listItem.key)) {
-    throw new ActionError("precondition_failed", `implement refused: ${row.listItem.key} is a GitHub issue row; implement launches Linear issues only`);
+/** The branch of a launched issue has to join back to its row through the project's branch pattern. */
+function requireBranchJoins(row: CollectedRow, branch: string, key: string, adjust: string): void {
+  if (keyFromBranch(row.project.branchPattern, branch) !== key) {
+    throw new ActionError(
+      "invalid_value",
+      `branch ${branch} does not match branch_pattern of project ${row.project.pohunekLabel}; adjust ${adjust}`,
+    );
   }
+}
+
+/** The state `implement` needs from either issue provider, checked before the provider-specific plan. */
+function requireImplementable(row: CollectedRow): Issue {
   const issue = row.item.issue;
   if (issue === null || row.item.pullRequest !== null) {
     throw new ActionError("precondition_failed", `implement refused: ${row.listItem.key} is not an issue without a pull request`);
@@ -117,21 +128,35 @@ async function planImplement(row: CollectedRow, config: PluginConfig, profile: s
   requireTurn(row, "implement", (actor, rule) => actor === "me" && rule === IMPLEMENT_RULE, `it needs rule ${String(IMPLEMENT_RULE)} (nothing runs)`);
   requireNoLiveSession(row, "implement");
   requireNoWorktree(row);
+  return issue;
+}
 
-  const key = issueKeyOf(row);
-  const { branchPrefix, slugMaxLength } = config.global.actions;
-  const slug = slugify(issue.title, slugMaxLength);
+function implementArgs(row: CollectedRow, config: PluginConfig, profile: string, branch: string, name: string, metadata: Readonly<Record<string, string>>): string[] {
+  return [
+    "--project", row.project.pohunekLabel,
+    "--branch", branch,
+    "--name", name,
+    "--agent", profile,
+    ...metaArgs(metadata),
+    "--input-stdin",
+    "--request-timeout-ms", String(config.global.actions.launchTimeoutMs),
+  ];
+}
+
+function implementSlug(issue: Issue, key: string, config: PluginConfig): string {
+  const slug = slugify(issue.title, config.global.actions.slugMaxLength);
   if (slug === "") {
     throw new ActionError("invalid_value", `implement refused: the title of ${key} has no ASCII letters or digits to build a branch name from`);
   }
-  const branch = `${branchPrefix}/${key}/${slug}`;
+  return slug;
+}
+
+async function planLinearImplement(row: CollectedRow, config: PluginConfig, profile: string, issue: Issue): Promise<ActionPlan> {
+  const key = issueKeyOf(row);
+  const slug = implementSlug(issue, key, config);
+  const branch = `${config.global.actions.branchPrefix}/${key}/${slug}`;
   // The row has to find its session and pull request again through the project's branch pattern.
-  if (keyFromBranch(row.project.branchPattern, branch) !== key) {
-    throw new ActionError(
-      "invalid_value",
-      `branch ${branch} does not match branch_pattern of project ${row.project.pohunekLabel}; adjust [actions] branch_prefix`,
-    );
-  }
+  requireBranchJoins(row, branch, key, "[actions] branch_prefix");
 
   const metadata: Record<string, string> = {
     "work.link.provider": "linear",
@@ -160,17 +185,80 @@ async function planImplement(row: CollectedRow, config: PluginConfig, profile: s
     cwd: null,
     name: key,
     metadata,
-    args: [
-      "--project", row.project.pohunekLabel,
-      "--branch", branch,
-      "--name", key,
-      "--agent", profile,
-      ...metaArgs(metadata),
-      "--input-stdin",
-      "--request-timeout-ms", String(config.global.actions.launchTimeoutMs),
-    ],
+    args: implementArgs(row, config, profile, branch, key, metadata),
     prompt,
   };
+}
+
+/** The issue number of `<owner/name>#<n>`; `githubIssueKeyOf` has checked the shape. */
+function issueNumberOf(key: string): number {
+  return Number(key.slice(key.indexOf("#") + 1));
+}
+
+/**
+ * A GitHub issue: the branch is `<branch_prefix>/<issue_number_prefix><n>/<slug>`, and the body, which only
+ * this lookup reads, goes into the prompt's data block next to the title.
+ */
+async function planGithubImplement(row: CollectedRow, config: PluginConfig, profile: string, issue: Issue, github: GithubSource): Promise<ActionPlan> {
+  if (!isGithubProject(row.project)) {
+    throw new ActionError("invalid_value", `${row.listItem.key} is a GitHub issue row of project ${row.project.pohunekLabel}, whose issues do not come from GitHub`);
+  }
+  const key = githubIssueKeyOf(row);
+  const number = issueNumberOf(key);
+  const slug = implementSlug(issue, key, config);
+  const { branchPrefix, issueNumberPrefix, issueBodyMaxLength } = config.global.actions;
+  const branch = `${branchPrefix}/${issueNumberPrefix}${String(number)}/${slug}`;
+  requireBranchJoins(row, branch, String(number), "[actions] branch_prefix and issue_number_prefix, or the project's branch_pattern");
+  if (!REPO.test(row.project.repo)) {
+    throw new ActionError("invalid_value", `repository ${JSON.stringify(row.project.repo)} is not owner/name`);
+  }
+
+  const detail = await github.fetchIssueDetail(row.project, number);
+  if (!detail.ok) {
+    throw new ActionError("source_unavailable", `implement refused: reading ${key} failed (${detail.code}): ${detail.message}`);
+  }
+  if (!detail.data.open) {
+    throw new ActionError("precondition_failed", `implement refused: ${key} is closed`);
+  }
+
+  const metadata: Record<string, string> = {
+    "work.link.provider": "github",
+    "work.link.kind": "issue",
+    "work.link.id": key,
+    "work.link.url": detail.data.url,
+    "work.link.branch": branch,
+    [ROLE_KEY]: "implement",
+    "work.rev": IMPLEMENT_REV,
+  };
+  const prompt = renderTemplate(await readTemplate("work-implement-github"), {
+    issue: key,
+    number: String(number),
+    repo: row.project.repo,
+    project: row.project.pohunekLabel,
+    branch,
+    issue_block: dataBlock("github", { id: key, title: detail.data.title, url: detail.data.url }, { name: "body", value: detail.data.body, maxLength: issueBodyMaxLength }),
+  });
+  return {
+    action: "implement",
+    key: row.listItem.key,
+    project: row.project.pohunekLabel,
+    profile,
+    branch,
+    baseBranch: null,
+    expectedHead: null,
+    cwd: null,
+    name: key,
+    metadata,
+    args: implementArgs(row, config, profile, branch, key, metadata),
+    prompt,
+  };
+}
+
+async function planImplement(row: CollectedRow, config: PluginConfig, profile: string, github: GithubSource): Promise<ActionPlan> {
+  const issue = requireImplementable(row);
+  return isGithubIssueRowKey(row.listItem.key)
+    ? planGithubImplement(row, config, profile, issue, github)
+    : planLinearImplement(row, config, profile, issue);
 }
 
 /** The daemon accepts a second live session in a worktree, so the plugin refuses it, whoever started the first. */
@@ -387,7 +475,7 @@ export async function planLaunch(
   const profile = profileFor(action, row, config, options.profile);
   switch (action) {
     case "implement":
-      return planImplement(row, config, profile);
+      return planImplement(row, config, profile, options.github);
     case "review":
       return planReview(row, config, profile, options.sessions);
     default:

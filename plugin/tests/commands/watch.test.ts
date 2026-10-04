@@ -76,6 +76,7 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
         fetchPullRequests: () => Promise.resolve(world.prs),
         fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
         fetchIssues: () => Promise.resolve(world.githubIssues),
+        fetchIssueDetail: () => Promise.reject(new Error("an issue body is read only when implement is planned")),
       },
       linear: { fetchIssues: () => Promise.resolve(world.issues) },
       logger,
@@ -229,6 +230,7 @@ test("a failing poll is logged and the loop continues with the next one", async 
     github: {
       fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
       fetchIssues: () => Promise.resolve({ ok: true, source: "github_issues", data: [], durationMs: 0 }),
+      fetchIssueDetail: () => Promise.reject(new Error("an issue body is read only when implement is planned")),
       fetchPullRequests: () => {
         calls += 1;
         return calls === 1 ? Promise.reject(new Error("boom")) : Promise.resolve(githubOk([waiting]));

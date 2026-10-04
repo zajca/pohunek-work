@@ -270,3 +270,37 @@ describe("closing issue references", () => {
     expect((await fitting.fetchPullRequests(linearProject)).ok).toBe(true);
   });
 });
+
+describe("issue detail", () => {
+  const node = { number: 7, url: "https://github.example/acme/widgets/issues/7", title: "Cache widgets", state: "OPEN", body: "Line one\nLine two" };
+  const answer = (issue: unknown): Response => reply({ data: { rateLimit: { remaining: 100 }, repository: { issue } } });
+
+  test("one lookup by owner, name and number returns title, url, state and body", async () => {
+    const { source, requests } = sourceWith(() => answer(node));
+    const result = await source.fetchIssueDetail(githubProject, 7);
+    expect(result).toMatchObject({ ok: true, source: "github_issues", data: { id: "acme/widgets#7", title: "Cache widgets", url: node.url, open: true, body: "Line one\nLine two" } });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.variables).toEqual({ owner: "acme", name: "widgets", number: 7 });
+    expect(requests[0]?.query).not.toContain("acme");
+  });
+
+  test("a closed issue reports open false", async () => {
+    const { source } = sourceWith(() => answer({ ...node, state: "CLOSED" }));
+    expect(await source.fetchIssueDetail(githubProject, 7)).toMatchObject({ ok: true, data: { open: false } });
+  });
+
+  test("a missing issue, a wrong number and a malformed node fail typed without provider text", async () => {
+    for (const body of [null, { ...node, number: 8 }, { ...node, state: "MERGED" }, { ...node, body: null }]) {
+      const { source } = sourceWith(() => answer(body));
+      const result = await source.fetchIssueDetail(githubProject, 7);
+      expect(result).toMatchObject({ ok: false, source: "github_issues", code: "invalid_response" });
+    }
+  });
+
+  test("a non-positive number never reaches GitHub, and a transport failure is typed", async () => {
+    const { source, requests } = sourceWith(() => reply({}, 503));
+    expect(await source.fetchIssueDetail(githubProject, 0)).toMatchObject({ ok: false, code: "not_configured" });
+    expect(requests).toHaveLength(0);
+    expect(await source.fetchIssueDetail(githubProject, 7)).toMatchObject({ ok: false, code: "unavailable" });
+  });
+});

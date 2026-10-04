@@ -33,7 +33,11 @@ M0 and M1 are merged: `pohunek-work list` and `doctor`. M2a and M2b are in
 progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 
 - `pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--dry-run]`
-  launches a linked session; `review` starts in a fresh worktree of the pull
+  launches a linked session; `implement` also launches a `github-issue:` row: the
+  branch is `<branch_prefix>/<issue_number_prefix><n>/<slug>` (the project's
+  `branch_pattern` has to capture `<n>` from it) and the prompt carries the issue
+  title and body, cut to `[actions] issue_body_max_length` characters, inside an
+  untrusted-data block (both keys are required, `issue_number_prefix` may be empty); `review` starts in a fresh worktree of the pull
   request head and checks the checked-out commit after the launch;
 - `pohunek-work do <key> ready [--dry-run]` runs `gh pr ready` on the owner's
   draft and re-reads the pull request to confirm it is no longer a draft;

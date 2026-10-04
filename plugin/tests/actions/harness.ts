@@ -8,6 +8,7 @@ import type { LaunchRequest, PohunekClient, PohunekWorktree } from "../../src/so
 import type { PluginConfig } from "../../src/types/config.ts";
 import type {
   Issue,
+  IssueDetail,
   MergedPullRequest,
   PohunekSession,
   PullRequest,
@@ -44,6 +45,8 @@ export interface World {
   issues?: SourceResult<readonly Issue[]>;
   /** Answer of the GitHub issue source; used by a project whose issues come from GitHub. */
   githubIssues?: SourceResult<readonly Issue[]>;
+  /** Answer of the single-issue lookup `implement` makes for a GitHub issue; fails the test when absent and read. */
+  issueDetail?: (number: number) => SourceResult<IssueDetail>;
   sessions?: readonly PohunekSession[];
   launch?: (request: LaunchRequest) => SourceResult<PohunekSession>;
   /** Warning kinds the fake daemon reports with a created session. */
@@ -82,6 +85,8 @@ export interface Harness {
   /** Every `gh` argv run through the injected exec. */
   commands: (readonly string[])[];
   attached: string[];
+  /** Issue numbers whose body was read. */
+  issueReads: number[];
   worktreeReads: string[];
   /** Calls of any source; zero means nothing was read. */
   sourceCalls: () => number;
@@ -91,6 +96,7 @@ export function setup(world: World): Harness {
   const launches: LaunchRequest[] = [];
   const commands: (readonly string[])[] = [];
   const attached: string[] = [];
+  const issueReads: number[] = [];
   const worktreeReads: string[] = [];
   let calls = 0;
   const count = <T>(value: T): T => {
@@ -121,6 +127,7 @@ export function setup(world: World): Harness {
     launches,
     commands,
     attached,
+    issueReads,
     worktreeReads,
     sourceCalls: () => calls,
     deps: {
@@ -131,6 +138,11 @@ export function setup(world: World): Harness {
         fetchMergedPullRequests: (project) =>
           Promise.resolve(project.pohunekLabel === "widgets" ? (world.merged ?? ok("github", [])) : ok("github", [])),
         fetchIssues: () => Promise.resolve(count(world.githubIssues ?? ok("github_issues", []))),
+        fetchIssueDetail: (_project, number) => {
+          issueReads.push(number);
+          if (world.issueDetail === undefined) return Promise.reject(new Error("the test did not expect an issue lookup"));
+          return Promise.resolve(world.issueDetail(number));
+        },
       },
       linear: {
         fetchIssues: (project) =>

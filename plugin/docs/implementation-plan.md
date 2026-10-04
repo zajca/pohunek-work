@@ -140,6 +140,8 @@ poll_interval_secs = 300
 branch_prefix = "zajca"
 review_branch_segment = "review"
 slug_max_length = 40
+issue_number_prefix = "issue-"
+issue_body_max_length = 8000
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
 

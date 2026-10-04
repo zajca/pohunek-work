@@ -336,10 +336,10 @@ test("the table shows a github-issue row under its own key and names the issue o
   expect(lines[2]).toStartWith("github:acme/widgets#14 (acme/widgets#7)");
 });
 
-test("implement is not listed on a github-issue row, while a linear row on rule 8 still lists it", () => {
+test("implement is listed on a github-issue row and on a linear row on rule 8", () => {
   const github = buildListItem(item({ key: "github-issue:acme/widgets#7", issue: issue({ id: "acme/widgets#7" }), pullRequest: null, noIssue: false, issueKey: "acme/widgets#7" }), context);
   const linear = buildListItem(item({ key: "linear:ABC-1", issue: issue(), pullRequest: null, noIssue: false, issueKey: "ABC-1" }), context);
   expect(github.on_turn.rule).toBe(8);
-  expect(github.actions).toEqual([]);
+  expect(github.actions.map((action) => action.name)).toEqual(["implement"]);
   expect(linear.actions.map((action) => action.name)).toEqual(["implement"]);
 });

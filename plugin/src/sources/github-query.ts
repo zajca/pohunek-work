@@ -111,6 +111,15 @@ export function buildIssueSearchRequest(
   return { query, variables: { q: queryString, top: sizes.issuePageSize, nested: sizes.nestedPageSize, after } };
 }
 
+/** One issue of a repository by number, with the fields the `implement` prompt carries. */
+export function buildIssueDetailRequest(owner: string, name: string, number: number): GraphqlRequest {
+  const query = `query PohunekWorkIssueDetail($owner: String!, $name: String!, $number: Int!) {
+  rateLimit { remaining }
+  repository(owner: $owner, name: $name) { issue(number: $number) { number url title state body } }
+}`;
+  return { query, variables: { owner, name, number } };
+}
+
 /** One page of the merged pull request search; only the fields the join needs. */
 export function buildMergedSearchRequest(
   queryString: string,

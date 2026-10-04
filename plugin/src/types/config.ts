@@ -62,6 +62,10 @@ export interface ActionsConfig {
   readonly reviewBranchSegment: string;
   /** Longest slug taken from the issue title. */
   readonly slugMaxLength: number;
+  /** Text before the number in the second branch segment of a GitHub issue (`<prefix>/<this><n>/<slug>`); may be empty. */
+  readonly issueNumberPrefix: string;
+  /** Longest issue body, in characters, that reaches the prompt of a GitHub issue; the rest is cut and marked. */
+  readonly issueBodyMaxLength: number;
   /** Time the daemon may take to answer `pohunek session new`, which creates a worktree. */
   readonly launchTimeoutMs: number;
   /** Extra time after `launchTimeoutMs` before the plugin ends the pohunek process itself. */
