@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   buildConnectionRequest,
+  buildIssueSearchRequest,
   buildSearchRequest,
   type ConnectionKind,
   type GraphqlRequest,
@@ -14,6 +15,8 @@ const KINDS: readonly ConnectionKind[] = [
   "reviewRequests",
   "checkContexts",
   "threadComments",
+  "closingIssues",
+  "issueLabels",
 ];
 
 /** GraphQL rejects declared-but-unused variables and used-but-undeclared ones. */
@@ -28,8 +31,23 @@ function expectVariablesConsistent(request: GraphqlRequest): void {
 
 test("the search request declares exactly the variables it uses", () => {
   expectVariablesConsistent(
-    buildSearchRequest([{ alias: "authored", queryString: "q", after: null }], sizes),
+    buildSearchRequest([{ alias: "authored", queryString: "q", after: null }], sizes, { closingReferences: false }),
   );
+});
+
+test("the search request declares exactly the variables it uses with and without the closing references", () => {
+  const search = [{ alias: "authored", queryString: "q", after: null }];
+  const withReferences = buildSearchRequest(search, sizes, { closingReferences: true });
+  expectVariablesConsistent(withReferences);
+  expect(withReferences.query).toContain("closingIssuesReferences(first: $nested)");
+  expect(buildSearchRequest(search, sizes, { closingReferences: false }).query).not.toContain("closingIssuesReferences");
+});
+
+test("the issue search request declares exactly the variables it uses and carries the search string as a variable", () => {
+  const request = buildIssueSearchRequest("repo:acme/widgets is:issue", null, { issuePageSize: 5, nestedPageSize: 4 });
+  expectVariablesConsistent(request);
+  expect(request.variables).toEqual({ q: "repo:acme/widgets is:issue", top: 5, nested: 4, after: null });
+  expect(request.query).not.toContain("acme/widgets");
 });
 
 test("every single-kind connection request declares exactly the variables it uses", () => {

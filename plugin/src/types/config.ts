@@ -14,6 +14,8 @@ export interface GithubConfig {
   readonly timeoutMs: number;
   /** Page size of the top-level pull request connections. */
   readonly pullRequestPageSize: number;
+  /** Page size of the issue search of a project whose issues come from GitHub. */
+  readonly issuePageSize: number;
   /** Page size of connections nested in a pull request (reviews, threads, timeline, checks). */
   readonly nestedPageSize: number;
   /** Page size of the comments nested in a review thread. */
@@ -125,9 +127,13 @@ export interface LinearIssueSource {
   readonly pausedStates: readonly string[];
 }
 
-/** Pull requests are the only work items of the project; no issue tracker is consulted. */
+/** Issues of a project are the open GitHub issues of `repo` assigned to the owner that carry a started or paused label. */
 export interface GithubIssueSource {
   readonly kind: "github";
+  /** Labels that mark an assigned issue as started; never empty. */
+  readonly startedLabels: readonly string[];
+  /** Labels that pause an assigned issue; may be empty. */
+  readonly pausedLabels: readonly string[];
 }
 
 export type IssueSource = LinearIssueSource | GithubIssueSource;
@@ -164,3 +170,6 @@ export interface PluginConfig {
 
 /** A project whose issues come from Linear. */
 export type LinearProject = ProjectConfig & { readonly issueSource: LinearIssueSource };
+
+/** A project whose issues come from GitHub. */
+export type GithubProject = ProjectConfig & { readonly issueSource: GithubIssueSource };

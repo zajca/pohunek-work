@@ -2,6 +2,7 @@
 // (RFC 9.1) and the terminal table.
 import { configuredProfile } from "../config/profiles.ts";
 import { evaluateOnTurn, summarizeChecks } from "../rules.ts";
+import { isGithubIssueRowKey, isIssueRowOf } from "../config/row-key.ts";
 import { isLiveSession, worktreeOf } from "../sources/pohunek.ts";
 import { toAscii } from "./sanitize.ts";
 import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
@@ -60,13 +61,15 @@ const WORKTREE_ACTIONS: readonly string[] = ["babysit", "fix-ci", "rebase"];
  * action is listed only when a linked session owns a worktree; `on_turn` keeps
  * the reason either way. `attach` is listed whenever a live linked session
  * exists, which covers rules 1 and 11. A paused row (rule 12) has no action.
- * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
+ * `implement` is not listed on a GitHub issue row. `merge` is never listed. Delegation policy is empty, so nothing is delegable.
  */
 export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles">): ListAction[] {
   if (onTurn.actor === "paused") return [];
   const names: string[] = [];
   const primary = ruleAction(onTurn);
-  if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeOf(item.sessions) !== null)) names.push(primary);
+  // @TODO launch `implement` for GitHub issue rows (zajca/pohunek-work#58)
+  const launchable = primary !== "implement" || !isGithubIssueRowKey(item.key);
+  if (primary !== null && launchable && (!WORKTREE_ACTIONS.includes(primary) || worktreeOf(item.sessions) !== null)) names.push(primary);
   if (item.sessions.some(isLiveSession)) names.push("attach");
   return names.map((name) => {
     const profile = PROFILED_ACTIONS.includes(name) ? configuredProfile(name, context.project.profiles, context.profiles) : undefined;
@@ -163,7 +166,7 @@ function onTurnCell(item: ListItem): string {
 /** Row key; a `github:` row that resolved to an issue names it, e.g. `github:o/r#9 (ABC-11)`. */
 function keyCell(item: ListItem): string {
   if (item.no_issue) return `${item.key} (no issue)`;
-  if (item.issue_key !== null && item.key !== `linear:${item.issue_key}`) return `${item.key} (${item.issue_key})`;
+  if (item.issue_key !== null && !isIssueRowOf(item.key, item.issue_key)) return `${item.key} (${item.issue_key})`;
   return item.key;
 }
 

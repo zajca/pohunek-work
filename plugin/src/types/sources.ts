@@ -2,7 +2,7 @@
 // types; rules and join work on nothing else. Provider free text other than
 // titles is never carried (no comment or review bodies).
 
-export type SourceName = "github" | "linear" | "pohunek";
+export type SourceName = "github" | "github_issues" | "linear" | "pohunek";
 
 /** Stable, provider-independent failure codes shown in `sources` and `on_turn.reason`. */
 export type SourceErrorCode =
@@ -122,6 +122,11 @@ export interface PullRequest {
   readonly reviewRequests: readonly ReviewRequest[];
   /** Latest-commit checks; empty when the commit has no checks. */
   readonly checks: readonly Check[];
+  /**
+   * Numbers, ascending, of the issues of the project's own repository that the pull request
+   * closes; empty unless the project's issues come from GitHub.
+   */
+  readonly closingIssueNumbers: readonly number[];
   readonly updatedAt: string;
 }
 

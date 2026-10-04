@@ -2,13 +2,17 @@
 // Search strings and page sizes travel as variables; no caller value is ever
 // interpolated into the document text.
 
+import type { SearchShape } from "../util/github-budget.ts";
+
 export type ConnectionKind =
   | "reviews"
   | "reviewThreads"
   | "timelineItems"
   | "reviewRequests"
   | "checkContexts"
-  | "threadComments";
+  | "threadComments"
+  | "closingIssues"
+  | "issueLabels";
 
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 const ACTOR = "author { __typename login }";
@@ -20,9 +24,15 @@ const TIMELINE_FIELDS = `nodes { __typename ... on PullRequestCommit { commit { 
 const REQUEST_FIELDS = `nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } ${PAGE_INFO}`;
 const CONTEXT_FIELDS = `nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } ${PAGE_INFO}`;
 
+const CLOSING_FIELDS = `nodes { number repository { nameWithOwner } } ${PAGE_INFO}`;
+const LABEL_FIELDS = `nodes { name } ${PAGE_INFO}`;
+
 const TIMELINE_ITEM_TYPES = "[PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]";
 
-const PULL_REQUEST_FRAGMENT = `
+/** The closing references are part of the document only for a project whose issues come from GitHub. */
+function pullRequestFragment(closingReferences: boolean): string {
+  const closing = closingReferences ? `\n  closingIssuesReferences(first: $nested) { ${CLOSING_FIELDS} }` : "";
+  return `
 fragment PrFields on PullRequest {
   id number url title isDraft isCrossRepository headRefName headRefOid baseRefName reviewDecision mergeable updatedAt
   repository { nameWithOwner }
@@ -31,8 +41,9 @@ fragment PrFields on PullRequest {
   reviewThreads(first: $nested) { ${THREADS_FIELDS} }
   timelineItems(first: $nested, itemTypes: ${TIMELINE_ITEM_TYPES}) { ${TIMELINE_FIELDS} }
   reviewRequests(first: $nested) { ${REQUEST_FIELDS} }
-  commits(last: 1) { nodes { commit { id statusCheckRollup { contexts(first: $nested) { ${CONTEXT_FIELDS} } } } } }
+  commits(last: 1) { nodes { commit { id statusCheckRollup { contexts(first: $nested) { ${CONTEXT_FIELDS} } } } } }${closing}
 }`;
+}
 
 export interface SearchSpec {
   /** Alias of the search field and suffix of its variables. */
@@ -60,6 +71,7 @@ export interface SearchRequestSizes {
 export function buildSearchRequest(
   searches: readonly SearchSpec[],
   sizes: SearchRequestSizes,
+  shape: SearchShape,
 ): GraphqlRequest {
   const variables: GraphqlVariables = {
     top: sizes.pullRequestPageSize,
@@ -79,8 +91,24 @@ export function buildSearchRequest(
   const query = `query PohunekWorkPullRequests(${declarations.join(", ")}) {
   rateLimit { remaining }
   ${fields.join("\n  ")}
-}${PULL_REQUEST_FRAGMENT}`;
+}${pullRequestFragment(shape.closingReferences)}`;
   return { query, variables };
+}
+
+/** One page of the open issues of a repository assigned to the owner, with the first page of their labels. */
+export function buildIssueSearchRequest(
+  queryString: string,
+  after: string | null,
+  sizes: { readonly issuePageSize: number; readonly nestedPageSize: number },
+): GraphqlRequest {
+  const query = `query PohunekWorkIssues($q: String!, $top: Int!, $nested: Int!, $after: String) {
+  rateLimit { remaining }
+  issues: search(query: $q, type: ISSUE, first: $top, after: $after) {
+    issueCount ${PAGE_INFO}
+    nodes { ... on Issue { id number url title labels(first: $nested) { ${LABEL_FIELDS} } } }
+  }
+}`;
+  return { query, variables: { q: queryString, top: sizes.issuePageSize, nested: sizes.nestedPageSize, after } };
 }
 
 /** One page of the merged pull request search; only the fields the join needs. */
@@ -122,6 +150,8 @@ export const CONNECTION_KINDS: Readonly<Record<ConnectionKind, KindSpec>> = {
     path: ["comments"],
     fields: THREAD_COMMENTS_FIELDS,
   },
+  closingIssues: { parentType: "PullRequest", path: ["closingIssuesReferences"], fields: CLOSING_FIELDS },
+  issueLabels: { parentType: "Issue", path: ["labels"], fields: LABEL_FIELDS },
 };
 
 export interface ConnectionPageSpec {

@@ -2,6 +2,7 @@
 // `size.rows` lines of at most `size.columns` characters. Pure; every piece of
 // contract text goes through toSafe before it is placed.
 import { isSourceFailure, type ListAction, type ListItem, type ListPayload } from "../types/item.ts";
+import { isIssueRowOf } from "../config/row-key.ts";
 import { isTuiAction } from "./actions.ts";
 import { columnsFor, overlayHeight, tableWidthOf, COLUMN_GAP, DROP_ORDER, type ColumnId, type ColumnSpec, type Layout } from "./layout.ts";
 import { isStale, layoutOf, selectedRow, staleBefore, visibleRows, MS_PER_MINUTE, type State } from "./model.ts";
@@ -219,20 +220,20 @@ function actionLabel(action: ListAction, primary: boolean): string {
   return `${action.name}${primary ? "*" : ""}${profile}${isTuiAction(action.name) ? "" : " [not run by the TUI]"}`;
 }
 
-/** Issue key in parentheses after the key of a row that resolved to an issue but is not its `linear:` row. */
+/** Issue key in parentheses after the key of a row that resolved to an issue but is not that issue's own row. */
 function secondaryIssueTag(item: ListItem): string {
-  return item.issue_key !== null && item.key !== `linear:${item.issue_key}` ? ` (${item.issue_key})` : "";
+  return item.issue_key !== null && !isIssueRowOf(item.key, item.issue_key) ? ` (${item.issue_key})` : "";
 }
 
 /** Names the issue of a `github:` row that resolved to one. */
 function secondaryIssueNote(item: ListItem): string {
-  return item.issue_key !== null && item.key !== `linear:${item.issue_key}` ? `  issue ${item.issue_key}` : "";
+  return item.issue_key !== null && !isIssueRowOf(item.key, item.issue_key) ? `  issue ${item.issue_key}` : "";
 }
 
 /** Detail of one row, unwrapped; the caller wraps to the pane width. */
 export function detailLines(state: State, item: ListItem): SafeText[] {
   const lines: string[] = [
-    `${item.key}  (project ${item.project})${item.no_issue ? "  no Linear issue" : ""}${secondaryIssueNote(item)}`,
+    `${item.key}  (project ${item.project})${item.no_issue ? "  no issue" : ""}${secondaryIssueNote(item)}`,
     `turn: ${turnCell(item)}`,
     `  ${ruleLine(item)}`,
   ];

@@ -18,10 +18,10 @@ import { session } from "../rules/builders.ts";
 
 export const baseConfig: PluginConfig = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 
-export function ok<T>(source: "github" | "linear" | "pohunek", data: T): SourceResult<T> {
+export function ok<T>(source: "github" | "github_issues" | "linear" | "pohunek", data: T): SourceResult<T> {
   return { ok: true, source, data, durationMs: 1 };
 }
-export function fail(source: "github" | "linear" | "pohunek", code: "timeout" | "unavailable", message = "failed"): SourceResult<never> {
+export function fail(source: "github" | "github_issues" | "linear" | "pohunek", code: "timeout" | "unavailable", message = "failed"): SourceResult<never> {
   return { ok: false, source, code, message, durationMs: 1 };
 }
 
@@ -42,6 +42,8 @@ export interface World {
   prs?: SourceResult<readonly PullRequest[]>;
   merged?: SourceResult<readonly MergedPullRequest[]>;
   issues?: SourceResult<readonly Issue[]>;
+  /** Answer of the GitHub issue source; used by a project whose issues come from GitHub. */
+  githubIssues?: SourceResult<readonly Issue[]>;
   sessions?: readonly PohunekSession[];
   launch?: (request: LaunchRequest) => SourceResult<PohunekSession>;
   /** Warning kinds the fake daemon reports with a created session. */
@@ -128,6 +130,7 @@ export function setup(world: World): Harness {
           Promise.resolve(count(project.pohunekLabel === "widgets" ? (world.prs ?? ok("github", [])) : ok("github", []))),
         fetchMergedPullRequests: (project) =>
           Promise.resolve(project.pohunekLabel === "widgets" ? (world.merged ?? ok("github", [])) : ok("github", [])),
+        fetchIssues: () => Promise.resolve(count(world.githubIssues ?? ok("github_issues", []))),
       },
       linear: {
         fetchIssues: (project) =>

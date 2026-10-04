@@ -5,7 +5,7 @@ import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
 import type { Issue, PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type ExecResult } from "../../src/util/exec.ts";
-import { check, issue, pr } from "../rules/builders.ts";
+import { check, githubIssueSource, issue, pr } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 
@@ -25,7 +25,7 @@ interface Recorded {
 
 interface Harness {
   deps: WatchDeps;
-  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]> };
+  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]>; githubIssues: SourceResult<readonly Issue[]> };
   argvs: (readonly string[])[];
   logs: Recorded[];
   setExec(next: () => Promise<ExecResult>): void;
@@ -39,8 +39,12 @@ function linearOk(issues: readonly Issue[]): SourceResult<readonly Issue[]> {
   return { ok: true, source: "linear", data: issues, durationMs: 1 };
 }
 
+function githubIssuesOk(issues: readonly Issue[]): SourceResult<readonly Issue[]> {
+  return { ok: true, source: "github_issues", data: issues, durationMs: 1 };
+}
+
 function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
-  const world = { prs: githubOk(prs), issues: linearOk([]) };
+  const world = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]) };
   const argvs: (readonly string[])[] = [];
   const logs: Recorded[] = [];
   let execNext: () => Promise<ExecResult> = () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
@@ -71,6 +75,7 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
       github: {
         fetchPullRequests: () => Promise.resolve(world.prs),
         fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
+        fetchIssues: () => Promise.resolve(world.githubIssues),
       },
       linear: { fetchIssues: () => Promise.resolve(world.issues) },
       logger,
@@ -223,6 +228,7 @@ test("a failing poll is logged and the loop continues with the next one", async 
     ...h.deps,
     github: {
       fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
+      fetchIssues: () => Promise.resolve({ ok: true, source: "github_issues", data: [], durationMs: 0 }),
       fetchPullRequests: () => {
         calls += 1;
         return calls === 1 ? Promise.reject(new Error("boom")) : Promise.resolve(githubOk([waiting]));
@@ -292,7 +298,7 @@ test("a github-only configuration counts every poll complete and baselines at on
   const githubOnly = {
     ...config,
     global: { ...config.global, linear: null },
-    projects: config.projects.map((p) => ({ ...p, issueSource: { kind: "github" } }) as const),
+    projects: config.projects.map((p) => ({ ...p, issueSource: githubIssueSource })),
   };
   const h = harness([mine]);
   h.deps = { ...h.deps, linear: null };
@@ -300,4 +306,28 @@ test("a github-only configuration counts every poll complete and baselines at on
   expect(first.baseline).not.toBeNull();
   expect(h.logs.some((l) => l.event === "watch_tick")).toBe(true);
   expect(h.logs.filter((l) => l.level === "error")).toEqual([]);
+});
+
+test("a github issue becomes the owner's turn, notifies once under its github-issue key and pausing it clears the row", async () => {
+  const githubConfig = {
+    ...config,
+    global: { ...config.global, linear: null },
+    projects: config.projects.map((p) => ({ ...p, issueSource: githubIssueSource })),
+  };
+  const started = issue({ id: "acme/widgets#7", state: "in-progress" });
+  const h = harness([]);
+  h.deps = { ...h.deps, linear: null };
+  const watch = (baseline: Parameters<typeof watchTick>[3]): ReturnType<typeof watchTick> =>
+    watchTick(githubConfig, options, h.deps, baseline, new AbortController().signal);
+  let state = (await watch(null)).baseline;
+  expect(state?.size).toBe(0);
+  h.world.githubIssues = githubIssuesOk([started]);
+  const appeared = await watch(state);
+  state = appeared.baseline;
+  expect(appeared.notified).toEqual(["widgets github-issue:acme/widgets#7"]);
+  expect(h.argvs.join(" ")).toContain("github-issue:acme/widgets#7");
+  h.world.githubIssues = githubIssuesOk([{ ...started, started: false, paused: true, state: "on-hold" }]);
+  const paused = await watch(state);
+  expect(paused.notified).toEqual([]);
+  expect(paused.baseline?.has("widgets github-issue:acme/widgets#7")).toBe(false);
 });

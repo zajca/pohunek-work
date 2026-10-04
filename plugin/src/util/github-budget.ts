@@ -13,20 +13,35 @@ export interface NodeBudgetSizes {
   readonly threadCommentPageSize: number;
 }
 
+/** Nested connections of a pull request in the search fragment, without the closing issue references. */
+const PULL_REQUEST_CONNECTIONS = 5;
+
+export interface SearchShape {
+  /** The fragment also requests `closingIssuesReferences` (projects whose issues come from GitHub). */
+  readonly closingReferences: boolean;
+}
+
 /**
  * Upper bound of nodes one search page can request: per pull request the
- * node itself, five nested connections (reviews, threads, timeline, review
- * requests, check contexts) and the comments of every thread.
+ * node itself, its nested connections (reviews, threads, timeline, review
+ * requests, check contexts and, for a GitHub issue source, the closing issue
+ * references) and the comments of every thread.
  */
-export function estimateSearchNodes(sizes: NodeBudgetSizes): number {
+export function estimateSearchNodes(sizes: NodeBudgetSizes, shape: SearchShape): number {
+  const connections = PULL_REQUEST_CONNECTIONS + (shape.closingReferences ? 1 : 0);
   const perPullRequest =
-    1 + 5 * sizes.nestedPageSize + sizes.nestedPageSize * sizes.threadCommentPageSize;
+    1 + connections * sizes.nestedPageSize + sizes.nestedPageSize * sizes.threadCommentPageSize;
   return sizes.pullRequestPageSize * (1 + perPullRequest);
 }
 
 /** Total for a request that holds `searches` aliased searches. */
-export function estimateRequestNodes(sizes: NodeBudgetSizes, searches: number): number {
-  return searches * estimateSearchNodes(sizes);
+export function estimateRequestNodes(sizes: NodeBudgetSizes, searches: number, shape: SearchShape): number {
+  return searches * estimateSearchNodes(sizes, shape);
+}
+
+/** Upper bound of nodes one issue search page can request: per issue the node itself and its label page. */
+export function estimateIssueSearchNodes(sizes: Pick<NodeBudgetSizes, "nestedPageSize"> & { readonly issuePageSize: number }): number {
+  return sizes.issuePageSize * (1 + sizes.nestedPageSize);
 }
 
 /** Nodes a follow-up alias spends on the `node(id:)` lookup and the parents above its connection. */
@@ -52,6 +67,8 @@ export function estimateConnectionNodes(kind: ConnectionKind, sizes: ConnectionN
     case "timelineItems":
     case "reviewRequests":
     case "checkContexts":
+    case "closingIssues":
+    case "issueLabels":
       items = sizes.nestedPageSize;
       break;
   }

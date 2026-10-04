@@ -24,7 +24,10 @@ export const identity: IdentityConfig = {
 
 export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource };
 
-export const allOk: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
+/** Issues of the project come from GitHub issues carrying these labels. */
+export const githubIssueSource = { kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] } as const satisfies IssueSource;
+
+export const allOk: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "ok" };
 
 export const T0 = "2026-05-01T10:00:00Z";
 export const T1 = "2026-05-01T11:00:00Z";
@@ -101,6 +104,7 @@ export function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     timeline: [],
     reviewRequests: [],
     checks: [],
+    closingIssueNumbers: [],
     updatedAt: T3,
     ...overrides,
   };

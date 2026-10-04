@@ -185,10 +185,9 @@ function evaluateChangesRequested(
   };
 }
 
-/** Failure text of the project's issue source; null when it is `ok` or the project has none. */
+/** Failure text of the project's issue source; null when it is `ok`. */
 function issueSourceFailure(sources: SourceStatuses, project: Pick<ProjectConfig, "issueSource">): string | null {
-  const key = issueSourceStatusKey(project);
-  return key === null ? null : failedSources(sources, [key]);
+  return failedSources(sources, [issueSourceStatusKey(project)]);
 }
 
 function failedSources(

@@ -24,7 +24,7 @@ const project = {
   profiles: null,
 } satisfies ProjectConfig;
 
-const okSources: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
+const okSources: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "ok" };
 
 function issue(id: string, attachmentUrls: string[] = []): Issue {
   return {
@@ -64,6 +64,7 @@ function pr(
     timeline: [],
     reviewRequests: [],
     checks: [],
+    closingIssueNumbers: [],
     updatedAt: "2026-01-01T00:00:00Z",
   };
 }
@@ -97,11 +98,7 @@ function notification(id: string, sessionId: string | null): PohunekNotification
   };
 }
 
-const githubProject: ProjectConfig = { ...project, issueSource: { kind: "github" } };
-
-function runGithub(partial: Partial<JoinInput>): ReturnType<typeof joinItems> {
-  return run({ project: githubProject, sources: { ...okSources, linear: "unused" }, ...partial });
-}
+const githubProject: ProjectConfig = { ...project, issueSource: { kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] } };
 
 function run(partial: Partial<JoinInput>): ReturnType<typeof joinItems> {
   return joinItems({
@@ -150,18 +147,18 @@ describe("join precedence", () => {
       ],
     });
     expect(items[0]?.key).toBe("linear:ABC-2");
-    expect(items[0]?.joinedBy).toBe("linear_attachment");
+    expect(items[0]?.joinedBy).toBe("issue_reference");
     expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s1"]);
   });
 
-  test("linear attachment with exact url joins by linear_attachment", () => {
+  test("linear attachment with exact url joins by issue_reference", () => {
     const { items } = run({
       issues: [issue("ABC-3", ["https://github.example/acme/widgets/pull/2"])],
       pullRequests: [pr(2, "feature/y")],
     });
     expect(items).toHaveLength(1);
     expect(items[0]?.key).toBe("linear:ABC-3");
-    expect(items[0]?.joinedBy).toBe("linear_attachment");
+    expect(items[0]?.joinedBy).toBe("issue_reference");
   });
 
   test("attachment url must match exactly", () => {
@@ -225,7 +222,7 @@ describe("join precedence", () => {
     });
     const row = items.find((i) => i.pullRequest !== null);
     expect(row?.key).toBe("linear:ABC-5");
-    expect(row?.joinedBy).toBe("linear_attachment");
+    expect(row?.joinedBy).toBe("issue_reference");
     expect(items.map((i) => i.key)).toEqual(["linear:ABC-5", "linear:ABC-6"]);
   });
 });
@@ -611,36 +608,159 @@ describe("legacy link.* metadata and unlinked sessions", () => {
 });
 
 describe("github issue source", () => {
-  test("a numeric branch pattern match yields a github row without an issue key", () => {
-    const { items } = runGithub({ pullRequests: [pr(1, "me/ABC-1/work")] });
+  const ghIssue = (number: number, overrides: Partial<Issue> = {}): Issue => ({
+    id: `acme/widgets#${number}`,
+    title: "Add widget cache",
+    url: `https://github.example/acme/widgets/issues/${number}`,
+    state: "in-progress",
+    started: true,
+    paused: false,
+    assigneeIsMe: true,
+    attachmentUrls: [],
+    ...overrides,
+  });
+  const withClosing = (number: number, head: string, closing: number[]): PullRequest => ({ ...pr(number, head), closingIssueNumbers: closing });
+  const link = (id: string, kind: string, branch: string, provider = "github"): Record<string, string> => ({
+    "work.link.provider": provider,
+    "work.link.kind": kind,
+    "work.link.id": id,
+    "work.link.branch": branch,
+  });
+  const sources: SourceStatuses = { ...okSources, linear: "unused", github_issues: "ok" };
+  const gh = (partial: Partial<JoinInput>): ReturnType<typeof joinItems> =>
+    joinItems({
+      project: githubProject,
+      issues: [],
+      pullRequests: [],
+      mergedPullRequests: [],
+      sessions: [],
+      notifications: [],
+      sources,
+      ...partial,
+    });
+
+  test("an issue without a pull request is a github-issue row keyed by owner/name#number", () => {
+    const { items } = gh({ issues: [ghIssue(7)] });
+    expect(items.map((i) => [i.key, i.issueKey, i.pullRequest])).toEqual([["github-issue:acme/widgets#7", "acme/widgets#7", null]]);
+    expect(items[0]?.issue?.id).toBe("acme/widgets#7");
+  });
+
+  test("a paused issue without a pull request gets no row", () => {
+    expect(gh({ issues: [ghIssue(7, { started: false, paused: true })] }).items).toEqual([]);
+  });
+
+  test("a closing reference joins the pull request to the issue row", () => {
+    const { items } = gh({ issues: [ghIssue(7)], pullRequests: [withClosing(1, "feature/x", [7])] });
     expect(items).toHaveLength(1);
-    expect(items[0]?.key).toBe("github:acme/widgets#1");
-    expect(items[0]?.issueKey).toBeNull();
-    expect(items[0]?.joinedBy).toBeNull();
-    expect(items[0]?.noIssue).toBe(false);
+    expect(items[0]).toMatchObject({ key: "github-issue:acme/widgets#7", joinedBy: "issue_reference", noIssue: false });
+    expect(items[0]?.pullRequest?.id).toBe("acme/widgets#1");
   });
 
-  test("a linear-provider session link never creates a linear row", () => {
-    const { items } = runGithub({
-      pullRequests: [pr(1, "feature/x")],
-      sessions: [
-        session("s1", { "work.link.provider": "linear", "work.link.id": "ABC-1", "work.link.branch": "feature/x" }),
-      ],
+  test("a closing reference to an issue that is not on the table still names the issue row", () => {
+    const { items } = gh({ pullRequests: [withClosing(1, "feature/x", [7])] });
+    expect(items[0]).toMatchObject({ key: "github-issue:acme/widgets#7", issue: null, joinedBy: "issue_reference" });
+  });
+
+  test("a pull request that closes several issues joins the lowest one on the table, else the lowest", () => {
+    const onTable = gh({ issues: [ghIssue(9)], pullRequests: [withClosing(1, "feature/x", [3, 9, 11])] });
+    expect(onTable.items.map((i) => i.key)).toEqual(["github-issue:acme/widgets#9"]);
+    const none = gh({ pullRequests: [withClosing(1, "feature/x", [3, 9])] });
+    expect(none.items.map((i) => i.key)).toEqual(["github-issue:acme/widgets#3"]);
+  });
+
+  test("a session link of kind issue wins over a closing reference and the branch pattern", () => {
+    const { items } = gh({
+      issues: [ghIssue(5), ghIssue(7), ghIssue(12)],
+      pullRequests: [withClosing(1, "me/12-work", [7])],
+      sessions: [session("s1", link("acme/widgets#5", "issue", "me/12-work"))],
     });
+    expect(items.find((i) => i.pullRequest !== null)).toMatchObject({ key: "github-issue:acme/widgets#5", joinedBy: "session_link" });
+    expect(items.find((i) => i.pullRequest !== null)?.sessions.map((s) => s.id)).toEqual(["s1"]);
+  });
+
+  test("a session link of kind pull_request or without a kind never resolves a pull request to an issue", () => {
+    for (const metadata of [link("acme/widgets#1", "pull_request", "feature/x"), { "work.link.provider": "github", "work.link.id": "acme/widgets#1", "work.link.branch": "feature/x" }]) {
+      const { items } = gh({ pullRequests: [pr(1, "feature/x")], sessions: [session("s1", metadata)] });
+      expect(items.map((i) => i.key)).toEqual(["github:acme/widgets#1"]);
+      expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s1"]);
+    }
+  });
+
+  test("a session link to an issue of another repository is ignored", () => {
+    const { items } = gh({ pullRequests: [pr(1, "feature/x")], sessions: [session("s1", link("acme/other#5", "issue", "feature/x"))] });
     expect(items.map((i) => i.key)).toEqual(["github:acme/widgets#1"]);
-    expect(items[0]?.issueKey).toBeNull();
-    expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s1"]);
   });
 
-  test("a merged pull request produces no row", () => {
-    const { items } = runGithub({ mergedPullRequests: [merged(5, "me/ABC-1/work")] });
-    expect(items).toEqual([]);
+  test("a closing reference wins over the branch pattern", () => {
+    const { items } = gh({ pullRequests: [withClosing(1, "me/12-work", [7])] });
+    expect(items[0]).toMatchObject({ key: "github-issue:acme/widgets#7", joinedBy: "issue_reference" });
   });
 
-  test("an unlinked session is orphaned with linear unused and github ok", () => {
-    const { orphanedSessions } = runGithub({
-      sessions: [session("s1", { "work.link.provider": "github", "work.link.id": "acme/widgets#9" })],
+  test("a branch pattern capture of a decimal number resolves to owner/name#number", () => {
+    const githubNumeric: ProjectConfig = { ...githubProject, branchPattern: /^me\/(?<key>[0-9A-Za-z]+)-/ };
+    const { items } = gh({ project: githubNumeric, issues: [ghIssue(12)], pullRequests: [pr(1, "me/12-work")] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "github-issue:acme/widgets#12", joinedBy: "branch_pattern" });
+  });
+
+  test("a branch pattern capture that is not a decimal number does not resolve", () => {
+    const githubNumeric: ProjectConfig = { ...githubProject, branchPattern: /^me\/(?<key>[0-9A-Za-z]+)-/ };
+    const { items } = gh({ project: githubNumeric, pullRequests: [pr(1, "me/ABC1-work"), pr(2, "me/0-work")] });
+    expect(items.map((i) => [i.key, i.issueKey, i.noIssue])).toEqual([
+      ["github:acme/widgets#1", null, true],
+      ["github:acme/widgets#2", null, true],
+    ]);
+  });
+
+  test("a pull request that resolves to nothing is flagged only while the issue source answered", () => {
+    expect(gh({ pullRequests: [pr(1, "feature/x")] }).items[0]?.noIssue).toBe(true);
+    expect(gh({ pullRequests: [pr(1, "feature/x")], sources: { ...sources, github_issues: "timeout" } }).items[0]?.noIssue).toBe(false);
+  });
+
+  test("a pull request that joins by closing reference and a second one for the same issue keep one issue row", () => {
+    const { items } = gh({ issues: [ghIssue(7)], pullRequests: [withClosing(1, "a", [7]), withClosing(2, "b", [7])] });
+    expect(items.map((i) => [i.key, i.issueKey])).toEqual([
+      ["github-issue:acme/widgets#7", "acme/widgets#7"],
+      ["github:acme/widgets#2", "acme/widgets#7"],
+    ]);
+    expect(items[1]?.noIssue).toBe(false);
+  });
+
+  test("a merged pull request resolved by branch pattern or session link explains the issue-only row", () => {
+    const githubNumeric: ProjectConfig = { ...githubProject, branchPattern: /^me\/(?<key>[0-9A-Za-z]+)-/ };
+    const byBranch = gh({ project: githubNumeric, issues: [ghIssue(12)], mergedPullRequests: [merged(5, "me/12-work")] });
+    expect(byBranch.items[0]?.mergedPullRequest?.number).toBe(5);
+    const bySession = gh({
+      issues: [ghIssue(7)],
+      mergedPullRequests: [merged(5, "feature/x")],
+      sessions: [session("s1", link("acme/widgets#7", "issue", "feature/x"))],
     });
-    expect(orphanedSessions.map((o) => o.id)).toEqual(["s1"]);
+    expect(bySession.items[0]).toMatchObject({ key: "github-issue:acme/widgets#7" });
+    expect(bySession.items[0]?.mergedPullRequest?.number).toBe(5);
+  });
+
+  test("a merged pull request without a match produces no row", () => {
+    expect(gh({ mergedPullRequests: [merged(5, "feature/x")] }).items).toEqual([]);
+  });
+
+  test("a session linked to an issue that left the table is orphaned only while github and github_issues answered", () => {
+    const sessions = [session("s1", link("acme/widgets#9", "issue", "feature/x"))];
+    expect(gh({ sessions }).orphanedSessions.map((o) => o.id)).toEqual(["s1"]);
+    expect(gh({ sessions, sources: { ...sources, github_issues: "timeout" } }).orphanedSessions).toEqual([]);
+  });
+
+  test("a session linked to a paused issue is never orphaned", () => {
+    const sessions = [session("s1", link("acme/widgets#7", "issue", "feature/x"))];
+    expect(gh({ issues: [ghIssue(7, { started: false, paused: true })], sessions }).orphanedSessions).toEqual([]);
+  });
+
+  test("a session linked to a pull request needs only github to be called orphaned", () => {
+    const sessions = [session("s1", link("acme/widgets#9", "pull_request", "feature/x"))];
+    expect(gh({ sessions, sources: { ...sources, github_issues: "timeout" } }).orphanedSessions.map((o) => o.id)).toEqual(["s1"]);
+  });
+
+  test("a linear-provider session link never creates a github-issue row", () => {
+    const { items } = gh({ pullRequests: [pr(1, "feature/x")], sessions: [session("s1", link("ABC-1", "issue", "feature/x", "linear"))] });
+    expect(items.map((i) => i.key)).toEqual(["github:acme/widgets#1"]);
   });
 });

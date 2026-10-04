@@ -44,6 +44,15 @@ describe("decodeListEnvelope", () => {
     expect(decodeListEnvelope(JSON.stringify(bad))).toEqual({ kind: "malformed", message: "ok.items[0].on_turn.rule is not a known rule" });
   });
 
+  test("the github_issues status of a row is required and a github-issue row decodes", () => {
+    const good = JSON.parse(envelopeText(payload([row("github-issue:acme/widgets#7")]))) as { ok: { items: { sources: Record<string, unknown> }[] } };
+    expect(decodeListEnvelope(JSON.stringify(good)).kind).toBe("ok");
+    const sources = good.ok.items[0]?.sources;
+    if (sources === undefined) throw new Error("fixture");
+    delete sources["github_issues"];
+    expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].sources.github_issues is not a string" });
+  });
+
   test("the err envelope is decoded with its class, code and message", () => {
     const text = JSON.stringify({
       cli_version: "0.1.0",

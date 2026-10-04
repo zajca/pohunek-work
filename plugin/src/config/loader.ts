@@ -18,7 +18,7 @@ import type {
   TuiInitialView,
   WatchConfig,
 } from "../types/config.ts";
-import { estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
+import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
 import {
   fail,
@@ -89,6 +89,7 @@ function parseGithub(root: Table, file: string): GithubConfig {
     "gh_bin",
     "timeout_ms",
     "pull_request_page_size",
+    "issue_page_size",
     "nested_page_size",
     "thread_comment_page_size",
     "merged_lookback_days",
@@ -98,16 +99,27 @@ function parseGithub(root: Table, file: string): GithubConfig {
     ghBin: readAbsolutePath(table, "gh_bin", file, path),
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
     pullRequestPageSize: readGithubPageSize(table, "pull_request_page_size", file, path),
+    issuePageSize: readGithubPageSize(table, "issue_page_size", file, path),
     nestedPageSize: readGithubPageSize(table, "nested_page_size", file, path),
     threadCommentPageSize: readGithubPageSize(table, "thread_comment_page_size", file, path),
     mergedLookbackDays: readPositiveInt(table, "merged_lookback_days", file, path),
   };
-  // The authored and the directly requested searches always run in one request.
-  if (estimateRequestNodes(config, 2) > GITHUB_MAX_NODES) {
+  // The authored and the directly requested searches always run in one request. The worst case
+  // includes the closing issue references, which only projects with a GitHub issue source request:
+  // a limit that depends on the project files would make the global file valid or not by what the
+  // project files contain.
+  if (estimateRequestNodes(config, 2, { closingReferences: true }) > GITHUB_MAX_NODES) {
     throw fail(
       file,
       [...path, "pull_request_page_size"],
       `with nested_page_size and thread_comment_page_size exceeds the GitHub limit of ${GITHUB_MAX_NODES.toString()} nodes per request; lower the page sizes`,
+    );
+  }
+  if (estimateIssueSearchNodes(config) > GITHUB_MAX_NODES) {
+    throw fail(
+      file,
+      [...path, "issue_page_size"],
+      `with nested_page_size exceeds the GitHub limit of ${GITHUB_MAX_NODES.toString()} nodes per request; lower the page sizes`,
     );
   }
   return config;
@@ -309,6 +321,17 @@ function compileBranchPattern(source: string, file: string): RegExp {
 
 /** Keys that only an issue source of the given kind accepts. */
 const LINEAR_ONLY_KEYS = ["linear_team", "paused_states"] as const;
+const GITHUB_ONLY_KEYS = ["started_labels", "paused_labels"] as const;
+
+/** Label names are compared case-insensitively, so two spellings of one label are a duplicate. */
+function rejectDuplicateLabels(labels: readonly string[], file: string, path: readonly string[], key: string): void {
+  const seen = new Set<string>();
+  for (const label of labels) {
+    const folded = label.toLowerCase();
+    if (seen.has(folded)) throw fail(file, [...path, key], `must not list ${JSON.stringify(label)} twice`);
+    seen.add(folded);
+  }
+}
 
 function parseIssueSource(table: Table, file: string, path: readonly string[]): IssueSource {
   const kind = readEnum(table, "issue_source", ISSUE_SOURCES, file, path);
@@ -316,7 +339,18 @@ function parseIssueSource(table: Table, file: string, path: readonly string[]): 
     for (const key of LINEAR_ONLY_KEYS) {
       if (key in table) throw fail(file, [...path, key], 'is only valid with issue_source = "linear"');
     }
-    return { kind };
+    const startedLabels = readNonEmptyStringArray(table, "started_labels", file, path);
+    const pausedLabels = readStringArray(table, "paused_labels", file, path);
+    rejectDuplicateLabels(startedLabels, file, path, "started_labels");
+    rejectDuplicateLabels(pausedLabels, file, path, "paused_labels");
+    const both = pausedLabels.find((label) => startedLabels.some((started) => started.toLowerCase() === label.toLowerCase()));
+    if (both !== undefined) {
+      throw fail(file, [...path, "paused_labels"], `must not repeat ${JSON.stringify(both)} from started_labels`);
+    }
+    return { kind, startedLabels, pausedLabels };
+  }
+  for (const key of GITHUB_ONLY_KEYS) {
+    if (key in table) throw fail(file, [...path, key], 'is only valid with issue_source = "github"');
   }
   return {
     kind,
@@ -332,7 +366,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states"],
+    ["pohunek_label", "repo", "issue_source", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels"],
     file,
     path,
   );
