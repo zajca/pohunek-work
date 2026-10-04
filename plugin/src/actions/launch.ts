@@ -530,8 +530,11 @@ export function displayArgv(bin: string, plan: ActionPlan): string[] {
 /**
  * The session runs once the daemon answered, so a wrong checkout can only be
  * reported: the review and adoption prompts tell the agent to stop on a different HEAD.
+ * A review session is read-only, so a differing head is a failed launch. An adopted session writes and
+ * core reports no head at creation, so a differing head may be the agent's own pull or rebase: it is
+ * returned for the caller to report and the agent's own check before any change stays the guard.
  */
-async function verifyHead(plan: ActionPlan, expected: string, result: ActionResult, pohunek: PohunekClient): Promise<void> {
+async function verifyHead(plan: ActionPlan, expected: string, result: ActionResult, pohunek: PohunekClient): Promise<ActionResult["headMismatch"]> {
   // A review branch exists only for the review; an adopted branch is the owner's and may hold unpushed commits.
   const cleanup = plan.action === "review"
     ? `the session runs; remove it with \`pohunek session rm ${result.sessionId}\` and delete the local branch ${String(plan.branch)}`
@@ -550,10 +553,14 @@ async function verifyHead(plan: ActionPlan, expected: string, result: ActionResu
     );
   }
   const worktree = worktrees.data.find((w) => w.sessionId === result.sessionId || (result.worktreePath !== null && w.path === result.worktreePath));
+  if (worktree !== undefined && worktree.head !== expected && plan.action !== "review") {
+    return { expected, actual: worktree.head };
+  }
   if (worktree?.head !== expected) {
     const seen = worktree === undefined ? "no worktree of the session was listed" : `the worktree holds ${worktree.head}`;
     throw new ActionError("launch_unverified", `session ${result.sessionId} was created but ${seen} instead of ${expected}; ${cleanup}`);
   }
+  return null;
 }
 
 /**
@@ -597,9 +604,8 @@ export async function executePlan(
     worktreePath: session.worktreePath,
     metadata: session.metadata,
     warnings,
+    headMismatch: null,
   };
-  if (plan.expectedHead !== null) {
-    await verifyHead(plan, plan.expectedHead, result, pohunek);
-  }
-  return result;
+  if (plan.expectedHead === null) return result;
+  return { ...result, headMismatch: await verifyHead(plan, plan.expectedHead, result, pohunek) };
 }

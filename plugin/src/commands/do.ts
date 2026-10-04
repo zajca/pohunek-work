@@ -100,6 +100,11 @@ function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unk
   };
 }
 
+function headMismatchWarning(sessionId: string, mismatch: NonNullable<ActionResult["headMismatch"]>): string {
+  return `session ${sessionId} runs in a worktree at ${mismatch.actual}, not at the pull request head ${mismatch.expected}; ` +
+    "the session may have advanced the branch itself, and its prompt makes it stop when it started on another commit. Check the session before acting";
+}
+
 function resultJson(result: ActionResult): Record<string, unknown> {
   return {
     session_id: result.sessionId,
@@ -108,6 +113,7 @@ function resultJson(result: ActionResult): Record<string, unknown> {
     worktree_path: result.worktreePath,
     metadata: result.metadata,
     ...(result.warnings.length === 0 ? {} : { warnings: result.warnings }),
+    ...(result.headMismatch === null ? {} : { head_mismatch: result.headMismatch }),
   };
 }
 
@@ -167,7 +173,8 @@ async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps,
   const stdout = options.json
     ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
     : display(`started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`);
-  return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`)] };
+  const mismatch = result.headMismatch === null ? [] : [headMismatchWarning(result.sessionId, result.headMismatch)];
+  return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`), ...mismatch] };
 }
 
 function readyText(plan: ReadyPlan): string {

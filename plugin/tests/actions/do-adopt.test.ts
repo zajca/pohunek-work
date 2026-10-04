@@ -104,11 +104,33 @@ for (const { action, pullRequest } of CASES) {
     expect(launches).toHaveLength(0);
   });
 
-  test(`${action} adoption is launch_unverified when the worktree holds another commit, and the advice keeps the branch`, async () => {
-    const { deps } = setup({ prs: ok("github", [pullRequest]), worktrees: worktreesAround("b".repeat(40)) });
+  test(`${action} adoption whose worktree head differs after the launch succeeds with a head_mismatch warning naming both commits`, async () => {
+    const advanced = "b".repeat(40);
+    const { deps, launches } = setup({ prs: ok("github", [pullRequest]), worktrees: worktreesAround(advanced) });
+    const out = await runDo(baseConfig, doOptions(key, action), deps);
+    expect(launches).toHaveLength(1);
+    const { result } = (JSON.parse(out.stdout) as Envelope).ok;
+    expect(result).toMatchObject({ session_id: "s-new", head_mismatch: { expected: SHA, actual: advanced } });
+    const warning = out.warnings.join("\n");
+    expect(warning).toContain(SHA);
+    expect(warning).toContain(advanced);
+    expect(warning).toContain("Check the session before acting");
+    expect(warning).not.toContain("session rm");
+    expect(warning).not.toContain("delete");
+  });
+
+  test(`${action} adoption with the expected head has no head_mismatch`, async () => {
+    const { deps } = setup({ prs: ok("github", [pullRequest]), worktrees: worktreesAround(SHA) });
+    const out = await runDo(baseConfig, doOptions(key, action), deps);
+    expect((JSON.parse(out.stdout) as Envelope).ok.result).not.toHaveProperty("head_mismatch");
+    expect(out.warnings).toEqual([]);
+  });
+
+  test(`${action} adoption is launch_unverified when no worktree of the session is listed`, async () => {
+    const primaryOnly = (): ReturnType<NonNullable<World["worktrees"]>> => ok("pohunek", [{ path: "/repo", branch: "main", head: SHA, sessionId: null }]);
+    const { deps } = setup({ prs: ok("github", [pullRequest]), worktrees: primaryOnly });
     const error = await expectRefusalMessage(runDo(baseConfig, doOptions(key, action), deps));
-    expect(error).toContain("s-new");
-    expect(error).toContain("pohunek session rm s-new");
+    expect(error).toContain("no worktree of the session was listed");
     expect(error).toContain(`the local branch ${BRANCH} stays`);
     expect(error).not.toContain("delete");
   });

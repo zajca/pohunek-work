@@ -189,8 +189,10 @@ the CLI rejects (`incomplete_origin_environment`); the spikes ran with
     `owned: false` and no `session_id`.
   - In the worktree of a created H there is no upstream: `git pull` and a plain `git push`
     fail, `git push --force-with-lease origin H` works, `refs/remotes/origin/H` exists.
+  - `session new --json` (`ok`), `session show --json` and `session list --json` carry no head or
+    base commit of the worktree; only `project show` reports a head, at read time.
   Consequence for adoption: launch with `--branch H --base-branch H`, refuse when any listed
-  worktree holds H, verify the head after the launch, and let the prompt set the upstream.
+  worktree holds H, report a differing head after the launch as a warning, and let the prompt guard the start and set the upstream.
 
 ## 4. Architecture additions
 

@@ -282,11 +282,17 @@ Adoption is refused with a typed code when the head branch cannot be checked out
 
 Core checks an existing local branch out as it is (spike S9), so a stale local branch of the
 same name yields a worktree at another commit without a warning. After the launch the plugin
-compares the worktree head from `project show` with the pull request head SHA and reports
-`launch_unverified` on a difference or on any daemon warning; the advice then is to remove the
-session and bring the branch to the pull request head, never to delete it. The prompt makes
-the agent run `git rev-parse HEAD` first and stop on a difference, and set the branch's
-upstream, which core does not set for a branch it creates from `--base-branch`.
+reports `launch_unverified` on any daemon warning or when no worktree of the session is listed;
+the advice then is to remove the session and bring the branch to the pull request head, never to
+delete it. Core reports no head commit at creation (`session new`, `session show` and `session list`
+carry none), so the guard against a wrong start is the prompt: the agent runs `git rev-parse HEAD`
+before any change, stops on a difference, and sets the branch's upstream, which core does not set
+for a branch it creates from `--base-branch`. The adopted session writes, so a head read after the
+launch may be its own pull or rebase; the plugin therefore compares the worktree head from
+`project show` with the pull request head SHA only to report a difference as a non-fatal warning
+(`warnings` of `do` and `result.head_mismatch` with both commits in `--json`) that tells the owner to
+check the session before acting. The `review` session is read-only, so there a differing head stays
+`launch_unverified`.
 
 ## 8. The `on_turn` Column
 

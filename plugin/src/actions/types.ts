@@ -80,6 +80,11 @@ export interface ActionResult {
   readonly metadata: Readonly<Record<string, string>>;
   /** Kinds of the daemon's launch warnings; empty when the launch went as requested. */
   readonly warnings: readonly string[];
+  /**
+   * Adoption only: the worktree head read after the launch differs from the pull request head. The agent
+   * may have legitimately advanced the branch since the launch, so it is reported, not treated as a failure.
+   */
+  readonly headMismatch: { readonly expected: string; readonly actual: string } | null;
 }
 
 /** `gh pr ready` for one draft pull request, and the read that confirms it. */
