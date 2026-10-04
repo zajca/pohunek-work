@@ -26,6 +26,7 @@ mod review;
 mod sdk;
 mod state;
 mod subagents;
+mod timestamp;
 mod ui_state;
 mod work_link;
 
