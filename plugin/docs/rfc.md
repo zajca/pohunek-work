@@ -429,13 +429,13 @@ All interfaces use the same plugin library and the same actions.
 
 Versioned envelope matching the pohunek CLI (`{cli_version, protocol,
 ok|err}`, with the plugin's own contract version). The `list` contract is
-version 3: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
+version 4: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
 version 3 adds the source status `unused`, which a source reports for a project
 that does not use it (`sources.linear` of a project with `issue_source =
 "github"`, `sources.github_issues` of a project with `issue_source = "linear"`),
 the source `github_issues` (the GitHub issue lookup of a `github` project), the
 `github-issue:` row key and the `on_turn` value `{"actor": "agent", "reason":
-"external review", "rule": 3}` of a project with `reviews = "external"`. `unused` is not a failure: it never appears in the
+"external review", "rule": 3}` of a project with `reviews = "external"`; version 4 adds the row field `ignored` (the pull request or the joined issue carries the project's `ignore_label`; the row has no actions but keeps its computed `on_turn`). `unused` is not a failure: it never appears in the
 list of unavailable sources and never makes `list` exit partial. A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload
 it cannot decode. `do` and `setup` version their envelopes separately
@@ -459,6 +459,7 @@ it cannot decode. `do` and `setup` version their envelopes separately
     {"name": "babysit", "delegable": false, "profile": "claude-otel"},
     {"name": "attach", "delegable": true}
   ],
+  "ignored": false,
   "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "github_issues": "unused", "pohunek": "ok"}
 }
 ```
@@ -647,9 +648,13 @@ Rules:
   which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
   `policy_checks` and `ai_reviewers` are required for both sources.
 - **`ignore_label` parks work.** It is optional and has no default; a blank
-  or non-string value is an error naming the file and key. Rows carrying the
-  label (case-insensitive) on the pull request or the joined issue are hidden
-  from `list`, refused by `do` and never notified by `watch`; absent = off.
+  or non-string value is an error naming the file and key. A row whose pull
+  request or joined issue carries the label (case-insensitive) is ignored:
+  `ignored: true` in `list --json`, no actions, its computed `on_turn` kept;
+  absent = off. A label list that cannot be read completely fails the source
+  (`truncated`) and never reads as "not ignored". With the key, each Linear
+  issue page also selects `labels(first: page_size)`; Linear caps a query at
+  10,000 complexity points, so keep `[linear] page_size` at 50 or below.
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:

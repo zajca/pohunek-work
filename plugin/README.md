@@ -27,9 +27,9 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
-A project file may set the optional key `ignore_label`. Rows whose pull request
-or joined issue carries that label (compared case-insensitively) are hidden from
-`list`, refused by `do` and never notified by `watch`; without the key the
+A project file may set the optional key `ignore_label`. A pull request or issue
+that carries that label (compared case-insensitively) marks its row as ignored:
+the `list --json` row has `ignored: true` and no actions. Without the key the
 feature is off.
 
 The result is one table with a derived `on_turn` column, a set of named
