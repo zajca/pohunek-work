@@ -12,7 +12,8 @@ export type ConnectionKind =
   | "checkContexts"
   | "threadComments"
   | "closingIssues"
-  | "issueLabels";
+  | "issueLabels"
+  | "pullRequestLabels";
 
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 const ACTOR = "author { __typename login }";
@@ -29,9 +30,13 @@ const LABEL_FIELDS = `nodes { name } ${PAGE_INFO}`;
 
 const TIMELINE_ITEM_TYPES = "[PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]";
 
-/** The closing references are part of the document only for a project whose issues come from GitHub. */
-function pullRequestFragment(closingReferences: boolean): string {
-  const closing = closingReferences ? `\n  closingIssuesReferences(first: $nested) { ${CLOSING_FIELDS} }` : "";
+/**
+ * The closing references are part of the document only for a project whose issues come from GitHub,
+ * the labels only for a project with an ignore label.
+ */
+function pullRequestFragment(shape: SearchShape): string {
+  const closing = shape.closingReferences ? `\n  closingIssuesReferences(first: $nested) { ${CLOSING_FIELDS} }` : "";
+  const labels = shape.pullRequestLabels ? `\n  labels(first: $nested) { ${LABEL_FIELDS} }` : "";
   return `
 fragment PrFields on PullRequest {
   id number url title isDraft isCrossRepository headRefName headRefOid baseRefName reviewDecision mergeable updatedAt
@@ -41,7 +46,7 @@ fragment PrFields on PullRequest {
   reviewThreads(first: $nested) { ${THREADS_FIELDS} }
   timelineItems(first: $nested, itemTypes: ${TIMELINE_ITEM_TYPES}) { ${TIMELINE_FIELDS} }
   reviewRequests(first: $nested) { ${REQUEST_FIELDS} }
-  commits(last: 1) { nodes { commit { id statusCheckRollup { contexts(first: $nested) { ${CONTEXT_FIELDS} } } } } }${closing}
+  commits(last: 1) { nodes { commit { id statusCheckRollup { contexts(first: $nested) { ${CONTEXT_FIELDS} } } } } }${closing}${labels}
 }`;
 }
 
@@ -91,7 +96,7 @@ export function buildSearchRequest(
   const query = `query PohunekWorkPullRequests(${declarations.join(", ")}) {
   rateLimit { remaining }
   ${fields.join("\n  ")}
-}${pullRequestFragment(shape.closingReferences)}`;
+}${pullRequestFragment(shape)}`;
   return { query, variables };
 }
 
@@ -161,6 +166,7 @@ export const CONNECTION_KINDS: Readonly<Record<ConnectionKind, KindSpec>> = {
   },
   closingIssues: { parentType: "PullRequest", path: ["closingIssuesReferences"], fields: CLOSING_FIELDS },
   issueLabels: { parentType: "Issue", path: ["labels"], fields: LABEL_FIELDS },
+  pullRequestLabels: { parentType: "PullRequest", path: ["labels"], fields: LABEL_FIELDS },
 };
 
 export interface ConnectionPageSpec {

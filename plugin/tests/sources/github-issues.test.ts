@@ -32,6 +32,7 @@ const base: ProjectConfig = {
   ignoredChecks: [],
   policyChecks: [],
   aiReviewers: [],
+  ignoreLabel: null,
   reviews: "session",
   policy: null,
   profiles: null,
@@ -93,6 +94,7 @@ describe("issues", () => {
         paused: false,
         assigneeIsMe: true,
         attachmentUrls: [],
+        ignored: false,
       },
       {
         id: "acme/widgets#8",
@@ -103,6 +105,7 @@ describe("issues", () => {
         paused: true,
         assigneeIsMe: true,
         attachmentUrls: [],
+        ignored: false,
       },
       {
         id: "acme/widgets#10",
@@ -113,6 +116,7 @@ describe("issues", () => {
         paused: true,
         assigneeIsMe: true,
         attachmentUrls: [],
+        ignored: false,
       },
     ]);
     expect(requests).toHaveLength(1);
@@ -303,5 +307,127 @@ describe("issue detail", () => {
     expect(await source.fetchIssueDetail(githubProject, 0)).toMatchObject({ ok: false, code: "not_configured" });
     expect(requests).toHaveLength(0);
     expect(await source.fetchIssueDetail(githubProject, 7)).toMatchObject({ ok: false, code: "unavailable" });
+  });
+});
+
+describe("ignore label", () => {
+  const withIgnore = (label: string | null): GithubProject => ({ ...githubProject, ignoreLabel: label });
+  const linearWith = (label: string | null): ProjectConfig => ({ ...linearProject, ignoreLabel: label });
+  const labelConnection = (names: string[], next: string | null = null): Json => ({
+    nodes: names.map((name) => ({ name })),
+    pageInfo: { hasNextPage: next !== null, endCursor: next ?? "E" },
+  });
+
+  async function issuesWithLabels(names: string[], next: string | null = null): Promise<Json> {
+    const page = await fixture("issues-page");
+    dig(page, "data", "issues", "nodes", 0)["labels"] = labelConnection(names, next);
+    return page;
+  }
+
+  function pullRequests(result: SourceResult<readonly PullRequest[]>): readonly PullRequest[] {
+    if (!result.ok) throw new Error(`expected success, got ${result.code}`);
+    return result.data;
+  }
+
+  async function prPage(labels: Json | null): Promise<Json> {
+    const page = await fixture("one-page");
+    for (const alias of ["authored", "requested"]) {
+      const search = (page["data"] as Json)[alias] as Json | undefined;
+      for (const node of (search?.["nodes"] as Json[] | undefined) ?? []) {
+        node["labels"] = labels ?? labelConnection([]);
+      }
+    }
+    return page;
+  }
+
+  const numberOf = (issues: readonly Issue[], id: string): Issue | undefined => issues.find((issue) => issue.id === id);
+
+  test("an issue carrying the ignore label is ignored, matched case-insensitively", async () => {
+    const page = await issuesWithLabels(["in-progress", "Pohunek:IGNORE"]);
+    const { source } = sourceWith(() => reply(page));
+    const issues = expectIssues(await source.fetchIssues(withIgnore("pohunek:ignore")));
+    expect(numberOf(issues, "acme/widgets#7")).toMatchObject({ started: true, ignored: true });
+    expect(numberOf(issues, "acme/widgets#8")).toMatchObject({ ignored: false });
+  });
+
+  test("an issue without the ignore label is not ignored", async () => {
+    const page = await issuesWithLabels(["in-progress", "other"]);
+    const { source } = sourceWith(() => reply(page));
+    const issues = expectIssues(await source.fetchIssues(withIgnore("pohunek:ignore")));
+    expect(numberOf(issues, "acme/widgets#7")?.ignored).toBe(false);
+  });
+
+  test("a project without an ignore label never marks an issue ignored", async () => {
+    const page = await issuesWithLabels(["in-progress", "pohunek:ignore"]);
+    const { source } = sourceWith(() => reply(page));
+    const issues = expectIssues(await source.fetchIssues(withIgnore(null)));
+    expect(issues.every((issue) => !issue.ignored)).toBe(true);
+  });
+
+  test("an issue with neither a started nor a paused label stays off the table even when ignored", async () => {
+    const page = await issuesWithLabels(["pohunek:ignore"]);
+    const { source } = sourceWith(() => reply(page));
+    const issues = expectIssues(await source.fetchIssues(withIgnore("pohunek:ignore")));
+    expect(numberOf(issues, "acme/widgets#7")).toBeUndefined();
+  });
+
+  test("a label page cut short is followed so an ignore label further down is found", async () => {
+    const page = await issuesWithLabels(["in-progress"], "L7");
+    const next = { data: { rateLimit: { remaining: 1 }, c0: { labels: labelConnection(["pohunek:ignore"]) } } };
+    const { source, requests } = sourceWith((_request, index) => reply(index === 0 ? page : next));
+    const issues = expectIssues(await source.fetchIssues(withIgnore("pohunek:ignore")));
+    expect(requests).toHaveLength(2);
+    expect(numberOf(issues, "acme/widgets#7")?.ignored).toBe(true);
+  });
+
+  test("a label page that cannot be followed is truncated, never not ignored", async () => {
+    const page = await issuesWithLabels(["in-progress"], "L7");
+    const loop = { data: { rateLimit: { remaining: 1 }, c0: { labels: labelConnection(["x"], "L7") } } };
+    const { source } = sourceWith((_request, index) => reply(index === 0 ? page : loop));
+    expect(await source.fetchIssues(withIgnore("pohunek:ignore"))).toMatchObject({ ok: false, code: "truncated" });
+  });
+
+  test("a pull request carrying the ignore label is ignored, case-insensitively, and the query selects the labels", async () => {
+    const page = await prPage(labelConnection(["bug", "POHUNEK:Ignore"]));
+    const { source, requests } = sourceWith(() => reply(page));
+    const prs = pullRequests(await source.fetchPullRequests(linearWith("pohunek:ignore")));
+    expect(requests[0]?.query).toContain("labels(first: $nested)");
+    expect(prs.length).toBeGreaterThan(0);
+    expect(prs.every((pr) => pr.ignored)).toBe(true);
+  });
+
+  test("a pull request without the ignore label is not ignored", async () => {
+    const page = await prPage(labelConnection(["bug"]));
+    const { source } = sourceWith(() => reply(page));
+    const prs = pullRequests(await source.fetchPullRequests(linearWith("pohunek:ignore")));
+    expect(prs.every((pr) => !pr.ignored)).toBe(true);
+  });
+
+  test("a project without an ignore label requests no pull request labels and ignores nothing", async () => {
+    const page = await fixture("one-page");
+    const { source, requests } = sourceWith(() => reply(page));
+    const prs = pullRequests(await source.fetchPullRequests(linearWith(null)));
+    expect(requests[0]?.query).not.toContain("labels");
+    expect(prs.every((pr) => !pr.ignored)).toBe(true);
+  });
+
+  test("a pull request label page cut short is followed by node id", async () => {
+    const page = await prPage(labelConnection(["bug"]));
+    dig(page, "data", "authored", "nodes", 0)["labels"] = labelConnection(["bug"], "L1");
+    const next = { data: { rateLimit: { remaining: 1 }, c0: { labels: labelConnection(["pohunek:ignore"]) } } };
+    const { source, requests } = sourceWith((_request, index) => reply(index === 0 ? page : next));
+    const prs = pullRequests(await source.fetchPullRequests(linearWith("pohunek:ignore")));
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.query).toContain("... on PullRequest");
+    expect(requests[1]?.query).toContain("labels(first: $nested");
+    expect(prs.find((pr) => pr.number === 12)?.ignored).toBe(true);
+  });
+
+  test("a pull request label page that cannot be followed is truncated", async () => {
+    const page = await prPage(labelConnection(["bug"]));
+    dig(page, "data", "authored", "nodes", 0)["labels"] = labelConnection(["bug"], "L1");
+    const loop = { data: { rateLimit: { remaining: 1 }, c0: { labels: labelConnection(["x"], "L1") } } };
+    const { source } = sourceWith((_request, index) => reply(index === 0 ? page : loop));
+    expect(await source.fetchPullRequests(linearWith("pohunek:ignore"))).toMatchObject({ ok: false, code: "truncated" });
   });
 });

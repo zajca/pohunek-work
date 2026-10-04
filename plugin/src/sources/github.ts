@@ -304,6 +304,17 @@ function closingIssueNumbers(pr: JsonObject, repo: string, withClosing: boolean)
   return [...numbers].sort((a, b) => a - b);
 }
 
+function labelNames(container: JsonObject): string[] {
+  return connectionNodes(container, "labels", "labels").map((node) =>
+    asString(asObject(node, "label")["name"], "label.name"),
+  );
+}
+
+/** True when a label equals the project's ignore label (case-insensitive); false when the project has none. */
+function carriesIgnoreLabel(labels: readonly string[], ignoreLabel: string | null): boolean {
+  return ignoreLabel !== null && firstLabelOf(labels, [ignoreLabel]) !== null;
+}
+
 function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: ProjectConfig): PullRequest {
   const repo = asString(asObject(pr["repository"], "repository")["nameWithOwner"], "repository.nameWithOwner");
   const number = asInteger(pr["number"], "number");
@@ -338,6 +349,7 @@ function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: P
     reviewRequests: requests,
     checks: rollup === null ? [] : connectionNodes(rollup, "contexts", "contexts").map(toCheck),
     closingIssueNumbers: closingIssueNumbers(pr, project.repo, project.issueSource.kind === "github"),
+    ignored: project.ignoreLabel !== null && carriesIgnoreLabel(labelNames(pr), project.ignoreLabel),
     updatedAt: asString(pr["updatedAt"], "updatedAt"),
   };
 }
@@ -524,7 +536,7 @@ function collectPendingIssues(issues: readonly JsonObject[], seen: SeenCursors):
   return pending;
 }
 
-function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursors, withClosing: boolean): PendingPage[] {
+function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursors, shape: SearchShape): PendingPage[] {
   const pending: PendingPage[] = [];
   const check = pendingChecker(pending, seen);
 
@@ -534,8 +546,11 @@ function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursor
     check("reviewRequests", prId, pr, "reviewRequests");
     check("timelineItems", prId, pr, "timelineItems");
     check("reviewThreads", prId, pr, "reviewThreads");
-    if (withClosing) {
+    if (shape.closingReferences) {
       check("closingIssues", prId, pr, "closingIssuesReferences");
+    }
+    if (shape.pullRequestLabels) {
+      check("pullRequestLabels", prId, pr, "labels");
     }
     for (const raw of connectionNodes(pr, "reviewThreads", "reviewThreads")) {
       const thread = asObject(raw, "thread");
@@ -778,9 +793,7 @@ function firstLabelOf(labels: readonly string[], wanted: readonly string[]): str
  * is the deciding label.
  */
 function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
-  const labels = connectionNodes(raw, "labels", "labels").map((node) =>
-    asString(asObject(node, "label")["name"], "label.name"),
-  );
+  const labels = labelNames(raw);
   const paused = firstLabelOf(labels, project.issueSource.pausedLabels);
   const started = firstLabelOf(labels, project.issueSource.startedLabels);
   const state = paused ?? started;
@@ -796,6 +809,7 @@ function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
     paused: paused !== null,
     assigneeIsMe: true,
     attachmentUrls: [],
+    ignored: carriesIgnoreLabel(labels, project.ignoreLabel),
   };
 }
 
@@ -874,7 +888,10 @@ export function createGithubSource(
     try {
       validateInputs(project, config.identity);
       const searches = buildSearches(project, config.identity);
-      const shape: SearchShape = { closingReferences: project.issueSource.kind === "github" };
+      const shape: SearchShape = {
+        closingReferences: project.issueSource.kind === "github",
+        pullRequestLabels: project.ignoreLabel !== null,
+      };
       if (estimateRequestNodes(config.github, searches.length, shape) > GITHUB_MAX_NODES) {
         throw new SourceFailureError(
           "not_configured",
@@ -890,7 +907,7 @@ export function createGithubSource(
       const collected = await runSearches(transport, searches, shape);
       const raws = [...collected.values()].map((entry) => entry.raw);
       await completeNestedConnections(transport, raws, new WeakMap(), (roots, seen) =>
-        collectPendingPullRequests(roots, seen, shape.closingReferences),
+        collectPendingPullRequests(roots, seen, shape),
       );
       const data = [...collected.values()].map((entry) => toPullRequest(entry.raw, entry.relation, project));
       return { ok: true, source: "github", data, durationMs: elapsed() };

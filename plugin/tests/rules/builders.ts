@@ -105,6 +105,7 @@ export function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewRequests: [],
     checks: [],
     closingIssueNumbers: [],
+    ignored: false,
     updatedAt: T3,
     ...overrides,
   };
@@ -120,6 +121,7 @@ export function issue(overrides: Partial<Issue> = {}): Issue {
     paused: false,
     assigneeIsMe: true,
     attachmentUrls: [],
+    ignored: false,
     ...overrides,
   };
 }

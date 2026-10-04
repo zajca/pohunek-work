@@ -624,6 +624,7 @@ branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 policy_checks = []        # merge blockers the owner meets; disjoint from ignored_checks
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
+# ignore_label = "pohunek:ignore"   # optional; absent = off
 paused_states = ["On hold", "Waiting for Support"]   # only with issue_source = "linear"
 
 # Optional per-project overrides; a table here replaces the global table whole.
@@ -645,6 +646,10 @@ Rules:
   the file and key) and requires `started_labels` and `paused_labels` instead,
   which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
   `policy_checks` and `ai_reviewers` are required for both sources.
+- **`ignore_label` parks work.** It is optional and has no default; a blank
+  or non-string value is an error naming the file and key. Rows carrying the
+  label (case-insensitive) on the pull request or the joined issue are hidden
+  from `list`, refused by `do` and never notified by `watch`; absent = off.
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:

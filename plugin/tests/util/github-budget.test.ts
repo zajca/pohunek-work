@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { CONNECTION_ALIAS_OVERHEAD_NODES, estimateConnectionNodes, estimateIssueSearchNodes, estimateRequestNodes, estimateSearchNodes, GITHUB_MAX_NODES } from "../../src/util/github-budget.ts";
 
-const BASE = { closingReferences: false };
-const WITH_CLOSING = { closingReferences: true };
+const BASE = { closingReferences: false, pullRequestLabels: false };
+const WITH_CLOSING = { closingReferences: true, pullRequestLabels: false };
 
 test("page sizes 50/100/100 exceed the node limit, as GitHub measured 525,100 nodes for one search", () => {
   const oversized = { pullRequestPageSize: 50, nestedPageSize: 100, threadCommentPageSize: 100 };
@@ -21,6 +21,11 @@ test("the closing issue references add one nested connection per pull request", 
   expect(estimateSearchNodes(sizes, WITH_CLOSING) - estimateSearchNodes(sizes, BASE)).toBe(20 * 50);
 });
 
+test("the pull request labels add one nested connection per pull request", () => {
+  const sizes = { pullRequestPageSize: 20, nestedPageSize: 50, threadCommentPageSize: 10 };
+  expect(estimateSearchNodes(sizes, { closingReferences: false, pullRequestLabels: true }) - estimateSearchNodes(sizes, BASE)).toBe(20 * 50);
+});
+
 test("an issue search page costs the issue and its label page per issue", () => {
   expect(estimateIssueSearchNodes({ issuePageSize: 30, nestedPageSize: 50 })).toBe(30 * 51);
 });
@@ -29,7 +34,7 @@ describe("estimateConnectionNodes", () => {
   const sizes = { nestedPageSize: 100, threadCommentPageSize: 7 };
 
   test("flat nested connections cost one page of items plus the alias overhead", () => {
-    for (const kind of ["reviews", "timelineItems", "reviewRequests", "checkContexts", "closingIssues", "issueLabels"] as const) {
+    for (const kind of ["reviews", "timelineItems", "reviewRequests", "checkContexts", "closingIssues", "issueLabels", "pullRequestLabels"] as const) {
       expect(estimateConnectionNodes(kind, sizes)).toBe(100 + CONNECTION_ALIAS_OVERHEAD_NODES);
     }
   });

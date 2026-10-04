@@ -33,6 +33,7 @@ const project: ProjectConfig = {
   ignoredChecks: [],
   policyChecks: [],
   aiReviewers: [],
+  ignoreLabel: null,
   reviews: "session",
   policy: null,
   profiles: null,
@@ -184,6 +185,7 @@ describe("normalization", () => {
         { name: "legacy/ci", outcome: "failure" },
       ],
       closingIssueNumbers: [],
+      ignored: false,
       updatedAt: "2026-09-30T10:00:00Z",
     });
   });

@@ -12,7 +12,7 @@ import type {
 } from "./sources.ts";
 
 /** Version of the `list --json` contract; bumped on any incompatible change. */
-export const LIST_CONTRACT_VERSION = 3;
+export const LIST_CONTRACT_VERSION = 4;
 
 /**
  * Per-source availability for one poll: `ok`, the stable failure code, or `unused`
@@ -112,6 +112,11 @@ export interface WorkItem {
   readonly notifications: readonly PohunekNotification[];
 }
 
+/** A row is ignored (parked) when its pull request, its issue or the issue it resolved to carries the project's ignore label. */
+export function isIgnoredItem(item: WorkItem): boolean {
+  return (item.pullRequest?.ignored ?? false) || (item.issue?.ignored ?? false) || (item.resolvedIssue?.ignored ?? false);
+}
+
 export interface UnlinkedSession {
   readonly id: string;
   readonly name: string | null;
@@ -182,7 +187,10 @@ export interface ListItem {
   readonly issue_key: string | null;
   readonly sessions: readonly ListSession[];
   readonly on_turn: ListOnTurn;
+  /** Empty for an ignored row. */
   readonly actions: readonly ListAction[];
+  /** The row carries the project's ignore label; its `on_turn` verdict is still computed. */
+  readonly ignored: boolean;
   readonly sources: SourceStatuses;
 }
 

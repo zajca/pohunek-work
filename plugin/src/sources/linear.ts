@@ -15,8 +15,10 @@ export interface LinearDeps {
   readonly fetch?: typeof fetch;
 }
 
-const ISSUES_QUERY = `
-query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFirst: Int!) {
+// The label selection is added only when the project has an ignore label.
+function issuesQuery(withLabels: boolean): string {
+  return `
+query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFirst: Int!${withLabels ? ", $labelsFirst: Int!" : ""}) {
   issues(
     first: $first
     after: $after
@@ -35,17 +37,36 @@ query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFi
       attachments(first: $attachmentsFirst) {
         nodes { url }
         pageInfo { hasNextPage endCursor }
+      }${
+        withLabels
+          ? `
+      labels(first: $labelsFirst) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }`
+          : ""
       }
     }
     pageInfo { hasNextPage endCursor }
   }
 }`;
+}
 
 const ATTACHMENTS_QUERY = `
 query WorkIssueAttachments($id: String!, $first: Int!, $after: String) {
   issue(id: $id) {
     attachments(first: $first, after: $after) {
       nodes { url }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const LABELS_QUERY = `
+query WorkIssueLabels($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    labels(first: $first, after: $after) {
+      nodes { name }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -121,6 +142,10 @@ function parsePageInfo(value: unknown, what: string): PageInfo {
 
 function parseAttachmentNodes(value: unknown, what: string): string[] {
   return arr(value, what).map((node) => str(obj(node, what), "url", what));
+}
+
+function parseLabelNames(value: unknown, what: string): string[] {
+  return arr(value, what).map((node) => str(obj(node, what), "name", what));
 }
 
 /** Failure code for a GraphQL error list; only error codes and paths are used. */
@@ -222,10 +247,55 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     return collected;
   }
 
+  async function remainingLabels(token: string, issueId: string, start: PageInfo): Promise<string[]> {
+    const collected: string[] = [];
+    const seen = new Set<string>();
+    let page = start;
+    while (page.hasNextPage) {
+      const cursor = page.endCursor;
+      if (cursor === null || seen.has(cursor)) {
+        throw new LinearFailure("truncated", "Linear labels cannot be paginated further");
+      }
+      seen.add(cursor);
+      const data = await post(token, LABELS_QUERY, {
+        id: issueId,
+        first: config.pageSize,
+        after: cursor,
+      });
+      const connection = obj(obj(data["issue"], "issue")["labels"], "labels");
+      collected.push(...parseLabelNames(connection["nodes"], "labels.nodes"));
+      page = parsePageInfo(connection["pageInfo"], "labels.pageInfo");
+    }
+    return collected;
+  }
+
+  async function isIgnored(
+    token: string,
+    node: JsonObject,
+    ignoreLabel: string | null,
+  ): Promise<boolean> {
+    if (ignoreLabel === null) {
+      return false;
+    }
+    const wanted = ignoreLabel.toLowerCase();
+    const labels = obj(node["labels"], "issue.labels");
+    const names = parseLabelNames(labels["nodes"], "issue.labels.nodes");
+    if (names.some((name) => name.toLowerCase() === wanted)) {
+      return true;
+    }
+    const rest = await remainingLabels(
+      token,
+      str(node, "id", "issue.id"),
+      parsePageInfo(labels["pageInfo"], "issue.labels.pageInfo"),
+    );
+    return rest.some((name) => name.toLowerCase() === wanted);
+  }
+
   async function parseIssue(
     token: string,
     value: unknown,
     pausedStates: readonly string[],
+    ignoreLabel: string | null,
   ): Promise<Issue> {
     const node = obj(value, "issue");
     const state = obj(node["state"], "issue.state");
@@ -241,6 +311,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
     );
     const stateName = str(state, "name", "issue.state.name");
+    const ignored = await isIgnored(token, node, ignoreLabel);
     return {
       id: str(node, "identifier", "issue.identifier"),
       title: str(node, "title", "issue.title"),
@@ -250,6 +321,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       paused: pausedStates.includes(stateName),
       assigneeIsMe: true,
       attachmentUrls: [...first, ...rest],
+      ignored,
     };
   }
 
@@ -257,20 +329,23 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     token: string,
     teamKey: string,
     pausedStates: readonly string[],
+    ignoreLabel: string | null,
   ): Promise<Issue[]> {
     const issues: Issue[] = [];
     const seen = new Set<string>();
+    const query = issuesQuery(ignoreLabel !== null);
     let after: string | null = null;
     for (;;) {
-      const data = await post(token, ISSUES_QUERY, {
+      const data = await post(token, query, {
         first: config.pageSize,
         after,
         teamKey,
         attachmentsFirst: config.pageSize,
+        ...(ignoreLabel === null ? {} : { labelsFirst: config.pageSize }),
       });
       const connection = obj(data["issues"], "issues");
       for (const node of arr(connection["nodes"], "issues.nodes")) {
-        issues.push(await parseIssue(token, node, pausedStates));
+        issues.push(await parseIssue(token, node, pausedStates, ignoreLabel));
       }
       const page = parsePageInfo(connection["pageInfo"], "issues.pageInfo");
       if (!page.hasNextPage) {
@@ -304,7 +379,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
         return fail("unauthenticated", "Linear token from keyring is not a valid API key");
       }
       try {
-        const data = await collectIssues(secret.secret, project.issueSource.team, project.issueSource.pausedStates);
+        const data = await collectIssues(secret.secret, project.issueSource.team, project.issueSource.pausedStates, project.ignoreLabel);
         return { ok: true, source: "linear", data, durationMs: elapsed() };
       } catch (error) {
         if (error instanceof LinearFailure) {

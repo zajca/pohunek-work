@@ -107,10 +107,10 @@ function parseGithub(root: Table, file: string): GithubConfig {
     mergedLookbackDays: readPositiveInt(table, "merged_lookback_days", file, path),
   };
   // The authored and the directly requested searches always run in one request. The worst case
-  // includes the closing issue references, which only projects with a GitHub issue source request:
-  // a limit that depends on the project files would make the global file valid or not by what the
-  // project files contain.
-  if (estimateRequestNodes(config, 2, { closingReferences: true }) > GITHUB_MAX_NODES) {
+  // includes the closing issue references (projects with a GitHub issue source) and the labels
+  // (projects with an ignore label): a limit that depends on the project files would make the
+  // global file valid or not by what the project files contain.
+  if (estimateRequestNodes(config, 2, { closingReferences: true, pullRequestLabels: true }) > GITHUB_MAX_NODES) {
     throw fail(
       file,
       [...path, "pull_request_page_size"],
@@ -391,7 +391,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels"],
+    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels", "ignore_label"],
     file,
     path,
   );
@@ -422,6 +422,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     ignoredChecks,
     policyChecks,
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
+    ignoreLabel: "ignore_label" in table ? readString(table, "ignore_label", file, path) : null,
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,
   };

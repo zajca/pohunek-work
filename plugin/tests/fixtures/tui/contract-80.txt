@@ -1,11 +1,11 @@
-me 3  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
+me 4  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
    KEY                      TURN                    PR    TITLE                 
 >  github:acme/widgets#12   me: leave draft (r6)    #12 d Add widget cache      
    github:acme/w... (ABC-1) me: request review (r9) #14   Add widget cache      
    linear:ABC-2             me: nothing runs (r8)   -     Widget cache          
+   linear:ABC-4             me: nothing runs (r8)   -     Widget cache          
    linear:ABC-1             reviewer (r10)          #12   Widget cache          
    linear:ABC-3             paused (r12)            #13 d Widget cache          
-
 
 
 

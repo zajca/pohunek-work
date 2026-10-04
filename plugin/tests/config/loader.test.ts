@@ -99,6 +99,27 @@ describe("loadConfig valid", () => {
     expect(widgets?.profiles).toBeNull();
   });
 
+  test("ignore_label is absent by default and loads as written when present", async () => {
+    const dir = await copyFixture();
+    expect((await loadProjectConfig(dir, "widgets")).ignoreLabel).toBeNull();
+    await editFile(dir, "projects/widgets.toml", (t) => `${t}ignore_label = "Pohunek:Ignore"\n`);
+    expect((await loadProjectConfig(dir, "widgets")).ignoreLabel).toBe("Pohunek:Ignore");
+  });
+
+  test.each([
+    ['""', "must not be empty"],
+    ['"   "', "must not be empty"],
+    ["5", "must be a string"],
+    ['["x"]', "must be a string"],
+  ])("ignore_label = %s is rejected naming file and key", async (value, problem) => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => `${t}ignore_label = ${value}\n`);
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.ignore_label");
+    expect(error.message).toContain(`[project] ignore_label ${problem}`);
+  });
+
   test("per-project policy and profiles replace the global tables whole", async () => {
     const config = await loadConfig(FIXTURE_DIR);
     const gadgets = config.projects[0];

@@ -22,6 +22,7 @@ import {
   type SourceStatuses,
   type UnlinkedSession,
   type WorkItem,
+  isIgnoredItem,
 } from "../types/item.ts";
 
 export interface RowContext {
@@ -72,11 +73,11 @@ function worktreeActionable(item: WorkItem, context: Pick<RowContext, "project" 
  * pull request's head branch can be adopted (`adoptRefusal`); `do` additionally
  * refuses an adoption when a worktree pohunek did not create holds the branch,
  * which only `project show` reveals. `on_turn` keeps the reason either way. `attach` is listed whenever a live linked session
- * exists, which covers rules 1 and 11. A paused row (rule 12) has no action.
+ * exists, which covers rules 1 and 11. A paused row (rule 12) and an ignored row have no action.
  * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
  */
 export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles" | "sessions">): ListAction[] {
-  if (onTurn.actor === "paused") return [];
+  if (onTurn.actor === "paused" || isIgnoredItem(item)) return [];
   const names: string[] = [];
   const primary = ruleAction(onTurn);
   if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeActionable(item, context))) names.push(primary);
@@ -127,6 +128,7 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
     })),
     on_turn: { actor: onTurn.actor, reason: onTurn.reason, rule: onTurn.rule },
     actions: rowActions(item, onTurn, context),
+    ignored: isIgnoredItem(item),
     sources: context.sources,
   };
 }

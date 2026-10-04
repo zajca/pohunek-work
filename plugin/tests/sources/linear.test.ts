@@ -12,7 +12,7 @@ const config: LinearConfig = {
   timeoutMs: 500,
   pageSize: 1,
 };
-const project = { name: "widgets", issueSource: { kind: "linear", team: "ABC", pausedStates: [] } } as unknown as LinearProject;
+const project = { name: "widgets", issueSource: { kind: "linear", team: "ABC", pausedStates: [] }, ignoreLabel: null } as unknown as LinearProject;
 
 async function fixture(name: string): Promise<unknown> {
   return (await Bun.file(new URL(`../fixtures/linear/${name}.json`, import.meta.url)).json()) as unknown;
@@ -83,6 +83,7 @@ test("normalizes issues across two pages, with attachment URLs", async () => {
       paused: false,
       assigneeIsMe: true,
       attachmentUrls: ["https://github.com/acme/widgets/pull/12"],
+      ignored: false,
     },
     {
       id: "ABC-2",
@@ -93,6 +94,7 @@ test("normalizes issues across two pages, with attachment URLs", async () => {
       paused: false,
       assigneeIsMe: true,
       attachmentUrls: [],
+      ignored: false,
     },
   ]);
   expect(calls).toHaveLength(2);
@@ -287,4 +289,107 @@ test("started follows the state type and paused the configured state names, matc
   expect(await withState("on hold", "started", ["On hold"])).toEqual({ state: "on hold", started: true, paused: false });
   expect(await withState("In Progress", "started", [])).toEqual({ state: "In Progress", started: true, paused: false });
   expect(await withState("Todo", "unstarted", ["On hold"])).toEqual({ state: "Todo", started: false, paused: false });
+});
+
+interface LabelPage {
+  data: { issues: { nodes: Record<string, unknown>[] } };
+}
+
+const withIgnore = { ...project, ignoreLabel: "Pohunek:Ignore" } as unknown as LinearProject;
+
+async function labelledPage(
+  names: string[],
+  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
+): Promise<LabelPage> {
+  const page = (await fixture("page2")) as LabelPage;
+  const node = page.data.issues.nodes[0];
+  if (node === undefined) throw new Error("fixture has no node");
+  node["labels"] = { nodes: names.map((name) => ({ name })), pageInfo };
+  return page;
+}
+
+test("without an ignore label the request has no labels selection and ignored is false", async () => {
+  const page = await fixture("page2");
+  const run = fetcher(() => json(page));
+  const result = await source(run.fetch).fetchIssues(project);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(false);
+  expect(run.calls[0]?.body.query).not.toContain("labels");
+  expect(run.calls[0]?.body.variables).not.toHaveProperty("labelsFirst");
+});
+
+test("an ignore label adds the labels selection and matches case-insensitively", async () => {
+  const page = await labelledPage(["bug", "pohunek:ignore"]);
+  const { fetch: f, calls } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(true);
+  expect(calls[0]?.body.query).toContain("labels(first: $labelsFirst)");
+  expect(calls[0]?.body.variables["labelsFirst"]).toBe(1);
+});
+
+test("an issue without the ignore label is not ignored", async () => {
+  const page = await labelledPage(["bug", "pohunek:ignored"]);
+  const { fetch: f, calls } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(false);
+  expect(calls).toHaveLength(1);
+});
+
+test("labels are paged until the ignore label is found", async () => {
+  const first = await labelledPage(["bug"], { hasNextPage: true, endCursor: "lab-1" });
+  const second = {
+    data: { issue: { labels: { nodes: [{ name: "POHUNEK:IGNORE" }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+  };
+  const bodies = [first, second];
+  const { fetch: f, calls } = fetcher((_c, i) => json(bodies[i]));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(true);
+  expect(calls[1]?.body.variables).toEqual({ id: "00000000-0000-0000-0000-000000000002", first: 1, after: "lab-1" });
+});
+
+test("a complete multi-page label list without the label is not ignored", async () => {
+  const first = await labelledPage(["bug"], { hasNextPage: true, endCursor: "lab-1" });
+  const second = { data: { issue: { labels: { nodes: [{ name: "ui" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const bodies = [first, second];
+  const { fetch: f } = fetcher((_c, i) => json(bodies[i]));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(false);
+});
+
+test("label pagination without a cursor is truncated", async () => {
+  const page = await labelledPage(["bug"], { hasNextPage: true, endCursor: null });
+  const { fetch: f } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.code).toBe("truncated");
+});
+
+test("a repeated label cursor is truncated", async () => {
+  const first = await labelledPage(["bug"], { hasNextPage: true, endCursor: "lab-1" });
+  const again = { data: { issue: { labels: { nodes: [{ name: "ui" }], pageInfo: { hasNextPage: true, endCursor: "lab-1" } } } } };
+  const bodies = [first, again];
+  const { fetch: f } = fetcher((_c, i) => json(bodies[i]));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.code).toBe("truncated");
+});
+
+test("a missing labels connection under an ignore label is invalid_response", async () => {
+  const page = await fixture("page2");
+  const { fetch: f } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.code).toBe("invalid_response");
 });

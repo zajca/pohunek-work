@@ -89,7 +89,7 @@ describe("stale data with a fake clock", () => {
 
 describe("err envelope and incompatible contract", () => {
   const err = decodeListEnvelope(
-    JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", msg: "bad" } }),
+    JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 4, maximum: 4 }, err: { class: "configuration", code: "config_invalid", msg: "bad" } }),
   );
 
   test("an err envelope goes full screen, keeps the data; r retries and success returns to the rows", () => {

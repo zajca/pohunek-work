@@ -167,6 +167,11 @@ export interface ProjectConfig {
   readonly policyChecks: readonly string[];
   /** GitHub logins of AI reviewer accounts; compared case-insensitively, `[bot]` suffix ignored. */
   readonly aiReviewers: readonly string[];
+  /**
+   * Label that parks a pull request or issue: rows carrying it are hidden from `list` and refused
+   * by `do`. Compared case-insensitively. Null when the key is absent, which turns the feature off.
+   */
+  readonly ignoreLabel: string | null;
   readonly policy: PolicyConfig | null;
   readonly profiles: ProfilesConfig | null;
 }
