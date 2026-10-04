@@ -19,7 +19,7 @@ import {
 } from "../util/exec.ts";
 
 /** Protocol version this plugin speaks; must lie inside the CLI's [minimum, maximum]. */
-export const SUPPORTED_PROTOCOL_VERSION = 3;
+export const SUPPORTED_PROTOCOL_VERSION = 4;
 
 const SESSION_ENV = "POHUNEK_SESSION_ID";
 const DAEMON_ENV = "POHUNEK_DAEMON_ID";

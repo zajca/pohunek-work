@@ -2867,7 +2867,8 @@ fn apply_host_event(
             if let Some(session) = host.sessions.get_mut(&state.session_id.0) {
                 let runtime_matches = state.runtime.as_ref().is_some_and(|event_runtime| {
                     session.runtime.as_ref().is_some_and(|session_runtime| {
-                        session_runtime.runtime_id.as_deref() == Some(event_runtime.runtime_id())
+                        session_runtime.worker_instance_id.as_deref()
+                            == Some(event_runtime.worker_instance_id())
                             && session_runtime.runtime_generation
                                 == event_runtime.runtime_generation()
                     })
@@ -2964,23 +2965,25 @@ fn observation_invalidation_for_host_event(host: &HostView, event: &HostEvent) -
         .then(|| session.id.0.clone())
 }
 
-fn session_runtime_identity(session: &SessionInfo) -> Option<(&str, protocol::RuntimeGeneration)> {
+fn session_worker_instance_identity(
+    session: &SessionInfo,
+) -> Option<(&str, protocol::RuntimeGeneration)> {
     session.runtime.as_ref().and_then(|runtime| {
         runtime
-            .runtime_id
+            .worker_instance_id
             .as_deref()
-            .map(|runtime_id| (runtime_id, runtime.runtime_generation))
+            .map(|worker_instance_id| (worker_instance_id, runtime.runtime_generation))
     })
 }
 
 fn same_runtime_generation(previous: &SessionInfo, current: &SessionInfo) -> bool {
-    session_runtime_identity(previous)
-        .zip(session_runtime_identity(current))
+    session_worker_instance_identity(previous)
+        .zip(session_worker_instance_identity(current))
         .is_some_and(|(previous_identity, current_identity)| previous_identity == current_identity)
 }
 
 fn runtime_generation_changed(previous: &SessionInfo, current: &SessionInfo) -> bool {
-    session_runtime_identity(previous) != session_runtime_identity(current)
+    session_worker_instance_identity(previous) != session_worker_instance_identity(current)
 }
 
 /// Store or replace a notification record, dropping it when the daemon reports a
@@ -3279,13 +3282,13 @@ mod tests {
         workspace.apply(DomainEvent::HostSnapshotLoaded {
             snapshot: snapshot("local", vec![session_with_runtime("s-1", "runtime-1")]),
         });
-        let event = |runtime_id: &str, revision, lifecycle| {
+        let event = |worker_instance_id: &str, revision, lifecycle| {
             HostEvent::SubagentState(SubagentStateEvent {
                 session_id: SessionId("s-1".to_owned()),
                 subagent: protocol::SubagentInfo {
                     id: "child-1".to_owned(),
                     parent_id: None,
-                    provider: protocol::AgentKind::Claude,
+                    provider: protocol::RuntimeRef::claude(),
                     agent_type: Some("Explore".to_owned()),
                     lifecycle,
                     activity: (lifecycle == protocol::SubagentLifecycle::Running)
@@ -3297,7 +3300,7 @@ mod tests {
                 },
                 runtime: Some(
                     SessionRuntimeIdentity::new(
-                        runtime_id.to_owned(),
+                        worker_instance_id.to_owned(),
                         protocol::RuntimeGeneration::new(1),
                     )
                     .expect("runtime identity"),
@@ -3430,7 +3433,7 @@ mod tests {
         linked.subagents = vec![protocol::SubagentInfo {
             id: "sub-1".to_owned(),
             parent_id: None,
-            provider: protocol::AgentKind::Codex,
+            provider: protocol::RuntimeRef::codex(),
             agent_type: None,
             lifecycle: protocol::SubagentLifecycle::Running,
             activity: None,
@@ -3733,7 +3736,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_identity_changes_and_typed_errors_discard_observation_cursors() {
+    fn worker_instance_identity_changes_and_typed_errors_discard_observation_cursors() {
         let host_id = HostId::new("local");
         let session_id = SessionId("s-observe".to_owned());
         let original = session_with_runtime(&session_id.0, "runtime-stable");
@@ -4475,7 +4478,7 @@ mod tests {
         snapshot.notification_providers = vec!["future-agent".to_owned()];
         snapshot.runtimes = vec![protocol::AgentRuntime {
             agent: "hermes-review".to_owned(),
-            agent_base: Some(protocol::AgentKind::Hermes),
+            agent_base: Some(protocol::RuntimeRef::hermes()),
             available: true,
             path: Some("/usr/bin/hermes".to_owned()),
             version: Some("0.2.0".to_owned()),
@@ -5468,7 +5471,7 @@ mod tests {
                 fork: true,
             },
             agent: "codex".to_owned(),
-            agent_base: protocol::AgentKind::Codex,
+            agent_base: protocol::RuntimeRef::codex(),
             cwd: PathBuf::from("/repo"),
             cwd_source: Some(protocol::CwdSource::Launch),
             pid: 42,
@@ -5500,13 +5503,13 @@ mod tests {
         }
     }
 
-    fn session_with_runtime(id: &str, runtime_id: &str) -> SessionInfo {
+    fn session_with_runtime(id: &str, worker_instance_id: &str) -> SessionInfo {
         let mut session = session(id, None);
         session.runtime = Some(protocol::SessionRuntime {
             state: protocol::RuntimeState::Live,
             runtime_generation: protocol::RuntimeGeneration::new(1),
-            worker_id: Some(format!("worker-{runtime_id}")),
-            runtime_id: Some(runtime_id.to_owned()),
+            worker_id: Some(format!("worker-{worker_instance_id}")),
+            worker_instance_id: Some(worker_instance_id.to_owned()),
             started_at: Some("2026-01-01T00:00:00Z".to_owned()),
             last_connected_at: Some("2026-01-01T00:00:01Z".to_owned()),
             loss_reason: None,

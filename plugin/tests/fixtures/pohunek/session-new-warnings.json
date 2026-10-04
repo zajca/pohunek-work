@@ -1,6 +1,6 @@
 {
   "cli_version": "0.31.6",
-  "protocol": { "minimum": 3, "maximum": 3 },
+  "protocol": { "minimum": 4, "maximum": 4 },
   "ok": {
     "id": "s-review-1",
     "external": false,
@@ -11,7 +11,7 @@
     "cwd": "/work/wt/s-review-1-widgets-review",
     "cwd_source": "launch",
     "pid": 1000,
-    "runtime": { "state": "live", "runtime_generation": "1", "worker_id": "worker-1", "runtime_id": "runtime-1", "started_at": "2026-10-01T20:05:39Z", "last_connected_at": "2026-10-01T20:05:39Z" },
+    "runtime": { "state": "live", "runtime_generation": "1", "worker_id": "worker-1", "worker_instance_id": "runtime-1", "started_at": "2026-10-01T20:05:39Z", "last_connected_at": "2026-10-01T20:05:39Z" },
     "cols": 80,
     "rows": 24,
     "state": "running",

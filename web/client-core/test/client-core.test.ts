@@ -197,7 +197,7 @@ describe("@pohunek/client-core", () => {
       });
 
       await waitFor(() => workspace.sessions.snapshot()[key]?.runtimeContinuity === "reconnected");
-      expect(workspace.sessions.snapshot()[key]?.session.runtime?.runtime_id).toBe("runtime-1");
+      expect(workspace.sessions.snapshot()[key]?.session.runtime?.worker_instance_id).toBe("runtime-1");
 
       const recovered = hostDataFromSnapshot(
         [session("s-runtime", "runtime-2")],
@@ -205,7 +205,7 @@ describe("@pohunek/client-core", () => {
         hostDataFromSnapshot([session("s-runtime", "runtime-1")], []),
       );
       expect(recovered.sessions["s-runtime"]?.runtimeContinuity).toBe("recovered");
-      expect(recovered.sessions["s-runtime"]?.session.runtime?.runtime_id).toBe("runtime-2");
+      expect(recovered.sessions["s-runtime"]?.session.runtime?.worker_instance_id).toBe("runtime-2");
     } finally {
       await workspace.close();
       await relay.close();
@@ -235,7 +235,7 @@ describe("@pohunek/client-core", () => {
       session: session("s-runtime", "runtime-2"),
     });
     expect(recovered.sessions["s-runtime"]?.runtimeContinuity).toBe("recovered");
-    expect(recovered.sessions["s-runtime"]?.session.runtime?.runtime_id).toBe("runtime-2");
+    expect(recovered.sessions["s-runtime"]?.session.runtime?.worker_instance_id).toBe("runtime-2");
   });
 
   test("reduces subagent state and rejects stale revisions", () => {
@@ -244,7 +244,7 @@ describe("@pohunek/client-core", () => {
       v: PROTOCOL_VERSION,
       event: "subagent_state",
       session_id: "s-subagent",
-      runtime: { runtime_id: "runtime-1", runtime_generation: "1" },
+      runtime: { worker_instance_id: "runtime-1", runtime_generation: "1" },
       subagent: {
         id: "child-1",
         provider: "codex",
@@ -260,7 +260,7 @@ describe("@pohunek/client-core", () => {
       v: PROTOCOL_VERSION,
       event: "subagent_state",
       session_id: "s-subagent",
-      runtime: { runtime_id: "runtime-1", runtime_generation: "1" },
+      runtime: { worker_instance_id: "runtime-1", runtime_generation: "1" },
       subagent: {
         id: "child-1",
         provider: "codex",
@@ -284,7 +284,7 @@ describe("@pohunek/client-core", () => {
       v: PROTOCOL_VERSION,
       event: "subagent_state",
       session_id: "s-subagent",
-      runtime: { runtime_id: "runtime-1", runtime_generation: "1" },
+      runtime: { worker_instance_id: "runtime-1", runtime_generation: "1" },
       subagent: {
         id: "child-1",
         provider: "codex",
@@ -643,7 +643,7 @@ function session(id: string, runtimeId?: string): SessionInfo {
       runtime: {
         state: "live",
         worker_id: `worker-${runtimeId}`,
-        runtime_id: runtimeId,
+        worker_instance_id: runtimeId,
         runtime_generation: "1",
         started_at: "2026-07-22T12:00:00Z",
         last_connected_at: "2026-07-22T12:00:00Z",

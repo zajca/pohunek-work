@@ -178,12 +178,12 @@ for (const [name, env] of [
 }
 
 test("protocol outside the offered range is protocol_mismatch", async () => {
-  expect(SUPPORTED_PROTOCOL_VERSION).toBe(3);
+  expect(SUPPORTED_PROTOCOL_VERSION).toBe(4);
   const body = await fixture("protocol-mismatch.json");
   const { exec } = fakeExec(() => reply(body));
   const failure = failureOf(await createPohunekClient(CONFIG, { exec, env: {} }).listProjects());
   expect(failure.code).toBe("protocol_mismatch");
-  expect(failure.message).toContain("4-5");
+  expect(failure.message).toContain("5-6");
 });
 
 test("err incomplete_origin_environment maps to origin_environment", async () => {
@@ -226,10 +226,10 @@ test("malformed JSON is invalid_response, with exit 0 and non-zero", async () =>
 test("envelope violations are invalid_response", async () => {
   const bodies = [
     "[]",
-    JSON.stringify({ protocol: { minimum: 3, maximum: 3 }, ok: [] }),
-    JSON.stringify({ cli_version: "1", protocol: { minimum: "3", maximum: 3 }, ok: [] }),
-    JSON.stringify({ cli_version: "1", protocol: { minimum: 3, maximum: 3 } }),
-    JSON.stringify({ cli_version: "1", protocol: { minimum: 3, maximum: 3 }, ok: [], err: {} }),
+    JSON.stringify({ protocol: { minimum: 4, maximum: 4 }, ok: [] }),
+    JSON.stringify({ cli_version: "1", protocol: { minimum: "4", maximum: 3 }, ok: [] }),
+    JSON.stringify({ cli_version: "1", protocol: { minimum: 4, maximum: 4 } }),
+    JSON.stringify({ cli_version: "1", protocol: { minimum: 4, maximum: 4 }, ok: [], err: {} }),
   ];
   for (const body of bodies) {
     const { exec } = fakeExec(() => reply(body));
@@ -241,7 +241,7 @@ test("envelope violations are invalid_response", async () => {
 test("a missing required field names the field path", async () => {
   const body = JSON.stringify({
     cli_version: "0.31.6",
-    protocol: { minimum: 3, maximum: 3 },
+    protocol: { minimum: 4, maximum: 4 },
     ok: [{ id: "prj_1", label: "widgets" }, { label: "no-id" }],
   });
   const { exec } = fakeExec(() => reply(body));
@@ -252,7 +252,7 @@ test("a missing required field names the field path", async () => {
 
 test("wrong types and wrong payload shapes are invalid_response", async () => {
   const wrap = (ok: unknown): string =>
-    JSON.stringify({ cli_version: "0.31.6", protocol: { minimum: 3, maximum: 3 }, ok });
+    JSON.stringify({ cli_version: "0.31.6", protocol: { minimum: 4, maximum: 4 }, ok });
   const cases: readonly [string, string, string][] = [
     ["session", wrap([{ id: "s", state: 5 }]), "$.ok[0].state"],
     ["session", wrap([{ id: "s", state: "running", metadata: { k: 1 } }]), "$.ok[0].metadata.k"],

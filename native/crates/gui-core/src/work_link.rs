@@ -273,7 +273,7 @@ mod tests {
                 fork: true,
             },
             agent: "claude".to_owned(),
-            agent_base: protocol::AgentKind::Claude,
+            agent_base: protocol::RuntimeRef::claude(),
             cwd: PathBuf::from("/work"),
             cwd_source: None,
             pid: 1,

@@ -150,7 +150,7 @@ function localSession(): SessionInfo {
       state: "live",
       runtime_generation: "1",
       worker_id: `worker-${FIXTURE_LOCAL_SESSION_ID}`,
-      runtime_id: `runtime-${FIXTURE_LOCAL_SESSION_ID}`,
+      worker_instance_id: `runtime-${FIXTURE_LOCAL_SESSION_ID}`,
       started_at: FIXTURE_TIMESTAMP,
       last_connected_at: FIXTURE_TIMESTAMP,
     },

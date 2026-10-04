@@ -39,11 +39,11 @@ use pohunek_test_support::env::TestEnv;
 use pohunek_test_support::process_env::ProcessEnv;
 use pohunek_test_support::wait;
 use protocol::{
-    method, AgentActivity, AgentKind, ErrorClass, NotificationPolicyParams, ProcessStartIdentity,
+    method, AgentActivity, ErrorClass, NotificationPolicyParams, ProcessStartIdentity,
     ProjectActionParams, ProjectActionResult, ProjectActionsParams, ProjectAddParams,
     ProjectPromptParams, ProjectRemoveParams, ProjectRenameParams, ProjectShowParams,
-    ProtocolError, ProviderKind, ReportSequence, Request, Response, SessionDiffParams, SessionId,
-    SessionInfo, SessionNewParams, SessionOutputParams, SessionReportNativeIdParams,
+    ProtocolError, ProviderKind, ReportSequence, Request, Response, RuntimeRef, SessionDiffParams,
+    SessionId, SessionInfo, SessionNewParams, SessionOutputParams, SessionReportNativeIdParams,
     SessionScreenParams, SessionSetMetadataParams, SessionWaitParams, StateSource,
 };
 use time::format_description::well_known::Rfc3339;
@@ -75,7 +75,7 @@ async fn dropping_the_harness_with_a_live_session_reaps_the_worker_and_agent() {
     let daemon = LoopbackDaemon::spawn("drop-reaps").await;
     let host = daemon.host("host-drop");
     let session =
-        create_agent_session(&host, AgentKind::Codex, temp_dir("gui-core-drop-cwd")).await;
+        create_agent_session(&host, RuntimeRef::codex(), temp_dir("gui-core-drop-cwd")).await;
     let inspector = HostInspector::new();
     let hierarchy = inspector
         .descendants(daemon.pid())
@@ -163,7 +163,8 @@ async fn loopback_hosts_seed_and_stream_agent_state() {
         DomainEvent::HostSubscribed { .. }
     ));
 
-    let created = create_agent_session(&host_a, AgentKind::Codex, temp_dir("gui-core-cwd")).await;
+    let created =
+        create_agent_session(&host_a, RuntimeRef::codex(), temp_dir("gui-core-cwd")).await;
     let state = wait_for_agent_state(&mut events, &created.id).await;
     assert_eq!(state.activity, AgentActivity::Blocked);
     assert_eq!(state.source, StateSource::OscTitle);
@@ -186,8 +187,8 @@ async fn workspace_connects_to_multiple_loopback_daemons_and_lists_sessions() {
     let host_b = daemon_b.host("host-b");
     let repo_a = init_git_repo("gui-core-m1-repo-a");
     let repo_b = init_git_repo("gui-core-m1-repo-b");
-    let session_a = create_agent_session(&host_a, AgentKind::Codex, repo_a).await;
-    let session_b = create_agent_session(&host_b, AgentKind::Codex, repo_b).await;
+    let session_a = create_agent_session(&host_a, RuntimeRef::codex(), repo_a).await;
+    let session_b = create_agent_session(&host_b, RuntimeRef::codex(), repo_b).await;
 
     let mut workspace = Workspace::default();
     let mut stream = Box::pin(workspace_connection_stream(
@@ -241,7 +242,8 @@ async fn live_agent_state_updates_are_reflected() {
     ));
     wait_for_host_connected(&mut workspace, &mut stream, &host).await;
 
-    let session = create_agent_session(&host, AgentKind::Codex, temp_dir("gui-core-m1-cwd")).await;
+    let session =
+        create_agent_session(&host, RuntimeRef::codex(), temp_dir("gui-core-m1-cwd")).await;
     wait_for_session_activity(
         &mut workspace,
         &mut stream,
@@ -286,7 +288,7 @@ async fn notification_seed_with_an_empty_inbox_connects_and_streams_sessions() {
     wait_for_host_connected(&mut workspace, &mut stream, &host).await;
 
     let session =
-        create_agent_session(&host, AgentKind::Codex, temp_dir("gui-core-notif-cwd")).await;
+        create_agent_session(&host, RuntimeRef::codex(), temp_dir("gui-core-notif-cwd")).await;
     wait_for_hosts_with_sessions(&mut workspace, &mut stream, &[(&host, &session.id)]).await;
 
     let view = workspace.hosts.get(&host.id).expect("host view");
@@ -354,7 +356,7 @@ async fn unreachable_host_marks_error_without_breaking_other_hosts() {
     let dead_host = HostConfig::tcp("host-dead", unused_loopback_addr().await);
     let session = create_agent_session(
         &live_host,
-        AgentKind::Codex,
+        RuntimeRef::codex(),
         init_git_repo("gui-core-m1-live-repo"),
     )
     .await;
@@ -399,7 +401,7 @@ async fn session_lifecycle_create_inspect_and_stop_reconciles_workspace_state() 
     let created = no_origin::create_session(
         &host,
         SessionNewParams {
-            agent: agent_name(&AgentKind::Codex).to_owned(),
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
             name: None,
             cwd: Some(temp_dir("gui-core-m2-session-cwd")),
             cols: 100,
@@ -484,7 +486,7 @@ async fn session_children_receive_the_fixture_environment_not_the_host_one() {
     let created = no_origin::create_session(
         &host,
         SessionNewParams {
-            agent: agent_name(&AgentKind::Codex).to_owned(),
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
             name: None,
             cwd: Some(temp_dir("gui-core-env-cwd")),
             cols: 100,
@@ -531,7 +533,7 @@ async fn exercise_observation_and_policy(host: &HostConfig, session: &SessionInf
     .expect("session.output through gui-core");
     assert_eq!(output.session_id(), &session.id);
     let stale_runtime = protocol::SessionRuntimeIdentity::new(
-        output.runtime().runtime_id(),
+        output.runtime().worker_instance_id(),
         protocol::RuntimeGeneration::new(
             output
                 .runtime()
@@ -604,7 +606,7 @@ async fn session_metadata_merge_and_clear_round_trips() {
     let created = no_origin::create_session(
         &host,
         SessionNewParams {
-            agent: agent_name(&AgentKind::Codex).to_owned(),
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
             name: None,
             cwd: Some(temp_dir("gui-core-m2-metadata-cwd")),
             cols: 80,
@@ -753,7 +755,7 @@ async fn worktree_creation_is_session_new_with_branch_and_visible_in_project_sho
     let created = no_origin::create_session(
         &host,
         SessionNewParams {
-            agent: agent_name(&AgentKind::Codex).to_owned(),
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
             name: None,
             cwd: None,
             cols: 80,
@@ -1387,7 +1389,7 @@ async fn prompt_errors_surface_without_corrupting_workspace_state() {
     .await
     .expect("project.add");
     let existing =
-        create_agent_session(&host, AgentKind::Codex, temp_dir("gui-core-m3-existing")).await;
+        create_agent_session(&host, RuntimeRef::codex(), temp_dir("gui-core-m3-existing")).await;
     let mut workspace = Workspace::default();
     workspace.apply(DomainEvent::HostSnapshotLoaded {
         snapshot: load_host_snapshot(&host).await.expect("seed workspace"),
@@ -1573,7 +1575,7 @@ async fn create_worktree_session(host: &HostConfig, project_id: &str, branch: &s
     no_origin::create_session(
         host,
         SessionNewParams {
-            agent: agent_name(&AgentKind::Codex).to_owned(),
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
             name: None,
             cwd: None,
             cols: 80,
@@ -1936,7 +1938,7 @@ async fn review_dispatch_uses_the_overridden_agent_instead_of_the_source_session
     let session_info = inspect_session(&host, &session.id)
         .await
         .expect("session.inspect");
-    assert_eq!(session_info.agent, agent_name(&AgentKind::Codex));
+    assert_eq!(session_info.agent, agent_name(&RuntimeRef::codex()));
 
     let store = ReviewStore::new(temp_dir("gui-core-review-dispatch-agent-override-store"));
     let mut review = Review::new(
@@ -1959,7 +1961,7 @@ async fn review_dispatch_uses_the_overridden_agent_instead_of_the_source_session
             config: &host,
             store: &store,
             session_info: &session_info,
-            agent: Some(agent_name(&AgentKind::Shell).to_owned()),
+            agent: Some(agent_name(&RuntimeRef::shell()).to_owned()),
             rendered_prompt,
             cols: 80,
             rows: 24,
@@ -1969,7 +1971,7 @@ async fn review_dispatch_uses_the_overridden_agent_instead_of_the_source_session
     .await
     .expect("dispatch review with agent override");
 
-    assert_eq!(dispatched.session.agent, agent_name(&AgentKind::Shell));
+    assert_eq!(dispatched.session.agent, agent_name(&RuntimeRef::shell()));
     assert_ne!(dispatched.session.agent, session_info.agent);
 
     stop_session(&host, &session.id).await;
@@ -2847,10 +2849,10 @@ async fn report_native_id(host: &HostConfig, id: &SessionId, agent: &str, native
     let session = inspect_session(host, id)
         .await
         .expect("inspect session before native identity report");
-    let runtime_id = session
+    let worker_instance_id = session
         .runtime
         .as_ref()
-        .and_then(|runtime| runtime.runtime_id.clone())
+        .and_then(|runtime| runtime.worker_instance_id.clone())
         .expect("managed session has a runtime id");
     let process_start_identity = process_start_identity(session.pid);
     let expires_at = (time::OffsetDateTime::now_utc()
@@ -2859,7 +2861,7 @@ async fn report_native_id(host: &HostConfig, id: &SessionId, agent: &str, native
     .expect("format native identity report expiry");
     let params = SessionReportNativeIdParams::new(
         id.clone(),
-        runtime_id,
+        worker_instance_id,
         agent,
         session.pid,
         process_start_identity,
@@ -2903,7 +2905,7 @@ async fn wait_for_native_id(host: &HostConfig, id: &SessionId, native_id: &str) 
     }
 }
 
-async fn create_agent_session(host: &HostConfig, agent: AgentKind, cwd: PathBuf) -> SessionInfo {
+async fn create_agent_session(host: &HostConfig, agent: RuntimeRef, cwd: PathBuf) -> SessionInfo {
     let mut client = client(host).await;
     let request = Request::new(
         "gui-core-session-new",
@@ -2988,14 +2990,8 @@ where
     }
 }
 
-fn agent_name(agent: &AgentKind) -> &'static str {
-    match agent {
-        AgentKind::Shell => "shell",
-        AgentKind::Codex => "codex",
-        AgentKind::Claude => "claude",
-        AgentKind::Hermes => "hermes",
-        AgentKind::Unknown(_) => panic!("unknown agents cannot be launched in tests"),
-    }
+fn agent_name(agent: &RuntimeRef) -> &str {
+    agent.as_wire()
 }
 
 thread_local! {

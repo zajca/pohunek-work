@@ -39,7 +39,7 @@
   let detail: Detail | undefined = $state();
   let capabilities: Capabilities | undefined = $state();
   let screen: Screen | undefined = $state();
-  let outputCursor: Pick<Output, "runtime_id" | "runtime_generation" | "next_offset"> | undefined = $state();
+  let outputCursor: Pick<Output, "worker_instance_id" | "runtime_generation" | "next_offset"> | undefined = $state();
   let outputText = $state("");
   let outputNotice: string | undefined = $state();
   let observationLoading = $state(false);
@@ -197,7 +197,7 @@
         session_id: requestSessionId,
         ...(requestCursor === undefined ? {} : {
           runtime: {
-            runtime_id: requestCursor.runtime_id,
+            worker_instance_id: requestCursor.worker_instance_id,
             runtime_generation: requestCursor.runtime_generation,
           },
           after_offset: requestCursor.next_offset,
@@ -211,7 +211,7 @@
       }
       outputText += decodeOutput(result.data_base64);
       outputCursor = {
-        runtime_id: result.runtime_id,
+        worker_instance_id: result.worker_instance_id,
         runtime_generation: result.runtime_generation,
         next_offset: result.next_offset,
       };
@@ -519,8 +519,8 @@
             <div><dt>State source</dt><dd>{detail.state_source}</dd></div>
             {#if detail.runtime !== undefined}
               <div><dt>Runtime state</dt><dd>{detail.runtime.state}</dd></div>
-              {#if detail.runtime.runtime_id !== undefined}
-                <div><dt>Runtime ID</dt><dd>{detail.runtime.runtime_id}</dd></div>
+              {#if detail.runtime.worker_instance_id !== undefined}
+                <div><dt>Worker instance ID</dt><dd>{detail.runtime.worker_instance_id}</dd></div>
               {/if}
               {#if detail.runtime.worker_id !== undefined}
                 <div><dt>Worker ID</dt><dd>{detail.runtime.worker_id}</dd></div>

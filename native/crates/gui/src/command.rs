@@ -1186,10 +1186,16 @@ fn wait_for_selected_session_task(app: &PohunekApp) -> Result<Task<Message>, Str
         .and_then(|host| host.sessions.get(&session_id.0))
         .ok_or_else(|| "selected session is not loaded".to_owned())?;
     let runtime = session.runtime.as_ref().and_then(|runtime| {
-        runtime.runtime_id.as_ref().and_then(|runtime_id| {
-            protocol::SessionRuntimeIdentity::new(runtime_id.clone(), runtime.runtime_generation)
+        runtime
+            .worker_instance_id
+            .as_ref()
+            .and_then(|worker_instance_id| {
+                protocol::SessionRuntimeIdentity::new(
+                    worker_instance_id.clone(),
+                    runtime.runtime_generation,
+                )
                 .ok()
-        })
+            })
     });
     let params = SessionWaitParams::new(
         session_id,
@@ -1632,9 +1638,9 @@ mod tests {
         ProviderState, UiState, Workspace,
     };
     use protocol::{
-        AgentKind, AgentRuntime, ApprovalKeyReference, HostGovernanceStatus,
-        HostId as StableHostId, NotificationKind, NotificationRecord, NotificationSeverity,
-        NotificationSource, ProjectInfo, ProjectSource, SessionInfo,
+        AgentRuntime, ApprovalKeyReference, HostGovernanceStatus, HostId as StableHostId,
+        NotificationKind, NotificationRecord, NotificationSeverity, NotificationSource,
+        ProjectInfo, ProjectSource, RuntimeRef, SessionInfo,
     };
 
     use super::*;
@@ -1694,7 +1700,7 @@ mod tests {
                 fork: true,
             },
             agent: "codex".to_owned(),
-            agent_base: protocol::AgentKind::Codex,
+            agent_base: protocol::RuntimeRef::codex(),
             cwd: PathBuf::from("/work/project"),
             cwd_source: Some(protocol::CwdSource::Launch),
             pid: 42,
@@ -2377,16 +2383,16 @@ mod tests {
         let mut host = test_host();
         host.runtimes = vec![
             test_runtime("legacy-custom", None, true, None),
-            test_runtime("hermes", None, true, None),
+            test_runtime("hermes", None, true, Some(false)),
             test_runtime(
                 "hermes-supported",
-                Some(AgentKind::Hermes),
+                Some(RuntimeRef::hermes()),
                 true,
                 Some(true),
             ),
             test_runtime(
                 "future-profile",
-                Some(AgentKind::Unknown("future".to_owned())),
+                Some(RuntimeRef::from_wire("Future Agent")),
                 true,
                 Some(true),
             ),
@@ -2406,7 +2412,7 @@ mod tests {
         let host_id = HostId::new("local");
         let mut host = test_host();
         host.runtimes = vec![
-            test_runtime("shell-profile", Some(AgentKind::Shell), true, None),
+            test_runtime("shell-profile", Some(RuntimeRef::shell()), true, None),
             test_runtime("legacy-custom", None, true, None),
         ];
 
@@ -2780,7 +2786,7 @@ mod tests {
 
     fn test_runtime(
         name: &str,
-        agent_base: Option<AgentKind>,
+        agent_base: Option<RuntimeRef>,
         available: bool,
         supported: Option<bool>,
     ) -> AgentRuntime {
@@ -2825,7 +2831,7 @@ mod tests {
             metadata: BTreeMap::new(),
             created_at: created_at.to_owned(),
             session_id: None,
-            agent_kind: Some(AgentKind::Codex),
+            agent_kind: Some(RuntimeRef::codex()),
             source_id: None,
             dedupe_key: None,
             project_id: Some("p-1".to_owned()),

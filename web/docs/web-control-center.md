@@ -36,7 +36,7 @@ context rather than the primary navigation level.
 Selecting a running session attaches its PTY directly in the main pane without
 hiding the rail. Switching sessions detaches the old view and attaches the new
 one; resize and binary terminal traffic still use the daemon attach proxy.
-After daemon replacement the browser must compare `runtime_id`: the same
+After daemon replacement the browser must compare `worker_instance_id`: the same
 generation may reconnect and repaint, while a changed generation is explicit
 native recovery. Lost, conflicting, incompatible, and observe-only sessions
 show a summary instead. The

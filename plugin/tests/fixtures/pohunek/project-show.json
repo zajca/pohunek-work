@@ -1,6 +1,6 @@
 {
   "cli_version": "0.31.6",
-  "protocol": { "minimum": 3, "maximum": 3 },
+  "protocol": { "minimum": 4, "maximum": 4 },
   "ok": {
     "project": {
       "id": "prj_1",
