@@ -321,6 +321,10 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const branchPatternSource = readString(table, "branch_pattern", file, path);
   const ignoredChecks = readStringArray(table, "ignored_checks", file, path);
   const policyChecks = readStringArray(table, "policy_checks", file, path);
+  const repeated = policyChecks.find((name, index) => policyChecks.indexOf(name) !== index);
+  if (repeated !== undefined) {
+    throw fail(file, [...path, "policy_checks"], `must not list ${JSON.stringify(repeated)} twice`);
+  }
   const both = policyChecks.find((name) => ignoredChecks.includes(name));
   if (both !== undefined) {
     throw fail(file, [...path, "policy_checks"], `must not repeat ${JSON.stringify(both)} from ignored_checks`);

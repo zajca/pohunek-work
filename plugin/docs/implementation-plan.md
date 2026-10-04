@@ -180,6 +180,7 @@ repo = "keboola/connection"
 linear_team = "DMD"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
+policy_checks = []
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
 # Linear state names; started issues in these states and without a pull
 # request get no row (they are not on anyone's turn).

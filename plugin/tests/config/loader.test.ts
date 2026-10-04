@@ -305,6 +305,15 @@ describe("loadConfig unknown keys", () => {
     expect(error.message).toContain('must not repeat "CI / Flaky" from ignored_checks');
   });
 
+  test("a duplicate policy_checks entry", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('policy_checks = ["Policy / Label"]', 'policy_checks = ["Policy / Label", "Policy / Label"]'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.policy_checks");
+    expect(error.message).toContain('must not list "Policy / Label" twice');
+  });
+
   test("project policy table with an unknown key", async () => {
     const dir = await copyFixture();
     await editFile(dir, "projects/gadgets.toml", (t) => t.replace("[policy]\n", "[policy]\nextra = 1\n"));
