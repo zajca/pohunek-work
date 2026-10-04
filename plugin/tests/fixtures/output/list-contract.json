@@ -155,6 +155,7 @@
         "actions": [],
         "sources": {
           "github": "ok",
+          "github_merged": "ok",
           "linear": "ok",
           "pohunek": "ok"
         }
