@@ -21,7 +21,7 @@ export const identity: IdentityConfig = {
   reviewTeams: ["acme/reviewers"],
 };
 
-export const project = { ignoredChecks: ["CD / Enqueue E2E"], aiReviewers: ["ai-helper"] };
+export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"] };
 
 export const allOk: SourceStatuses = { github: "ok", linear: "ok", pohunek: "ok" };
 

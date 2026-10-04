@@ -29,6 +29,7 @@ const project: ProjectConfig = {
   branchPattern: /(?<key>ABC-\d+)/,
   branchPatternSource: "(?P<key>ABC-\\d+)",
   ignoredChecks: [],
+  policyChecks: [],
   aiReviewers: [],
   pausedStates: [],
   policy: null,

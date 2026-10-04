@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decodeListEnvelope } from "../../src/tui/decode.ts";
 import { initialState, update, type State } from "../../src/tui/model.ts";
-import { detailLines, formatAge, view, type Frame } from "../../src/tui/view.ts";
+import { detailLines, formatAge, ruleLine, view, type Frame } from "../../src/tui/view.ts";
 import {
   envelopeText,
   listDone,
@@ -150,6 +150,13 @@ test("golden: detail pane text for every rule", () => {
   const path = join(GOLDEN_DIR, "detail-per-rule.txt");
   if (UPDATE) writeFileSync(path, text);
   else expect(text).toBe(readFileSync(path, "utf8"));
+});
+
+test("rule 5 has a line per reason, a policy check included", () => {
+  const line = (reason: string): string => ruleLine(row("github:acme/x#1", { on_turn: { actor: "me", reason, rule: 5 } }));
+  expect(line("fix CI")).toBe("a check failed on the pull request");
+  expect(line("rebase")).toBe("the pull request conflicts with its base branch");
+  expect(line("policy check: Require label")).toBe("a policy check failed: meet it on GitHub (manual)");
 });
 
 const ESC = "\u001b";

@@ -1,12 +1,13 @@
 // The `on_turn` rules of RFC section 8: a pure function over normalized data.
 import type { IdentityConfig, ProjectConfig } from "./types/config.ts";
-import type {
-  ChangesRequestedProgress,
-  MeReason,
-  OnTurn,
-  RuleNumber,
-  SourceStatuses,
-  WorkItem,
+import {
+  POLICY_CHECK_REASON_PREFIX,
+  type ChangesRequestedProgress,
+  type MeReason,
+  type OnTurn,
+  type RuleNumber,
+  type SourceStatuses,
+  type WorkItem,
 } from "./types/item.ts";
 import type {
   Actor,
@@ -21,7 +22,7 @@ export interface RuleInput {
   readonly item: WorkItem;
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "aiReviewers">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers">;
 }
 
 export interface RuleResult {
@@ -54,6 +55,30 @@ export function summarizeChecks(
   if (relevant.some((check) => check.outcome === "failure")) return "failure";
   if (relevant.some((check) => check.outcome === "pending")) return "pending";
   return "success";
+}
+
+/** Names of failing checks, each listed once; ignored checks are left out. */
+export interface FailingChecks {
+  /** Checks an agent can fix, in the order GitHub reports them. */
+  readonly ci: readonly string[];
+  /** Failing `policyChecks` entries, in configuration order. */
+  readonly policy: readonly string[];
+}
+
+/** Splits the failing checks into CI and policy failures by exact name. */
+export function failingChecks(
+  checks: readonly Check[],
+  project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks">,
+): FailingChecks {
+  const failed = new Set(
+    checks
+      .filter((check) => check.outcome === "failure" && !project.ignoredChecks.includes(check.name))
+      .map((check) => check.name),
+  );
+  return {
+    ci: [...failed].filter((name) => !project.policyChecks.includes(name)),
+    policy: project.policyChecks.filter((name) => failed.has(name)),
+  };
 }
 
 export function isAiReviewer(actor: Actor | null, aiReviewers: readonly string[]): boolean {
@@ -216,10 +241,13 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     if (progress !== null && !(progress.fixDelivered && progress.threadsAnswered && progress.rerequested)) {
       return result(me("respond", 4));
     }
-    if (summarizeChecks(authored.checks, project.ignoredChecks) === "failure") {
-      return result(me("fix CI", 5));
-    }
+    // A rebase reruns every check, so a conflict comes before any failure.
     if (authored.mergeable === "CONFLICTING") return result(me("rebase", 5));
+    const failing = failingChecks(authored.checks, project);
+    if (failing.ci.length > 0) return result(me("fix CI", 5));
+    if (failing.policy.length > 0) {
+      return result(me(`${POLICY_CHECK_REASON_PREFIX}${failing.policy.join(", ")}`, 5));
+    }
     if (authored.isDraft) return result(me("leave draft", 6));
     if (
       authored.reviewDecision === "APPROVED" &&

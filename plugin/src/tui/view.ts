@@ -13,7 +13,7 @@ export type Frame = readonly SafeText[];
 const MINUTES_PER_HOUR = 60;
 const PANE_SEPARATOR = toSafe("|");
 
-/** One line per rule (RFC 8.1); rule 5 has a line per reason. */
+/** One line per rule (RFC 8.1); rule 5 has a line per fixed reason and `5` for a policy check. */
 const RULE_LINES: Readonly<Record<string, string>> = {
   "1": "a linked agent is blocked or asks for approval: answer it (attach)",
   "2": "a linked agent is working",
@@ -21,6 +21,7 @@ const RULE_LINES: Readonly<Record<string, string>> = {
   "4": "changes requested: deliver a fix, answer every thread, re-request review",
   "5:fix CI": "a check failed on the pull request",
   "5:rebase": "the pull request conflicts with its base branch",
+  "5": "a policy check failed: meet it on GitHub (manual)",
   "6": "the pull request is a draft: mark it ready when done",
   "7": "approved, checks green, mergeable: merge on GitHub (manual)",
   "8": "issue started and assigned to you, no pull request, nothing runs",

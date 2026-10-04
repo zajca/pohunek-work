@@ -90,6 +90,7 @@ describe("loadConfig valid", () => {
     expect(widgets?.linearTeam).toBe("ABC");
     expect(widgets?.branchPatternSource).toBe("^alice/(?P<key>ABC-[0-9]+)/");
     expect(widgets?.ignoredChecks).toEqual(["CI / Flaky"]);
+    expect(widgets?.policyChecks).toEqual(["Policy / Label"]);
     expect(widgets?.aiReviewers).toEqual(["review-bot"]);
     expect(widgets?.pausedStates).toEqual(["On hold"]);
     expect(widgets?.policy).toBeNull();
@@ -134,6 +135,7 @@ describe("loadConfig missing keys", () => {
     ["config.toml", "launch_kill_margin_ms = 10000\n", "actions.launch_kill_margin_ms", "[actions] launch_kill_margin_ms is required"],
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
     ["projects/widgets.toml", 'ignored_checks = ["CI / Flaky"]\n', "project.ignored_checks", "[project] ignored_checks is required"],
+    ["projects/widgets.toml", 'policy_checks = ["Policy / Label"]\n', "project.policy_checks", "[project] policy_checks is required"],
     ["projects/widgets.toml", 'ai_reviewers = ["review-bot"]\n', "project.ai_reviewers", "[project] ai_reviewers is required"],
     ["projects/widgets.toml", 'paused_states = ["On hold"]\n', "project.paused_states", "[project] paused_states is required"],
   ])("%s without a line fails naming file and key", async (file, line, key, fragment) => {
@@ -292,6 +294,24 @@ describe("loadConfig unknown keys", () => {
     const error = await loadError(dir);
     expect(error.file).toBe("projects/widgets.toml");
     expect(error.key).toBe("extra");
+  });
+
+  test("a check named in both ignored_checks and policy_checks", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('policy_checks = ["Policy / Label"]', 'policy_checks = ["Policy / Label", "CI / Flaky"]'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.policy_checks");
+    expect(error.message).toContain('must not repeat "CI / Flaky" from ignored_checks');
+  });
+
+  test("a duplicate policy_checks entry", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => t.replace('policy_checks = ["Policy / Label"]', 'policy_checks = ["Policy / Label", "Policy / Label"]'));
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.policy_checks");
+    expect(error.message).toContain('must not list "Policy / Label" twice');
   });
 
   test("project policy table with an unknown key", async () => {

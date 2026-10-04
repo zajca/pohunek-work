@@ -4,7 +4,7 @@
 import type { CollectedRow } from "../commands/list.ts";
 import { configuredProfile } from "../config/profiles.ts";
 import { keyFromBranch } from "../join.ts";
-import { summarizeChecks } from "../rules.ts";
+import { failingChecks } from "../rules.ts";
 import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { PohunekSession, PullRequest } from "../types/sources.ts";
@@ -166,12 +166,6 @@ interface WorktreeSpec {
   readonly fields: (row: CollectedRow, pr: PullRequest) => Readonly<Record<string, string>>;
 }
 
-function failingChecks(row: CollectedRow, pr: PullRequest): string[] {
-  return pr.checks
-    .filter((check) => check.outcome === "failure" && !row.project.ignoredChecks.includes(check.name))
-    .map((check) => check.name);
-}
-
 const WORKTREE_SPECS: Readonly<Record<Exclude<LaunchAction, "implement" | "review">, WorktreeSpec>> = {
   babysit: {
     template: "work-babysit",
@@ -184,11 +178,18 @@ const WORKTREE_SPECS: Readonly<Record<Exclude<LaunchAction, "implement" | "revie
     template: "work-fix-ci",
     precondition: (row, pr) => {
       requireTurn(row, "fix-ci", (actor, rule) => actor === "me" && rule === FIX_RULE, `it needs rule ${String(FIX_RULE)} (fix CI)`);
-      if (summarizeChecks(pr.checks, row.project.ignoredChecks) !== "failure") {
+      if (pr.mergeable === "CONFLICTING") {
+        throw new ActionError("precondition_failed", `fix-ci refused: ${pr.id} conflicts with its base; rebase it first`);
+      }
+      const failing = failingChecks(pr.checks, row.project);
+      if (failing.policy.length > 0 && failing.ci.length === 0) {
+        throw new ActionError("precondition_failed", `fix-ci refused: only policy checks of ${pr.id} fail (${failing.policy.join(", ")}); they need the owner`);
+      }
+      if (failing.ci.length === 0) {
         throw new ActionError("precondition_failed", `fix-ci refused: no check of ${pr.id} is failing`);
       }
     },
-    fields: (row, pr) => ({ failing_checks: failingChecks(row, pr).join(", ") }),
+    fields: (row, pr) => ({ failing_checks: failingChecks(pr.checks, row.project).ci.join(", ") }),
   },
   rebase: {
     template: "work-rebase",
