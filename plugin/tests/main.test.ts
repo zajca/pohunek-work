@@ -117,7 +117,7 @@ test("reportError without --json prints strict ASCII on stderr", () => {
     lines.push(line);
   };
   try {
-    reportError(false, "action", "command_failed", "pohunek attach failed (\u001b]0;x\u0007 \u017elu\u0165ou\u010dk\u00fd)\nsecond line");
+    reportError(false, 1, "action", "command_failed", "pohunek attach failed (\u001b]0;x\u0007 \u017elu\u0165ou\u010dk\u00fd)\nsecond line");
   } finally {
     console.error = original;
   }
@@ -131,11 +131,12 @@ test("reportError prints the given class in the JSON envelope and returns exit 2
     lines.push(line);
   };
   try {
-    expect(reportError(true, "internal", "internal_error", "boom")).toBe(2);
+    expect(reportError(true, 7, "internal", "internal_error", "boom")).toBe(2);
   } finally {
     console.log = original;
   }
-  const envelope = JSON.parse(lines.join("\n")) as { err: { class: string; code: string; msg: string } };
+  const envelope = JSON.parse(lines.join("\n")) as { protocol: unknown; err: { class: string; code: string; msg: string } };
+  expect(envelope.protocol).toEqual({ minimum: 7, maximum: 7 });
   expect(envelope.err).toEqual({ class: "internal", code: "internal_error", msg: "boom" });
 });
 

@@ -142,10 +142,11 @@ export function buildListEnvelope(
   };
 }
 
-export function buildErrorEnvelope(cliVersion: string, err: ListError): ListEnvelope {
+/** `contract` is the version of the command that failed: `list`, `do` and `setup` version their envelopes separately. */
+export function buildErrorEnvelope(cliVersion: string, err: ListError, contract: number): ListEnvelope {
   return {
     cli_version: cliVersion,
-    protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
+    protocol: { minimum: contract, maximum: contract },
     err,
   };
 }

@@ -11,7 +11,7 @@ import type {
 } from "./sources.ts";
 
 /** Version of the `list --json` contract; bumped on any incompatible change. */
-export const LIST_CONTRACT_VERSION = 1;
+export const LIST_CONTRACT_VERSION = 2;
 
 /** Per-source availability for one poll: `ok` or the stable failure code. */
 export type SourceStatus = "ok" | SourceErrorCode;

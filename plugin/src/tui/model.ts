@@ -484,7 +484,11 @@ function listDone(state: State, run: ChildRun, outcome: ListOutcome | null, now:
   } else if (outcome.kind === "incompatible") {
     next = { ...next, fatal: { kind: "incompatible", message: outcome.message }, data: null, baseline: null, marked: new Set() };
   } else {
-    const transitions = transitionsToMe(state.baseline, outcome.payload.items);
+    const transitions = transitionsToMe(
+      state.baseline,
+      outcome.payload.items,
+      outcome.payload.projects.every((project) => Object.values(project.sources).every((source) => source === "ok")),
+    );
     const meNow = new Set(outcome.payload.items.filter((item) => item.on_turn.actor === "me").map(rowId));
     const marked = new Set([...state.marked, ...transitions.marked].filter((id) => meNow.has(id)));
     const clearsStatus = state.status?.error === true && state.status.text.startsWith("refresh");

@@ -3,7 +3,7 @@ import { decodeListEnvelope } from "../../src/tui/decode.ts";
 import { initialState, isStale, layoutOf, selectedRow, start, update, visibleRows, type State } from "../../src/tui/model.ts";
 import { rowId } from "../../src/tui/rows.ts";
 import { view } from "../../src/tui/view.ts";
-import { envelopeText, listDone, loaded, NARROW, okOutcome, payload, press, row, RULE_ROWS, SETTINGS, T0, WIDE } from "./builders.ts";
+import { envelopeText, listDone, loaded, NARROW, okOutcome, payload, PROJECTS_PARTIAL, press, row, RULE_ROWS, SETTINGS, T0, WIDE } from "./builders.ts";
 
 function keysOf(state: State): string[] {
   return visibleRows(state).map((item) => item.key);
@@ -89,7 +89,7 @@ describe("stale data with a fake clock", () => {
 
 describe("err envelope and incompatible contract", () => {
   const err = decodeListEnvelope(
-    JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 1, maximum: 1 }, err: { class: "configuration", code: "config_invalid", msg: "bad" } }),
+    JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 2, maximum: 2 }, err: { class: "configuration", code: "config_invalid", msg: "bad" } }),
   );
 
   test("an err envelope goes full screen, keeps the data; r retries and success returns to the rows", () => {
@@ -104,9 +104,9 @@ describe("err envelope and incompatible contract", () => {
     expect(back.fatal).toBeNull();
   });
 
-  test("a protocol range without v1 drops the data and never guesses", () => {
+  test("a protocol range without v2 drops the data and never guesses", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)));
-    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 2, maximum: 2 }));
+    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 3, maximum: 3 }));
     const [next] = update(state, listDone(outcome, T0 + 10));
     expect(next.fatal?.kind).toBe("incompatible");
     expect(next.data).toBeNull();
@@ -307,9 +307,23 @@ describe("refresh keeps the selection and marks rows that became mine", () => {
     expect(effects.some((effect) => effect.kind === "bell")).toBe(false);
   });
 
+  test("a row that leaves the list during a complete poll is marked when it returns on my turn", () => {
+    const state = loaded(okOutcome(payload(RULE_ROWS)));
+    const [gone] = update(state, listDone(okOutcome(payload(RULE_ROWS.slice(1))), T0 + 1));
+    const [back] = update(gone, listDone(okOutcome(payload(RULE_ROWS)), T0 + 2));
+    expect([...back.marked]).toEqual([rowId(RULE_ROWS[0] ?? row("missing"))]);
+  });
+
+  test("a row missing during a partial poll keeps its baseline, so its return marks nothing", () => {
+    const state = loaded(okOutcome(payload(RULE_ROWS)));
+    const [partial] = update(state, listDone(okOutcome(payload(RULE_ROWS.slice(1), PROJECTS_PARTIAL)), T0 + 1));
+    const [back] = update(partial, listDone(okOutcome(payload(RULE_ROWS)), T0 + 2));
+    expect(back.marked.size).toBe(0);
+  });
+
   test("an incompatible contract re-baselines: the next good load marks nothing", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS.slice(1))));
-    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 2, maximum: 2 }));
+    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 3, maximum: 3 }));
     const [incompatible] = update(state, listDone(outcome, T0 + 1));
     const [next] = update(incompatible, listDone(okOutcome(payload(RULE_ROWS)), T0 + 2));
     expect(next.marked.size).toBe(0);

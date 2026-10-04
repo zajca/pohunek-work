@@ -65,7 +65,7 @@ runs `list --json` and `do ...` as **child processes of `[tui] self_bin`**. It n
 (`commands/list.ts`, `sources/*`, `actions/launch.ts`).
 
 **Gains:** no credentials in the long-running process (`gh auth token` and the keyring read happen only in
-short-lived children); one versioned contract (list v1, do v1) shared with rofi and `/work` and exercised
+short-lived children); one versioned contract (list v2, do v1) shared with rofi and `/work` and exercised
 daily; the existing per-command JSON logs cover every child; plan reviewed = plan run, because `do`
 confirms in the process that executes (M2 section 4, rule 2). **Costs:** a spawn per refresh (negligible
 next to the network), a runtime envelope decoder, no in-TUI confirmation modal (4.4). **Enforcement:** an
@@ -193,7 +193,7 @@ marked; the row's `sources`; the last preview, refusal or child stderr. `s` show
 | exit 3 (partial) | partial banner; rows render; `unknown` rows explained | kept |
 | exit 2 `err` envelope (e.g. `config_invalid`) | full screen: class, code, message; `r` retries | kept, stale |
 | timeout or unparsable output | status line error, logged | kept, stale |
-| `protocol` range excludes v1 (a `cli_version` mismatch is only a header warning) | full screen "incompatible pohunek-work at `self_bin`", no rows | dropped (never guess) |
+| `protocol` range excludes v2 (a `cli_version` mismatch is only a header warning) | full screen "incompatible pohunek-work at `self_bin`", no rows | dropped (never guess) |
 | terminal too small | `terminal too small` | kept |
 
 ## 5. Logging

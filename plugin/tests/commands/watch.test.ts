@@ -131,6 +131,21 @@ test("pausing an issue notifies nobody and resuming it notifies once", async () 
   expect(resumed.notified).toEqual(["widgets linear:ABC-1"]);
 });
 
+test("a paused issue without a pull request disappears and notifies once when it returns on the owner's turn", async () => {
+  const h = harness([]);
+  h.world.issues = linearOk([issue()]);
+  let state = (await tick(h, null)).baseline;
+  expect(state?.get("widgets linear:ABC-1")).toBe("me");
+  h.world.issues = linearOk([issue({ stateName: "On hold" })]);
+  const paused = await tick(h, state);
+  state = paused.baseline;
+  expect(paused.notified).toEqual([]);
+  expect(state?.has("widgets linear:ABC-1")).toBe(false);
+  h.world.issues = linearOk([issue()]);
+  const resumed = await tick(h, state);
+  expect(resumed.notified).toEqual(["widgets linear:ABC-1"]);
+});
+
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {
   const h = harness([mine]);
   h.world.prs = { ok: false, source: "github", code: "rate_limited", message: "failed", durationMs: 1 };

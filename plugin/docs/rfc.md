@@ -259,7 +259,9 @@ working. A paused row lists no actions and `do` refuses every action on it,
 A paused issue without a pull request gets no row at all, so a session linked
 to it, blocked or working, is not shown in `list`; it is not reported as
 orphaned either. When the issue leaves the paused state, the row is evaluated
-again and `watch` notifies if it lands on the owner's turn.
+again and `watch` notifies if it lands on the owner's turn: after a poll in
+which every source answered, `watch` drops rows that are no longer listed from
+its baseline, so the returning row counts as new.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered
@@ -321,7 +323,11 @@ All interfaces use the same plugin library and the same actions.
 ### 9.1 `list --json`
 
 Versioned envelope matching the pohunek CLI (`{cli_version, protocol,
-ok|err}`, with the plugin's own contract version). Illustrative item:
+ok|err}`, with the plugin's own contract version). The `list` contract is
+version 2: `on_turn.actor` gained `paused` and `on_turn.rule` gained 12, so a
+consumer pinned to version 1 gets an `incompatible` outcome instead of a
+payload it cannot decode. `do` and `setup` version their envelopes separately
+(both 1). Illustrative item:
 
 ```json
 {

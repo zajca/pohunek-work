@@ -81,7 +81,7 @@ test("envelope carries the contract version and exactly one of ok or err", () =>
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
     ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [] },
   });
-  const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" });
+  const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" }, LIST_CONTRACT_VERSION);
   expect("ok" in err).toBe(false);
   expect("err" in err).toBe(true);
 });

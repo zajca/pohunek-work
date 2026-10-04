@@ -96,12 +96,20 @@ export function actorCounts(payload: ListPayload): Readonly<Record<TurnActor, nu
  * Rows that became the owner's turn since the last known state. Unknown
  * actors never update the baseline, so a source outage and its recovery do
  * not mark rows; a row that appears already on the owner's turn is marked.
+ * With `complete` (every source answered) rows absent from `next` leave the
+ * baseline, so a row that disappears for a while (a paused issue without a
+ * pull request) is marked when it returns on the owner's turn.
  */
 export function transitionsToMe(
   baseline: ReadonlyMap<string, TurnActor> | null,
   next: readonly ListItem[],
+  complete: boolean,
 ): { readonly marked: ReadonlySet<string>; readonly baseline: ReadonlyMap<string, TurnActor> } {
   const updated = new Map(baseline ?? []);
+  if (complete) {
+    const present = new Set(next.map(rowId));
+    for (const id of [...updated.keys()]) if (!present.has(id)) updated.delete(id);
+  }
   const marked = new Set<string>();
   for (const item of next) {
     const id = rowId(item);
