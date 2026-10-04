@@ -50,7 +50,7 @@ execute the scripts under the shell named by `POHUNEK_TEST_SHELL`, for example
 ```sh
 cd launchers
 bun install --frozen-lockfile
-POHUNEK_TEST_SHELL=dash POHUNEK_TEST_BIN=/path/to/pohunek bun test
+POHUNEK_TEST_SHELL=dash POHUNEK_TEST_BIN=/path/to/pohunek bun run test
 ```
 
 `POHUNEK_TEST_BIN` names a `pohunek` binary that provides `prompt render` and

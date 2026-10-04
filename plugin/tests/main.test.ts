@@ -1,11 +1,22 @@
-import { expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { afterEach, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reportError } from "../src/cli-errors.ts";
 import { exec } from "../src/util/exec.ts";
 
 const MAIN = new URL("../src/main.ts", import.meta.url).pathname;
+const tempDirs: string[] = [];
+
+async function tempDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 async function run(args: readonly string[], configDir: string): Promise<{ code: number | null; out: string; err: string }> {
   const result = await exec(["bun", MAIN, ...args], {
@@ -21,7 +32,7 @@ async function run(args: readonly string[], configDir: string): Promise<{ code: 
 }
 
 test("an unknown option prints usage and exits 2 without a stack dump", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const result = await run(["list", "--bogus"], dir);
   expect(result.code).toBe(2);
   expect(result.err).toContain("usage:");
@@ -29,7 +40,7 @@ test("an unknown option prints usage and exits 2 without a stack dump", async ()
 });
 
 test("a usage error under --json is a JSON error envelope on stdout", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const result = await run(["list", "--json", "--bogus"], dir);
   expect(result.code).toBe(2);
   const envelope = JSON.parse(result.out) as { err: { class: string; code: string; msg: string } };
@@ -38,14 +49,14 @@ test("a usage error under --json is a JSON error envelope on stdout", async () =
 });
 
 test("an unexpected positional argument is a usage error", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   expect((await run(["list", "foo"], dir)).code).toBe(2);
   expect((await run(["doctor", "--whatever"], dir)).code).toBe(2);
   expect((await run([], dir)).code).toBe(2);
 });
 
 test("do rejects unknown actions and options that do not apply, before reading the config", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const cases: readonly (readonly string[])[] = [
     ["do", "ABC-1", "deploy"],
     ["do", "ABC-1", "ready", "--profile", "x"],
@@ -65,7 +76,7 @@ test("do rejects unknown actions and options that do not apply, before reading t
 });
 
 test("do accepts every action name and reaches the config", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   for (const action of ["fix-ci", "rebase", "review", "ready", "merge"]) {
     const result = await run(["do", "ABC-1", action, "--json"], dir);
     const envelope = JSON.parse(result.out) as { err: { code: string } };
@@ -76,7 +87,7 @@ test("do accepts every action name and reaches the config", async () => {
 });
 
 test("a missing config exits 2 with a JSON error envelope under --json", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const result = await run(["list", "--json"], dir);
   expect(result.code).toBe(2);
   const envelope = JSON.parse(result.out) as { err: { code: string; msg: string } };
@@ -85,7 +96,7 @@ test("a missing config exits 2 with a JSON error envelope under --json", async (
 });
 
 test("tui: arguments are a usage error, a missing config names the file", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const usage = await run(["tui", "--all"], dir);
   expect(usage.code).toBe(2);
   expect(usage.err).toContain("tui takes no arguments");
@@ -95,7 +106,7 @@ test("tui: arguments are a usage error, a missing config names the file", async 
 });
 
 test("tui refuses without a terminal and leaves the screen alone", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const result = await exec(["bun", MAIN, "tui"], {
     timeoutMs: 20_000,
     env: {
@@ -140,7 +151,7 @@ test("reportError prints the given class in the JSON envelope and returns exit 2
 });
 
 test("setup rejects unknown steps and options that do not apply", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const cases: readonly (readonly string[])[] = [
     ["setup", "everything"],
     ["setup", "all"],
@@ -160,7 +171,7 @@ test("setup rejects unknown steps and options that do not apply", async () => {
 });
 
 test("setup installs into the XDG locations and reports JSON on stdout", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const result = await exec(["bun", MAIN, "setup", "scripts", "--json"], {
     timeoutMs: 20_000,
     env: {
@@ -183,7 +194,7 @@ test("setup without a derivable home is a configuration error envelope", async (
 });
 
 test("doctor reports the launcher requirements as warnings next to the config failure", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pw-main-"));
+  const dir = await tempDir();
   const result = await run(["doctor"], dir);
   expect(result.code).toBe(10);
   expect(result.out).toContain("FAIL config_invalid config");

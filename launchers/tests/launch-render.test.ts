@@ -1,18 +1,21 @@
 // Launch scripts end to end through the real prompt renderer: `pohunek prompt render` and
 // `pohunek prompt link` come from the pohunek binary named by POHUNEK_TEST_BIN, the rest
 // of pohunek, `gh` and `linear` are stubs.
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
   assertMetaArgs,
   pohunekBin,
   POHUNEK_STUB,
   read,
+  removeSandboxes,
   runScript,
   sandbox,
   writeConfig,
   writeExecutable,
 } from "./helpers.ts";
+
+afterEach(removeSandboxes);
 
 function failureContext(result: { stdout: string; stderr: string }): string {
   return `stdout=${result.stdout} stderr=${result.stderr}`;

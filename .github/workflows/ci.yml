@@ -99,7 +99,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun test
+      # `bun run test` runs the suite under a private TMPDIR and fails on leftovers.
+      - run: bun run test
 
   launchers:
     needs: changes
@@ -144,9 +145,9 @@ jobs:
           POHUNEK_TEST_SHELL: ${{ matrix.shell }}
         run: |
           if [ "${{ matrix.render }}" = "true" ]; then
-            bun test
+            bun run test
           else
-            bun test tests/launcher-scripts.test.ts tests/lib-timeout.test.ts
+            bun run test tests/launcher-scripts.test.ts tests/lib-timeout.test.ts
           fi
 
   # The release packaging scripts shared by every surface. The web surface's

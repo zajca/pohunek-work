@@ -32,6 +32,8 @@ cd plugin && bun install --frozen-lockfile && bun run check   # lint, typecheck,
 cd launchers && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
 # `bun test` in launchers/ needs POHUNEK_TEST_SHELL (sh, bash or dash) and, for
 # the rendering tests, POHUNEK_TEST_BIN (absolute path of a core `pohunek` binary)
+# `bun run test` (part of `check`) runs the suite under a private TMPDIR and fails
+# when a test leaves anything in it
 
 # native/ (Cargo workspace; run with POHUNEK_* variables unset)
 cd native

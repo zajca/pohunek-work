@@ -33,6 +33,9 @@ recipe_branch="$(printf '%s\n' "$recipe" | sed -n 4p)"
 
 context_json="$("$gh_bin" pr view "$pr_number" --json title,body,headRefName,url)"
 prompt="$(pohunek_render_provider_prompt "$prompt_template" github_pr "$pr_number" "$context_json")"
+# The session starts through `exec`, which skips the EXIT trap, so the template is
+# removed once rendered; nothing below reads it.
+rm -f "$prompt_template"
 url="$(pohunek_json_url "$context_json")"
 [ -n "$url" ] || pohunek_fail "provider JSON missing url"
 link_meta="$(pohunek_link_meta github_pr "$pr_number" "$url" "$context_json")"
