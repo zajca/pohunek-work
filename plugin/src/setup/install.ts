@@ -10,7 +10,7 @@ import { CONFIG_ASSETS, renderSwayDropin, SCRIPT_ASSETS } from "./assets.ts";
 import type { SetupPaths } from "./paths.ts";
 import { configIncludesDropin, readSwayConfig } from "./sway-include.ts";
 import { hasControlCharacter, isPlainKeybind, quoteForSwayExec } from "./sway-quote.ts";
-import { OBSOLETE_SCRIPTS, SCRIPT_MODE, SWAY_DROPIN_DIR, SWAY_DROPIN_FILE } from "./settings.ts";
+import { OBSOLETE_SCRIPTS, SCRIPT_MODE, SWAY_DROPIN_DIR, SWAY_DROPIN_FILE, type IssuePickerSource } from "./settings.ts";
 
 export type WriteOutcome = "created" | "overwritten" | "unchanged" | "skipped";
 
@@ -53,6 +53,8 @@ export interface SwayOptions extends InstallOptions {
   readonly issueKeybind: string;
   /** Project the issue picker is bound for; null leaves the issue binding out, the picker needs one. */
   readonly issueProject: string | null;
+  /** Issue source the bound picker lists; required exactly when `issueProject` is set. */
+  readonly issueSource: IssuePickerSource | null;
   /** Environment used to resolve variables in the sway config's include directives. */
   readonly env: Readonly<Record<string, string | undefined>>;
 }
@@ -176,7 +178,10 @@ export function swayDropinPath(paths: SetupPaths): string {
 }
 
 /** Builds the drop-in text; refuses values that would change what sway parses or add a line to its config. */
-export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "keybind" | "issueKeybind" | "issueProject">): string {
+export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "keybind" | "issueKeybind" | "issueProject" | "issueSource">): string {
+  if ((options.issueProject === null) !== (options.issueSource === null)) {
+    throw new SetupIoError("sway drop-in issue project and issue source are set together or not at all");
+  }
   const words: [string, string][] = [
     ["launcher path", join(paths.launcherBinDir, "pohunek-rofi")],
     ["issue launcher path", join(paths.launcherBinDir, "pohunek-rofi-issue")],
@@ -203,6 +208,7 @@ export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "
             keybind: options.issueKeybind,
             launcher: quoteForSwayExec(words[1]?.[1] ?? ""),
             project: quoteForSwayExec(options.issueProject),
+            source: quoteForSwayExec(options.issueSource ?? ""),
           },
         }),
   });

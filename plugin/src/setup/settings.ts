@@ -16,7 +16,11 @@ export const SWAY_DROPIN_DIR = "config.d";
 /** Keybind of the session switcher (`pohunek-rofi`). */
 export const DEFAULT_SWAY_KEYBIND = "$mod+p";
 
-/** Keybind of the Linear issue picker (`pohunek-rofi-issue`). */
+/** Issue sources the picker (`pohunek-rofi-issue`) accepts as its source argument. */
+export const ISSUE_PICKER_SOURCES = ["linear", "github"] as const;
+export type IssuePickerSource = (typeof ISSUE_PICKER_SOURCES)[number];
+
+/** Keybind of the issue picker (`pohunek-rofi-issue`). */
 export const DEFAULT_SWAY_ISSUE_KEYBIND = "$mod+i";
 
 /** Obsolete script names; `setup scripts --force` deletes them from the install directory. */

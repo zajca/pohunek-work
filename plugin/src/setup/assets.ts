@@ -48,6 +48,8 @@ export interface SwayDropinValues {
     readonly launcher: string;
     /** Quoted project argument. */
     readonly project: string;
+    /** Quoted source argument (`linear` or `github`). */
+    readonly source: string;
   };
 }
 
@@ -71,6 +73,7 @@ export function renderSwayDropin(values: SwayDropinValues): string {
           issue_keybind: values.issue.keybind,
           issue_launcher: values.issue.launcher,
           project: values.issue.project,
+          source: values.issue.source,
         });
   return fill(swayDropinTemplate, { keybind: values.keybind, launcher: values.launcher, issue_binding: issueBinding });
 }

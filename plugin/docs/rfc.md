@@ -369,6 +369,7 @@ All interfaces use the same plugin library and the same actions.
 | --- | --- | --- |
 | CLI | `pohunek-work list/do/attach/gc`; `pohunek work ...` once core can invoke plugin actions from the CLI (#325) | B |
 | rofi | `pohunek-rofi-work`, shipped with the plugin: rows on my turn, Enter runs the row action | C |
+| rofi issue picker | `pohunek-rofi-issue <project> <linear\|github>`: for `github` the `github-issue:` rows of `list --json` that offer `implement`, Enter runs `pohunek-work do <key> implement` in a terminal | C |
 | Notifications | `pohunek-work watch` posts through `notification.create` on transition to `me` | C |
 | Agent skill `/work` | reads `list --json`, runs `do` | C |
 | GUI or web panel | the native GUI (`native/`) and the web control center (`web/`) of this repository; showing plugin data in them is a separate design (question 1) | — |

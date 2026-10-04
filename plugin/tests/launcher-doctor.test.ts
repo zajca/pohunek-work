@@ -215,3 +215,28 @@ test("macOS checks the terminal only and resolves terminal= as one executable", 
   expect(resolved.ok).toBe(true);
   expect(resolved.message).toStartWith("configured terminal 'kitty' resolves");
 });
+
+test("a GitHub issue project adds the pohunek_work_bin check after the terminal check", async () => {
+  const names = (await runLauncherChecks({ env, platform: "linux" }, true)).map((check) => check.name);
+  expect(names).toEqual(["bin:rofi", "bin:swaymsg", "bin:python3", "terminal", "pohunek_work_bin", "launcher_scripts", "sway_include"]);
+});
+
+test("pohunek_work_bin is advisory when unset, unresolved or resolved", async () => {
+  const unset = byName(await runLauncherChecks({ env, platform: "linux" }, true), "pohunek_work_bin");
+  expect(unset.ok).toBe(false);
+  expect(unset.message).toContain("set 'pohunek_work_bin=' in launcher.conf");
+
+  const configDir = join(root, "config", "pohunek");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, "launcher.conf"), "pohunek_work_bin=pohunek-work\n");
+  const missing = byName(await runLauncherChecks({ env, platform: "linux" }, true), "pohunek_work_bin");
+  expect(missing.ok).toBe(false);
+  expect(missing.message).toContain("'pohunek-work' (launcher.conf) does not resolve to one executable");
+
+  const work = await tool("pohunek-work");
+  expect(byName(await runLauncherChecks({ env, platform: "linux" }, true), "pohunek_work_bin")).toEqual({
+    name: "pohunek_work_bin",
+    ok: true,
+    message: `'pohunek-work' resolves to ${work}`,
+  });
+});

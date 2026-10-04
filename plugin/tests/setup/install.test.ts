@@ -119,7 +119,7 @@ test("installConfig writes launcher.conf and the prompt templates, then protects
 });
 
 function sway(extra: Partial<SwayOptions> = {}): SwayOptions {
-  return { force: false, print: false, keybind: "$mod+x", issueKeybind: "$mod+y", issueProject: null, env: { HOME: root }, ...extra };
+  return { force: false, print: false, keybind: "$mod+x", issueKeybind: "$mod+y", issueProject: null, issueSource: null, env: { HOME: root }, ...extra };
 }
 
 test("installSway writes the session switcher binding with the absolute launcher path", async () => {
@@ -144,9 +144,11 @@ test("the issue picker binding is generated only for a configured project", asyn
   expect(without.snippet).not.toContain("pohunek-rofi-issue");
   expect(without.snippet).not.toContain("$mod+y");
 
-  const withProject = await installSway(paths, sway({ print: true, issueProject: "ui" }));
+  const withProject = await installSway(paths, sway({ print: true, issueProject: "ui", issueSource: "github" }));
   expect(withProject.issue_binding).toBe(true);
-  expect(withProject.snippet).toContain(`bindsym $mod+y exec exec '${join(paths.launcherBinDir, "pohunek-rofi-issue")}' 'ui'\n`);
+  expect(withProject.snippet).toContain(`bindsym $mod+y exec exec '${join(paths.launcherBinDir, "pohunek-rofi-issue")}' 'ui' 'github'\n`);
+  const linear = await installSway(paths, sway({ print: true, issueProject: "ui", issueSource: "linear" }));
+  expect(linear.snippet).toContain("pohunek-rofi-issue' 'ui' 'linear'\n");
 });
 
 test("installSway detects a real include of the drop-in and ignores comments and other directories", async () => {
@@ -183,9 +185,11 @@ test("values that would change what sway parses are refused before anything is w
     { keybind: "$mod+x,exec evil" },
     { keybind: "" },
     { keybind: "$mod+'x" },
-    { issueProject: "ui\nexec evil" },
-    { issueProject: "" },
-    { issueProject: "ui", issueKeybind: "$mod+y;exec evil" },
+    { issueProject: "ui\nexec evil", issueSource: "github" },
+    { issueProject: "", issueSource: "github" },
+    { issueProject: "ui", issueSource: "github", issueKeybind: "$mod+y;exec evil" },
+    { issueProject: "ui" },
+    { issueSource: "github" },
   ];
   for (const extra of refused) {
     expect(await failure(installSway(paths, sway(extra)))).toBeInstanceOf(SetupIoError);

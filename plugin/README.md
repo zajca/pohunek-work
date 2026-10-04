@@ -45,9 +45,12 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   session;
 - `pohunek-work setup [scripts|config|sway] [--force] [--json]` installs the
   rofi/sway launcher scripts, the starter `launcher.conf` and prompt templates,
-  and the sway drop-in from `launchers/` into the per-user XDG locations;
+  and the sway drop-in from `launchers/` into the per-user XDG locations (the
+  issue picker binding needs `--issue-project <p> --issue-source <linear|github>`;
+  for GitHub it runs `pohunek-work list` and `pohunek-work do <key> implement`);
   `pohunek-work doctor` reports the launcher requirements (rofi, swaymsg,
-  python3, terminal, installed scripts, sway include) as advisory `warn` lines
+  python3, terminal, installed scripts, sway include, and `pohunek_work_bin` for a
+  GitHub issue project) as advisory `warn` lines
   (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.

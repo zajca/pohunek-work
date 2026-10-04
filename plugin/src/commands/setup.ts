@@ -3,7 +3,7 @@
 // XDG locations. Local filesystem writes only; nothing here talks to pohunek.
 import { installConfig, installScripts, installSway, type ConfigResult, type FileResult, type ScriptsResult, type SwayResult } from "../setup/install.ts";
 import { resolveSetupPaths, type SetupPaths } from "../setup/paths.ts";
-import { DEFAULT_SWAY_ISSUE_KEYBIND, DEFAULT_SWAY_KEYBIND, SETUP_CONTRACT_VERSION, SWAY_DROPIN_DIR } from "../setup/settings.ts";
+import { DEFAULT_SWAY_ISSUE_KEYBIND, DEFAULT_SWAY_KEYBIND, SETUP_CONTRACT_VERSION, SWAY_DROPIN_DIR, type IssuePickerSource } from "../setup/settings.ts";
 
 export const SETUP_STEPS = ["all", "scripts", "config", "sway"] as const;
 export type SetupStep = (typeof SETUP_STEPS)[number];
@@ -17,6 +17,8 @@ export interface SetupOptions {
   readonly issueKeybind: string;
   /** `sway` only: bind the issue picker for this project; without it no issue binding is generated. */
   readonly issueProject: string | null;
+  /** `sway` only: issue source of the bound picker; set exactly when `issueProject` is. */
+  readonly issueSource: IssuePickerSource | null;
   readonly json: boolean;
 }
 
@@ -116,9 +118,9 @@ function nextSteps(platform: NodeJS.Platform, paths: SetupPaths): string[] {
     ];
   }
   return [
-    `Edit ${paths.configDir}/launcher.conf - set 'terminal' (and 'linear_cli' for Linear).`,
-    "Pass a project id/label to launchers, for example `pohunek-launch-issue <project> <issue-id> [action]`.",
-    `Bind the Linear issue picker with \`pohunek-work setup sway --force --issue-project <project>\` (${DEFAULT_SWAY_ISSUE_KEYBIND} by default); it needs a project.`,
+    `Edit ${paths.configDir}/launcher.conf - set 'terminal' (and 'linear_cli' for Linear, 'pohunek_work_bin' for GitHub issues).`,
+    "Pass a project id/label to launchers, for example `pohunek-launch-issue <project> <issue-id> [action]` for Linear issues.",
+    `Bind the issue picker with \`pohunek-work setup sway --force --issue-project <project> --issue-source <linear|github>\` (${DEFAULT_SWAY_ISSUE_KEYBIND} by default); it needs a project and the project's issue source.`,
     `Ensure your sway config has: include ${paths.swayConfigDir}/${SWAY_DROPIN_DIR}/*`,
     `Reload sway (swaymsg reload): ${DEFAULT_SWAY_KEYBIND} opens the session switcher.`,
     "Run `pohunek-work doctor` to verify rofi, swaymsg, python3, the terminal and the installed scripts.",
@@ -148,7 +150,7 @@ async function runAll(paths: SetupPaths, options: SetupOptions, deps: SetupDeps)
   const hasSway = platformHasSway(deps.platform);
   const scripts = hasSway ? await installScripts(paths, options) : null;
   const config = await installConfig(paths, options);
-  const sway = hasSway ? await installSway(paths, { ...options, print: false, ...DEFAULT_KEYBINDS, issueProject: null, env: deps.env }) : null;
+  const sway = hasSway ? await installSway(paths, { ...options, print: false, ...DEFAULT_KEYBINDS, issueProject: null, issueSource: null, env: deps.env }) : null;
   const skipped: SkippedStep[] = hasSway
     ? []
     : [

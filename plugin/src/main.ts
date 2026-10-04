@@ -6,7 +6,7 @@ import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAc
 import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
 import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupStep } from "./commands/setup.ts";
-import { SETUP_CONTRACT_VERSION } from "./setup/settings.ts";
+import { ISSUE_PICKER_SOURCES, SETUP_CONTRACT_VERSION } from "./setup/settings.ts";
 import { LIST_CONTRACT_VERSION } from "./types/item.ts";
 import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
@@ -35,7 +35,7 @@ const USAGE = `usage:
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]
   pohunek-work setup config [--force] [--json]
-  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project>] [--issue-keybind <key>] [--json]
+  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project> --issue-source <linear|github>] [--issue-keybind <key>] [--json]
   pohunek-work tui
   pohunek-work watch [--project <label>]
 
@@ -223,6 +223,7 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
         keybind: { type: "string" },
         "issue-keybind": { type: "string" },
         "issue-project": { type: "string" },
+        "issue-source": { type: "string" },
         json: { type: "boolean", default: false },
       },
       allowPositionals: true,
@@ -233,13 +234,23 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
     const step: SetupStep | undefined = sub === undefined ? "all" : SETUP_STEPS.find((name) => name === sub && name !== "all");
     if (step === undefined) throw new UsageError(`unknown setup step: ${String(sub)} (known: ${SETUP_STEPS.filter((name) => name !== "all").join(", ")})`);
     const sway = step === "sway";
-    if (!sway && (values.print || values.keybind !== undefined || values["issue-keybind"] !== undefined || values["issue-project"] !== undefined)) {
-      throw new UsageError("--print, --keybind, --issue-keybind and --issue-project apply to `setup sway` only");
+    if (!sway && (values.print || values.keybind !== undefined || values["issue-keybind"] !== undefined || values["issue-project"] !== undefined || values["issue-source"] !== undefined)) {
+      throw new UsageError("--print, --keybind, --issue-keybind, --issue-project and --issue-source apply to `setup sway` only");
     }
     if (values["issue-keybind"] !== undefined && values["issue-project"] === undefined) {
       throw new UsageError("--issue-keybind needs --issue-project: the issue picker is bound for one project");
     }
     if (values["issue-project"] === "") throw new UsageError("--issue-project needs a project");
+    if (values["issue-project"] !== undefined && values["issue-source"] === undefined) {
+      throw new UsageError(`--issue-project needs --issue-source <${ISSUE_PICKER_SOURCES.join("|")}>: the picker has no default source`);
+    }
+    if (values["issue-source"] !== undefined && values["issue-project"] === undefined) {
+      throw new UsageError("--issue-source needs --issue-project: the issue picker is bound for one project");
+    }
+    const issueSource = values["issue-source"] === undefined ? null : ISSUE_PICKER_SOURCES.find((name) => name === values["issue-source"]);
+    if (issueSource === undefined) {
+      throw new UsageError(`unknown --issue-source ${JSON.stringify(values["issue-source"])} (known: ${ISSUE_PICKER_SOURCES.join(", ")})`);
+    }
     if (values.print && values.force) throw new UsageError("--print and --force exclude each other");
     return {
       step,
@@ -248,6 +259,7 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
       keybind: values.keybind ?? DEFAULT_KEYBINDS.keybind,
       issueKeybind: values["issue-keybind"] ?? DEFAULT_KEYBINDS.issueKeybind,
       issueProject: values["issue-project"] ?? null,
+      issueSource,
       json: values.json,
     };
   } catch (error) {

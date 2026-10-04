@@ -1,5 +1,6 @@
 // Launcher requirement checks of `pohunek-work doctor`: rofi, swaymsg, python3,
-// the terminal, the installed scripts and the sway include. The launcher is
+// the terminal, the installed scripts, the sway include and, for a GitHub issue
+// project, the `pohunek_work_bin` the GitHub issue picker runs. The launcher is
 // optional, so every finding is advisory (`warn`) and never changes the exit
 // code. On macOS only the terminal is checked: rofi and sway are Linux
 // capabilities.
@@ -67,29 +68,55 @@ async function binary(name: string, pathVar: string | undefined): Promise<Launch
 }
 
 /**
- * The `terminal=` value of `launcher.conf`, read like the launcher's `pohunek_config_get`:
+ * The value of `key` in `launcher.conf`, read like the launcher's `pohunek_config_get`:
  * blank and `#` lines are skipped, the last assignment wins, and a non-comment line without
  * `=` makes the lookup fail, which reads as unset. An empty value means unset.
  */
-export function parseLauncherTerminal(contents: string): string | null {
+export function parseLauncherValue(contents: string, key: string): string | null {
   let value: string | null = null;
   for (const raw of contents.split(/\r?\n/)) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#")) continue;
     const separator = line.indexOf("=");
     if (separator < 0) return null;
-    if (line.slice(0, separator).trim() === "terminal") value = line.slice(separator + 1).trim();
+    if (line.slice(0, separator).trim() === key) value = line.slice(separator + 1).trim();
   }
   return value === null || value === "" ? null : value;
 }
 
-async function configuredTerminal(paths: SetupPaths | null): Promise<string | null> {
+/** The `terminal=` value of `launcher.conf`. */
+export function parseLauncherTerminal(contents: string): string | null {
+  return parseLauncherValue(contents, "terminal");
+}
+
+async function configuredValue(paths: SetupPaths | null, key: string): Promise<string | null> {
   if (paths === null) return null;
   try {
-    return parseLauncherTerminal(await readFile(join(paths.configDir, "launcher.conf"), "utf8"));
+    return parseLauncherValue(await readFile(join(paths.configDir, "launcher.conf"), "utf8"), key);
   } catch {
     return null;
   }
+}
+
+async function configuredTerminal(paths: SetupPaths | null): Promise<string | null> {
+  return configuredValue(paths, "terminal");
+}
+
+/**
+ * The GitHub issue picker runs the whole `pohunek_work_bin=` value as one program name
+ * (`pohunek-work list`, `pohunek-work do`), so it is resolved as one executable.
+ */
+async function pohunekWorkBin(probe: LauncherProbe, paths: SetupPaths | null): Promise<LauncherCheck> {
+  const name = "pohunek_work_bin";
+  const command = await configuredValue(paths, "pohunek_work_bin");
+  if (command === null) {
+    return warn(name, "set 'pohunek_work_bin=' in launcher.conf (the GitHub issue picker runs pohunek-work for a project with issue_source = \"github\")");
+  }
+  const resolved = await resolveExecutable(command, probe.env["PATH"]);
+  if (resolved === null) {
+    return warn(name, `'${command}' (launcher.conf) does not resolve to one executable; the picker runs the whole value as a single program name`);
+  }
+  return ok(name, `'${command}' resolves to ${resolved}`);
 }
 
 /**
@@ -183,8 +210,11 @@ async function swayInclude(probe: LauncherProbe, paths: SetupPaths): Promise<Lau
   );
 }
 
-/** Runs the launcher checks for the probed platform and environment. */
-export async function runLauncherChecks(probe: LauncherProbe): Promise<LauncherCheck[]> {
+/**
+ * Runs the launcher checks for the probed platform and environment.
+ * `githubIssuePicker` adds the `pohunek_work_bin` check when a configured project uses GitHub issues.
+ */
+export async function runLauncherChecks(probe: LauncherProbe, githubIssuePicker = false): Promise<LauncherCheck[]> {
   let paths: SetupPaths | null = null;
   let pathsFailure: LauncherCheck | null = null;
   try {
@@ -203,6 +233,7 @@ export async function runLauncherChecks(probe: LauncherProbe): Promise<LauncherC
     await binary("python3", pathVar),
     await linuxTerminal(probe, paths),
   ];
+  if (githubIssuePicker) checks.push(await pohunekWorkBin(probe, paths));
   if (paths === null) {
     if (pathsFailure !== null) checks.push(pathsFailure);
     return checks;
