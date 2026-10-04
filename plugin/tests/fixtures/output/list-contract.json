@@ -1,8 +1,8 @@
 {
   "cli_version": "0.1.0",
   "protocol": {
-    "minimum": 2,
-    "maximum": 2
+    "minimum": 3,
+    "maximum": 3
   },
   "ok": {
     "items": [

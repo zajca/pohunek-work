@@ -1,7 +1,7 @@
 // Linear source: started issues assigned to the token owner for one team.
 // The API key is sent as the raw Authorization value (personal API key form).
 
-import type { LinearConfig, ProjectConfig } from "../types/config.ts";
+import type { LinearConfig, LinearProject } from "../types/config.ts";
 import type {
   LinearAttachment,
   LinearCycle,
@@ -14,7 +14,7 @@ import type { Exec } from "../util/exec.ts";
 import { readKeyringSecret } from "./keyring.ts";
 
 export interface LinearSource {
-  fetchIssues(project: ProjectConfig): Promise<SourceResult<readonly LinearIssue[]>>;
+  fetchIssues(project: LinearProject): Promise<SourceResult<readonly LinearIssue[]>>;
 }
 
 export interface LinearDeps {
@@ -325,7 +325,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
         return fail("unauthenticated", "Linear token from keyring is not a valid API key");
       }
       try {
-        const data = await collectIssues(secret.secret, project.linearTeam);
+        const data = await collectIssues(secret.secret, project.issueSource.team);
         return { ok: true, source: "linear", data, durationMs: elapsed() };
       } catch (error) {
         if (error instanceof LinearFailure) {

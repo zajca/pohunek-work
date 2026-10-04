@@ -14,13 +14,12 @@ const project = {
   name: "widgets",
   pohunekLabel: "widgets",
   repo: "acme/widgets",
-  linearTeam: "ABC",
+  issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] },
   branchPattern: /^me\/(?<key>[A-Z]+-\d+)\//,
   branchPatternSource: "^me/(?P<key>[A-Z]+-\\d+)/",
   ignoredChecks: [],
   policyChecks: [],
   aiReviewers: [],
-  pausedStates: ["On hold"],
   policy: null,
   profiles: null,
 } satisfies ProjectConfig;
@@ -97,6 +96,12 @@ function notification(id: string, sessionId: string | null): PohunekNotification
     sessionId,
     createdAt: "2026-01-01T00:00:00Z",
   };
+}
+
+const githubProject: ProjectConfig = { ...project, issueSource: { kind: "github" } };
+
+function runGithub(partial: Partial<JoinInput>): ReturnType<typeof joinItems> {
+  return run({ project: githubProject, sources: { ...okSources, linear: "unused" }, ...partial });
 }
 
 function run(partial: Partial<JoinInput>): ReturnType<typeof joinItems> {
@@ -603,5 +608,40 @@ describe("legacy link.* metadata and unlinked sessions", () => {
     });
     expect(unlinkedSessions.map((s) => s.id)).toEqual(["s5"]);
     expect(items[0]?.sessions).toEqual([]);
+  });
+});
+
+describe("github issue source", () => {
+  test("a numeric branch pattern match yields a github row without an issue key", () => {
+    const { items } = runGithub({ pullRequests: [pr(1, "me/ABC-1/work")] });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.key).toBe("github:acme/widgets#1");
+    expect(items[0]?.issueKey).toBeNull();
+    expect(items[0]?.joinedBy).toBeNull();
+    expect(items[0]?.noIssue).toBe(false);
+  });
+
+  test("a linear-provider session link never creates a linear row", () => {
+    const { items } = runGithub({
+      pullRequests: [pr(1, "feature/x")],
+      sessions: [
+        session("s1", { "work.link.provider": "linear", "work.link.id": "ABC-1", "work.link.branch": "feature/x" }),
+      ],
+    });
+    expect(items.map((i) => i.key)).toEqual(["github:acme/widgets#1"]);
+    expect(items[0]?.issueKey).toBeNull();
+    expect(items[0]?.sessions.map((s) => s.id)).toEqual(["s1"]);
+  });
+
+  test("a merged pull request produces no row", () => {
+    const { items } = runGithub({ mergedPullRequests: [merged(5, "me/ABC-1/work")] });
+    expect(items).toEqual([]);
+  });
+
+  test("an unlinked session is orphaned with linear unused and github ok", () => {
+    const { orphanedSessions } = runGithub({
+      sessions: [session("s1", { "work.link.provider": "github", "work.link.id": "acme/widgets#9" })],
+    });
+    expect(orphanedSessions.map((o) => o.id)).toEqual(["s1"]);
   });
 });

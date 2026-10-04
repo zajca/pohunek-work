@@ -65,7 +65,7 @@ describe.each(SIZES)("golden frames at width %s", (width, size) => {
     const err = decodeListEnvelope(
       JSON.stringify({
         cli_version: "0.1.0",
-        protocol: { minimum: 2, maximum: 2 },
+        protocol: { minimum: 3, maximum: 3 },
         err: { class: "configuration", code: "config_invalid", msg: "config.toml: tui is required" },
       }),
     );
@@ -73,9 +73,9 @@ describe.each(SIZES)("golden frames at width %s", (width, size) => {
     golden(`error-${width}`, next);
   });
 
-  test("protocol excludes v2: incompatible, no rows", () => {
+  test("protocol excludes v3: incompatible, no rows", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)), { size });
-    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "9.0.0", { minimum: 3, maximum: 4 }));
+    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "9.0.0", { minimum: 4, maximum: 5 }));
     const [next] = update(state, listDone(outcome, T0 + 60_000));
     golden(`incompatible-${width}`, next);
   });

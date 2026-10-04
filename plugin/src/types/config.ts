@@ -104,7 +104,8 @@ export interface TuiConfig {
 export interface GlobalConfig {
   readonly identity: IdentityConfig;
   readonly github: GithubConfig;
-  readonly linear: LinearConfig;
+  /** Present only when the global file has a `[linear]` table; required whenever a project uses Linear. */
+  readonly linear: LinearConfig | null;
   readonly pohunek: PohunekConfig;
   readonly watch: WatchConfig;
   readonly notify: NotifyConfig;
@@ -115,13 +116,29 @@ export interface GlobalConfig {
   readonly tui: TuiConfig;
 }
 
+/** Issues of a project come from Linear. */
+export interface LinearIssueSource {
+  readonly kind: "linear";
+  /** Linear team key whose issues are listed. */
+  readonly team: string;
+  /** Linear state names whose issues without a pull request are left out of the table. */
+  readonly pausedStates: readonly string[];
+}
+
+/** Pull requests are the only work items of the project; no issue tracker is consulted. */
+export interface GithubIssueSource {
+  readonly kind: "github";
+}
+
+export type IssueSource = LinearIssueSource | GithubIssueSource;
+
 export interface ProjectConfig {
   /** File name without extension; equals `pohunekLabel`. */
   readonly name: string;
   readonly pohunekLabel: string;
   /** `owner/name` of the GitHub repository. */
   readonly repo: string;
-  readonly linearTeam: string;
+  readonly issueSource: IssueSource;
   /** Compiled `branch_pattern`; always has a named group `key`. */
   readonly branchPattern: RegExp;
   /** Source text of `branch_pattern` as written in the file. */
@@ -135,8 +152,6 @@ export interface ProjectConfig {
   readonly policyChecks: readonly string[];
   /** GitHub logins of AI reviewer accounts; compared case-insensitively, `[bot]` suffix ignored. */
   readonly aiReviewers: readonly string[];
-  /** Linear state names whose issues without a pull request are left out of the table. */
-  readonly pausedStates: readonly string[];
   readonly policy: PolicyConfig | null;
   readonly profiles: ProfilesConfig | null;
 }
@@ -146,3 +161,6 @@ export interface PluginConfig {
   readonly global: GlobalConfig;
   readonly projects: readonly ProjectConfig[];
 }
+
+/** A project whose issues come from Linear. */
+export type LinearProject = ProjectConfig & { readonly issueSource: LinearIssueSource };

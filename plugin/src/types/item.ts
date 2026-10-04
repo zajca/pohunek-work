@@ -12,10 +12,19 @@ import type {
 } from "./sources.ts";
 
 /** Version of the `list --json` contract; bumped on any incompatible change. */
-export const LIST_CONTRACT_VERSION = 2;
+export const LIST_CONTRACT_VERSION = 3;
 
-/** Per-source availability for one poll: `ok` or the stable failure code. */
-export type SourceStatus = "ok" | SourceErrorCode;
+/**
+ * Per-source availability for one poll: `ok`, the stable failure code, or `unused`
+ * when the project does not use the source. `unused` is never a failure.
+ */
+export type SourceStatus = "ok" | "unused" | SourceErrorCode;
+
+/** `unused` is not a failure: the project does not use the source. */
+export function isSourceFailure(status: SourceStatus): boolean {
+  return status !== "ok" && status !== "unused";
+}
+
 /**
  * `github_merged` is the merged pull request lookup behind rule 13; it is kept
  * apart from `github` so its failure only affects the rows that rule decides.

@@ -95,7 +95,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
     const output = await runList(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
       github: createGithubSource(config.global),
-      linear: createLinearSource(config.global.linear),
+      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
       logger,
       cliVersion: pkg.version,
     });
@@ -192,7 +192,7 @@ async function doCommand(argv: readonly string[]): Promise<number> {
     const output = await runDo(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
       github: createGithubSource(config.global),
-      linear: createLinearSource(config.global.linear),
+      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
       logger,
       cliVersion: pkg.version,
       confirm: terminalConfirm(),
@@ -371,7 +371,7 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
     await runWatch(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
       github: createGithubSource(config.global),
-      linear: createLinearSource(config.global.linear),
+      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
       logger,
       exec,
       sleep,

@@ -26,8 +26,9 @@ const global = {
   pohunek: { bin: "/bin/pohunek-fake", timeoutMs: 333, notificationsPageSize: 1 },
 } as unknown as GlobalConfig;
 
-function project(name: string, repo: string): ProjectConfig {
-  return { name, pohunekLabel: name, repo } as unknown as ProjectConfig;
+function project(name: string, repo: string, kind: "linear" | "github" = "linear"): ProjectConfig {
+  const issueSource = kind === "linear" ? { kind, team: "ABC", pausedStates: [] } : { kind };
+  return { name, pohunekLabel: name, repo, issueSource } as unknown as ProjectConfig;
 }
 
 const pluginConfig: PluginConfig = {
@@ -378,4 +379,40 @@ test("a real failure after advisory findings still decides the exit code", async
   const { deps } = makeDeps({ ghExit: 1 });
   const report = await runDoctor({ ...deps, launcher: { env: { PATH: "/nonexistent", HOME: "/nonexistent" }, platform: "linux" } });
   expect(report.exitCode).toBe(DOCTOR_EXIT_CODES.github_unauthenticated);
+});
+
+const githubOnlyConfig: PluginConfig = {
+  configDir: "/cfg",
+  global: { ...global, linear: null },
+  projects: [project("widgets", "acme/widgets", "github")],
+};
+
+test("a configuration without a Linear project skips the keyring check and says so", async () => {
+  const { deps, calls } = makeDeps({ config: githubOnlyConfig, keyring: { present: false, kind: "not_found" } });
+  const report = await runDoctor(deps);
+  expect(calls.keyring).toBe(0);
+  expect(report.exitCode).toBe(0);
+  const keyring = report.checks.find((c) => c.name === "linear keyring");
+  expect(keyring?.ok).toBe(true);
+  expect(keyring?.message).toContain("not needed");
+});
+
+test("every project line names its issue source", async () => {
+  const mixed: PluginConfig = {
+    ...pluginConfig,
+    projects: [project("widgets", "acme/widgets", "linear"), project("gadgets", "acme/gadgets", "github")],
+  };
+  const { deps, calls } = makeDeps({
+    config: mixed,
+    projects: projectsOk([
+      registered("widgets", "git@github.com:acme/widgets.git"),
+      registered("gadgets", "git@github.com:acme/other.git"),
+    ]),
+  });
+  const report = await runDoctor(deps);
+  expect(report.checks.find((c) => c.name === "project widgets")?.message).toContain("[issue source: linear]");
+  const gadgets = report.checks.find((c) => c.name === "project gadgets");
+  expect(gadgets?.code).toBe("project_origin_mismatch");
+  expect(gadgets?.message).toContain("[issue source: github]");
+  expect(calls.keyring).toBe(1);
 });

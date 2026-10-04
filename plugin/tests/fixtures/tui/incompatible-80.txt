@@ -1,5 +1,5 @@
 incompatible pohunek-work at /opt/bin/pohunek-work
-protocol 3-4 does not include version 2
+protocol 4-5 does not include version 3
 no rows are shown: the TUI never guesses another contract version
 update self_bin or this TUI; q quits
 

@@ -380,12 +380,12 @@ describe("rule 12: paused issues", () => {
     const missing = item({ ...joined, issue: null, pullRequest: conflicting });
     expect(onTurn(missing, { ...allOk, linear: "timeout" })).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
     expect(onTurn(missing).rule).toBe(5);
-    expect(onTurn(missing, { ...allOk, linear: "timeout" }, { ...project, pausedStates: [] }).rule).toBe(5);
+    expect(onTurn(missing, { ...allOk, linear: "timeout" }, { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(5);
     expect(onTurn(item({ pullRequest: conflicting }), { ...allOk, linear: "timeout" }).rule).toBe(5);
   });
 
   test("only a configured paused state pauses, matched exactly", () => {
-    expect(onTurn(pausedRow, allOk, { ...project, pausedStates: [] }).rule).toBe(5);
+    expect(onTurn(pausedRow, allOk, { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(5);
     expect(onTurn(item({ ...pausedRow, issue: issue({ stateName: "on hold" }) })).rule).toBe(5);
   });
 });
@@ -633,7 +633,7 @@ describe("unknown on missing sources", () => {
 
   test("project config is read from the input", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
-    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], pausedStates: [] }).rule).toBe(9);
+    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
   });
 });

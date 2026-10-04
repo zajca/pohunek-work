@@ -287,3 +287,17 @@ test("unknownProject accepts null and configured labels and returns an unknown l
   expect(unknownProject(config, "widgets")).toBeNull();
   expect(unknownProject(config, "typo")).toBe("typo");
 });
+
+test("a github-only configuration counts every poll complete and baselines at once", async () => {
+  const githubOnly = {
+    ...config,
+    global: { ...config.global, linear: null },
+    projects: config.projects.map((p) => ({ ...p, issueSource: { kind: "github" } }) as const),
+  };
+  const h = harness([mine]);
+  h.deps = { ...h.deps, linear: null };
+  const first = await watchTick(githubOnly, options, h.deps, null, new AbortController().signal);
+  expect(first.baseline).not.toBeNull();
+  expect(h.logs.some((l) => l.event === "watch_tick")).toBe(true);
+  expect(h.logs.filter((l) => l.level === "error")).toEqual([]);
+});

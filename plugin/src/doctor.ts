@@ -11,7 +11,7 @@ import {
 } from "./sources/pohunek.ts";
 import { keyringEntryPresent as defaultKeyringEntryPresent } from "./sources/keyring.ts";
 import { runLauncherChecks, type LauncherProbe } from "./launcher-doctor.ts";
-import type { PluginConfig } from "./types/config.ts";
+import type { LinearConfig, PluginConfig, ProjectConfig } from "./types/config.ts";
 import type { PohunekProject } from "./types/sources.ts";
 import { exec as defaultExec, SpawnError, type Exec } from "./util/exec.ts";
 
@@ -71,7 +71,13 @@ function sameRepo(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
-function checkProject(
+/** Names the issue source on every project line, whether the project passes or fails. */
+function checkProject(project: ProjectConfig, registered: readonly PohunekProject[]): DoctorCheck {
+  const check = checkRegistration(project.name, project.pohunekLabel, project.repo, registered);
+  return { ...check, message: `${check.message} [issue source: ${project.issueSource.kind}]` };
+}
+
+function checkRegistration(
   name: string,
   label: string,
   repo: string,
@@ -130,14 +136,14 @@ async function checkGithub(config: PluginConfig, run: Exec): Promise<DoctorCheck
 }
 
 async function checkKeyring(
-  config: PluginConfig,
+  linear: LinearConfig,
   presence: typeof defaultKeyringEntryPresent,
   run: Exec,
 ): Promise<DoctorCheck> {
   const name = "linear keyring";
-  const { keyringService, keyringKey } = config.global.linear;
+  const { keyringService, keyringKey } = linear;
   const entry = `service "${keyringService}", key "${keyringKey}"`;
-  const result = await presence(config.global.linear, { exec: run });
+  const result = await presence(linear, { exec: run });
   if (result.present) {
     return pass(name, `entry present (${entry})`);
   }
@@ -194,7 +200,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   } else if (projects.ok) {
     checks.push(pass("pohunek", `reachable, ${String(projects.data.length)} project(s) registered`));
     for (const project of config.projects) {
-      checks.push(checkProject(project.name, project.pohunekLabel, project.repo, projects.data));
+      checks.push(checkProject(project, projects.data));
     }
   } else if (projects.code === "origin_environment") {
     checks.push(
@@ -211,7 +217,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   }
 
   checks.push(await checkGithub(config, run));
-  checks.push(await checkKeyring(config, presence, run));
+  if (config.projects.some((project) => project.issueSource.kind === "linear")) {
+    const linear = config.global.linear;
+    checks.push(
+      linear === null
+        ? failed("linear keyring", "config_invalid", "config.toml: [linear] is required by a project with issue_source = \"linear\"")
+        : await checkKeyring(linear, presence, run),
+    );
+  } else {
+    checks.push(pass("linear keyring", "not needed: no project uses issue_source = \"linear\""));
+  }
   checks.push(...(await launcherChecks(deps)));
   return finish(checks);
 }

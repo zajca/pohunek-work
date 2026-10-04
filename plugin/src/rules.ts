@@ -1,6 +1,8 @@
 // The `on_turn` rules of RFC section 8: a pure function over normalized data.
+import { pausedStatesOf } from "./config/issue-source.ts";
 import type { IdentityConfig, ProjectConfig } from "./types/config.ts";
 import {
+  isSourceFailure,
   POLICY_CHECK_REASON_PREFIX,
   type ChangesRequestedProgress,
   type MeReason,
@@ -22,7 +24,7 @@ export interface RuleInput {
   readonly item: WorkItem;
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "pausedStates">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource">;
 }
 
 export interface RuleResult {
@@ -189,7 +191,7 @@ function failedSources(
 ): string | null {
   const failed = needed.flatMap((name) => {
     const status = sources[name];
-    return status === "ok" ? [] : [`${name}:${status}`];
+    return !isSourceFailure(status) ? [] : [`${name}:${status}`];
   });
   return failed.length === 0 ? null : failed.join(", ");
 }
@@ -236,12 +238,13 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
 
   // Rule 12: linear. A row joined to an issue key whose issue Linear did not
   // return may be paused, so it is unknown while Linear is down.
-  if (project.pausedStates.length > 0) {
+  const pausedStates = pausedStatesOf(project);
+  if (pausedStates.length > 0) {
     if (item.issue === null && item.joinedBy !== null) {
       const linearFailure = failedSources(sources, ["linear"]);
       if (linearFailure !== null) return unknown(linearFailure);
     }
-    if (item.issue !== null && project.pausedStates.includes(item.issue.stateName)) {
+    if (item.issue !== null && pausedStates.includes(item.issue.stateName)) {
       return result({ actor: "paused", reason: "paused", rule: 12 });
     }
   }

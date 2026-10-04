@@ -5,6 +5,7 @@ import type {
   GlobalConfig,
   GithubConfig,
   IdentityConfig,
+  IssueSource,
   LinearConfig,
   LogConfig,
   NotifyConfig,
@@ -222,6 +223,7 @@ function readTimerValue(table: Table, key: string, unitMs: number, file: string,
   return value;
 }
 
+const ISSUE_SOURCES: readonly IssueSource["kind"][] = ["linear", "github"];
 const TUI_INITIAL_VIEWS: readonly TuiInitialView[] = ["mine", "all"];
 
 /** A host name as `URL.hostname` returns it: lowercase labels, no port, no scheme. */
@@ -277,7 +279,7 @@ function parseGlobal(root: Table, file: string): GlobalConfig {
   return {
     identity: parseIdentity(root, file),
     github: parseGithub(root, file),
-    linear: parseLinear(root, file),
+    linear: "linear" in root ? parseLinear(root, file) : null,
     pohunek: parsePohunek(root, file),
     watch: parseWatch(root, file),
     notify: parseNotify(root, file),
@@ -305,6 +307,24 @@ function compileBranchPattern(source: string, file: string): RegExp {
   return pattern;
 }
 
+/** Keys that only an issue source of the given kind accepts. */
+const LINEAR_ONLY_KEYS = ["linear_team", "paused_states"] as const;
+
+function parseIssueSource(table: Table, file: string, path: readonly string[]): IssueSource {
+  const kind = readEnum(table, "issue_source", ISSUE_SOURCES, file, path);
+  if (kind === "github") {
+    for (const key of LINEAR_ONLY_KEYS) {
+      if (key in table) throw fail(file, [...path, key], 'is only valid with issue_source = "linear"');
+    }
+    return { kind };
+  }
+  return {
+    kind,
+    team: readString(table, "linear_team", file, path),
+    pausedStates: readStringArray(table, "paused_states", file, path),
+  };
+}
+
 function parseProject(root: Table, name: string): ProjectConfig {
   const file = `${PROJECTS_DIR}/${name}${TOML_SUFFIX}`;
   rejectUnknownKeys(root, ["project", "policy", "profiles"], file, []);
@@ -312,10 +332,11 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "linear_team", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "paused_states"],
+    ["pohunek_label", "repo", "issue_source", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states"],
     file,
     path,
   );
+  const issueSource = parseIssueSource(table, file, path);
   const pohunekLabel = readString(table, "pohunek_label", file, path);
   if (pohunekLabel !== name) {
     throw fail(file, [...path, "pohunek_label"], "must equal the file name without extension");
@@ -335,13 +356,12 @@ function parseProject(root: Table, name: string): ProjectConfig {
     name,
     pohunekLabel,
     repo: readRepo(table, "repo", file, path),
-    linearTeam: readString(table, "linear_team", file, path),
+    issueSource,
     branchPattern: compileBranchPattern(branchPatternSource, file),
     branchPatternSource,
     ignoredChecks,
     policyChecks,
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
-    pausedStates: readStringArray(table, "paused_states", file, path),
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,
   };
@@ -379,5 +399,15 @@ export async function loadConfig(configDir: string): Promise<PluginConfig> {
   const global = parseGlobal(root, GLOBAL_FILE);
   const names = await listProjectNames(configDir);
   const projects = await Promise.all(names.map((name) => loadProjectConfig(configDir, name)));
+  if (global.linear === null) {
+    const linearProject = projects.find((project) => project.issueSource.kind === "linear");
+    if (linearProject !== undefined) {
+      throw fail(
+        GLOBAL_FILE,
+        ["linear"],
+        `is required because ${PROJECTS_DIR}/${linearProject.name}${TOML_SUFFIX} uses issue_source = "linear"`,
+      );
+    }
+  }
   return { configDir, global, projects };
 }

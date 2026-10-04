@@ -1,5 +1,5 @@
 // Synthetic builders for rule tests; every value is invented.
-import type { IdentityConfig } from "../../src/types/config.ts";
+import type { IdentityConfig, IssueSource } from "../../src/types/config.ts";
 import type { SourceStatuses, WorkItem } from "../../src/types/item.ts";
 import type {
   Actor,
@@ -22,7 +22,7 @@ export const identity: IdentityConfig = {
   reviewTeams: ["acme/reviewers"],
 };
 
-export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], pausedStates: ["On hold"] };
+export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource };
 
 export const allOk: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
 

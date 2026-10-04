@@ -89,7 +89,7 @@ describe("stale data with a fake clock", () => {
 
 describe("err envelope and incompatible contract", () => {
   const err = decodeListEnvelope(
-    JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 2, maximum: 2 }, err: { class: "configuration", code: "config_invalid", msg: "bad" } }),
+    JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", msg: "bad" } }),
   );
 
   test("an err envelope goes full screen, keeps the data; r retries and success returns to the rows", () => {
@@ -104,9 +104,9 @@ describe("err envelope and incompatible contract", () => {
     expect(back.fatal).toBeNull();
   });
 
-  test("a protocol range without v2 drops the data and never guesses", () => {
+  test("a protocol range without v3 drops the data and never guesses", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)));
-    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 3, maximum: 3 }));
+    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 2, maximum: 2 }));
     const [next] = update(state, listDone(outcome, T0 + 10));
     expect(next.fatal?.kind).toBe("incompatible");
     expect(next.data).toBeNull();
@@ -323,7 +323,7 @@ describe("refresh keeps the selection and marks rows that became mine", () => {
 
   test("an incompatible contract re-baselines: the next good load marks nothing", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS.slice(1))));
-    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 3, maximum: 3 }));
+    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "2.0.0", { minimum: 2, maximum: 2 }));
     const [incompatible] = update(state, listDone(outcome, T0 + 1));
     const [next] = update(incompatible, listDone(okOutcome(payload(RULE_ROWS)), T0 + 2));
     expect(next.marked.size).toBe(0);

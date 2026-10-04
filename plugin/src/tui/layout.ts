@@ -1,5 +1,5 @@
 // Screen regions shared by the reducer (page size, scrolling) and the view.
-import type { ListPayload } from "../types/item.ts";
+import { isSourceFailure, type ListPayload } from "../types/item.ts";
 import { hiddenUnknownCount, projectLabels, type Filters } from "./rows.ts";
 import type { Size } from "./terminal.ts";
 
@@ -79,7 +79,7 @@ export interface Layout {
 
 export function headerFlags(payload: ListPayload, filters: Filters, ownVersion: string, dataVersion: string, stderrLines: number): HeaderFlags {
   return {
-    partial: payload.projects.some((p) => Object.values(p.sources).some((status) => status !== "ok")),
+    partial: payload.projects.some((p) => Object.values(p.sources).some(isSourceFailure)),
     versionMismatch: ownVersion !== dataVersion,
     listStderr: stderrLines > 0,
     hiddenUnknown: hiddenUnknownCount(payload, filters) > 0,
