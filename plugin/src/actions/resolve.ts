@@ -22,6 +22,7 @@ export async function resolveRow(
   config: PluginConfig,
   input: string,
   onlyProject: string | null,
+  includeIgnored: boolean,
   deps: Omit<ListDeps, "cliVersion">,
 ): Promise<Resolved> {
   const key = normalizeKey(input);
@@ -35,6 +36,13 @@ export async function resolveRow(
   if (matches.length > 1) {
     const projects = matches.map((m) => m.project.pohunekLabel).join(", ");
     throw new ActionError("ambiguous_item", `key ${key} appears in several projects (${projects}); pass --project`);
+  }
+  // An ignored row is parked on purpose: acting on it needs an explicit opt-in, for every action.
+  if (row.listItem.ignored && !includeIgnored) {
+    throw new ActionError(
+      "precondition_failed",
+      `${key} carries the ignore label and is parked: pass --include-ignored to act on it, or remove the label`,
+    );
   }
   return { row, warnings: collected.warnings, sessions: collected.sessions };
 }

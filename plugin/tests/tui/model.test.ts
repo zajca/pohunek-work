@@ -261,6 +261,16 @@ describe("refresh keeps the selection and marks rows that became mine", () => {
     expect(selectedRow(next)?.key).toBe(chosen?.key ?? "missing");
   });
 
+  test("the omitted_ignored count follows each refresh", () => {
+    const state = loaded(okOutcome(payload(RULE_ROWS, undefined, 2)));
+    expect(state.data?.payload.omitted_ignored).toBe(2);
+    const [grown] = update({ ...state, refreshing: true }, listDone(okOutcome(payload(RULE_ROWS, undefined, 5)), T0 + 1));
+    expect(grown.data?.payload.omitted_ignored).toBe(5);
+    const [cleared] = update({ ...grown, refreshing: true }, listDone(okOutcome(payload(RULE_ROWS)), T0 + 2));
+    expect(cleared.data?.payload.omitted_ignored).toBe(0);
+    expect(view(cleared).join("\n")).not.toContain("ignored hidden");
+  });
+
   test("a vanished selected row falls back to the same position", () => {
     const state = press(loaded(okOutcome(payload(RULE_ROWS))), ["j", "j"]).state;
     const keys = keysOf(state);

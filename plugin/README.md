@@ -27,10 +27,16 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
-A project file may set the optional key `ignore_label`. A pull request or issue
-that carries that label (compared case-insensitively) marks its row as ignored:
-the `list --json` row has `ignored: true` and no actions. Without the key the
-feature is off.
+A project file may set the optional key `ignore_label`. Rows whose pull request
+or joined issue carries that label (compared case-insensitively) are hidden from
+`list` (`list --mine` included), refused by `do` and never notified by `watch`;
+without the key the feature is off. `list --include-ignored` shows them (JSON
+`ignored: true`, no actions, the computed `on_turn` kept), and the table ends
+with `N ignored row(s) hidden (use --include-ignored)` when rows are hidden; the
+JSON `omitted_ignored` counts the hidden rows that `--mine`, `--stale-days` and
+`--project` would have listed (0 with the flag). `do <key> <action>` on an
+ignored row fails with `precondition_failed` unless `--include-ignored` is
+passed, also with `--dry-run`.
 
 The result is one table with a derived `on_turn` column, a set of named
 actions (`implement`, `babysit`, `fix-ci`, `rebase`, `review`, `ready`,

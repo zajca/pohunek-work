@@ -77,7 +77,8 @@ export async function watchTick(
   const { logger } = deps;
   const collected = await collectRows(config, options.project, deps);
   for (const warning of collected.warnings) logger.error("watch_warning", { warning });
-  const items = collected.rows.map((row) => row.listItem);
+  // Ignored rows never reach the baseline, so a row that loses the label while it is the owner's turn is new to it and notifies once.
+  const items = collected.rows.map((row) => row.listItem).filter((item) => !item.ignored);
   const complete = collected.sourceFailures.length === 0;
   const next = transitionsToMe(baseline, items, complete);
   const nextBaseline: Baseline = baseline === null && !complete ? null : next.baseline;

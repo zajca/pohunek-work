@@ -167,7 +167,8 @@ The TUI checks independently:
 SESSIONS, TITLE (truncated); sorted `me`, `unknown`, `agent`, `reviewer`, `paused`, then key. **Header:** counts per
 actor (`paused` only when non-zero), filters, data age, `STALE`; a **partial banner** with `project: source=code` for each non-`ok`
 `projects[]` entry; in the `mine` view **`N unknown rows hidden (f)`**, because an unknown row may be the
-owner's turn. **Detail pane** (full screen on Tab below `detail_min_width`): `on_turn` with a one-line rule
+owner's turn, and **`ignored hidden: N`** when `list --json` reports `omitted_ignored > 0` (the TUI never
+passes `--include-ignored`, so parked rows stay out of the table but never silently). **Detail pane** (full screen on Tab below `detail_min_width`): `on_turn` with a one-line rule
 description; issue (id, state, title, URL); PR (draft, review decision, checks, mergeable, `fix_delivered` /
 `threads_answered` / `rerequested`); sessions (id, name, role, state, activity); actions with the primary
 marked; the row's `sources`; the last preview, refusal or child stderr. `s` shows `orphaned_sessions` and

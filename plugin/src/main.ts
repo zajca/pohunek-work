@@ -27,10 +27,10 @@ import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
-  pohunek-work list [--mine] [--stale-days <n>] [--json] [--project <label>]
-  pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--dry-run] [--yes] [--json]
-  pohunek-work do <key> ready [--project <label>] [--dry-run] [--yes] [--json]
-  pohunek-work do <key> attach [--project <label>] [--dry-run [--json]]
+  pohunek-work list [--mine] [--stale-days <n>] [--include-ignored] [--json] [--project <label>]
+  pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
+  pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
+  pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
   pohunek-work doctor
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]
@@ -54,13 +54,14 @@ function parseStaleDays(value: string | undefined): number | null {
   return Number(value);
 }
 
-function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; json: boolean; project: string | null } {
+function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; includeIgnored: boolean; json: boolean; project: string | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
       options: {
         mine: { type: "boolean", default: false },
         "stale-days": { type: "string" },
+        "include-ignored": { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         project: { type: "string" },
       },
@@ -68,7 +69,7 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), json: values.json, project: values.project ?? null };
+    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), includeIgnored: values["include-ignored"], json: values.json, project: values.project ?? null };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
@@ -120,6 +121,7 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
       options: {
         profile: { type: "string" },
         project: { type: "string" },
+        "include-ignored": { type: "boolean", default: false },
         "dry-run": { type: "boolean", default: false },
         yes: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
@@ -141,6 +143,7 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
       action: known,
       profile: values.profile ?? null,
       project: values.project ?? null,
+      includeIgnored: values["include-ignored"],
       dryRun: values["dry-run"],
       yes: values.yes,
       json: values.json,
@@ -156,6 +159,7 @@ interface DoArgs {
   readonly action: DoAction;
   readonly profile: string | null;
   readonly project: string | null;
+  readonly includeIgnored: boolean;
   readonly dryRun: boolean;
   readonly yes: boolean;
   readonly json: boolean;

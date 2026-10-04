@@ -78,6 +78,7 @@ function sampleEnvelope(): unknown {
     [{ id: "s-9", name: null, linkId: "ABC-9" }],
     [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }],
     [{ project: "widgets", sources: allOk }],
+    2,
   );
 }
 
@@ -90,11 +91,11 @@ test("list --json contract is pinned by a golden file", async () => {
 });
 
 test("envelope carries the contract version and exactly one of ok or err", () => {
-  const ok = buildListEnvelope("0.1.0", [], [], [], []);
+  const ok = buildListEnvelope("0.1.0", [], [], [], [], 0);
   expect(ok).toEqual({
     cli_version: "0.1.0",
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
-    ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [] },
+    ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [], omitted_ignored: 0 },
   });
   const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" }, LIST_CONTRACT_VERSION);
   expect("ok" in err).toBe(false);
@@ -175,6 +176,7 @@ test("table renders rows, no-issue marker and orphans", () => {
     [{ id: "s-9", name: "x", linkId: "ABC-9" }],
     [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }],
     new Set(),
+    0,
   );
   expect(text.split("\n")[0]).toMatch(/^KEY\s+ON TURN\s+PR\s+REVIEW\s+CHECKS\s+SESSIONS\s+TITLE$/);
   expect(text).toContain("github:acme/widgets#12 (no issue)");
@@ -197,6 +199,7 @@ test("the table is strict ASCII: escapes, bidi and zero-width characters become 
     [{ id: "s-9", name: "o\u001b[2J", linkId: "ABC-9" }],
     [{ id: "s-8", name: "\u202Ename", project: "widgets", state: "running", activity: "idle" }],
     new Set(),
+    0,
   );
   expect(/^[\x20-\x7e\n]*$/.test(text)).toBe(true);
   expect(text).toContain("evil?]0;pwn? ?rtl? Zlutoucky");
@@ -325,7 +328,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
 
   test("the table shows a paused row as paused with its rule", () => {
     const paused = buildListItem(item({ key: "linear:ABC-1", issue: issue({ state: "On hold", paused: true }), joinedBy: "branch_pattern", noIssue: false }), context);
-    expect(renderTable([paused], [], [], new Set())).toContain("paused (r12)");
+    expect(renderTable([paused], [], [], new Set(), 0)).toContain("paused (r12)");
   });
 
   test("a rule 4 or 5 row without a worktree keeps its on_turn reason and lists the action for reuse or adoption", () => {
@@ -380,7 +383,7 @@ test("the table names the issue of a secondary pull request row and of no other 
   const plain = buildListItem(item(), context);
   expect(secondary.issue_key).toBe("ABC-1");
   expect(plain.issue_key).toBeNull();
-  const lines = renderTable([secondary, winner, plain], [], [], new Set()).split("\n");
+  const lines = renderTable([secondary, winner, plain], [], [], new Set(), 0).split("\n");
   expect(lines[1]).toStartWith("github:acme/widgets#14 (ABC-1)");
   expect(lines[2]).toStartWith("linear:ABC-1 ");
   expect(lines[3]).toStartWith("github:acme/widgets#12 (no issue)");
@@ -389,7 +392,7 @@ test("the table names the issue of a secondary pull request row and of no other 
 test("the table shows a github-issue row under its own key and names the issue on a secondary pull request row", () => {
   const issueRow = buildListItem(item({ key: "github-issue:acme/widgets#7", issue: issue({ id: "acme/widgets#7" }), noIssue: false, issueKey: "acme/widgets#7" }), context);
   const secondary = buildListItem(item({ key: "github:acme/widgets#14", pullRequest: pr({ id: "acme/widgets#14", number: 14 }), noIssue: false, issueKey: "acme/widgets#7" }), context);
-  const lines = renderTable([issueRow, secondary], [], [], new Set()).split("\n");
+  const lines = renderTable([issueRow, secondary], [], [], new Set(), 0).split("\n");
   expect(lines[1]).toStartWith("github-issue:acme/widgets#7 ");
   expect(lines[1]).not.toContain("(acme/widgets#7)");
   expect(lines[2]).toStartWith("github:acme/widgets#14 (acme/widgets#7)");
@@ -401,4 +404,18 @@ test("implement is listed on a github-issue row and on a linear row on rule 8", 
   expect(github.on_turn.rule).toBe(8);
   expect(github.actions.map((action) => action.name)).toEqual(["implement"]);
   expect(linear.actions.map((action) => action.name)).toEqual(["implement"]);
+});
+
+test("table appends the hidden ignored count after the session lines, and nothing for 0", () => {
+  const rows = [buildListItem(item({ pullRequest: pr({ isDraft: true }) }), context)];
+  const unlinked = [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }];
+  const lines = renderTable(rows, [], unlinked, new Set(), 3).split("\n");
+  expect(lines.at(-1)).toBe("3 ignored row(s) hidden (use --include-ignored)");
+  expect(lines.at(-2)).toContain("unlinked session s-8");
+  expect(renderTable(rows, [], unlinked, new Set(), 0)).not.toContain("hidden");
+});
+
+test("the envelope carries omitted_ignored", () => {
+  const envelope = buildListEnvelope("0.1.0", [], [], [], [], 5);
+  expect("ok" in envelope && envelope.ok.omitted_ignored).toBe(5);
 });

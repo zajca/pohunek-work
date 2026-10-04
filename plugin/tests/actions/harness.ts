@@ -186,7 +186,7 @@ export function setup(world: World): Harness {
 }
 
 export function options(overrides: Partial<DoOptions> = {}): DoOptions {
-  return { key: "linear:ABC-1", action: "implement", profile: null, project: "widgets", dryRun: false, yes: true, json: true, ...overrides };
+  return { key: "linear:ABC-1", action: "implement", profile: null, project: "widgets", dryRun: false, yes: true, json: true, includeIgnored: false, ...overrides };
 }
 
 export async function refusal(promise: Promise<unknown>): Promise<ActionError> {

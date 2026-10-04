@@ -161,6 +161,25 @@ test("a paused issue without a pull request disappears and notifies once when it
   expect(resumed.notified).toEqual(["widgets linear:ABC-1"]);
 });
 
+test("an ignored row on the owner's turn never notifies, and losing the label notifies once", async () => {
+  const parked = pr({ headRefName: "feature/abc-1", isDraft: true, ignored: true });
+  const h = harness([waiting]);
+  let state = (await tick(h, null)).baseline;
+  h.world.prs = githubOk([parked]);
+  const ignoredTick = await tick(h, state);
+  state = ignoredTick.baseline;
+  expect(ignoredTick.notified).toEqual([]);
+  expect(state?.has("widgets github:acme/widgets#12")).toBe(false);
+  expect(h.argvs).toEqual([]);
+  const stillParked = await tick(h, state);
+  expect(stillParked.notified).toEqual([]);
+  h.world.prs = githubOk([mine]);
+  const unparked = await tick(h, stillParked.baseline);
+  expect(unparked.notified).toEqual(["widgets github:acme/widgets#12"]);
+  expect(h.argvs).toHaveLength(1);
+  expect((await tick(h, unparked.baseline)).notified).toEqual([]);
+});
+
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {
   const h = harness([mine]);
   h.world.prs = { ok: false, source: "github", code: "rate_limited", message: "failed", durationMs: 1 };

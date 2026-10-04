@@ -473,8 +473,15 @@ that does not use it (`sources.linear` of a project with `issue_source =
 "github"`, `sources.github_issues` of a project with `issue_source = "linear"`),
 the source `github_issues` (the GitHub issue lookup of a `github` project), the
 `github-issue:` row key and the `on_turn` value `{"actor": "agent", "reason":
-"external review", "rule": 3}` of a project with `reviews = "external"`; version 4 adds the row field `ignored` (the pull request or the joined issue carries the project's `ignore_label`; the row has no actions but keeps its computed `on_turn`). `unused` is not a failure: it never appears in the
-list of unavailable sources and never makes `list` exit partial. A consumer
+"external review", "rule": 3}` of a project with `reviews = "external"`. `unused` is not a failure: it never appears in the
+list of unavailable sources and never makes `list` exit partial. Version 4 adds the row field `ignored` (a row carrying the project's
+`ignore_label`; it has no actions but keeps its computed `on_turn`) and the
+payload field `omitted_ignored` (the number of ignored rows left out of `items`
+that `--mine`, `--stale-days` and `--project` would have listed; 0 with
+`--include-ignored`). `list` and `list --mine` hide ignored rows unless
+`--include-ignored` is passed; the table then ends with
+`N ignored row(s) hidden (use --include-ignored)` when N > 0.
+A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload
 it cannot decode. `do` and `setup` version their envelopes separately
 (both 1). Illustrative item:
@@ -686,19 +693,20 @@ Rules:
   which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
   `policy_checks` and `ai_reviewers` are required for both sources.
 - **`ignore_label` parks work.** It is optional and has no default; a blank
-  or non-string value is an error naming the file and key. A row whose pull
-  request or joined issue carries the label (case-insensitive) is ignored:
-  `ignored: true` in `list --json`, no actions, its computed `on_turn` kept;
-  absent = off. A label list that cannot be read completely fails the source
-  (`truncated`) and never reads as "not ignored". With the key, each Linear
-  issue page also selects `labels(first: page_size)`. Linear caps a query at
-  10,000 complexity points, so `[linear] page_size` is validated at load: at
-  most 93 in general and at most 66 while a Linear project sets `ignore_label`
-  (`ConfigError` naming `linear.page_size`). While `github` is down an issue row
+  or non-string value is an error naming the file and key. Rows carrying the
+  label (case-insensitive) on the pull request or the joined issue are hidden
+  from `list` unless `--include-ignored` is passed, refused by `do` unless
+  `--include-ignored` is passed (`precondition_failed`) and never notified by
+  `watch`; absent = off. A label list that cannot be read completely fails the
+  source (`truncated`) and never reads as "not ignored". With the key, each
+  Linear issue page also selects `labels(first: page_size)`. Linear caps a
+  query at 10,000 complexity points, so `[linear] page_size` is validated at
+  load: at most 93 in general and at most 66 while a Linear project sets
+  `ignore_label` (`ConfigError` naming `linear.page_size`). While `github` is down an issue row
   (no pull request data) is `unknown`, and while the issue source is down a
   row whose issue is unknown (joined to a key, or an authored Linear pull
-  request without a key) is `unknown` before rules 1 and 2, with no actions and
-  no notification, because that issue may carry the label (8.3).
+  request without a key) is `unknown`; both before rules 1 and 2, with no
+  actions and no notification, because that issue may carry the label (8.3).
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:

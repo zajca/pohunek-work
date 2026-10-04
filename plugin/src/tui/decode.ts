@@ -52,6 +52,12 @@ function integer(value: unknown, path: string): number {
   return value;
 }
 
+function nonNegativeInteger(value: unknown, path: string): number {
+  const number = integer(value, path);
+  if (number < 0) throw new ShapeError(`${path} is negative`);
+  return number;
+}
+
 function array<T>(value: unknown, path: string, item: (entry: unknown, path: string) => T): T[] {
   if (!Array.isArray(value)) throw new ShapeError(`${path} is not an array`);
   const entries: unknown[] = value;
@@ -191,6 +197,7 @@ function payload(value: unknown): ListPayload {
     orphaned_sessions: array(fields["orphaned_sessions"], "ok.orphaned_sessions", orphan),
     unlinked_sessions: array(fields["unlinked_sessions"], "ok.unlinked_sessions", unlinked),
     projects: array(fields["projects"], "ok.projects", projectStatus),
+    omitted_ignored: nonNegativeInteger(fields["omitted_ignored"], "ok.omitted_ignored"),
   };
 }
 

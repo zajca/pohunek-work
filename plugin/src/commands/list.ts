@@ -42,6 +42,8 @@ export interface ListOptions {
   readonly json: boolean;
   /** Pohunek project label to restrict the listing to; null for every project. */
   readonly project: string | null;
+  /** Lists rows carrying the project's ignore label; they are hidden otherwise. */
+  readonly includeIgnored: boolean;
 }
 
 export interface ListDeps {
@@ -234,8 +236,17 @@ export async function runList(
 
   const mineRows = options.mine ? filterMine(items) : items;
   const cutoff = options.staleDays === null ? null : staleCutoff((deps.now ?? Date.now)(), options.staleDays);
-  const shown = cutoff === null ? mineRows : mineRows.filter((item) => !isStalePullRequest(item, cutoff));
-  logger.info("list_done", { rows: items.length, shown: shown.length, mine: options.mine, stale_days: options.staleDays });
+  const filtered = cutoff === null ? mineRows : mineRows.filter((item) => !isStalePullRequest(item, cutoff));
+  const shown = options.includeIgnored ? filtered : filtered.filter((item) => !item.ignored);
+  const omittedIgnored = filtered.length - shown.length;
+  logger.info("list_done", {
+    rows: items.length,
+    shown: shown.length,
+    mine: options.mine,
+    stale_days: options.staleDays,
+    include_ignored: options.includeIgnored,
+    omitted_ignored: omittedIgnored,
+  });
   const stdout = options.json
     ? JSON.stringify(buildListEnvelope(
           deps.cliVersion,
@@ -243,11 +254,13 @@ export async function runList(
           options.mine ? [] : orphans,
           options.mine ? [] : unlinked,
           projectStatuses,
+          omittedIgnored,
         ), null, 2)
     : renderTable(
         shown,
         options.mine ? [] : orphans,
         options.mine ? [] : unlinked,
-        new Set(sessions.filter(isLiveSession).map((s) => s.id)));
+        new Set(sessions.filter(isLiveSession).map((s) => s.id)),
+        omittedIgnored);
   return { stdout, warnings, items: shown, sourceFailures };
 }

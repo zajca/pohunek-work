@@ -144,12 +144,14 @@ export function buildListEnvelope(
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
   projects: readonly ListProjectStatus[],
+  omittedIgnored: number,
 ): ListEnvelope {
   const ok: ListPayload = {
     items,
     orphaned_sessions: orphanedSessions,
     unlinked_sessions: unlinkedSessions,
     projects,
+    omitted_ignored: omittedIgnored,
   };
   return {
     cli_version: cliVersion,
@@ -189,12 +191,13 @@ function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
     .join(",");
 }
 
-/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now. */
+/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now; a final line counts the hidden ignored rows. */
 export function renderTable(
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
   liveSessionIds: ReadonlySet<string>,
+  omittedIgnored: number,
 ): string {
   const rows = items.map((item) => {
     const pr = item.pull_request;
@@ -226,6 +229,7 @@ export function renderTable(
       ),
     );
   }
+  if (omittedIgnored > 0) lines.push(`${omittedIgnored.toString()} ignored row(s) hidden (use --include-ignored)`);
   return lines.join("\n");
 }
 

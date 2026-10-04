@@ -216,7 +216,7 @@ describe("launch", () => {
     const metadata = (JSON.parse(out.stdout) as Envelope).ok.result?.metadata ?? {};
     const launched: PohunekSession = session({ id: "s-new", state: "stopped", activity: null, branch: BRANCH, worktreePath: "/wt/new", metadata });
     const afterPush: World = { ...world, prs: ok("github", [pr({ headRefName: BRANCH, headSha: "a".repeat(40), mergeable: "CONFLICTING", closingIssueNumbers: [7] })]), sessions: [launched] };
-    const listed = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(afterPush).deps);
+    const listed = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(afterPush).deps);
     const row = listed.items.find((item): item is ListItem => item.key === ROW);
     expect(row?.sessions.map((s) => s.id)).toEqual(["s-new"]);
     expect(row?.actions.map((action) => action.name)).toEqual(["rebase"]);
@@ -230,7 +230,7 @@ describe("launch", () => {
 describe("list", () => {
   test("never reads an issue body and carries none", async () => {
     const harness = setup(worldWith(ok("github_issues", detail({ body: "SECRET-BODY-TEXT" }))));
-    const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, harness.deps);
+    const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, harness.deps);
     expect(harness.issueReads).toEqual([]);
     expect(JSON.stringify(out.items)).not.toContain("SECRET-BODY-TEXT");
   });
@@ -243,7 +243,7 @@ describe("list", () => {
   ];
   for (const [label, world] of CASES) {
     test(`list offers implement exactly when do plans it: ${label}`, async () => {
-      const listed = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
+      const listed = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
       const offered = listed.items.filter((item) => item.key === ROW && item.actions.some((action) => action.name === "implement"));
       let planned = true;
       try {

@@ -222,6 +222,11 @@ export interface ListPayload {
   /** Live sessions without a work link; `gc --adopt` links them later. */
   readonly unlinked_sessions: readonly UnlinkedSession[];
   readonly projects: readonly ListProjectStatus[];
+  /**
+   * Ignored rows left out of `items` that the other filters (`--mine`, `--stale-days`, `--project`)
+   * would have listed; 0 with `--include-ignored`.
+   */
+  readonly omitted_ignored: number;
 }
 
 export interface ListError {

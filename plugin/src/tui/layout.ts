@@ -63,6 +63,7 @@ export interface HeaderFlags {
   readonly versionMismatch: boolean;
   readonly listStderr: boolean;
   readonly hiddenUnknown: boolean;
+  readonly hiddenIgnored: boolean;
 }
 
 export interface Layout {
@@ -83,11 +84,12 @@ export function headerFlags(payload: ListPayload, filters: Filters, ownVersion: 
     versionMismatch: ownVersion !== dataVersion,
     listStderr: stderrLines > 0,
     hiddenUnknown: hiddenUnknownCount(payload, filters) > 0,
+    hiddenIgnored: payload.omitted_ignored > 0,
   };
 }
 
 export function computeLayout(size: Size, columns: readonly ColumnSpec[], flags: HeaderFlags, detailMinWidth: number): Layout {
-  const headerLines = 1 + [flags.partial, flags.versionMismatch, flags.listStderr, flags.hiddenUnknown].filter(Boolean).length;
+  const headerLines = 1 + [flags.partial, flags.versionMismatch, flags.listStderr, flags.hiddenUnknown, flags.hiddenIgnored].filter(Boolean).length;
   const bodyHeight = size.rows - headerLines - TABLE_HEADER_LINES - STATUS_LINES;
   const minWidth = minTableWidth(columns);
   const detailWidth = Math.floor(size.columns * DETAIL_SHARE);

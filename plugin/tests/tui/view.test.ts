@@ -60,6 +60,18 @@ describe.each(SIZES)("golden frames at width %s", (width, size) => {
     golden(`mine-partial-${width}`, loaded(okOutcome(payload(RULE_ROWS, PROJECTS_PARTIAL)), { size, settings: { initialView: "mine" } }));
   });
 
+  test("ignored rows hidden: the count shows in the banner area at this width", () => {
+    const state = loaded(okOutcome(payload(RULE_ROWS, undefined, 3)), { size });
+    const lines = view(state);
+    expect(lines.filter((line) => line.includes("ignored hidden: 3"))).toHaveLength(1);
+    expect(lines.every((line) => line.length <= size.columns)).toBe(true);
+    golden(`ignored-hidden-${width}`, state);
+  });
+
+  test("no ignored indicator when nothing is hidden", () => {
+    expect(view(loaded(okOutcome(payload(RULE_ROWS)), { size })).join("\n")).not.toContain("ignored hidden");
+  });
+
   test("err envelope: full screen, r retries", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)), { size });
     const err = decodeListEnvelope(
