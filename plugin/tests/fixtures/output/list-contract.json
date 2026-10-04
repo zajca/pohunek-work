@@ -1,8 +1,8 @@
 {
   "cli_version": "0.1.0",
   "protocol": {
-    "minimum": 1,
-    "maximum": 1
+    "minimum": 2,
+    "maximum": 2
   },
   "ok": {
     "items": [
@@ -115,6 +115,42 @@
             "profile": "profile-a"
           }
         ],
+        "sources": {
+          "github": "ok",
+          "linear": "ok",
+          "pohunek": "ok"
+        }
+      },
+      {
+        "key": "linear:ABC-3",
+        "project": "widgets",
+        "issue": {
+          "id": "ABC-3",
+          "title": "Widget cache",
+          "state": "On hold",
+          "url": "https://example.invalid/issue/ABC-1"
+        },
+        "pull_request": {
+          "id": "acme/widgets#13",
+          "url": "https://example.invalid/acme/widgets/pull/12",
+          "title": "Add widget cache",
+          "draft": true,
+          "updated_at": "2026-05-01T13:00:00Z",
+          "review_decision": null,
+          "checks": "none",
+          "mergeable": "CONFLICTING",
+          "fix_delivered": null,
+          "threads_answered": null,
+          "rerequested": null
+        },
+        "no_issue": false,
+        "sessions": [],
+        "on_turn": {
+          "actor": "paused",
+          "reason": "paused",
+          "rule": 12
+        },
+        "actions": [],
         "sources": {
           "github": "ok",
           "linear": "ok",

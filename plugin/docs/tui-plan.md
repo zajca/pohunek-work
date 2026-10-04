@@ -65,7 +65,7 @@ runs `list --json` and `do ...` as **child processes of `[tui] self_bin`**. It n
 (`commands/list.ts`, `sources/*`, `actions/launch.ts`).
 
 **Gains:** no credentials in the long-running process (`gh auth token` and the keyring read happen only in
-short-lived children); one versioned contract (list v1, do v1) shared with rofi and `/work` and exercised
+short-lived children); one versioned contract (list v2, do v1) shared with rofi and `/work` and exercised
 daily; the existing per-command JSON logs cover every child; plan reviewed = plan run, because `do`
 confirms in the process that executes (M2 section 4, rule 2). **Costs:** a spawn per refresh (negligible
 next to the network), a runtime envelope decoder, no in-TUI confirmation modal (4.4). **Enforcement:** an
@@ -164,8 +164,8 @@ The TUI checks independently:
 ### 4.6 Screen, data display and keys
 
 **Rows:** `*`, KEY, PROJECT (with more than one project), TURN (`me: respond (r4)`), PR, REVIEW, CHECKS,
-SESSIONS, TITLE (truncated); sorted `me`, `unknown`, `agent`, `reviewer`, then key. **Header:** counts per
-actor, filters, data age, `STALE`; a **partial banner** with `project: source=code` for each non-`ok`
+SESSIONS, TITLE (truncated); sorted `me`, `unknown`, `agent`, `reviewer`, `paused`, then key. **Header:** counts per
+actor (`paused` only when non-zero), filters, data age, `STALE`; a **partial banner** with `project: source=code` for each non-`ok`
 `projects[]` entry; in the `mine` view **`N unknown rows hidden (f)`**, because an unknown row may be the
 owner's turn. **Detail pane** (full screen on Tab below `detail_min_width`): `on_turn` with a one-line rule
 description; issue (id, state, title, URL); PR (draft, review decision, checks, mergeable, `fix_delivered` /
@@ -179,7 +179,7 @@ marked; the row's `sources`; the last preview, refusal or child stderr. `s` show
 | Enter | primary action (handover to `do`) | `a` | choose among the row's actions |
 | `p` | preview (`--dry-run`) into the detail pane | `t` | attach (only when listed) |
 | `o` | open PR or issue URL | `r` | refresh now |
-| `m` | toggle mine / all | `f` | actor filter: all, me, agent, reviewer, unknown |
+| `m` | toggle mine / all | `f` | actor filter: all, me, agent, reviewer, paused, unknown |
 | `P` | cycle project filter | `/` | text filter on key and title; Esc clears |
 | `s` | sessions view | Tab | detail pane focus / full screen |
 | `?` | help | `q`, Ctrl-C | quit (outside a handover) |
@@ -193,7 +193,7 @@ marked; the row's `sources`; the last preview, refusal or child stderr. `s` show
 | exit 3 (partial) | partial banner; rows render; `unknown` rows explained | kept |
 | exit 2 `err` envelope (e.g. `config_invalid`) | full screen: class, code, message; `r` retries | kept, stale |
 | timeout or unparsable output | status line error, logged | kept, stale |
-| `protocol` range excludes v1 (a `cli_version` mismatch is only a header warning) | full screen "incompatible pohunek-work at `self_bin`", no rows | dropped (never guess) |
+| `protocol` range excludes v2 (a `cli_version` mismatch is only a header warning) | full screen "incompatible pohunek-work at `self_bin`", no rows | dropped (never guess) |
 | terminal too small | `terminal too small` | kept |
 
 ## 5. Logging

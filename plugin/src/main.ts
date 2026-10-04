@@ -2,10 +2,12 @@
 // Command line entry point: `pohunek-work list`, `do`, `doctor`, `setup`, `tui` and `watch`.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
-import { ActionError, DO_ACTIONS, isLaunchAction, type DoAction } from "./actions/types.ts";
+import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
 import { runList } from "./commands/list.ts";
 import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupStep } from "./commands/setup.ts";
+import { SETUP_CONTRACT_VERSION } from "./setup/settings.ts";
+import { LIST_CONTRACT_VERSION } from "./types/item.ts";
 import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
@@ -80,7 +82,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
     config = await loadConfig(resolveConfigDir());
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    return reportError(options.json, "configuration", "config_invalid", error.message);
+    return reportError(options.json, LIST_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
   }
 
   const logger = createLogger({
@@ -178,7 +180,7 @@ async function doCommand(argv: readonly string[]): Promise<number> {
     config = await loadConfig(resolveConfigDir());
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    return reportError(options.json, "configuration", "config_invalid", error.message);
+    return reportError(options.json, DO_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
   }
 
   const logger = createLogger({
@@ -201,7 +203,7 @@ async function doCommand(argv: readonly string[]): Promise<number> {
     console.log(output.stdout);
     return 0;
   } catch (error) {
-    if (error instanceof ActionError) return reportError(options.json, "action", error.code, error.message);
+    if (error instanceof ActionError) return reportError(options.json, DO_CONTRACT_VERSION, "action", error.code, error.message);
     logger.error("do_failed", { error: error instanceof Error ? error : String(error) });
     throw error;
   } finally {
@@ -261,8 +263,8 @@ async function setupCommand(argv: readonly string[]): Promise<number> {
     process.stdout.write(output.stdout);
     return 0;
   } catch (error) {
-    if (error instanceof SetupPathError) return reportError(options.json, "configuration", "setup_paths", error.message);
-    if (error instanceof SetupIoError) return reportError(options.json, "action", "setup_io", error.message);
+    if (error instanceof SetupPathError) return reportError(options.json, SETUP_CONTRACT_VERSION, "configuration", "setup_paths", error.message);
+    if (error instanceof SetupIoError) return reportError(options.json, SETUP_CONTRACT_VERSION, "action", "setup_io", error.message);
     throw error;
   }
 }
@@ -281,10 +283,10 @@ async function tuiCommand(argv: readonly string[]): Promise<number> {
     config = await loadConfig(resolveConfigDir());
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    return reportError(false, "configuration", "config_invalid", error.message);
+    return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return reportError(false, "usage", "no_terminal", "tui needs a terminal on stdin and stdout");
+    return reportError(false, LIST_CONTRACT_VERSION, "usage", "no_terminal", "tui needs a terminal on stdin and stdout");
   }
   const logger = createLogger({
     logDir: resolveLogDir(),
@@ -346,11 +348,11 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
     config = await loadConfig(resolveConfigDir());
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    return reportError(false, "configuration", "config_invalid", error.message);
+    return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
   }
   const unknown = unknownProject(config, options.project);
   if (unknown !== null) {
-    return reportError(false, "usage", "unknown_project", `no project file for label ${JSON.stringify(unknown)}`);
+    return reportError(false, LIST_CONTRACT_VERSION, "usage", "unknown_project", `no project file for label ${JSON.stringify(unknown)}`);
   }
   const logger = createLogger({
     logDir: resolveLogDir(),
@@ -388,6 +390,7 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
 async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv;
   const json = argv.includes("--json");
+  const contract = command === "do" ? DO_CONTRACT_VERSION : command === "setup" ? SETUP_CONTRACT_VERSION : LIST_CONTRACT_VERSION;
   try {
     switch (command) {
       case "list":
@@ -407,12 +410,12 @@ async function main(argv: readonly string[]): Promise<number> {
     }
   } catch (error) {
     if (error instanceof UsageError) {
-      if (json) return reportError(true, "usage", "usage", `${error.message}\n${USAGE}`);
+      if (json) return reportError(true, contract, "usage", "usage", `${error.message}\n${USAGE}`);
       console.error(`${error.message}\n${USAGE}`);
       return EXIT_ERROR;
     }
     const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    return reportError(json, "internal", "internal_error", `unexpected failure: ${message}`);
+    return reportError(json, contract, "internal", "internal_error", `unexpected failure: ${message}`);
   }
 }
 

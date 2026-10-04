@@ -10,12 +10,13 @@ export type ErrorClass = "configuration" | "usage" | "internal" | "action";
 
 /**
  * Prints the error as a JSON envelope under --json, and in strict ASCII on stderr
- * otherwise: messages can carry text from pohunek or a provider.
+ * otherwise: messages can carry text from pohunek or a provider. `contract` is
+ * the failing command's envelope version.
  */
-export function reportError(json: boolean, errorClass: ErrorClass, code: string, message: string): number {
+export function reportError(json: boolean, contract: number, errorClass: ErrorClass, code: string, message: string): number {
   if (json) {
     const err = { class: errorClass, code, msg: message };
-    console.log(JSON.stringify(buildErrorEnvelope(pkg.version, err), null, 2));
+    console.log(JSON.stringify(buildErrorEnvelope(pkg.version, err, contract), null, 2));
   } else {
     console.error(toAsciiLines(message).join("\n"));
   }

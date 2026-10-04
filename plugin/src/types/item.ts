@@ -11,16 +11,17 @@ import type {
 } from "./sources.ts";
 
 /** Version of the `list --json` contract; bumped on any incompatible change. */
-export const LIST_CONTRACT_VERSION = 1;
+export const LIST_CONTRACT_VERSION = 2;
 
 /** Per-source availability for one poll: `ok` or the stable failure code. */
 export type SourceStatus = "ok" | SourceErrorCode;
 export type SourceStatuses = Readonly<Record<SourceName, SourceStatus>>;
 
-export type TurnActor = "me" | "agent" | "reviewer" | "unknown";
+/** `paused`: the joined issue is in a configured paused state, so the row is on nobody's turn. */
+export type TurnActor = "me" | "agent" | "reviewer" | "paused" | "unknown";
 
 /** Rule numbers of RFC section 8.1. */
-export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
+export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
 /** Prefix of the rule 5 reason for a pull request whose only failures are policy checks. */
 export const POLICY_CHECK_REASON_PREFIX = "policy check: ";
@@ -43,6 +44,7 @@ export type OnTurn =
   | { readonly actor: "me"; readonly reason: MeReason; readonly rule: RuleNumber }
   | { readonly actor: "agent"; readonly reason: "working"; readonly rule: 2 }
   | { readonly actor: "reviewer"; readonly reason: "waiting"; readonly rule: 10 }
+  | { readonly actor: "paused"; readonly reason: "paused"; readonly rule: 12 }
   /** `reason` lists the failed sources, e.g. `github:rate_limited`. */
   | { readonly actor: "unknown"; readonly reason: string; readonly rule: null };
 

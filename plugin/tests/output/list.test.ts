@@ -46,6 +46,16 @@ function sampleEnvelope(): unknown {
       context,
     ),
     buildListItem(item({ key: "linear:ABC-2", issue: issue({ id: "ABC-2" }), pullRequest: null, noIssue: false }), context),
+    buildListItem(
+      item({
+        key: "linear:ABC-3",
+        issue: issue({ id: "ABC-3", stateName: "On hold" }),
+        pullRequest: pr({ id: "acme/widgets#13", number: 13, isDraft: true, mergeable: "CONFLICTING" }),
+        noIssue: false,
+        joinedBy: "branch_pattern",
+      }),
+      context,
+    ),
   ];
   return buildListEnvelope(
     "0.1.0",
@@ -71,7 +81,7 @@ test("envelope carries the contract version and exactly one of ok or err", () =>
     protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
     ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [] },
   });
-  const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" });
+  const err = buildErrorEnvelope("0.1.0", { class: "configuration", code: "config_invalid", msg: "x" }, LIST_CONTRACT_VERSION);
   expect("ok" in err).toBe(false);
   expect("err" in err).toBe(true);
 });
@@ -250,6 +260,28 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
     const blocked = buildListItem(item({ sessions: [session()], notifications: [notification()] }), context);
     expect(blocked.on_turn.rule).toBe(1);
     expect(blocked.actions).toEqual([{ name: "attach", delegable: false }]);
+  });
+
+  test("a paused row lists no action, not even attach, while rules 1 and 2 keep theirs", () => {
+    const conflicting = pr({ isDraft: true, mergeable: "CONFLICTING" });
+    const pausedRow = { key: "linear:ABC-1", issue: issue({ stateName: "On hold" }), pullRequest: conflicting, joinedBy: "branch_pattern", noIssue: false } as const;
+    const idleOwner = session({ worktreePath: "/wt/a" });
+    const paused = buildListItem(item({ ...pausedRow, sessions: [idleOwner] }), context);
+    expect(paused.on_turn).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    expect(paused.issue?.state).toBe("On hold");
+    expect(paused.actions).toEqual([]);
+    expect(filterMine([paused])).toEqual([]);
+    const working = buildListItem(item({ ...pausedRow, sessions: [session({ activity: "working", worktreePath: "/wt/a" })] }), context);
+    expect(working.on_turn.rule).toBe(2);
+    expect(working.actions).toEqual([{ name: "attach", delegable: false }]);
+    const blocked = buildListItem(item({ ...pausedRow, sessions: [idleOwner], notifications: [notification()] }), context);
+    expect(blocked.on_turn.rule).toBe(1);
+    expect(blocked.actions).toEqual([{ name: "attach", delegable: false }]);
+  });
+
+  test("the table shows a paused row as paused with its rule", () => {
+    const paused = buildListItem(item({ key: "linear:ABC-1", issue: issue({ stateName: "On hold" }), joinedBy: "branch_pattern", noIssue: false }), context);
+    expect(renderTable([paused], [], [], new Set())).toContain("paused (r12)");
   });
 
   test("a rule 4 or 5 row without a worktree keeps its on_turn reason and lists no action", () => {

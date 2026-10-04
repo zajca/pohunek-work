@@ -187,6 +187,14 @@ test("attach is refused without a live linked session, with several, and without
   expect([none, gone, two, noTty].map((h) => h.attached.length)).toEqual([0, 0, 0, 0]);
 });
 
+test("attach is refused on a paused row, which lists no action", async () => {
+  const onHold = issue({ stateName: "On hold" });
+  const joined = pr({ headRefName: "alice/ABC-1/work", mergeable: "CONFLICTING" });
+  const { deps, attached } = setup({ issues: ok("linear", [onHold]), prs: ok("github", [joined]), sessions: [LIVE], terminal: true });
+  await expectRefusal(runDo(baseConfig, attachOptions(), deps), "precondition_failed", "paused");
+  expect(attached).toHaveLength(0);
+});
+
 test("attach refuses a session id that would read as an option", async () => {
   const odd = session({ ...LIVE, id: "--help" });
   const { deps, attached } = setup({ issues: ok("linear", [issue()]), sessions: [odd], terminal: true });

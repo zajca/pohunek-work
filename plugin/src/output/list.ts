@@ -24,7 +24,7 @@ import {
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "profiles">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "pausedStates" | "profiles">;
   /** Global [profiles]; a project's own table replaces it whole. */
   readonly profiles: ProfilesConfig;
 }
@@ -59,10 +59,11 @@ const WORKTREE_ACTIONS: readonly string[] = ["babysit", "fix-ci", "rebase"];
  * Named actions of a row, the primary first (docs/tui-plan.md 4.5). A worktree
  * action is listed only when a linked session owns a worktree; `on_turn` keeps
  * the reason either way. `attach` is listed whenever a live linked session
- * exists, which covers rules 1 and 11. `merge` is never listed. Delegation
- * policy is empty, so nothing is delegable.
+ * exists, which covers rules 1 and 11. A paused row (rule 12) has no action.
+ * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
  */
 export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles">): ListAction[] {
+  if (onTurn.actor === "paused") return [];
   const names: string[] = [];
   const primary = ruleAction(onTurn);
   if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeOf(item.sessions) !== null)) names.push(primary);
@@ -141,10 +142,11 @@ export function buildListEnvelope(
   };
 }
 
-export function buildErrorEnvelope(cliVersion: string, err: ListError): ListEnvelope {
+/** `contract` is the version of the command that failed: `list`, `do` and `setup` version their envelopes separately. */
+export function buildErrorEnvelope(cliVersion: string, err: ListError, contract: number): ListEnvelope {
   return {
     cli_version: cliVersion,
-    protocol: { minimum: LIST_CONTRACT_VERSION, maximum: LIST_CONTRACT_VERSION },
+    protocol: { minimum: contract, maximum: contract },
     err,
   };
 }

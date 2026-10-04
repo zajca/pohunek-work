@@ -79,7 +79,7 @@ export async function watchTick(
   for (const warning of collected.warnings) logger.error("watch_warning", { warning });
   const items = collected.rows.map((row) => row.listItem);
   const complete = collected.sourceFailures.length === 0;
-  const next = transitionsToMe(baseline, items);
+  const next = transitionsToMe(baseline, items, complete);
   const nextBaseline: Baseline = baseline === null && !complete ? null : next.baseline;
   const marked = items.filter((item) => next.marked.has(rowId(item)));
   logger.info("watch_tick", { rows: items.length, notify: marked.length, complete, baselined: nextBaseline !== null });

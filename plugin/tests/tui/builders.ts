@@ -161,7 +161,7 @@ export function payload(items: readonly ListItem[], projects: readonly ListProje
   };
 }
 
-export function envelopeText(body: ListPayload, cliVersion = OWN_VERSION, protocol = { minimum: 1, maximum: 1 }): string {
+export function envelopeText(body: ListPayload, cliVersion = OWN_VERSION, protocol = { minimum: 2, maximum: 2 }): string {
   return JSON.stringify({ cli_version: cliVersion, protocol, ok: body });
 }
 

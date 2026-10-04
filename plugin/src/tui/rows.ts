@@ -6,10 +6,10 @@ import { toSafe } from "./safe.ts";
 
 export type ActorFilter = "all" | TurnActor;
 
-export const ACTOR_FILTERS: readonly ActorFilter[] = ["all", "me", "agent", "reviewer", "unknown"];
+export const ACTOR_FILTERS: readonly ActorFilter[] = ["all", "me", "agent", "reviewer", "paused", "unknown"];
 
-/** Row order of section 4.6: the owner's turn first, then rows that may be. */
-const ACTOR_ORDER: readonly TurnActor[] = ["me", "unknown", "agent", "reviewer"];
+/** Row order of section 4.6: the owner's turn first, then rows that may be; paused rows last. */
+const ACTOR_ORDER: readonly TurnActor[] = ["me", "unknown", "agent", "reviewer", "paused"];
 
 export interface Filters {
   readonly actor: ActorFilter;
@@ -87,7 +87,7 @@ export function projectLabels(payload: ListPayload): string[] {
 }
 
 export function actorCounts(payload: ListPayload): Readonly<Record<TurnActor, number>> {
-  const counts: Record<TurnActor, number> = { me: 0, agent: 0, reviewer: 0, unknown: 0 };
+  const counts: Record<TurnActor, number> = { me: 0, agent: 0, reviewer: 0, paused: 0, unknown: 0 };
   for (const item of payload.items) counts[item.on_turn.actor] += 1;
   return counts;
 }
@@ -96,12 +96,20 @@ export function actorCounts(payload: ListPayload): Readonly<Record<TurnActor, nu
  * Rows that became the owner's turn since the last known state. Unknown
  * actors never update the baseline, so a source outage and its recovery do
  * not mark rows; a row that appears already on the owner's turn is marked.
+ * With `complete` (every source answered) rows absent from `next` leave the
+ * baseline, so a row that disappears for a while (a paused issue without a
+ * pull request) is marked when it returns on the owner's turn.
  */
 export function transitionsToMe(
   baseline: ReadonlyMap<string, TurnActor> | null,
   next: readonly ListItem[],
+  complete: boolean,
 ): { readonly marked: ReadonlySet<string>; readonly baseline: ReadonlyMap<string, TurnActor> } {
   const updated = new Map(baseline ?? []);
+  if (complete) {
+    const present = new Set(next.map(rowId));
+    for (const id of [...updated.keys()]) if (!present.has(id)) updated.delete(id);
+  }
   const marked = new Set<string>();
   for (const item of next) {
     const id = rowId(item);

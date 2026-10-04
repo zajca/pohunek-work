@@ -65,7 +65,7 @@ describe.each(SIZES)("golden frames at width %s", (width, size) => {
     const err = decodeListEnvelope(
       JSON.stringify({
         cli_version: "0.1.0",
-        protocol: { minimum: 1, maximum: 1 },
+        protocol: { minimum: 2, maximum: 2 },
         err: { class: "configuration", code: "config_invalid", msg: "config.toml: tui is required" },
       }),
     );
@@ -73,9 +73,9 @@ describe.each(SIZES)("golden frames at width %s", (width, size) => {
     golden(`error-${width}`, next);
   });
 
-  test("protocol excludes v1: incompatible, no rows", () => {
+  test("protocol excludes v2: incompatible, no rows", () => {
     const state = loaded(okOutcome(payload(RULE_ROWS)), { size });
-    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "9.0.0", { minimum: 2, maximum: 3 }));
+    const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS), "9.0.0", { minimum: 3, maximum: 4 }));
     const [next] = update(state, listDone(outcome, T0 + 60_000));
     golden(`incompatible-${width}`, next);
   });
@@ -157,6 +157,20 @@ test("rule 5 has a line per reason, a policy check included", () => {
   expect(line("fix CI")).toBe("a check failed on the pull request");
   expect(line("rebase")).toBe("the pull request conflicts with its base branch");
   expect(line("policy check: Require label")).toBe("a policy check failed: meet it on GitHub (manual)");
+});
+
+test("a paused row decodes, sorts last, shows its rule and is counted in the header", () => {
+  const paused = row("linear:DMD-140", { on_turn: { actor: "paused", reason: "paused", rule: 12 } });
+  const decoded = decodeListEnvelope(envelopeText(payload([paused, ...RULE_ROWS])));
+  expect(decoded.kind).toBe("ok");
+  const state = loaded(okOutcome(payload([paused, ...RULE_ROWS])), { size: WIDE });
+  const frame = view(state);
+  expect(frame[0]).toContain("reviewer 1  paused 1  unknown 1");
+  const rows = frame.filter((line) => line.includes("linear:DMD-1"));
+  expect(rows.at(-1)).toContain("linear:DMD-140");
+  expect(rows.at(-1)).toContain("paused (r12)");
+  expect(ruleLine(paused)).toBe("the issue is in a paused state: nobody's turn until it leaves that state");
+  expect(view(loaded(okOutcome(payload(RULE_ROWS)), { size: WIDE }))[0]).not.toContain("paused");
 });
 
 const ESC = "\u001b";

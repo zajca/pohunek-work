@@ -4,7 +4,7 @@ import { runDo, type DoOutput } from "../../src/commands/do.ts";
 import { runList } from "../../src/commands/list.ts";
 import type { PohunekSession, PullRequest } from "../../src/types/sources.ts";
 import type { ListItem, RuleNumber } from "../../src/types/item.ts";
-import { check, deliveredPr, pr, session } from "../rules/builders.ts";
+import { check, deliveredPr, issue, pr, session } from "../rules/builders.ts";
 import { baseConfig, expectRefusal, ok, options, setup, type Envelope } from "./harness.ts";
 
 const SHA = "a".repeat(40);
@@ -111,4 +111,17 @@ test("rule 5 with a policy-only failure lists no action and do --dry-run refuses
   expect((await listedRow(pullRequest, sessions)).actions).toEqual([]);
   const rule: RuleCase = { pullRequest, rule: 5, reason: "policy check: Policy / Label", action: "rebase" };
   await expectRefusal(dryRun(rule, sessions), "precondition_failed", "rebase refused");
+});
+
+test("a pull request joined to a paused issue lists no action and do --dry-run refuses every action", async () => {
+  const pullRequest = pr({ headRefName: "alice/ABC-1/work", headSha: SHA, isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
+  const world = { prs: ok("github", [pullRequest]), issues: ok("linear", [issue({ stateName: "On hold" })]), sessions: [linked(pullRequest, "/wt/owner")] };
+  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
+  expect(out.items.map((item) => [item.key, item.on_turn, item.actions])).toEqual([
+    ["linear:ABC-1", { actor: "paused", reason: "paused", rule: 12 }, []],
+  ]);
+  for (const action of ["implement", "babysit", "fix-ci", "rebase", "review", "ready", "attach"] as const) {
+    const doOptions = options({ key: "linear:ABC-1", action, profile: "profile-a", dryRun: true, yes: false });
+    await expectRefusal(runDo(baseConfig, doOptions, setup(world).deps), "precondition_failed", `${action} refused`);
+  }
 });

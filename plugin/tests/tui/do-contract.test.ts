@@ -54,7 +54,7 @@ test("a refusal printed by the CLI entry point decodes as an error with its code
     lines.push(line);
   };
   try {
-    reportError(true, "action", "confirmation_required", "not confirmed; nothing was executed");
+    reportError(true, 1, "action", "confirmation_required", "not confirmed; nothing was executed");
   } finally {
     console.log = original;
   }

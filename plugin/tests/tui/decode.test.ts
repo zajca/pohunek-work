@@ -26,8 +26,8 @@ describe("decodeListEnvelope", () => {
     ["[]", "envelope is not an object"],
     ['{"protocol":{"minimum":1,"maximum":1},"ok":{}}', "cli_version is not a string"],
     ['{"cli_version":"1","ok":{}}', "protocol is not an object"],
-    ['{"cli_version":"1","protocol":{"minimum":1,"maximum":1}}', "envelope has neither ok nor err"],
-    ['{"cli_version":"1","protocol":{"minimum":1,"maximum":1},"ok":{"items":{}}}', "ok.items is not an array"],
+    ['{"cli_version":"1","protocol":{"minimum":2,"maximum":2}}', "envelope has neither ok nor err"],
+    ['{"cli_version":"1","protocol":{"minimum":2,"maximum":2},"ok":{"items":{}}}', "ok.items is not an array"],
   ])("malformed %p: %s", (text, message) => {
     expect(decodeListEnvelope(text)).toEqual({ kind: "malformed", message });
   });
@@ -38,14 +38,14 @@ describe("decodeListEnvelope", () => {
     if (first === undefined) throw new Error("fixture");
     first["on_turn"] = { actor: "somebody", reason: "x", rule: 1 };
     expect(decodeListEnvelope(JSON.stringify(bad))).toEqual({ kind: "malformed", message: "ok.items[0].on_turn.actor has an unknown value" });
-    first["on_turn"] = { actor: "me", reason: "x", rule: 12 };
+    first["on_turn"] = { actor: "me", reason: "x", rule: 13 };
     expect(decodeListEnvelope(JSON.stringify(bad))).toEqual({ kind: "malformed", message: "ok.items[0].on_turn.rule is not a known rule" });
   });
 
   test("the err envelope is decoded with its class, code and message", () => {
     const text = JSON.stringify({
       cli_version: "0.1.0",
-      protocol: { minimum: 1, maximum: 1 },
+      protocol: { minimum: 2, maximum: 2 },
       err: { class: "configuration", code: "config_invalid", msg: "config.toml: tui is required" },
     });
     expect(decodeListEnvelope(text)).toEqual({
@@ -56,9 +56,9 @@ describe("decodeListEnvelope", () => {
   });
 
   test.each([
-    [{ minimum: 2, maximum: 3 }],
+    [{ minimum: 3, maximum: 4 }],
     [{ minimum: 0, maximum: 0 }],
-  ])("protocol %p excludes v1: incompatible, payload not read", (protocol) => {
+  ])("protocol %p excludes v2: incompatible, payload not read", (protocol) => {
     const outcome = decodeListEnvelope(JSON.stringify({ cli_version: "9.0.0", protocol, ok: "anything" }));
     expect(outcome.kind).toBe("incompatible");
   });

@@ -22,7 +22,7 @@ export interface RuleInput {
   readonly item: WorkItem;
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "pausedStates">;
 }
 
 export interface RuleResult {
@@ -198,7 +198,10 @@ function me(reason: MeReason, rule: RuleNumber): OnTurn {
   return { actor: "me", reason, rule };
 }
 
-/** Evaluates rules 1 to 10 in order; the first rule that holds decides. */
+/**
+ * Evaluates the rules in RFC 8.1 order (1, 2, 12, 3 to 8, 11, 9, 10); the first
+ * rule that holds decides.
+ */
 export function evaluateOnTurn(input: RuleInput): RuleResult {
   const { item, sources, identity, project } = input;
   const pr = item.pullRequest;
@@ -229,6 +232,18 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   const liveSessions = item.sessions.filter(isLiveSession);
   if (liveSessions.some((session) => session.activity === "working")) {
     return result({ actor: "agent", reason: "working", rule: 2 });
+  }
+
+  // Rule 12: linear. A row joined to an issue key whose issue Linear did not
+  // return may be paused, so it is unknown while Linear is down.
+  if (project.pausedStates.length > 0) {
+    if (item.issue === null && item.joinedBy !== null) {
+      const linearFailure = failedSources(sources, ["linear"]);
+      if (linearFailure !== null) return unknown(linearFailure);
+    }
+    if (item.issue !== null && project.pausedStates.includes(item.issue.stateName)) {
+      return result({ actor: "paused", reason: "paused", rule: 12 });
+    }
   }
 
   // Rules 3 to 7 and 9: github.
