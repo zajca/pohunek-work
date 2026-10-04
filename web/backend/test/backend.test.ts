@@ -10,6 +10,7 @@ import {
   type BackendHandle,
   type BackendHostEntry,
   type BackendLogger,
+  type DaemonTarget,
 } from "@pohunek/backend";
 import { Client, attachRawWs, type RawStream } from "@pohunek/sdk";
 import {
@@ -33,6 +34,10 @@ const POLL_TIMEOUT_MILLISECONDS = 2_000;
 const BINARY_PAYLOAD = Uint8Array.of(0x00, 0xff, 0x80, 0x61, 0xc3, 0x28);
 const INDEX_CONTENT = "<!doctype html><title>Pohunek backend test</title>";
 const ASSET_CONTENT = "backend-test-asset";
+const REPEATED_REFUSAL_ATTEMPTS = 3;
+const FAILING_RELAY_HOST = "failing-lookup";
+const RESOLVED_RELAY_HOST = "resolved-target";
+const UNDIALED_RELAY_TARGET: DaemonTarget = { kind: "tcp", host: LOOPBACK_HOST, port: 1 };
 
 const silentLogger: BackendLogger = {
   log(): void {},
@@ -62,6 +67,58 @@ describe("@pohunek/backend", () => {
       const response = await fetch(`${relay.url}/daemon/remote/control`);
       expect(response.status).toBe(426);
       expect(resolutionCount).toBe(0);
+    } finally {
+      await relay.close();
+    }
+  });
+
+  test("repeated relay refusals each carry their status and body", async () => {
+    const relay = await startRelay({
+      bindHost: LOOPBACK_HOST,
+      port: 0,
+      allowLoopbackBind: true,
+      targets: (host: string): DaemonTarget | undefined => {
+        if (host === FAILING_RELAY_HOST) {
+          throw new Error("target lookup failed");
+        }
+        // Bun cannot upgrade a request without a WebSocket key, so a resolved
+        // target reaches the failed-upgrade refusal without being dialed.
+        return host === RESOLVED_RELAY_HOST ? UNDIALED_RELAY_TARGET : undefined;
+      },
+    });
+    const upgradeHeaders = { upgrade: "websocket" };
+    const refusals = [
+      { path: "/not-a-relay-route", headers: {}, status: 404, body: "unknown relay target" },
+      { path: "/daemon/remote/control", headers: {}, status: 426, body: "websocket upgrade required" },
+      {
+        path: "/daemon/remote/control",
+        headers: upgradeHeaders,
+        status: 404,
+        body: "unknown relay target",
+      },
+      {
+        path: `/daemon/${FAILING_RELAY_HOST}/control`,
+        headers: upgradeHeaders,
+        status: 503,
+        body: "relay target unavailable",
+      },
+      {
+        path: `/daemon/${RESOLVED_RELAY_HOST}/control`,
+        headers: upgradeHeaders,
+        status: 400,
+        body: "websocket upgrade failed",
+      },
+    ];
+    try {
+      for (const refusal of refusals) {
+        for (let attempt = 0; attempt < REPEATED_REFUSAL_ATTEMPTS; attempt += 1) {
+          const response = await fetch(`${relay.url}${refusal.path}`, { headers: refusal.headers });
+          expect({ status: response.status, body: await response.text() }).toEqual({
+            status: refusal.status,
+            body: refusal.body,
+          });
+        }
+      }
     } finally {
       await relay.close();
     }
