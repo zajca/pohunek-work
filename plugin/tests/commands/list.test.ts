@@ -226,8 +226,10 @@ test("live sessions without a link are listed as unlinked, hidden under --mine",
   expect((JSON.parse(mine.stdout) as { ok: { unlinked_sessions: unknown[] } }).ok.unlinked_sessions).toEqual([]);
 });
 
+const onHold = issue({ stateName: "On hold" });
+const working = session({ id: "s-work", activity: "working", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear" } });
+
 test("a paused issue with a conflicting draft pull request is paused with no action and left out of --mine", async () => {
-  const onHold = issue({ stateName: "On hold" });
   const conflicting = pr({ headRefName: "alice/ABC-1/work", isDraft: true, mergeable: "CONFLICTING" });
   const owner = session({ id: "s-own", activity: "idle", worktreePath: "/wt/abc-1", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear" } });
   const world = { issues: ok("linear", [onHold]), prs: ok("github", [conflicting]), sessions: ok("pohunek", [owner]) };
@@ -246,16 +248,17 @@ test("a paused issue with a conflicting draft pull request is paused with no act
   expect(resumed.items[0]?.actions.map((a) => a.name)).toEqual(["rebase", "attach"]);
 });
 
-test("a working session linked to a paused issue keeps the row on the agent", async () => {
-  const onHold = issue({ stateName: "On hold" });
+test("a working session linked to a paused issue with a pull request keeps the row on the agent", async () => {
   const conflicting = pr({ headRefName: "alice/ABC-1/work", mergeable: "CONFLICTING" });
-  const working = session({ id: "s-work", activity: "working", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear" } });
   const withPr = await runList(
     config,
     { mine: false, staleDays: null, json: true, project: "widgets" },
     deps({ issues: ok("linear", [onHold]), prs: ok("github", [conflicting]), sessions: ok("pohunek", [working]) }),
   );
   expect(withPr.items.map((i) => [i.key, i.on_turn])).toEqual([["linear:ABC-1", { actor: "agent", reason: "working", rule: 2 }]]);
+});
+
+test("a paused issue without a pull request has no row, so its working session is neither listed nor orphaned", async () => {
   const withoutPr = await runList(
     config,
     { mine: false, staleDays: null, json: true, project: "widgets" },

@@ -252,13 +252,14 @@ checks.
 Rule 12 is numbered last to keep the other numbers stable but is evaluated
 right after rule 2: an issue the owner put on hold is not on anyone's turn, so
 rules 3-11 never apply to its row, whatever its pull request needs (a conflict,
-a failing check, a draft). Rules 1 and 2 still win: a blocked agent still needs
-an answer and a working agent is still shown as working. A paused row lists no
-actions and `do` refuses every action on it, `attach` included. The state name
-must match a `paused_states` entry exactly. A paused issue without a pull
-request gets no row at all, and a session linked to it is not
-reported as orphaned. When the issue leaves the paused state, the row is
-evaluated again and `watch` notifies if it lands on the owner's turn.
+a failing check, a draft). On a row of a paused issue rules 1 and 2 still win:
+a blocked agent still needs an answer and a working agent is still shown as
+working. A paused row lists no actions and `do` refuses every action on it,
+`attach` included. The state name must match a `paused_states` entry exactly.
+A paused issue without a pull request gets no row at all, so a session linked
+to it, blocked or working, is not shown in `list`; it is not reported as
+orphaned either. When the issue leaves the paused state, the row is evaluated
+again and `watch` notifies if it lands on the owner's turn.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered
