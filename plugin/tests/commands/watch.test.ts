@@ -333,3 +333,20 @@ test("a github issue becomes the owner's turn, notifies once under its github-is
   expect(paused.notified).toEqual([]);
   expect(paused.baseline?.has("widgets github-issue:acme/widgets#7")).toBe(false);
 });
+
+test("a review request notifies under session reviews and stays silent under external reviews", async () => {
+  const requested = pr({ relation: "review_requested", headRefName: "feature/theirs" });
+  const external = { ...config, projects: config.projects.map((p) => (p.name === "widgets" ? { ...p, reviews: "external" as const } : p)) };
+  const session = harness([waiting]);
+  const base = (await tick(session, null)).baseline;
+  session.world.prs = githubOk([requested]);
+  expect((await tick(session, base)).notified).toEqual(["widgets github:acme/widgets#12"]);
+
+  const pipeline = harness([waiting]);
+  const pipelineBase = (await watchTick(external, options, pipeline.deps, null, new AbortController().signal)).baseline;
+  pipeline.world.prs = githubOk([requested]);
+  const result = await watchTick(external, options, pipeline.deps, pipelineBase, new AbortController().signal);
+  expect(result.notified).toEqual([]);
+  expect(pipeline.argvs).toEqual([]);
+  expect(result.baseline?.get("widgets github:acme/widgets#12")).toBe("agent");
+});

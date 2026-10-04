@@ -95,6 +95,24 @@ describe("rules one per rule", () => {
     expect(onTurn(it)).toEqual({ actor: "me", reason: "review", rule: 3 });
   });
 
+  test("rule 3 with external reviews is the agent's turn", () => {
+    const it = item({ pullRequest: pr({ relation: "review_requested", author: actor("someone") }) });
+    expect(onTurn(it, allOk, { ...project, reviews: "external" })).toEqual({ actor: "agent", reason: "external review", rule: 3 });
+  });
+
+  test("a working linked session wins over rule 3 with external reviews", () => {
+    const it = item({
+      pullRequest: pr({ relation: "review_requested" }),
+      sessions: [session({ activity: "working", metadata: { "work.link.id": "acme/widgets#12", "work.link.provider": "github" } })],
+    });
+    expect(onTurn(it, allOk, { ...project, reviews: "external" })).toEqual({ actor: "agent", reason: "working", rule: 2 });
+  });
+
+  test("external reviews leave the owner's own pull requests alone", () => {
+    const it = item({ pullRequest: pr({ isDraft: true }) });
+    expect(onTurn(it, allOk, { ...project, reviews: "external" }).rule).toBe(6);
+  });
+
   test("non-authored PR skips rules 4-9 and lands in rule 10 only via rule 3", () => {
     const it = item({ pullRequest: pr({ relation: "review_requested", isDraft: true, mergeable: "CONFLICTING" }) });
     expect(onTurn(it).rule).toBe(3);
@@ -634,7 +652,7 @@ describe("unknown on missing sources", () => {
 
   test("project config is read from the input", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
-    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(9);
+    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], reviews: "session", issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
   });
 });

@@ -427,3 +427,20 @@ describe("a project whose issues come from GitHub", () => {
     expect((JSON.parse(out.stdout) as { ok: { projects: { sources: Record<string, string> }[] } }).ok.projects[0]?.sources["linear"]).toBe("unused");
   });
 });
+
+test("external reviews give rule 3 to the agent, offer no action and still yield to a working linked session", async () => {
+  const external = { ...config, projects: config.projects.map((p) => (p.name === "widgets" ? { ...p, reviews: "external" as const } : p)) };
+  const requested = pr({ relation: "review_requested", headRefName: "feature/theirs" });
+  const request = { mine: false, staleDays: null, json: true, project: "widgets" };
+  const bare = await runList(external, request, deps({ prs: ok("github", [requested]) }));
+  expect(bare.items[0]?.on_turn).toEqual({ actor: "agent", reason: "external review", rule: 3 });
+  expect(bare.items[0]?.actions).toEqual([]);
+  const mineOnly = await runList(external, { ...request, mine: true }, deps({ prs: ok("github", [requested]) }));
+  expect(mineOnly.items).toEqual([]);
+  const linked = session({ activity: "working", projectLabel: "widgets", metadata: { "work.link.id": requested.id, "work.link.provider": "github" } });
+  const joined = await runList(external, request, deps({ prs: ok("github", [requested]), sessions: ok("pohunek", [linked]) }));
+  expect(joined.items[0]?.on_turn).toEqual({ actor: "agent", reason: "working", rule: 2 });
+  const session3 = await runList(config, request, deps({ prs: ok("github", [requested]) }));
+  expect(session3.items[0]?.on_turn).toEqual({ actor: "me", reason: "review", rule: 3 });
+  expect(session3.items[0]?.actions.map((a) => a.name)).toEqual(["review"]);
+});

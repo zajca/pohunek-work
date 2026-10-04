@@ -182,6 +182,7 @@ detail_min_width = 120
 pohunek_label = "connection"
 repo = "keboola/connection"
 issue_source = "linear"   # "linear" or "github"; linear_team and paused_states belong to "linear"
+reviews = "session"          # "session" or "external"
 linear_team = "DMD"
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]

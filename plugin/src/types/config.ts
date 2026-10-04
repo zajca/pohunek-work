@@ -142,6 +142,9 @@ export interface GithubIssueSource {
 
 export type IssueSource = LinearIssueSource | GithubIssueSource;
 
+/** `[project] reviews`: `session` launches a pohunek review session, `external` leaves reviews to the project's own pipeline. */
+export type ReviewsMode = "session" | "external";
+
 export interface ProjectConfig {
   /** File name without extension; equals `pohunekLabel`. */
   readonly name: string;
@@ -149,6 +152,8 @@ export interface ProjectConfig {
   /** `owner/name` of the GitHub repository. */
   readonly repo: string;
   readonly issueSource: IssueSource;
+  /** Who reviews the project's pull requests: a pohunek review session or an external pipeline. */
+  readonly reviews: ReviewsMode;
   /** Compiled `branch_pattern`; always has a named group `key`. */
   readonly branchPattern: RegExp;
   /** Source text of `branch_pattern` as written in the file. */

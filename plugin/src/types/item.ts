@@ -58,6 +58,8 @@ export type MeReason =
 export type OnTurn =
   | { readonly actor: "me"; readonly reason: MeReason; readonly rule: RuleNumber }
   | { readonly actor: "agent"; readonly reason: "working"; readonly rule: 2 }
+  /** Rule 3 of a project with `reviews = "external"`: the project's own pipeline reviews the pull request. */
+  | { readonly actor: "agent"; readonly reason: "external review"; readonly rule: 3 }
   | { readonly actor: "reviewer"; readonly reason: "waiting"; readonly rule: 10 }
   | { readonly actor: "paused"; readonly reason: "paused"; readonly rule: 12 }
   /** `reason` lists the failed sources, e.g. `github:rate_limited`. */

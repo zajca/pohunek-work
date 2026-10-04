@@ -472,6 +472,13 @@ export async function planLaunch(
   config: PluginConfig,
   options: PlanOptions,
 ): Promise<ActionPlan> {
+  // Checked before profile resolution: an external-review project needs no review profile.
+  if (action === "review" && row.project.reviews === "external") {
+    throw new ActionError(
+      "not_supported",
+      `review refused: project ${row.project.pohunekLabel} hands reviews to an external pipeline ([project] reviews = "external")`,
+    );
+  }
   const profile = profileFor(action, row, config, options.profile);
   switch (action) {
     case "implement":

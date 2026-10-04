@@ -5,7 +5,7 @@ import { runList } from "../../src/commands/list.ts";
 import type { PohunekSession, PullRequest } from "../../src/types/sources.ts";
 import type { ListItem, RuleNumber } from "../../src/types/item.ts";
 import { check, deliveredPr, issue, pr, session } from "../rules/builders.ts";
-import { baseConfig, expectRefusal, fail, ok, options, setup, type Envelope } from "./harness.ts";
+import { baseConfig, expectRefusal, externalReviewsConfig, fail, ok, options, setup, type Envelope } from "./harness.ts";
 
 const SHA = "a".repeat(40);
 const BRANCH = "feature/x";
@@ -149,3 +149,25 @@ test("a secondary pull request of a Linear issue is unknown while Linear is down
   expect(row).toMatchObject({ on_turn: { actor: "unknown", reason: "linear:timeout", rule: null }, actions: [] });
 });
 
+
+test("with external reviews rule 3 lists no review and do refuses it with not_supported", async () => {
+  const theirs = pr({ relation: "review_requested", headRefName: BRANCH, headSha: SHA });
+  const { deps } = setup({ prs: ok("github", [theirs]) });
+  const out = await runList(externalReviewsConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, deps);
+  const row = out.items.find((item) => item.key === `github:${theirs.id}`);
+  expect(row?.on_turn).toEqual({ actor: "agent", reason: "external review", rule: 3 });
+  expect(row?.actions).toEqual([]);
+  const doOptions = options({ key: `github:${theirs.id}`, action: "review", profile: "profile-a", dryRun: true, yes: false });
+  await expectRefusal(runDo(externalReviewsConfig, doOptions, setup({ prs: ok("github", [theirs]) }).deps), "not_supported", "[project] reviews");
+});
+
+test("with session reviews rule 3 lists review and do --dry-run accepts it", async () => {
+  const theirs = pr({ relation: "review_requested", headRefName: BRANCH, headSha: SHA });
+  const { deps } = setup({ prs: ok("github", [theirs]) });
+  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, deps);
+  const row = out.items.find((item) => item.key === `github:${theirs.id}`);
+  expect(row?.on_turn).toEqual({ actor: "me", reason: "review", rule: 3 });
+  expect(row?.actions.map((action) => action.name)).toEqual(["review"]);
+  const doOptions = options({ key: `github:${theirs.id}`, action: "review", profile: "profile-a", dryRun: true, yes: false });
+  expect((JSON.parse((await runDo(baseConfig, doOptions, setup({ prs: ok("github", [theirs]) }).deps)).stdout) as Envelope).ok.dry_run).toBe(true);
+});
