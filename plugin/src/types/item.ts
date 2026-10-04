@@ -16,7 +16,11 @@ export const LIST_CONTRACT_VERSION = 1;
 
 /** Per-source availability for one poll: `ok` or the stable failure code. */
 export type SourceStatus = "ok" | SourceErrorCode;
-export type SourceStatuses = Readonly<Record<SourceName, SourceStatus>>;
+/**
+ * `github_merged` is the merged pull request lookup behind rule 13; it is kept
+ * apart from `github` so its failure only affects the rows that rule decides.
+ */
+export type SourceStatuses = Readonly<Record<SourceName | "github_merged", SourceStatus>>;
 
 /** `paused`: the joined issue is in a configured paused state, so the row is on nobody's turn. */
 export type TurnActor = "me" | "agent" | "reviewer" | "paused" | "unknown";

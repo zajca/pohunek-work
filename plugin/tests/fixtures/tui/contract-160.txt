@@ -9,7 +9,7 @@ me 2  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
                                                                                                        |  https://example.invalid/acme/widgets/pull/12
                                                                                                        |sessions: none
                                                                                                        |actions: ready*
-                                                                                                       |sources: github=ok linear=ok pohunek=ok
+                                                                                                       |sources: github=ok github_merged=ok linear=ok pohunek=ok
                                                                                                        |
                                                                                                        |
                                                                                                        |

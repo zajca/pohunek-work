@@ -10,7 +10,7 @@ pr: keboola/connection#9005 PR 9005
   https://github.com/keboola/connection/pull/9005
 sessions: none
 actions: fix-ci* (claude-otel)
-sources: github=ok linear=ok pohunek=ok
+sources: github=ok github_merged=ok linear=ok pohunek=ok
 
 
 

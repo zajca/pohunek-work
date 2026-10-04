@@ -281,6 +281,8 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     if (linearFailure !== null) return unknown(linearFailure);
     if (issue.stateType === "started" && issue.assigneeIsMe && pr === null) {
       if (liveSessions.length === 0) {
+        // Rule 13 needs the merged lookup: without it a merged pull request cannot be told from none.
+        if (sources.github_merged !== "ok") return unknown(`github_merged:${sources.github_merged}`);
         // A merged pull request already delivered the work; a new implementation would duplicate it.
         if (item.mergedPullRequest !== null) return result(me("close or follow up", 13));
         return result(me("nothing runs", 8));

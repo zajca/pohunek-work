@@ -38,7 +38,9 @@ describe("decodeListEnvelope", () => {
     if (first === undefined) throw new Error("fixture");
     first["on_turn"] = { actor: "somebody", reason: "x", rule: 1 };
     expect(decodeListEnvelope(JSON.stringify(bad))).toEqual({ kind: "malformed", message: "ok.items[0].on_turn.actor has an unknown value" });
-    first["on_turn"] = { actor: "me", reason: "x", rule: 13 };
+    first["on_turn"] = { actor: "me", reason: "close or follow up", rule: 13 };
+    expect(decodeListEnvelope(JSON.stringify(bad)).kind).toBe("ok");
+    first["on_turn"] = { actor: "me", reason: "x", rule: 14 };
     expect(decodeListEnvelope(JSON.stringify(bad))).toEqual({ kind: "malformed", message: "ok.items[0].on_turn.rule is not a known rule" });
   });
 

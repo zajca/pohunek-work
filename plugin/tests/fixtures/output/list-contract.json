@@ -51,6 +51,7 @@
         ],
         "sources": {
           "github": "ok",
+          "github_merged": "ok",
           "linear": "ok",
           "pohunek": "ok"
         }
@@ -87,6 +88,7 @@
         ],
         "sources": {
           "github": "ok",
+          "github_merged": "ok",
           "linear": "ok",
           "pohunek": "ok"
         }
@@ -117,6 +119,7 @@
         ],
         "sources": {
           "github": "ok",
+          "github_merged": "ok",
           "linear": "ok",
           "pohunek": "ok"
         }
@@ -153,6 +156,7 @@
         "actions": [],
         "sources": {
           "github": "ok",
+          "github_merged": "ok",
           "linear": "ok",
           "pohunek": "ok"
         }
@@ -179,6 +183,7 @@
         "project": "widgets",
         "sources": {
           "github": "ok",
+          "github_merged": "ok",
           "linear": "ok",
           "pohunek": "ok"
         }

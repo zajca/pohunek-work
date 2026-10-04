@@ -274,9 +274,13 @@ already merged is not "nothing runs", because `implement` would start a second
 implementation of merged work. The row offers no action; the owner closes the
 issue or decides on follow-up work. An open PR of the issue wins (it is the
 row's PR and rules 3-10 apply), and a live linked session keeps rules 2 and 11.
-The merged lookup is part of the GitHub source: when it fails, the row's
-GitHub source is not `ok` and the row is `unknown`, so a failed lookup never
-falls back to rule 8. A merge older than `merged_lookback_days` is not seen.
+The merged lookup is the separate source `github_merged`, reported next to
+`github` in `sources`: only a row that would otherwise get rule 8 (started issue
+assigned to me, no PR, no live session) depends on it. When it fails that row
+is `unknown` with the reason `github_merged:<code>`, so a failed lookup never
+falls back to rule 8; every other row, pull request rows included, is evaluated
+as if the lookup had succeeded. A merge older than `merged_lookback_days` is not
+seen.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered
@@ -322,6 +326,8 @@ for every row joined to an issue key: while Linear is unavailable such a row
 is `unknown` with the Linear code, because its issue may be paused. Rows not
 joined to an issue (review requests, pull requests without an issue key) and
 projects with an empty `paused_states` do not depend on Linear for rule 12.
+Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
+for the rows described there.
 
 ## 9. Interfaces
 
@@ -356,7 +362,7 @@ ok|err}`, with the plugin's own contract version). Illustrative item:
     {"name": "babysit", "delegable": false, "profile": "claude-otel"},
     {"name": "attach", "delegable": true}
   ],
-  "sources": {"linear": "ok", "github": "ok", "pohunek": "ok"}
+  "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "pohunek": "ok"}
 }
 ```
 

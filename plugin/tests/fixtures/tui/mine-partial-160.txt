@@ -11,7 +11,7 @@ PARTIAL DATA ops: github=rate_limited
    linear:DMD-108           connection me: merge (r7)          #9008   success Approved and green      |  https://github.com/keboola/connection/pull/9003
    linear:DMD-109           connection me: nothing runs (r8)   -       -       Nothing runs yet        |sessions: none
    linear:DMD-110           connection me: request review (r9) #9010   success Nobody asked to review  |actions: review* (codex-pr-review)
-   linear:DMD-112           connection me: check agent (r11)   -       -       Agent went idle         |sources: github=ok linear=ok pohunek=ok
+   linear:DMD-112           connection me: check agent (r11)   -       -       Agent went idle         |sources: github=ok github_merged=ok linear=ok pohunek=ok
                                                                                                        |
                                                                                                        |
                                                                                                        |

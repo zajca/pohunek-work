@@ -217,6 +217,15 @@ describe("rules one per rule", () => {
     expect(onTurn(item({ ...base, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
   });
 
+  test("rule 13: a failed merged lookup makes only an issue row without PR and session unknown", () => {
+    const down = { ...allOk, github_merged: "rate_limited" } as const;
+    const issueRow = item({ key: "linear:ABC-1", issue: issue(), pullRequest: null });
+    expect(onTurn(issueRow, down)).toEqual({ actor: "unknown", reason: "github_merged:rate_limited", rule: null });
+    expect(onTurn(item({ pullRequest: pr({ isDraft: true }) }), down).rule).toBe(6);
+    expect(onTurn(item({ ...issueRow, sessions: [session()] }), down).rule).toBe(11);
+    expect(onTurn(item({ ...issueRow, issue: issue({ stateType: "unstarted" }) }), down).rule).toBe(10);
+  });
+
   test("rule 13: an open pull request wins over a merged one", () => {
     const it = item({ key: "linear:ABC-1", issue: issue(), pullRequest: pr({ isDraft: true }), mergedPullRequest: mergedPr() });
     expect(onTurn(it).rule).toBe(6);
@@ -618,7 +627,7 @@ describe("unknown on missing sources", () => {
   });
 
   test("reason lists only the sources the rule needs", () => {
-    const all = { github: "timeout", linear: "timeout", pohunek: "unavailable" } as const;
+    const all = { github: "timeout", github_merged: "timeout", linear: "timeout", pohunek: "unavailable" } as const;
     expect(onTurn(item(), all)).toEqual({ actor: "unknown", reason: "pohunek:unavailable", rule: null });
   });
 

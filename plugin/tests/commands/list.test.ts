@@ -101,7 +101,7 @@ test("a failed github source turns every row unknown with the source code", asyn
   );
   expect(result.items).toHaveLength(1);
   expect(result.items[0]?.on_turn).toEqual({ actor: "unknown", reason: "github:rate_limited", rule: null });
-  expect(result.items[0]?.sources).toEqual({ github: "rate_limited", linear: "ok", pohunek: "ok" });
+  expect(result.items[0]?.sources).toEqual({ github: "rate_limited", github_merged: "ok", linear: "ok", pohunek: "ok" });
 });
 
 test("a failed pohunek call marks pohunek unknown but rules not needing it still decide only after rules 1-2", async () => {
@@ -183,7 +183,7 @@ test("failed sources are reported regardless of the --mine filter", async () => 
   const envelope = JSON.parse(result.stdout) as { ok: { projects: { project: string; sources: Record<string, string> }[] } };
   expect(envelope.ok.projects[0]).toEqual({
     project: "widgets",
-    sources: { github: "rate_limited", linear: "ok", pohunek: "timeout" },
+    sources: { github: "rate_limited", github_merged: "ok", linear: "ok", pohunek: "timeout" },
   });
 });
 
@@ -208,7 +208,7 @@ test("a failed linear source marks issue rows unknown with the linear code", asy
     deps({ prs: ok("github", [draftPr]), issues: fail("linear", "timeout") }),
   );
   expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
-  expect(result.items[0]?.sources).toEqual({ github: "ok", linear: "timeout", pohunek: "ok" });
+  expect(result.items[0]?.sources).toEqual({ github: "ok", github_merged: "ok", linear: "timeout", pohunek: "ok" });
   expect(result.items[0]?.no_issue).toBe(false);
   expect(result.sourceFailures).toEqual(["widgets linear: timeout"]);
 });
@@ -304,10 +304,17 @@ test("an issue with no merged pull request still offers implement", async () => 
   expect(out.items[0]?.actions.map((a) => a.name)).toEqual(["implement"]);
 });
 
-test("a failed merged lookup makes the row unknown instead of offering implement", async () => {
-  const world = { issues: ok("linear", [issue()]), merged: fail("github", "rate_limited") };
+test("a failed merged lookup makes only the issue-only row unknown and PR rows keep their rules", async () => {
+  const world = {
+    issues: ok("linear", [issue({ id: "ABC-2" })]),
+    prs: ok("github", [draftPr]),
+    merged: fail("github", "rate_limited"),
+  };
   const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, deps(world));
-  expect(out.items[0]?.on_turn).toEqual({ actor: "unknown", reason: "github:rate_limited", rule: null });
-  expect(out.items[0]?.actions).toEqual([]);
-  expect(out.sourceFailures).toEqual(["widgets github: rate_limited"]);
+  const byKey = new Map(out.items.map((i) => [i.key, i]));
+  expect(byKey.get("github:acme/widgets#12")?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
+  expect(byKey.get("linear:ABC-2")?.on_turn).toEqual({ actor: "unknown", reason: "github_merged:rate_limited", rule: null });
+  expect(byKey.get("linear:ABC-2")?.actions).toEqual([]);
+  expect(byKey.get("linear:ABC-2")?.sources).toEqual({ github: "ok", github_merged: "rate_limited", linear: "ok", pohunek: "ok" });
+  expect(out.sourceFailures).toEqual(["widgets github_merged: rate_limited"]);
 });

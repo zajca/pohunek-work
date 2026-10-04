@@ -25,7 +25,7 @@ const project = {
   profiles: null,
 } satisfies ProjectConfig;
 
-const okSources: SourceStatuses = { github: "ok", linear: "ok", pohunek: "ok" };
+const okSources: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
 
 function issue(id: string, attachmentUrls: string[] = []): LinearIssue {
   return {

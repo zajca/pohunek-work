@@ -171,13 +171,14 @@ export async function collectRows(
 
   for (const { project, github, merged, linear } of perProject) {
     const sources: SourceStatuses = {
-      // The merged lookup is part of the GitHub source: without it a merged pull request cannot be told from none.
-      github: github.ok ? statusOf(merged) : statusOf(github),
+      github: statusOf(github),
+      github_merged: statusOf(merged),
       linear: statusOf(linear),
       pohunek,
     };
     projectStatuses.push({ project: project.pohunekLabel, sources });
     if (sources.github !== "ok") sourceFailures.push(`${project.pohunekLabel} github: ${sources.github}`);
+    if (sources.github_merged !== "ok") sourceFailures.push(`${project.pohunekLabel} github_merged: ${sources.github_merged}`);
     if (sources.linear !== "ok") sourceFailures.push(`${project.pohunekLabel} linear: ${sources.linear}`);
     const pullRequests: readonly PullRequest[] = github.ok ? github.data : [];
     const mergedPullRequests: readonly MergedPullRequest[] = merged.ok ? merged.data : [];

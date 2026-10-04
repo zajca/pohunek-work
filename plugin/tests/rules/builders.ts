@@ -24,7 +24,7 @@ export const identity: IdentityConfig = {
 
 export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], pausedStates: ["On hold"] };
 
-export const allOk: SourceStatuses = { github: "ok", linear: "ok", pohunek: "ok" };
+export const allOk: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
 
 export const T0 = "2026-05-01T10:00:00Z";
 export const T1 = "2026-05-01T11:00:00Z";
