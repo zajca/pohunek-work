@@ -20,6 +20,7 @@ import type {
 } from "../types/item.ts";
 import type {
   LinearIssue,
+  MergedPullRequest,
   PohunekNotification,
   PohunekProject,
   PohunekSession,
@@ -156,28 +157,33 @@ export async function collectRows(
   if (pohunek !== "ok") sourceFailures.push(`pohunek: ${pohunek}`);
   const perProject = await Promise.all(
     projects.map(async (project) => {
-      const [github, linear] = await Promise.all([
+      const [github, merged, linear] = await Promise.all([
         deps.github.fetchPullRequests(project),
+        deps.github.fetchMergedPullRequests(project),
         deps.linear.fetchIssues(project),
       ]);
       logger.sourceResult(github);
+      logger.sourceResult(merged);
       logger.sourceResult(linear);
-      return { project, github, linear };
+      return { project, github, merged, linear };
     }),
   );
 
-  for (const { project, github, linear } of perProject) {
+  for (const { project, github, merged, linear } of perProject) {
     const sources: SourceStatuses = {
       github: statusOf(github),
+      github_merged: statusOf(merged),
       linear: statusOf(linear),
       pohunek,
     };
     projectStatuses.push({ project: project.pohunekLabel, sources });
     if (sources.github !== "ok") sourceFailures.push(`${project.pohunekLabel} github: ${sources.github}`);
+    if (sources.github_merged !== "ok") sourceFailures.push(`${project.pohunekLabel} github_merged: ${sources.github_merged}`);
     if (sources.linear !== "ok") sourceFailures.push(`${project.pohunekLabel} linear: ${sources.linear}`);
     const pullRequests: readonly PullRequest[] = github.ok ? github.data : [];
+    const mergedPullRequests: readonly MergedPullRequest[] = merged.ok ? merged.data : [];
     const issues: readonly LinearIssue[] = linear.ok ? linear.data : [];
-    const joined = joinItems({ project, issues, pullRequests, sessions, notifications, sources });
+    const joined = joinItems({ project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources });
     for (const item of joined.items) {
       rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles }) });
     }

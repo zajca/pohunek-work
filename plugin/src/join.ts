@@ -9,6 +9,7 @@ import type { ProjectConfig } from "./types/config.ts";
 import { isLiveSession } from "./sources/pohunek.ts";
 import type {
   LinearIssue,
+  MergedPullRequest,
   PohunekNotification,
   PohunekSession,
   PullRequest,
@@ -18,6 +19,8 @@ export interface JoinInput {
   readonly project: ProjectConfig;
   readonly issues: readonly LinearIssue[];
   readonly pullRequests: readonly PullRequest[];
+  /** Merged pull requests of the owner; they explain issue-only rows and never form rows. */
+  readonly mergedPullRequests: readonly MergedPullRequest[];
   readonly sessions: readonly PohunekSession[];
   readonly notifications: readonly PohunekNotification[];
   readonly sources: SourceStatuses;
@@ -91,7 +94,7 @@ export function keyFromBranch(pattern: RegExp, headRefName: string): string | nu
 
 /** First match of RFC 7.3 precedence: session link, Linear attachment, branch pattern. */
 function resolveIssueKey(
-  pr: PullRequest,
+  pr: Pick<PullRequest, "url" | "headRefName">,
   project: ProjectConfig,
   issues: readonly LinearIssue[],
   linked: readonly LinkedSession[],
@@ -123,6 +126,7 @@ interface RowDraft {
   readonly issue: LinearIssue | null;
   readonly issueKey: string | null;
   readonly pullRequest: PullRequest | null;
+  readonly mergedPullRequest: MergedPullRequest | null;
   readonly joinedBy: JoinMatch | null;
   readonly noIssue: boolean;
 }
@@ -156,6 +160,30 @@ function claimWinners(candidates: readonly Candidate[]): Map<string, PullRequest
   return new Map([...winners].map(([key, value]) => [key, value.pr]));
 }
 
+/**
+ * Per issue key, the most recently merged pull request that resolves to it by
+ * RFC 7.3 precedence; ties go to the highest number. A merged pull request
+ * without a match is dropped: it never becomes a row.
+ */
+function claimMerged(
+  merged: readonly MergedPullRequest[],
+  project: ProjectConfig,
+  issues: readonly LinearIssue[],
+  linked: readonly LinkedSession[],
+): Map<string, MergedPullRequest> {
+  const winners = new Map<string, MergedPullRequest>();
+  for (const pr of merged) {
+    const resolution = resolveIssueKey(pr, project, issues, linked);
+    if (resolution === null) continue;
+    const current = winners.get(resolution.key);
+    if (current === undefined || Date.parse(pr.mergedAt) > Date.parse(current.mergedAt) ||
+      (Date.parse(pr.mergedAt) === Date.parse(current.mergedAt) && pr.number > current.number)) {
+      winners.set(resolution.key, pr);
+    }
+  }
+  return winners;
+}
+
 /** Source that must be `ok` before a session without a row may be called orphaned. */
 function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | "linear")[] {
   if (provider === "github") return ["github"];
@@ -165,7 +193,8 @@ function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | 
 /**
  * Builds the table rows and the orphaned sessions.
  *
- * Row order: pull requests in input order, then issue-only rows in issue order.
+ * Row order: pull requests in input order, then issue-only rows in issue order;
+ * an issue-only row carries the merged pull request that resolves to its issue.
  * Only `authored` pull requests are joined to issues. When several pull
  * requests resolve to the same issue key, the strongest match joins the issue
  * row (see claimWinners); the others become their own `github:` rows with
@@ -175,7 +204,7 @@ function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | 
  * could have matched it are `ok` and its issue is not in a paused state.
  */
 export function joinItems(input: JoinInput): JoinResult {
-  const { project, issues, pullRequests, sessions, notifications, sources } = input;
+  const { project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources } = input;
   const linked = linkedSessionsOf(project, sessions);
   const issuesById = new Map<string, LinearIssue>();
   for (const issue of issues) {
@@ -188,6 +217,8 @@ export function joinItems(input: JoinInput): JoinResult {
   }));
   const winners = claimWinners(candidates);
 
+  const mergedByKey = claimMerged(mergedPullRequests, project, issues, linked);
+
   const drafts: RowDraft[] = [];
   const claimedKeys = new Set<string>();
 
@@ -198,6 +229,7 @@ export function joinItems(input: JoinInput): JoinResult {
         issue: null,
         issueKey: null,
         pullRequest: pr,
+        mergedPullRequest: null,
         joinedBy: null,
         // Review requests of others are never joined; for authored pull requests
         // without Linear data the absence of an issue cannot be concluded.
@@ -211,6 +243,7 @@ export function joinItems(input: JoinInput): JoinResult {
         issue: null,
         issueKey: null,
         pullRequest: pr,
+        mergedPullRequest: null,
         joinedBy: null,
         noIssue: false,
       });
@@ -222,6 +255,7 @@ export function joinItems(input: JoinInput): JoinResult {
       issue: issuesById.get(resolution.key) ?? null,
       issueKey: resolution.key,
       pullRequest: pr,
+      mergedPullRequest: null,
       joinedBy: resolution.joinedBy,
       noIssue: false,
     });
@@ -239,6 +273,7 @@ export function joinItems(input: JoinInput): JoinResult {
       issue,
       issueKey: issue.id,
       pullRequest: null,
+      mergedPullRequest: mergedByKey.get(issue.id) ?? null,
       joinedBy: null,
       noIssue: false,
     });
@@ -272,6 +307,7 @@ export function joinItems(input: JoinInput): JoinResult {
       project: project.pohunekLabel,
       issue: draft.issue,
       pullRequest: draft.pullRequest,
+      mergedPullRequest: draft.mergedPullRequest,
       joinedBy: draft.joinedBy,
       noIssue: draft.noIssue,
       sessions: rowSessions,

@@ -5,6 +5,7 @@ import type {
   Actor,
   Check,
   LinearIssue,
+  MergedPullRequest,
   PohunekNotification,
   PohunekSession,
   PullRequest,
@@ -23,7 +24,7 @@ export const identity: IdentityConfig = {
 
 export const project = { ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], pausedStates: ["On hold"] };
 
-export const allOk: SourceStatuses = { github: "ok", linear: "ok", pohunek: "ok" };
+export const allOk: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" };
 
 export const T0 = "2026-05-01T10:00:00Z";
 export const T1 = "2026-05-01T11:00:00Z";
@@ -65,6 +66,18 @@ export function user(login: string): ReviewRequest {
 
 export function check(name: string, outcome: Check["outcome"]): Check {
   return { name, outcome };
+}
+
+export function mergedPr(overrides: Partial<MergedPullRequest> = {}): MergedPullRequest {
+  return {
+    id: "acme/widgets#7",
+    number: 7,
+    url: "https://example.invalid/acme/widgets/pull/7",
+    title: "Add widget cache",
+    headRefName: "alice/ABC-1/widget-cache",
+    mergedAt: "2026-10-02T10:00:00Z",
+    ...overrides,
+  };
 }
 
 export function pr(overrides: Partial<PullRequest> = {}): PullRequest {
@@ -143,6 +156,7 @@ export function item(overrides: Partial<WorkItem> = {}): WorkItem {
     project: "widgets",
     issue: null,
     pullRequest: pr(),
+    mergedPullRequest: null,
     joinedBy: null,
     noIssue: true,
     sessions: [],

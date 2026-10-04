@@ -25,7 +25,7 @@ export const SETTINGS: Settings = {
 export const NARROW: Size = { columns: 80, rows: 24 };
 export const WIDE: Size = { columns: 160, rows: 30 };
 
-const OK = { github: "ok", linear: "ok", pohunek: "ok" } as const;
+const OK = { github: "ok", github_merged: "ok", linear: "ok", pohunek: "ok" } as const;
 
 export function row(key: string, overrides: Partial<ListItem> = {}): ListItem {
   return {
@@ -138,7 +138,7 @@ export const RULE_ROWS: readonly ListItem[] = [
     project: "ops",
     issue: issue("OPS-7", "Rate limited source"),
     on_turn: { actor: "unknown", reason: "github:rate_limited", rule: null },
-    sources: { github: "rate_limited", linear: "ok", pohunek: "ok" },
+    sources: { github: "rate_limited", github_merged: "ok", linear: "ok", pohunek: "ok" },
   }),
 ];
 
@@ -149,7 +149,7 @@ export const PROJECTS_OK: readonly ListProjectStatus[] = [
 
 export const PROJECTS_PARTIAL: readonly ListProjectStatus[] = [
   { project: "connection", sources: OK },
-  { project: "ops", sources: { github: "rate_limited", linear: "ok", pohunek: "ok" } },
+  { project: "ops", sources: { github: "rate_limited", github_merged: "ok", linear: "ok", pohunek: "ok" } },
 ];
 
 export function payload(items: readonly ListItem[], projects: readonly ListProjectStatus[] = PROJECTS_OK): ListPayload {

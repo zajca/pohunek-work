@@ -213,6 +213,12 @@ A PR without a match is its own row flagged "no issue"; an issue without a PR
 is its own row; a linked session whose key matches no row is listed as
 orphaned.
 
+Merged PRs of the owner (`merged_lookback_days` window, one search per project)
+are resolved by the same precedence, but only to explain an issue's row: a
+merged PR never becomes a row of its own, and it is attached only to an issue
+without an open PR. When several merged PRs resolve to one issue, the most
+recently merged one is kept.
+
 ### 7.4 One worktree, one writer
 
 A worktree is used by one live session at a time. A babysit session starts in
@@ -238,6 +244,7 @@ Evaluated top to bottom; the first rule that holds decides.
 | 7 | Approved, checks green, mergeable | me: merge | `reviewDecision`, checks, `mergeable` |
 | 8 | Linear issue in a started state, assigned to me, with no PR and no live linked session | me: nothing runs | Linear state, assignee, join |
 | 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | Linear state, assignee, join, pohunek session state |
+| 13 | Evaluated right after 8: same issue conditions and no live linked session, and a merged PR resolves to the issue (7.3) | me: close or follow up | Linear state, assignee, join, merged PR search |
 | 9 | Open non-draft PR with no pending review request and no decision | me: request review | `reviewRequests`, `reviewDecision` |
 | 10 | Otherwise | reviewer | — |
 
@@ -262,6 +269,20 @@ orphaned either. When the issue leaves the paused state, the row is evaluated
 again and `watch` notifies if it lands on the owner's turn: after a poll in
 which every source answered, `watch` drops rows that are no longer listed from
 its baseline, so the returning row counts as new.
+
+Rule 13 is numbered last to keep the other numbers stable but is evaluated right
+after rule 8's conditions: a started issue assigned to the owner whose work
+already merged is not "nothing runs", because `implement` would start a second
+implementation of merged work. The row offers no action; the owner closes the
+issue or decides on follow-up work. An open PR of the issue wins (it is the
+row's PR and rules 3-10 apply), and a live linked session keeps rules 2 and 11.
+The merged lookup is the separate source `github_merged`, reported next to
+`github` in `sources`: only a row that would otherwise get rule 8 (started issue
+assigned to me, no PR, no live session) depends on it. When it fails that row
+is `unknown` with the reason `github_merged:<code>`, so a failed lookup never
+falls back to rule 8; every other row, pull request rows included, is evaluated
+as if the lookup had succeeded. A merge older than `merged_lookback_days` is not
+seen.
 
 An idle live session without a pending notification does not match rule 2;
 the row falls through and the session is shown in its own column. Rule 11 is numbered
@@ -307,6 +328,8 @@ for every row joined to an issue key: while Linear is unavailable such a row
 is `unknown` with the Linear code, because its issue may be paused. Rows not
 joined to an issue (review requests, pull requests without an issue key) and
 projects with an empty `paused_states` do not depend on Linear for rule 12.
+Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
+for the rows described there.
 
 ## 9. Interfaces
 
@@ -345,7 +368,7 @@ payload it cannot decode. `do` and `setup` version their envelopes separately
     {"name": "babysit", "delegable": false, "profile": "claude-otel"},
     {"name": "attach", "delegable": true}
   ],
-  "sources": {"linear": "ok", "github": "ok", "pohunek": "ok"}
+  "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "pohunek": "ok"}
 }
 ```
 

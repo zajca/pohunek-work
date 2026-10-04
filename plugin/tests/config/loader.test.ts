@@ -53,6 +53,7 @@ describe("loadConfig valid", () => {
         pullRequestPageSize: 20,
         nestedPageSize: 50,
         threadCommentPageSize: 10,
+        mergedLookbackDays: 30,
       },
       linear: {
         endpoint: "https://linear.example/graphql",

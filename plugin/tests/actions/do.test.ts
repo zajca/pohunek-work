@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { runDo, type DoOptions } from "../../src/commands/do.ts";
 import type { PluginConfig } from "../../src/types/config.ts";
-import { check, issue, pr, session } from "../rules/builders.ts";
+import { check, issue, mergedPr, pr, session } from "../rules/builders.ts";
 import {
   BIN,
   baseConfig,
@@ -86,6 +86,15 @@ test("a second implement is refused while a live linked session exists", async (
 
 test("implement is refused when the rule no longer matches", async () => {
   const { deps, launches } = setup({ issues: ok("linear", [issue({ assigneeIsMe: false })]) });
+  await expectRefusal(runDo(baseConfig, options(), deps), "precondition_failed", "rule 8");
+  expect(launches).toHaveLength(0);
+});
+
+test("implement is refused for an issue whose pull request is merged", async () => {
+  const { deps, launches } = setup({
+    issues: ok("linear", [issue()]),
+    merged: ok("github", [mergedPr({ headRefName: "alice/ABC-1/x" })]),
+  });
   await expectRefusal(runDo(baseConfig, options(), deps), "precondition_failed", "rule 8");
   expect(launches).toHaveLength(0);
 });

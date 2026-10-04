@@ -12,6 +12,7 @@ import {
   deliveredPr,
   input,
   issue,
+  mergedPr,
   item,
   notification,
   pr,
@@ -201,6 +202,33 @@ describe("rules one per rule", () => {
   test("rule 8: started issue assigned to me with nothing running", () => {
     const it = item({ key: "linear:ABC-1", issue: issue(), pullRequest: null });
     expect(onTurn(it)).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
+  });
+
+  test("rule 13: a merged pull request replaces rule 8 and rule 8 stays without one", () => {
+    const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null };
+    expect(onTurn(item({ ...base, mergedPullRequest: mergedPr() }))).toEqual({ actor: "me", reason: "close or follow up", rule: 13 });
+    expect(onTurn(item({ ...base, mergedPullRequest: null })).rule).toBe(8);
+  });
+
+  test("rule 13: an idle live session keeps rule 11, other state or assignee give nothing", () => {
+    const base = { key: "linear:ABC-1", issue: issue(), pullRequest: null, mergedPullRequest: mergedPr() };
+    expect(onTurn(item({ ...base, sessions: [session()] })).rule).toBe(11);
+    expect(onTurn(item({ ...base, issue: issue({ stateType: "unstarted" }) })).rule).toBe(10);
+    expect(onTurn(item({ ...base, issue: issue({ assigneeIsMe: false }) })).rule).toBe(10);
+  });
+
+  test("rule 13: a failed merged lookup makes only an issue row without PR and session unknown", () => {
+    const down = { ...allOk, github_merged: "rate_limited" } as const;
+    const issueRow = item({ key: "linear:ABC-1", issue: issue(), pullRequest: null });
+    expect(onTurn(issueRow, down)).toEqual({ actor: "unknown", reason: "github_merged:rate_limited", rule: null });
+    expect(onTurn(item({ pullRequest: pr({ isDraft: true }) }), down).rule).toBe(6);
+    expect(onTurn(item({ ...issueRow, sessions: [session()] }), down).rule).toBe(11);
+    expect(onTurn(item({ ...issueRow, issue: issue({ stateType: "unstarted" }) }), down).rule).toBe(10);
+  });
+
+  test("rule 13: an open pull request wins over a merged one", () => {
+    const it = item({ key: "linear:ABC-1", issue: issue(), pullRequest: pr({ isDraft: true }), mergedPullRequest: mergedPr() });
+    expect(onTurn(it).rule).toBe(6);
   });
 
   test("rule 11: started issue assigned to me with an idle live session and no PR", () => {
@@ -599,7 +627,7 @@ describe("unknown on missing sources", () => {
   });
 
   test("reason lists only the sources the rule needs", () => {
-    const all = { github: "timeout", linear: "timeout", pohunek: "unavailable" } as const;
+    const all = { github: "timeout", github_merged: "timeout", linear: "timeout", pohunek: "unavailable" } as const;
     expect(onTurn(item(), all)).toEqual({ actor: "unknown", reason: "pohunek:unavailable", rule: null });
   });
 

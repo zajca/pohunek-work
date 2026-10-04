@@ -8,6 +8,7 @@ import type { LaunchRequest, PohunekClient, PohunekWorktree } from "../../src/so
 import type { PluginConfig } from "../../src/types/config.ts";
 import type {
   LinearIssue,
+  MergedPullRequest,
   PohunekSession,
   PullRequest,
   SourceResult,
@@ -39,6 +40,7 @@ const REGISTRY = [
 
 export interface World {
   prs?: SourceResult<readonly PullRequest[]>;
+  merged?: SourceResult<readonly MergedPullRequest[]>;
   issues?: SourceResult<readonly LinearIssue[]>;
   sessions?: readonly PohunekSession[];
   launch?: (request: LaunchRequest) => SourceResult<PohunekSession>;
@@ -124,6 +126,8 @@ export function setup(world: World): Harness {
       github: {
         fetchPullRequests: (project) =>
           Promise.resolve(count(project.pohunekLabel === "widgets" ? (world.prs ?? ok("github", [])) : ok("github", []))),
+        fetchMergedPullRequests: (project) =>
+          Promise.resolve(project.pohunekLabel === "widgets" ? (world.merged ?? ok("github", [])) : ok("github", [])),
       },
       linear: {
         fetchIssues: (project) =>

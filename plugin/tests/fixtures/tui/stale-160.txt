@@ -11,7 +11,7 @@ list stderr (2 lines, s shows all): source unavailable: ops github: rate_limited
    linear:DMD-108           connection me: merge (r7)             #9008   success Approved and green   |  https://github.com/keboola/connection/pull/9003
    linear:DMD-109           connection me: nothing runs (r8)      -       -       Nothing runs yet     |sessions: none
    linear:DMD-110           connection me: request review (r9)    #9010   success Nobody asked to re...|actions: review* (codex-pr-review)
-   linear:DMD-112           connection me: check agent (r11)      -       -       Agent went idle      |sources: github=ok linear=ok pohunek=ok
+   linear:DMD-112           connection me: check agent (r11)      -       -       Agent went idle      |sources: github=ok github_merged=ok linear=ok pohunek=ok
    linear:OPS-7             ops        unknown: github:rate_li... -       -       Rate limited source  |
    linear:DMD-102           connection agent (r2)                 -       -       Agent is working     |
    linear:DMD-111           connection reviewer (r10)             #9011   success Waiting for reviewers|

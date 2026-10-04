@@ -8,6 +8,7 @@ import type {
   SourceErrorCode,
   SourceName,
   LinearIssue,
+  MergedPullRequest,
 } from "./sources.ts";
 
 /** Version of the `list --json` contract; bumped on any incompatible change. */
@@ -15,13 +16,17 @@ export const LIST_CONTRACT_VERSION = 2;
 
 /** Per-source availability for one poll: `ok` or the stable failure code. */
 export type SourceStatus = "ok" | SourceErrorCode;
-export type SourceStatuses = Readonly<Record<SourceName, SourceStatus>>;
+/**
+ * `github_merged` is the merged pull request lookup behind rule 13; it is kept
+ * apart from `github` so its failure only affects the rows that rule decides.
+ */
+export type SourceStatuses = Readonly<Record<SourceName | "github_merged", SourceStatus>>;
 
 /** `paused`: the joined issue is in a configured paused state, so the row is on nobody's turn. */
 export type TurnActor = "me" | "agent" | "reviewer" | "paused" | "unknown";
 
 /** Rule numbers of RFC section 8.1. */
-export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+export type RuleNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
 
 /** Prefix of the rule 5 reason for a pull request whose only failures are policy checks. */
 export const POLICY_CHECK_REASON_PREFIX = "policy check: ";
@@ -38,6 +43,7 @@ export type MeReason =
   | "merge"
   | "nothing runs"
   | "check agent"
+  | "close or follow up"
   | "request review";
 
 export type OnTurn =
@@ -65,6 +71,11 @@ export interface WorkItem {
   readonly project: string;
   readonly issue: LinearIssue | null;
   readonly pullRequest: PullRequest | null;
+  /**
+   * Merged pull request that resolves to the issue of a row without an open
+   * pull request (RFC 7.3 precedence); null otherwise.
+   */
+  readonly mergedPullRequest: MergedPullRequest | null;
   /** How the pull request was attached to the issue; null without a join. */
   readonly joinedBy: JoinMatch | null;
   /** A pull request without a Linear issue. */

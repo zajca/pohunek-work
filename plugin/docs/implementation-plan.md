@@ -114,6 +114,8 @@ timeout_ms = 20000
 pull_request_page_size = 20
 nested_page_size = 50
 thread_comment_page_size = 10
+# window of the merged pull request lookup behind rule 13
+merged_lookback_days = 30
 
 [linear]
 endpoint = "https://api.linear.app/graphql"

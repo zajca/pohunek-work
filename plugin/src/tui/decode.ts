@@ -67,7 +67,7 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], path: st
 
 const ACTORS: readonly TurnActor[] = ["me", "agent", "reviewer", "paused", "unknown"];
 const CHECKS: readonly ListPullRequest["checks"][] = ["success", "failure", "pending", "none"];
-const MAX_RULE = 12;
+const MAX_RULE = 13;
 
 function rule(value: unknown, path: string): RuleNumber | null {
   if (value === null) return null;
@@ -80,6 +80,7 @@ function sources(value: unknown, path: string): SourceStatuses {
   const fields = object(value, path);
   return {
     github: string(fields["github"], `${path}.github`),
+    github_merged: string(fields["github_merged"], `${path}.github_merged`),
     linear: string(fields["linear"], `${path}.linear`),
     pohunek: string(fields["pohunek"], `${path}.pohunek`),
   } as SourceStatuses;
