@@ -93,6 +93,12 @@ function cell(item: ListItem, id: ColumnId, state: State): SafeText {
   }
 }
 
+/** `fit` that cuts inside the head and keeps the last `tail` characters, so a suffix such as the issue key stays visible. */
+function fitKeepingTail(text: SafeText, width: number, tail: number): SafeText {
+  if (tail <= 0 || text.length <= width || width <= tail) return fit(text, width);
+  return concat(truncate(toSafe(text.slice(0, text.length - tail)), width - tail), toSafe(text.slice(text.length - tail)));
+}
+
 interface Table {
   readonly columns: readonly ColumnSpec[];
   readonly widths: readonly number[];
@@ -144,12 +150,14 @@ function tableLines(state: State, layout: Layout, payload: ListPayload): SafeTex
   const { columns, widths } = planTable(candidates, allCells, layout.tableWidth);
   const indexes = columns.map((column) => candidates.indexOf(column));
   const gap = toSafe(" ".repeat(COLUMN_GAP));
-  const line = (parts: readonly SafeText[]): SafeText =>
-    truncate(join(parts.map((part, index) => fit(part, widths[index] ?? 0)), gap), layout.tableWidth);
+  const line = (parts: readonly SafeText[], tails: readonly number[] = []): SafeText =>
+    truncate(join(parts.map((part, index) => fitKeepingTail(part, widths[index] ?? 0, tails[index] ?? 0)), gap), layout.tableWidth);
   const lines = [line(columns.map((column) => toSafe(column.header)))];
-  const body = allCells
-    .slice(state.top, state.top + layout.bodyHeight)
-    .map((cells) => line(indexes.map((index) => cells[index] ?? toSafe(""))));
+  const body = allCells.slice(state.top, state.top + layout.bodyHeight).map((cells, offset) => {
+    const row = rows[state.top + offset];
+    const tails = columns.map((column) => (column.id === "key" && row !== undefined ? secondaryIssueTag(row).length : 0));
+    return line(indexes.map((index) => cells[index] ?? toSafe("")), tails);
+  });
   if (rows.length === 0) body.push(truncate(toSafe(emptyMessage(state, payload)), layout.tableWidth));
   return [...lines, ...body];
 }

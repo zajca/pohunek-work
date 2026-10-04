@@ -1,7 +1,7 @@
 me 3  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
    KEY                      TURN                    PR    REVIEW  CHECKS  SESSIONS     TITLE           |github:acme/widgets#12  (project widgets)  no Linear
 >  github:acme/widgets#12   me: leave draft (r6)    #12 d -       success -            Add widget cache|issue
-   github:acme/widgets#1... me: request review (r9) #14   -       none    -            Add widget cache|turn: me: leave draft (r6)
+   github:acme/w... (ABC-1) me: request review (r9) #14   -       none    -            Add widget cache|turn: me: leave draft (r6)
    linear:ABC-2             me: nothing runs (r8)   -     -       -       -            Widget cache    |  the pull request is a draft: mark it ready when done
    linear:ABC-1             reviewer (r10)          #12   changes success babysit:idle Widget cache    |pr: acme/widgets#12 (draft) Add widget cache
    linear:ABC-3             paused (r12)            #13 d -       none    -            Widget cache    |  review=- checks=success mergeable=MERGEABLE
