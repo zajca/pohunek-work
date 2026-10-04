@@ -124,7 +124,10 @@ function resolveIssueKey(
 interface RowDraft {
   readonly key: string;
   readonly issue: LinearIssue | null;
+  /** Key sessions attach to; null on a secondary pull request row, which no session may claim by key. */
   readonly issueKey: string | null;
+  /** Issue key the row resolved to, including on a secondary pull request row; null without a match. */
+  readonly resolvedKey: string | null;
   readonly pullRequest: PullRequest | null;
   readonly mergedPullRequest: MergedPullRequest | null;
   readonly joinedBy: JoinMatch | null;
@@ -199,7 +202,7 @@ function sourcesToConcludeOrphan(provider: string | null): readonly ("github" | 
  * requests resolve to the same issue key, the strongest match joins the issue
  * row (see claimWinners); the others become their own `github:` rows with
  * `noIssue` false, because the issue exists (or is known by key) and only one
- * row may carry a `linear:<KEY>` key. A session attaches to exactly one row. A
+ * row may carry a `linear:<KEY>` key; they still report that key as `issueKey`. A session attaches to exactly one row. A
  * session without a row is reported as orphaned only when the sources that
  * could have matched it are `ok` and its issue is not in a paused state.
  */
@@ -228,6 +231,7 @@ export function joinItems(input: JoinInput): JoinResult {
         key: `github:${pr.id}`,
         issue: null,
         issueKey: null,
+        resolvedKey: null,
         pullRequest: pr,
         mergedPullRequest: null,
         joinedBy: null,
@@ -242,6 +246,7 @@ export function joinItems(input: JoinInput): JoinResult {
         key: `github:${pr.id}`,
         issue: null,
         issueKey: null,
+        resolvedKey: resolution.key,
         pullRequest: pr,
         mergedPullRequest: null,
         joinedBy: null,
@@ -254,6 +259,7 @@ export function joinItems(input: JoinInput): JoinResult {
       key: `linear:${resolution.key}`,
       issue: issuesById.get(resolution.key) ?? null,
       issueKey: resolution.key,
+      resolvedKey: resolution.key,
       pullRequest: pr,
       mergedPullRequest: null,
       joinedBy: resolution.joinedBy,
@@ -272,6 +278,7 @@ export function joinItems(input: JoinInput): JoinResult {
       key: `linear:${issue.id}`,
       issue,
       issueKey: issue.id,
+      resolvedKey: issue.id,
       pullRequest: null,
       mergedPullRequest: mergedByKey.get(issue.id) ?? null,
       joinedBy: null,
@@ -310,6 +317,7 @@ export function joinItems(input: JoinInput): JoinResult {
       mergedPullRequest: draft.mergedPullRequest,
       joinedBy: draft.joinedBy,
       noIssue: draft.noIssue,
+      issueKey: draft.resolvedKey,
       sessions: rowSessions,
       notifications: notifications.filter(
         (n) => n.sessionId !== null && sessionIds.has(n.sessionId),

@@ -149,6 +149,7 @@ function item(value: unknown, path: string): ListItem {
     issue: issue(fields["issue"], `${path}.issue`),
     pull_request: pullRequest(fields["pull_request"], `${path}.pull_request`),
     no_issue: boolean(fields["no_issue"], `${path}.no_issue`),
+    issue_key: nullableString(fields["issue_key"], `${path}.issue_key`),
     sessions: array(fields["sessions"], `${path}.sessions`, session),
     on_turn: onTurn(fields["on_turn"], `${path}.on_turn`),
     actions: array(fields["actions"], `${path}.actions`, action),

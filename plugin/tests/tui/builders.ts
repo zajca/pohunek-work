@@ -34,6 +34,7 @@ export function row(key: string, overrides: Partial<ListItem> = {}): ListItem {
     issue: null,
     pull_request: null,
     no_issue: false,
+    issue_key: null,
     sessions: [],
     on_turn: { actor: "reviewer", reason: "waiting", rule: 10 },
     actions: [],
@@ -82,6 +83,7 @@ export const RULE_ROWS: readonly ListItem[] = [
   row("github:keboola/connection#9003", {
     pull_request: pr(9003, { title: "Review me please" }),
     no_issue: true,
+    issue_key: null,
     on_turn: { actor: "me", reason: "review", rule: 3 },
     actions: [{ name: "review", delegable: false, profile: "codex-pr-review" }],
   }),

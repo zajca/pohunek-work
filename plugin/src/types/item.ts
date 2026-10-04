@@ -80,6 +80,11 @@ export interface WorkItem {
   readonly joinedBy: JoinMatch | null;
   /** A pull request without a Linear issue. */
   readonly noIssue: boolean;
+  /**
+   * Issue key the row resolved to, also on a secondary pull request row whose
+   * own key is `github:`; null when nothing resolved.
+   */
+  readonly issueKey: string | null;
   /** Sessions linked to this item, in pohunek order. */
   readonly sessions: readonly PohunekSession[];
   /** Notifications of the linked sessions. */
@@ -152,6 +157,8 @@ export interface ListItem {
   readonly issue: ListIssue | null;
   readonly pull_request: ListPullRequest | null;
   readonly no_issue: boolean;
+  /** Issue key the row resolved to; set on secondary pull request rows too, null when nothing resolved. */
+  readonly issue_key: string | null;
   readonly sessions: readonly ListSession[];
   readonly on_turn: ListOnTurn;
   readonly actions: readonly ListAction[];

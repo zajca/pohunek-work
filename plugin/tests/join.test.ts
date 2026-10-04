@@ -350,6 +350,23 @@ describe("rows", () => {
     expect(items[1]?.noIssue).toBe(false);
     expect(items[1]?.issue).toBeNull();
     expect(items[1]?.joinedBy).toBeNull();
+    expect(items[0]?.issueKey).toBe("ABC-11");
+    expect(items[1]?.issueKey).toBe("ABC-11");
+  });
+
+  test("a session linked by issue key attaches to the winner, not to a secondary row listed before it", () => {
+    const { items } = run({
+      issues: [issue("ABC-13")],
+      pullRequests: [pr(9, "me/ABC-13/second"), pr(8, "me/ABC-13/first")],
+      sessions: [session("s1", { "work.link.provider": "linear", "work.link.id": "ABC-13" })],
+    });
+    expect(items.find((i) => i.key === "linear:ABC-13")?.sessions.map((s) => s.id)).toEqual(["s1"]);
+    expect(items.find((i) => i.key === "github:acme/widgets#9")?.sessions).toEqual([]);
+  });
+
+  test("issueKey is null for a pull request without a match", () => {
+    const { items } = run({ pullRequests: [pr(5, "feature/x")] });
+    expect(items[0]?.issueKey).toBeNull();
   });
 });
 
