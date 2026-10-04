@@ -40,7 +40,7 @@ tracing = "0.1"
 # Released version of the GUI, independent of the core version. The MIT license
 # text is kept in LICENSES/pohunek-core-MIT.txt at the repository root.
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.96"
