@@ -253,6 +253,62 @@ test("a pull request linked to its issue only by a Linear attachment never notif
   expect(h.argvs).toEqual([]);
 });
 
+test("a pull request of a parked issue the issue source did not list never notifies, and losing the label notifies once", async () => {
+  const spike = { headRefName: "alice/ABC-1/spike" } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.size).toBe(1);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(["ABC-1"]), durationMs: 1 };
+  const parked = await guardedTick(h, first.baseline);
+  expect(parked.notified).toEqual([]);
+  expect(parked.baseline?.size).toBe(0);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const unparked = await guardedTick(h, parked.baseline);
+  expect(unparked.notified).toEqual(["widgets linear:ABC-1"]);
+  expect(h.argvs).toHaveLength(1);
+});
+
+test("a failed ignore-label lookup keeps the baseline and notifies nobody", async () => {
+  const spike = { headRefName: "alice/ABC-1/spike" } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const first = await guardedTick(h, null);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.ignoredKeys = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(down.baseline?.get("widgets linear:ABC-1")).toBe("reviewer");
+  expect(h.logs).toContainEqual({ level: "error", event: "source_failed" });
+  expect(h.argvs).toEqual([]);
+});
+
+test("a pull request of a GitHub issue the issue source did not list stays silent when the issue is labelled or the lookup fails", async () => {
+  const githubParked = {
+    ...config,
+    projects: config.projects.map((p) =>
+      p.name === "widgets"
+        ? { ...p, issueSource: githubIssueSource, branchPattern: /^alice\/(?<key>[0-9]+)\//, branchPatternSource: "^alice/(?P<key>[0-9]+)/", ignoreLabel: "Pohunek:Ignore" }
+        : p,
+    ),
+  };
+  const tickGithub = (h: Harness, baseline: Baseline): Promise<{ baseline: Baseline; notified: readonly string[] }> =>
+    watchTick(githubParked, options, h.deps, baseline, new AbortController().signal);
+  const spike = { headRefName: "alice/5/spike", closingIssueNumbers: [5] } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "github_issues", data: new Set(), durationMs: 1 };
+  const first = await tickGithub(h, null);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.ignoredKeys = { ok: true, source: "github_issues", data: new Set(["acme/widgets#5"]), durationMs: 1 };
+  const parked = await tickGithub(h, first.baseline);
+  expect(parked.notified).toEqual([]);
+  h.world.ignoredKeys = { ok: false, source: "github_issues", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await tickGithub(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {
   const h = harness([mine]);
   h.world.prs = { ok: false, source: "github", code: "rate_limited", message: "failed", durationMs: 1 };

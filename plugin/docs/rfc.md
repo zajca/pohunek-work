@@ -702,11 +702,14 @@ Rules:
   Linear issue page also selects `labels(first: page_size)`. Linear caps a
   query at 10,000 complexity points, so `[linear] page_size` is validated at
   load: at most 93 in general and at most 66 while a Linear project sets
-  `ignore_label` (`ConfigError` naming `linear.page_size`). While `github` is down an issue row
-  (no pull request data) is `unknown`, and while the issue source is down a
-  row whose issue is unknown (joined to a key, or an authored Linear pull
-  request without a key) is `unknown`; both before rules 1 and 2, with no
-  actions and no notification, because that issue may carry the label (8.3).
+  `ignore_label` (`ConfigError` naming `linear.page_size`). A pull request that
+  joined to an issue the issue source did not list is checked by a targeted
+  label lookup of exactly those issues (8.3); a labelled issue ignores the row.
+  While `github` is down an issue row (no pull request data) is `unknown`, and
+  while the issue source is down or that lookup fails a row whose issue is
+  unknown (joined to a key, or an authored Linear pull request without a key)
+  is `unknown`; all before rules 1 and 2, with no actions and no notification,
+  because that issue may carry the label (8.3).
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:

@@ -38,6 +38,15 @@ JSON `omitted_ignored` counts the hidden rows that `--mine`, `--stale-days` and
 ignored row fails with `precondition_failed` unless `--include-ignored` is
 passed, also with `--dry-run`.
 
+The issue source lists only started issues assigned to the owner (Linear) or
+open issues with a started or paused label (GitHub), so a pull request can join
+an issue it does not return, for example one parked with the label and moved to
+Backlog. For a project with `ignore_label` the plugin then asks the issue source
+for the labels of exactly those issues (batched by `[linear] page_size` or
+`[github] issue_page_size`; nothing is asked otherwise). When that lookup, the
+issue source or `github` fails, a row that may be parked is `unknown`, offers no
+action (`attach` included), is refused by `do` and is not notified by `watch`.
+
 The result is one table with a derived `on_turn` column, a set of named
 actions (`implement`, `babysit`, `fix-ci`, `rebase`, `review`, `ready`,
 `attach`) shared by the CLI, rofi, notifications and an agent skill (merging

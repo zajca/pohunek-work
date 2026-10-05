@@ -221,6 +221,70 @@ describe("ignored rows", () => {
   });
 });
 
+describe("an issue the issue source did not list", () => {
+  const linearSpike = pr({ headRefName: "alice/ABC-1/spike", checks: [check("build", "failure")] });
+  const githubSpike = pr({ headRefName: "alice/5/spike", checks: [check("build", "failure")], closingIssueNumbers: [5] });
+  const githubParked = {
+    ...config,
+    projects: [
+      { ...widgets, branchPattern: /^alice\/(?<key>[0-9]+)\//, branchPatternSource: "^alice/(?P<key>[0-9]+)/", issueSource: githubIssueSource, ignoreLabel: "Pohunek:Ignore" },
+      githubGadgets,
+    ],
+  };
+  const variants = [
+    { name: "Linear", config: unreadableConfig(), spike: linearSpike, key: "ABC-1", rowKey: "linear:ABC-1", source: "linear" as const, list: { issues: ok("linear", []) } },
+    { name: "GitHub", config: githubParked, spike: githubSpike, key: "acme/widgets#5", rowKey: "github-issue:acme/widgets#5", source: "github_issues" as const, list: { githubIssues: ok("github_issues", []) } },
+  ];
+
+  for (const variant of variants) {
+    const run = (world: World, options = baseOptions): ReturnType<typeof runList> =>
+      runList(variant.config, options, deps({ prs: ok("github", [variant.spike]), ...variant.list, ...world }));
+
+    test(`${variant.name}: a labelled issue hides its row and is counted`, async () => {
+      const lookups: string[][] = [];
+      const world = { ignoredKeys: ok(variant.source, new Set([variant.key])), lookups };
+      const hidden = await run(world);
+      expect(hidden.items).toEqual([]);
+      expect(payload(hidden.stdout).omitted_ignored).toBe(1);
+      const shown = await run(world, { ...baseOptions, includeIgnored: true });
+      expect(shown.items.map((i) => [i.key, i.ignored, i.actions, i.on_turn.rule])).toEqual([[variant.rowKey, true, [], 5]]);
+      expect(lookups).toEqual([[variant.key], [variant.key]]);
+    });
+
+    test(`${variant.name}: an issue without the label leaves a normal row`, async () => {
+      const out = await run({ ignoredKeys: ok(variant.source, new Set()) });
+      expect(out.items.map((i) => [i.key, i.ignored, i.on_turn.actor, i.on_turn.rule])).toEqual([[variant.rowKey, false, "me", 5]]);
+      expect(payload(out.stdout).omitted_ignored).toBe(0);
+    });
+
+    test(`${variant.name}: a failed lookup makes the row unknown with no actions and is a source failure`, async () => {
+      const failure: SourceResult<never> = { ok: false, source: variant.source, code: "truncated", message: "failed", durationMs: 1 };
+      const out = await run({ ignoredKeys: failure });
+      expect(out.items.map((i) => [i.key, i.ignored, i.on_turn.actor, i.on_turn.reason, i.actions])).toEqual([
+        [variant.rowKey, false, "unknown", `${variant.source}:truncated`, []],
+      ]);
+      expect(out.sourceFailures).toEqual([`widgets ${variant.source} lookup: ${variant.source}:truncated`]);
+    });
+
+    test(`${variant.name}: a project without an ignore label asks nothing`, async () => {
+      const lookups: string[][] = [];
+      const plain = { ...variant.config, projects: variant.config.projects.map((p) => ({ ...p, ignoreLabel: null })) };
+      const out = await runList(plain, baseOptions, deps({ prs: ok("github", [variant.spike]), ...variant.list, lookups }));
+      expect(out.items.map((i) => i.on_turn.rule)).toEqual([5]);
+      expect(lookups).toEqual([]);
+    });
+  }
+
+  test("nothing is asked when the issue source returned the issue or no pull request joined a missing key", async () => {
+    const lookups: string[][] = [];
+    const listed = await runList(unreadableConfig(), baseOptions, deps({ prs: ok("github", [linearSpike]), issues: ok("linear", [issue()]), lookups }));
+    expect(listed.items).toHaveLength(1);
+    const unrelated = await runList(unreadableConfig(), baseOptions, deps({ prs: ok("github", [draftPr]), lookups }));
+    expect(unrelated.items).toHaveLength(1);
+    expect(lookups).toEqual([]);
+  });
+});
+
 test("--stale-days leaves out pull requests not updated for that long, unless a session runs", async () => {
   const stale = pr({ headRefName: "feature/abc-1", updatedAt: "2026-01-01T00:00:00Z" });
   const fresh = pr({ id: "acme/widgets#13", number: 13, url: "https://example.invalid/13", headRefName: "x", updatedAt: "2026-06-10T00:00:00Z" });
