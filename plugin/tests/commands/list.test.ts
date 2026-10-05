@@ -202,6 +202,18 @@ describe("ignored rows", () => {
     expect(payload(parked.stdout).omitted_ignored).toBe(1);
   });
 
+  test("an issue row is unknown with no actions while github is down, because its pull request may carry the label", async () => {
+    const live = session({ id: "s-1", projectLabel: "widgets", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1" } });
+    for (const code of ["truncated", "rate_limited"] as const) {
+      const githubDown: SourceResult<never> = { ok: false, source: "github", code, message: "failed", durationMs: 1 };
+      const world = { prs: githubDown, sessions: ok("pohunek", [live]), issues: ok("linear", [issue()]) };
+      const out = await runList(unreadableConfig(), baseOptions, deps(world));
+      expect(out.items.map((i) => [i.key, i.ignored, i.on_turn.actor, i.on_turn.reason, i.actions])).toEqual([["linear:ABC-1", false, "unknown", `github:${code}`, []]]);
+      const plain = await runList(config, baseOptions, deps(world));
+      expect(plain.items[0]?.actions.map((a) => a.name)).toContain("attach");
+    }
+  });
+
   test("an ignored issue hides its row too", async () => {
     const out = await runList(config, baseOptions, deps({ issues: ok("linear", [issue({ ignored: true })]) }));
     expect(out.items).toEqual([]);

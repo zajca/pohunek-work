@@ -226,6 +226,20 @@ test("a blocked session does not notify a row whose issue may carry the ignore l
   expect(h.argvs).toEqual([]);
 });
 
+test("an issue row never notifies while github is down, even with a blocked session, and keeps its baseline", async () => {
+  const h = harness([]);
+  h.world.sessions = [session({ id: "s-1", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1" } })];
+  h.world.issues = linearOk([issue()]);
+  h.world.notifications = [notification({ sessionId: "s-1" })];
+  for (const code of ["truncated", "rate_limited"] as const) {
+    h.world.prs = { ok: false, source: "github", code, message: "failed", durationMs: 1 };
+    const down = await guardedTick(h, new Map([["widgets linear:ABC-1", "agent"]]));
+    expect(down.notified).toEqual([]);
+    expect(down.baseline?.get("widgets linear:ABC-1")).toBe("agent");
+  }
+  expect(h.argvs).toEqual([]);
+});
+
 test("a pull request linked to its issue only by a Linear attachment never notifies while Linear is down", async () => {
   const attached = pr({ headRefName: "feature/x", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
   const h = harness([attached]);

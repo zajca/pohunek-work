@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { runDo } from "../../src/commands/do.ts";
 import { ActionError } from "../../src/actions/types.ts";
 import type { Logger } from "../../src/log.ts";
-import { pr, session } from "../rules/builders.ts";
+import { issue, pr, session } from "../rules/builders.ts";
 import { baseConfig, expectRefusal, ok, options, refusal, setup, type Envelope } from "./harness.ts";
 
 const PARKED = pr({ headRefName: "feature/x", isDraft: true, ignored: true });
@@ -92,4 +92,24 @@ test("attach on a row whose issue cannot be read is refused: list offers no acti
     expect(error.message).toContain("linear:truncated");
   }
   expect(attached).toHaveLength(0);
+});
+
+test("attach on an issue row is refused while github is down: its pull request may carry the ignore label", async () => {
+  const guarded = {
+    ...baseConfig,
+    projects: baseConfig.projects.map((p) =>
+      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+    ),
+  };
+  const live = session({ id: "s-1", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1" } });
+  for (const code of ["truncated", "rate_limited"] as const) {
+    const githubDown = { ok: false, source: "github", code, message: "failed", durationMs: 1 } as const;
+    const { deps, attached } = setup({ prs: githubDown, sessions: [live], issues: ok("linear", [issue()]) });
+    for (const dryRun of [true, false]) {
+      const error = await refusal(runDo(guarded, options({ key: "linear:ABC-1", action: "attach", dryRun, yes: !dryRun }), deps));
+      expect(error.code).toBe("source_unavailable");
+      expect(error.message).toContain(`github:${code}`);
+    }
+    expect(attached).toHaveLength(0);
+  }
 });
