@@ -190,10 +190,12 @@ setup hook shows only as such a warning; this is tracked in
 report that a session can run checks without having seen it do so.
 
 `launch_unverified` and `launch_timed_out` mean a session may exist although
-`do` reported an error. Run `pohunek session list --json` and
-`pohunek session inspect` on the session whose metadata (`work.link.*`,
-`work.role`) matches the `--dry-run` plan to find it (the error carries no
-session id), never retry `do` blindly (a retry can start a second session), and
+`do` reported an error. For `launch_unverified` the error names the session
+id: run `pohunek session inspect` on it. For `launch_timed_out` the error
+carries no session id: run `pohunek session list --json`, match every `--meta`
+pair of the `--dry-run` argv (including `work.rev`) and take the newest
+matching session; matching only `work.link.*` and `work.role` can hit an older
+stopped session of the same row. Never retry `do` blindly (a retry can start a second session), and
 never remove the session or its worktree without the confirmation described in
 [Finished sessions](#finished-sessions). Report the error text: it names the
 cleanup the owner decides on.
@@ -255,7 +257,7 @@ when `do` provides it.
 - Allowed: `pohunek session inspect` of those sessions, of sessions listed in a
   row's `sessions[]`, `unlinked_sessions` or `orphaned_sessions`, of the session
   matching a `do` plan after `launch_timed_out`, and of sessions named in a `do`
-  refusal; `pohunek session diff` of the same sessions during cleanup.
+  refusal or error; `pohunek session diff` of the same sessions during cleanup.
 - Not allowed: session transcripts (`session read`, `session output`), `screen`
   of any session the manager did not launch, and any other session, unless the
   owner names the sessions.
