@@ -19,6 +19,7 @@ import type {
   TuiInitialView,
   WatchConfig,
 } from "../types/config.ts";
+import { fitsLinearComplexity, LINEAR_MAX_COMPLEXITY } from "../util/linear-budget.ts";
 import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
 import {
@@ -136,7 +137,7 @@ function parseLinear(root: Table, file: string): LinearConfig {
     file,
     path,
   );
-  return {
+  const config: LinearConfig = {
     endpoint: readHttpsUrl(table, "endpoint", file, path),
     secretToolBin: readAbsolutePath(table, "secret_tool_bin", file, path),
     keyringService: readString(table, "keyring_service", file, path),
@@ -144,6 +145,17 @@ function parseLinear(root: Table, file: string): LinearConfig {
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
     pageSize: readPositiveInt(table, "page_size", file, path),
   };
+  if (!fitsLinearComplexity(config.pageSize, false)) throw linearPageSizeError(file, config.pageSize, false);
+  return config;
+}
+
+function linearPageSizeError(file: string, pageSize: number, labels: boolean): ConfigError {
+  const reason = labels ? "with the label page of a project with an ignore_label " : "";
+  return fail(
+    file,
+    ["linear", "page_size"],
+    `${pageSize.toString()} ${reason}exceeds Linear's query complexity limit of ${LINEAR_MAX_COMPLEXITY.toString()} points; lower page_size`,
+  );
 }
 
 function parsePohunek(root: Table, file: string): PohunekConfig {
@@ -469,6 +481,14 @@ export async function loadConfig(configDir: string): Promise<PluginConfig> {
         `is required because ${PROJECTS_DIR}/${linearProject.name}${TOML_SUFFIX} uses issue_source = "linear"`,
       );
     }
+  }
+  // Only a project with an ignore_label selects the label page of every issue.
+  if (
+    global.linear !== null &&
+    projects.some((project) => project.issueSource.kind === "linear" && project.ignoreLabel !== null) &&
+    !fitsLinearComplexity(global.linear.pageSize, true)
+  ) {
+    throw linearPageSizeError(GLOBAL_FILE, global.linear.pageSize, true);
   }
   return { configDir, global, projects };
 }

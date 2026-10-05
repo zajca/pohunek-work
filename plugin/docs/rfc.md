@@ -653,8 +653,12 @@ Rules:
   `ignored: true` in `list --json`, no actions, its computed `on_turn` kept;
   absent = off. A label list that cannot be read completely fails the source
   (`truncated`) and never reads as "not ignored". With the key, each Linear
-  issue page also selects `labels(first: page_size)`; Linear caps a query at
-  10,000 complexity points, so keep `[linear] page_size` at 50 or below.
+  issue page also selects `labels(first: page_size)`. Linear caps a query at
+  10,000 complexity points, so `[linear] page_size` is validated at load: at
+  most 93 in general and at most 66 while a Linear project sets `ignore_label`
+  (`ConfigError` naming `linear.page_size`). While the issue source is down a
+  row whose issue is unknown is `unknown`, because that issue may carry the
+  label.
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:
@@ -678,7 +682,7 @@ Rules:
   the search and `nested_page_size` for the labels of an issue; a label list longer
   than one page is followed to its end, and anything that cannot be followed
   makes `github_issues` `truncated`. The node budget of the pull request search
-  is validated at load with the closing issue references of 7.3 included, whether
+  is validated at load with the closing issue references of 7.3 and the pull request labels of the ignore label included, whether
   or not a `github` project exists, so the global file is valid or not independently
   of the project files; the issue search is validated against the same limit. The global `[linear]` table of
   `config.toml` and its keyring entry are required only while at least one
