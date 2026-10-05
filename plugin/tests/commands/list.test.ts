@@ -106,6 +106,18 @@ function payload(stdout: string): Payload {
   return (JSON.parse(stdout) as { ok: Payload }).ok;
 }
 
+const truncatedLinear: SourceResult<never> = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+
+/** The widgets project with an ignore label and nothing to pause. */
+function unreadableConfig(): typeof config {
+  return {
+    ...config,
+    projects: config.projects.map((p) =>
+      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+    ),
+  };
+}
+
 describe("ignored rows", () => {
   test("are hidden by default and counted in omitted_ignored", async () => {
     const out = await runList(config, baseOptions, deps(ignoredWorld));
@@ -162,17 +174,32 @@ describe("ignored rows", () => {
   });
 
   test("a row whose issue is unreadable is shown as unknown with no actions, not hidden and not actionable", async () => {
-    const guarded = {
-      ...config,
-      projects: config.projects.map((p) =>
-        p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
-      ),
-    };
+    const guarded = unreadableConfig();
     const failing = pr({ headRefName: "alice/ABC-1/spike", checks: [check("build", "failure")] });
-    const truncated: SourceResult<never> = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
-    const out = await runList(guarded, baseOptions, deps({ prs: ok("github", [failing]), issues: truncated }));
+    const out = await runList(guarded, baseOptions, deps({ prs: ok("github", [failing]), issues: truncatedLinear }));
     expect(out.items.map((i) => [i.ignored, i.on_turn.actor, i.on_turn.reason, i.actions])).toEqual([[false, "unknown", "linear:truncated", []]]);
     expect(payload(out.stdout).omitted_ignored).toBe(0);
+  });
+
+  test("a live session on a row whose issue is unreadable offers no attach", async () => {
+    const guarded = unreadableConfig();
+    const spike = pr({ headRefName: "alice/ABC-1/spike", isDraft: true });
+    const live = session({ id: "s-1", projectLabel: "widgets", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1", "work.link.branch": spike.headRefName } });
+    const world = { prs: ok("github", [spike]), sessions: ok("pohunek", [live]), issues: truncatedLinear };
+    const out = await runList(guarded, baseOptions, deps(world));
+    expect(out.items.map((i) => [i.key, i.on_turn.actor, i.actions])).toEqual([["linear:ABC-1", "unknown", []]]);
+    const up = await runList(guarded, baseOptions, deps({ ...world, issues: ok("linear", [issue()]) }));
+    expect(up.items[0]?.actions.map((a) => a.name)).toContain("attach");
+  });
+
+  test("a pull request linked to its issue only by a Linear attachment is unknown with no actions while Linear is down", async () => {
+    const guarded = unreadableConfig();
+    const attached = pr({ headRefName: "feature/x", checks: [check("build", "failure")] });
+    const down = await runList(guarded, baseOptions, deps({ prs: ok("github", [attached]), issues: truncatedLinear }));
+    expect(down.items.map((i) => [i.key, i.ignored, i.on_turn.actor, i.actions])).toEqual([["github:acme/widgets#12", false, "unknown", []]]);
+    const parked = await runList(guarded, baseOptions, deps({ prs: ok("github", [attached]), issues: ok("linear", [issue({ ignored: true, attachmentUrls: [attached.url] })]) }));
+    expect(parked.items).toEqual([]);
+    expect(payload(parked.stdout).omitted_ignored).toBe(1);
   });
 
   test("an ignored issue hides its row too", async () => {

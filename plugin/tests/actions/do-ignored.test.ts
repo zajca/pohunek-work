@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { runDo } from "../../src/commands/do.ts";
 import { ActionError } from "../../src/actions/types.ts";
 import type { Logger } from "../../src/log.ts";
-import { pr } from "../rules/builders.ts";
+import { pr, session } from "../rules/builders.ts";
 import { baseConfig, expectRefusal, ok, options, refusal, setup, type Envelope } from "./harness.ts";
 
 const PARKED = pr({ headRefName: "feature/x", isDraft: true, ignored: true });
@@ -73,4 +73,23 @@ test("fix-ci on a row whose issue cannot be read is refused: the issue may carry
   }
   expect(commands).toHaveLength(0);
   expect(launches).toHaveLength(0);
+});
+
+test("attach on a row whose issue cannot be read is refused: list offers no action on it", async () => {
+  const guarded = {
+    ...baseConfig,
+    projects: baseConfig.projects.map((p) =>
+      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+    ),
+  };
+  const spike = pr({ headRefName: "alice/ABC-1/spike" });
+  const live = session({ id: "s-1", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1", "work.link.branch": spike.headRefName } });
+  const truncated = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 } as const;
+  const { deps, attached } = setup({ prs: ok("github", [spike]), sessions: [live], issues: truncated });
+  for (const dryRun of [true, false]) {
+    const error = await refusal(runDo(guarded, options({ key: "linear:ABC-1", action: "attach", dryRun, yes: !dryRun }), deps));
+    expect(error.code).toBe("source_unavailable");
+    expect(error.message).toContain("linear:truncated");
+  }
+  expect(attached).toHaveLength(0);
 });

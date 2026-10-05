@@ -3,9 +3,9 @@ import { notificationArgv, runWatch, unknownProject, watchTick, type Baseline, t
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
-import type { Issue, PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
+import type { Issue, PohunekNotification, PohunekProject, PohunekSession, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type ExecResult } from "../../src/util/exec.ts";
-import { check, githubIssueSource, issue, pr } from "../rules/builders.ts";
+import { check, githubIssueSource, issue, notification, pr, session } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 
@@ -25,7 +25,15 @@ interface Recorded {
 
 interface Harness {
   deps: WatchDeps;
-  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]>; githubIssues: SourceResult<readonly Issue[]>; ignoredKeys: SourceResult<ReadonlySet<string>> | null };
+  world: {
+    prs: SourceResult<readonly PullRequest[]>;
+    issues: SourceResult<readonly Issue[]>;
+    githubIssues: SourceResult<readonly Issue[]>;
+    sessions: readonly PohunekSession[];
+    notifications: readonly PohunekNotification[];
+    /** Answer of the ignore-label lookup of unlisted issues; a lookup fails the test when absent. */
+    ignoredKeys: SourceResult<ReadonlySet<string>> | null;
+  };
   argvs: (readonly string[])[];
   logs: Recorded[];
   setExec(next: () => Promise<ExecResult>): void;
@@ -44,7 +52,7 @@ function githubIssuesOk(issues: readonly Issue[]): SourceResult<readonly Issue[]
 }
 
 function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
-  const world: Harness["world"] = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]), ignoredKeys: null };
+  const world: Harness["world"] = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]), sessions: [], notifications: [], ignoredKeys: null };
   const argvs: (readonly string[])[] = [];
   const logs: Recorded[] = [];
   let execNext: () => Promise<ExecResult> = () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
@@ -57,8 +65,8 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
   };
   const pohunek: PohunekClient = {
     listProjects: () => Promise.resolve({ ok: true, source: "pohunek", data: registry, durationMs: 1 }),
-    listSessions: () => Promise.resolve({ ok: true, source: "pohunek", data: [], durationMs: 1 }),
-    listNotifications: () => Promise.resolve({ ok: true, source: "pohunek", data: [], durationMs: 1 }),
+    listSessions: () => Promise.resolve({ ok: true, source: "pohunek", data: world.sessions, durationMs: 1 }),
+    listNotifications: () => Promise.resolve({ ok: true, source: "pohunek", data: world.notifications, durationMs: 1 }),
     launchSession: () => Promise.reject(new Error("not used")),
     listWorktrees: () => Promise.reject(new Error("not used")),
     attach: () => Promise.reject(new Error("not used")),
@@ -180,22 +188,53 @@ test("an ignored row on the owner's turn never notifies, and losing the label no
   expect((await tick(h, unparked.baseline)).notified).toEqual([]);
 });
 
+const guarded = {
+  ...config,
+  projects: config.projects.map((p) =>
+    p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+  ),
+};
+const truncated: SourceResult<never> = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+
+async function guardedTick(h: Harness, baseline: Baseline): Promise<{ baseline: Baseline; notified: readonly string[] }> {
+  return watchTick(guarded, options, h.deps, baseline, new AbortController().signal);
+}
+
 test("a pull request whose issue may carry the ignore label never notifies while the issue source is down", async () => {
-  const guarded = {
-    ...config,
-    projects: config.projects.map((p) =>
-      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
-    ),
-  };
   const spike = { headRefName: "alice/ABC-1/spike" } as const;
-  const parkedIssue = issue({ ignored: true });
   const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
-  h.world.issues = linearOk([parkedIssue]);
-  const first = await watchTick(guarded, options, h.deps, null, new AbortController().signal);
+  h.world.issues = linearOk([issue({ ignored: true })]);
+  const first = await guardedTick(h, null);
   expect(first.baseline?.size).toBe(0);
   h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
-  h.world.issues = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
-  const down = await watchTick(guarded, options, h.deps, first.baseline, new AbortController().signal);
+  h.world.issues = truncated;
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("a blocked session does not notify a row whose issue may carry the ignore label while the issue source is down", async () => {
+  const spike = pr({ headRefName: "alice/ABC-1/spike", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
+  const h = harness([spike]);
+  h.world.sessions = [session({ id: "s-1", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1", "work.link.branch": spike.headRefName } })];
+  h.world.issues = linearOk([issue({ ignored: true })]);
+  const first = await guardedTick(h, null);
+  h.world.notifications = [notification({ sessionId: "s-1" })];
+  h.world.issues = truncated;
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("a pull request linked to its issue only by a Linear attachment never notifies while Linear is down", async () => {
+  const attached = pr({ headRefName: "feature/x", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
+  const h = harness([attached]);
+  h.world.issues = linearOk([issue({ ignored: true, attachmentUrls: [attached.url] })]);
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.size).toBe(0);
+  h.world.prs = githubOk([pr({ headRefName: "feature/x", checks: [check("build", "failure")] })]);
+  h.world.issues = truncated;
+  const down = await guardedTick(h, first.baseline);
   expect(down.notified).toEqual([]);
   expect(h.argvs).toEqual([]);
 });
