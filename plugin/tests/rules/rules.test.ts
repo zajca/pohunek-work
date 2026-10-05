@@ -743,6 +743,29 @@ describe("rule 12 with an ignore label and nothing to pause", () => {
     expect(onTurn(joined, down, withLabel).actor).toBe("unknown");
   });
 
+  test("the unknown verdict comes before the pohunek rules, so a blocked or working session cannot decide the row", () => {
+    const sessions = [session({ id: "s-1", activity: "working" })];
+    expect(onTurn(item({ ...secondary, sessions }), down, withLabel).actor).toBe("unknown");
+    const blocked = item({ ...secondary, sessions: [session({ id: "s-1", activity: "idle" })], notifications: [notification()] });
+    expect(onTurn(blocked, down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(onTurn(blocked, allOk, withLabel).rule).toBe(1);
+    expect(onTurn(blocked, down, noPause).rule).toBe(1);
+  });
+
+  test("a Linear pull request without a key may be linked to its issue by an attachment only, so it is unknown while the source is down", () => {
+    const unkeyed = item({ key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: null, joinedBy: null, noIssue: false, pullRequest: failing });
+    expect(onTurn(unkeyed, down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(onTurn(unkeyed, down, noPause).rule).toBe(5);
+    expect(onTurn(item({ ...unkeyed, noIssue: true }), allOk, withLabel).rule).toBe(5);
+  });
+
+  test("a pull request of someone else without a key and a github project without a key are not unknown", () => {
+    const unkeyed = { key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: null, joinedBy: null, noIssue: false } as const;
+    expect(onTurn(item({ ...unkeyed, pullRequest: pr({ relation: "review_requested" }) }), down, withLabel).actor).toBe("me");
+    const githubSource = { ...withLabel, issueSource: githubIssueSource };
+    expect(onTurn(item({ ...unkeyed, pullRequest: failing }), { ...allOk, github_issues: "truncated", linear: "unused" }, githubSource).rule).toBe(5);
+  });
+
   test("without an ignore label and without paused states the row stays the owner's turn", () => {
     expect(onTurn(item(secondary), down, noPause)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });
   });

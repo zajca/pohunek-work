@@ -190,6 +190,23 @@ function issueSourceFailure(sources: SourceStatuses, project: Pick<ProjectConfig
   return failedSources(sources, [issueSourceStatusKey(project)]);
 }
 
+/**
+ * Failure text of the issue source when the row's issue may carry the project's ignore label
+ * but the source did not return it; null otherwise. A Linear pull request without a key while
+ * the source is down may be linked to its issue by a Linear attachment only.
+ */
+export function ignoreLabelUnreadable(
+  item: WorkItem,
+  sources: SourceStatuses,
+  project: Pick<ProjectConfig, "issueSource" | "ignoreLabel">,
+): string | null {
+  if (project.ignoreLabel === null || (item.issue ?? item.resolvedIssue) !== null) return null;
+  const authored = item.pullRequest !== null && item.pullRequest.relation === "authored";
+  const keyUnknown = project.issueSource.kind === "linear" && authored && item.issueKey === null && !item.noIssue;
+  if (item.joinedBy === null && item.issueKey === null && !keyUnknown) return null;
+  return issueSourceFailure(sources, project);
+}
+
 function failedSources(
   sources: SourceStatuses,
   needed: readonly SourceName[],
@@ -226,6 +243,11 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   const pohunekFailure = failedSources(sources, ["pohunek"]);
   if (pohunekFailure !== null) return unknown(pohunekFailure);
 
+  // The ignore label can park the row through an issue the source did not return, so no
+  // rule below may decide it, the pohunek rules included.
+  const unreadable = ignoreLabelUnreadable(item, sources, project);
+  if (unreadable !== null) return unknown(unreadable);
+
   const linkedIds = new Set(item.sessions.map((session) => session.id));
   const blocked = item.notifications.some(
     (notification) =>
@@ -241,11 +263,11 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     return result({ actor: "agent", reason: "working", rule: 2 });
   }
 
-  // Rule 12: issue source. A row that resolved to an issue key (its own issue row or a
+  // Rule 12: paused issues. A row that resolved to an issue key (its own issue row or a
   // secondary pull request row of that issue) whose issue the source did not return may
-  // be paused or parked by the ignore label, so it is unknown while the source is down.
+  // be paused, so it is unknown while the source is down.
   const resolved = item.issue ?? item.resolvedIssue;
-  if (resolved === null && (item.joinedBy !== null || item.issueKey !== null) && (canPauseIssues(project) || project.ignoreLabel !== null)) {
+  if (resolved === null && (item.joinedBy !== null || item.issueKey !== null) && canPauseIssues(project)) {
     const issueFailure = issueSourceFailure(sources, project);
     if (issueFailure !== null) return unknown(issueFailure);
   }

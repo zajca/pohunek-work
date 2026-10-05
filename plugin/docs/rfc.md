@@ -407,8 +407,14 @@ project's issue source (`linear`, or `github_issues` for a `github` project)
 for every row joined to an issue key: while it is unavailable such a row is
 `unknown` with the source's code, because its issue may be paused. Rows not
 joined to an issue (review requests, pull requests without an issue key) and
-projects with an empty `paused_states` (or `paused_labels`) do not depend on the
-issue source for rule 12. Rule 8 needs it for every row that has an issue.
+projects with an empty `paused_states` (or `paused_labels`) and no `ignore_label`
+do not depend on the issue source for rule 12. A project with `ignore_label`
+needs the issue source for every row whose issue may carry the label: a row
+joined to an issue key and, for a Linear project, an authored pull request
+without a key while the source is down (it may be linked to its issue by a
+Linear attachment only). Such a row is `unknown` with the source's code before
+rules 1 and 2 are evaluated, offers no action (`attach` included) and `do`
+refuses it. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 
@@ -657,8 +663,9 @@ Rules:
   10,000 complexity points, so `[linear] page_size` is validated at load: at
   most 93 in general and at most 66 while a Linear project sets `ignore_label`
   (`ConfigError` naming `linear.page_size`). While the issue source is down a
-  row whose issue is unknown is `unknown`, because that issue may carry the
-  label.
+  row whose issue is unknown (joined to a key, or an authored Linear pull
+  request without a key) is `unknown` before rules 1 and 2, with no actions and
+  no notification, because that issue may carry the label (8.3).
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:

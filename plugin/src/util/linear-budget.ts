@@ -1,7 +1,9 @@
 // Linear rejects a GraphQL query whose complexity exceeds a fixed limit. The estimate mirrors
 // the scoring rules of https://linear.app/developers/rate-limiting: each property is 0.1 point,
 // each object is 1 point and a connection multiplies the points of its children by its `first`
-// argument. The query shape is the issue page of src/sources/linear.ts.
+// argument. The query shape is the issue page of src/sources/linear.ts. The estimator assumes the
+// `pageInfo` nested in a connection is not multiplied by that connection's `first`; this is not
+// verified against a live request.
 
 /** Maximum complexity of a single Linear query, as published by Linear (10,000 points). */
 export const LINEAR_MAX_COMPLEXITY = 10_000;
