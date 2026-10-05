@@ -180,6 +180,26 @@ test("an ignored row on the owner's turn never notifies, and losing the label no
   expect((await tick(h, unparked.baseline)).notified).toEqual([]);
 });
 
+test("a pull request whose issue may carry the ignore label never notifies while the issue source is down", async () => {
+  const guarded = {
+    ...config,
+    projects: config.projects.map((p) =>
+      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+    ),
+  };
+  const spike = { headRefName: "alice/ABC-1/spike" } as const;
+  const parkedIssue = issue({ ignored: true });
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.issues = linearOk([parkedIssue]);
+  const first = await watchTick(guarded, options, h.deps, null, new AbortController().signal);
+  expect(first.baseline?.size).toBe(0);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.issues = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await watchTick(guarded, options, h.deps, first.baseline, new AbortController().signal);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {
   const h = harness([mine]);
   h.world.prs = { ok: false, source: "github", code: "rate_limited", message: "failed", durationMs: 1 };

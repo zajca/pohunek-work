@@ -55,3 +55,22 @@ test("a row without the ignore label is unaffected by the flag", async () => {
     expect((JSON.parse(out.stdout) as Envelope).ok.dry_run).toBe(true);
   }
 });
+
+test("fix-ci on a row whose issue cannot be read is refused: the issue may carry the ignore label", async () => {
+  const guarded = {
+    ...baseConfig,
+    projects: baseConfig.projects.map((p) =>
+      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+    ),
+  };
+  const failing = pr({ headRefName: "alice/ABC-1/spike", checks: [{ name: "build", outcome: "failure" }] });
+  const truncated = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 } as const;
+  const { deps, commands, launches } = setup({ prs: ok("github", [failing]), issues: truncated });
+  for (const dryRun of [true, false]) {
+    const error = await refusal(runDo(guarded, options({ key: "linear:ABC-1", action: "fix-ci", profile: "profile-a", dryRun, yes: !dryRun }), deps));
+    expect(error.code).toBe("source_unavailable");
+    expect(error.message).toContain("linear:truncated");
+  }
+  expect(commands).toHaveLength(0);
+  expect(launches).toHaveLength(0);
+});

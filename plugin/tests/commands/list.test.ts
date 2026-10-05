@@ -161,6 +161,20 @@ describe("ignored rows", () => {
     expect((await runList(config, { ...baseOptions, json: false }, deps(world))).stdout).not.toContain("hidden");
   });
 
+  test("a row whose issue is unreadable is shown as unknown with no actions, not hidden and not actionable", async () => {
+    const guarded = {
+      ...config,
+      projects: config.projects.map((p) =>
+        p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+      ),
+    };
+    const failing = pr({ headRefName: "alice/ABC-1/spike", checks: [check("build", "failure")] });
+    const truncated: SourceResult<never> = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+    const out = await runList(guarded, baseOptions, deps({ prs: ok("github", [failing]), issues: truncated }));
+    expect(out.items.map((i) => [i.ignored, i.on_turn.actor, i.on_turn.reason, i.actions])).toEqual([[false, "unknown", "linear:truncated", []]]);
+    expect(payload(out.stdout).omitted_ignored).toBe(0);
+  });
+
   test("an ignored issue hides its row too", async () => {
     const out = await runList(config, baseOptions, deps({ issues: ok("linear", [issue({ ignored: true })]) }));
     expect(out.items).toEqual([]);
