@@ -2381,15 +2381,22 @@ fn resume_or_new_review(
     project: impl Into<String>,
     branch: impl Into<String>,
 ) -> Review {
-    let existing = store
-        .load_all()
+    let existing = latest_draft_for(source, store.load_all().into_iter().filter_map(Result::ok));
+    existing.unwrap_or_else(|| Review::new(source.clone(), project, branch))
+}
+
+/// Picks the draft of `source` with the latest `updated_at` instant; equal
+/// instants resolve to the largest review id, independent of iteration order.
+fn latest_draft_for(
+    source: &ReviewSource,
+    reviews: impl IntoIterator<Item = Review>,
+) -> Option<Review> {
+    reviews
         .into_iter()
-        .filter_map(Result::ok)
         .filter(|review| &review.source == source && review.status == ReviewStatus::Draft)
         .max_by(|left, right| {
             cmp_rfc3339(&left.updated_at, &right.updated_at).then_with(|| left.id.cmp(&right.id))
-        });
-    existing.unwrap_or_else(|| Review::new(source.clone(), project, branch))
+        })
 }
 
 /// Flattens every selectable line across every file/hunk of `model`, in
@@ -5256,7 +5263,7 @@ mod tests {
         workspace.apply(DomainEvent::HostSnapshotLoaded {
             snapshot: snapshot("local", vec![]),
         });
-        // As strings 'a-newer' ('.5Z') sorts below 'z-older' ('Z').
+        // As strings 'z-newer' ('.5Z') sorts below 'a-older' ('Z').
         let mut older = notification_record(
             "a-older",
             NotificationStatus::Unread,
@@ -6251,43 +6258,23 @@ mod tests {
     }
 
     #[test]
-    fn resuming_breaks_an_updated_at_tie_by_draft_id_in_any_insertion_order() {
-        let host_id = HostId::new("local");
-        let mut source_session = session("s-1", None);
-        source_session.branch = Some("feature/x".to_owned());
-        let source = ReviewSource::Session {
-            host_id: host_id.clone(),
-            session_id: source_session.id.clone(),
+    fn latest_draft_breaks_an_updated_at_tie_by_id_in_any_order() {
+        let source = ReviewSource::PullRequest {
+            host_id: HostId::new("local"),
+            pr_number: 1,
         };
         let mut first = Review::new(source.clone(), "project-1", "feature/x");
         first.updated_at = "2026-10-01T08:00:05Z".to_owned();
-        let mut second = Review::new(source, "project-1", "feature/x");
+        let mut second = Review::new(source.clone(), "project-1", "feature/x");
         second.updated_at = "2026-10-01T08:00:05Z".to_owned();
         let expected = first.id.clone().max(second.id.clone());
 
-        for drafts in [[&first, &second], [&second, &first]] {
-            let root = review_resume_root();
-            let store = ReviewStore::new(root.path().join("reviews"));
-            for draft in drafts {
-                store.save(draft).expect("persist draft");
-            }
-            let mut workspace = Workspace::default();
-            workspace.begin_review_from_session(
-                host_id.clone(),
-                &store,
-                &source_session,
-                "project-1",
-            );
-            let resumed = workspace
-                .hosts
-                .get(&host_id)
-                .expect("host")
-                .review
-                .active_review
-                .as_ref()
-                .expect("resumed review");
-
-            assert_eq!(resumed.id, expected);
+        for drafts in [
+            vec![first.clone(), second.clone()],
+            vec![second.clone(), first.clone()],
+        ] {
+            let picked = latest_draft_for(&source, drafts).expect("a draft");
+            assert_eq!(picked.id, expected);
         }
     }
 
