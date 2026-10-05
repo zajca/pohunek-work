@@ -16,6 +16,7 @@ use protocol::{
 
 use crate::providers;
 use crate::subagents::{subagent_counts, SubagentCounts};
+use crate::timestamp::cmp_rfc3339;
 use crate::work_link::{work_link, WorkLink};
 use crate::{
     parse_unified_diff, CoreError, DiffModel, DomainEvent, HealthSummary, HostId,
@@ -2092,10 +2093,7 @@ impl Workspace {
             }
         }
         rows.sort_by(|left, right| {
-            right
-                .record
-                .created_at
-                .cmp(&left.record.created_at)
+            cmp_rfc3339(&right.record.created_at, &left.record.created_at)
                 .then_with(|| left.record.id.0.cmp(&right.record.id.0))
         });
         rows
@@ -2148,9 +2146,7 @@ impl Workspace {
             .cloned()
             .collect();
         records.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
+            cmp_rfc3339(&right.created_at, &left.created_at)
                 .then_with(|| left.id.0.cmp(&right.id.0))
         });
         records
@@ -2385,13 +2381,22 @@ fn resume_or_new_review(
     project: impl Into<String>,
     branch: impl Into<String>,
 ) -> Review {
-    let existing = store
-        .load_all()
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|review| &review.source == source && review.status == ReviewStatus::Draft)
-        .max_by(|left, right| left.updated_at.cmp(&right.updated_at));
+    let existing = latest_draft_for(source, store.load_all().into_iter().filter_map(Result::ok));
     existing.unwrap_or_else(|| Review::new(source.clone(), project, branch))
+}
+
+/// Picks the draft of `source` with the latest `updated_at` instant; equal
+/// instants resolve to the largest review id, independent of iteration order.
+fn latest_draft_for(
+    source: &ReviewSource,
+    reviews: impl IntoIterator<Item = Review>,
+) -> Option<Review> {
+    reviews
+        .into_iter()
+        .filter(|review| &review.source == source && review.status == ReviewStatus::Draft)
+        .max_by(|left, right| {
+            cmp_rfc3339(&left.updated_at, &right.updated_at).then_with(|| left.id.cmp(&right.id))
+        })
 }
 
 /// Flattens every selectable line across every file/hunk of `model`, in
@@ -2817,8 +2822,7 @@ fn active_session_attention(host: &HostView, session: &SessionInfo) -> Option<Se
                             || record.severity == NotificationSeverity::Error))
         })
         .max_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
+            cmp_rfc3339(&left.created_at, &right.created_at)
                 .then_with(|| right.id.0.cmp(&left.id.0))
         });
     record.map_or_else(
@@ -5225,6 +5229,104 @@ mod tests {
     }
 
     #[test]
+    fn notifications_order_by_instant_when_fraction_precision_differs() {
+        let mut workspace = Workspace::default();
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: snapshot("local", vec![]),
+        });
+        // As strings 'n-newer' ('.5Z') sorts below 'n-older' ('Z').
+        let mut older = notification_record(
+            "n-older",
+            NotificationStatus::Unread,
+            NotificationSeverity::Info,
+        );
+        older.created_at = "2026-07-03T00:00:05Z".to_owned();
+        let mut newer = notification_record(
+            "n-newer",
+            NotificationStatus::Unread,
+            NotificationSeverity::Info,
+        );
+        newer.created_at = "2026-07-03T00:00:05.5Z".to_owned();
+        for record in [older, newer] {
+            workspace.apply(notification_created("local", record));
+        }
+
+        let rows = workspace.notifications(&NotificationFilter::default());
+        let ids: Vec<&str> = rows.iter().map(|row| row.record.id.0.as_str()).collect();
+
+        assert_eq!(ids, vec!["n-newer", "n-older"]);
+    }
+
+    #[test]
+    fn session_activity_orders_by_instant_when_fraction_precision_differs() {
+        let mut workspace = Workspace::default();
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: snapshot("local", vec![]),
+        });
+        // As strings 'z-newer' ('.5Z') sorts below 'a-older' ('Z').
+        let mut older = notification_record(
+            "a-older",
+            NotificationStatus::Unread,
+            NotificationSeverity::Info,
+        );
+        older.created_at = "2026-07-03T00:00:05Z".to_owned();
+        older.session_id = Some(SessionId("s-1".to_owned()));
+        let mut newer = notification_record(
+            "z-newer",
+            NotificationStatus::Unread,
+            NotificationSeverity::Info,
+        );
+        newer.created_at = "2026-07-03T00:00:05.5Z".to_owned();
+        newer.session_id = Some(SessionId("s-1".to_owned()));
+        for record in [older, newer] {
+            workspace.apply(notification_created("local", record));
+        }
+
+        let activity =
+            workspace.session_activity(&HostId::new("local"), &SessionId("s-1".to_owned()));
+        let ids: Vec<&str> = activity.iter().map(|record| record.id.0.as_str()).collect();
+
+        assert_eq!(ids, vec!["z-newer", "a-older"]);
+    }
+
+    #[test]
+    fn session_attention_surfaces_the_newest_approval_by_instant() {
+        let mut older = notification_record(
+            "n-older",
+            NotificationStatus::Unread,
+            NotificationSeverity::ActionRequired,
+        );
+        older.kind = NotificationKind::ApprovalRequired;
+        older.title = "Older approval".to_owned();
+        older.created_at = "2026-07-03T00:00:05Z".to_owned();
+        older.session_id = Some(SessionId("s-1".to_owned()));
+        let mut newer = notification_record(
+            "n-newer",
+            NotificationStatus::Unread,
+            NotificationSeverity::ActionRequired,
+        );
+        newer.kind = NotificationKind::ApprovalRequired;
+        newer.title = "Newer approval".to_owned();
+        newer.created_at = "2026-07-03T00:00:05.5Z".to_owned();
+        newer.session_id = Some(SessionId("s-1".to_owned()));
+        let mut workspace = Workspace::default();
+        workspace.apply(DomainEvent::HostSnapshotLoaded {
+            snapshot: snapshot_with_notifications(
+                "local",
+                vec![session("s-1", Some(AgentActivity::Idle))],
+                vec![older, newer],
+            ),
+        });
+
+        let rows = workspace.session_rows();
+
+        assert_eq!(
+            rows[0].attention.as_ref().map(|value| value.title.as_str()),
+            Some("Newer approval")
+        );
+    }
+
+    #[test]
     fn notifications_selector_filters_by_host() {
         let mut workspace = Workspace::default();
         // Seed both hosts through the connect path so their events are not dropped.
@@ -6119,6 +6221,61 @@ mod tests {
             .expect("fresh draft for a different source");
         assert_ne!(fresh.id, review_id);
         assert!(fresh.comments.is_empty());
+    }
+
+    #[test]
+    fn resuming_picks_the_draft_with_the_latest_instant_not_the_largest_string() {
+        let root = review_resume_root();
+        let store = ReviewStore::new(root.path().join("reviews"));
+        let host_id = HostId::new("local");
+        let mut source_session = session("s-1", None);
+        source_session.branch = Some("feature/x".to_owned());
+        let source = ReviewSource::Session {
+            host_id: host_id.clone(),
+            session_id: source_session.id.clone(),
+        };
+
+        // As strings the later draft ('.5Z') sorts below the earlier one ('Z').
+        let mut earlier = Review::new(source.clone(), "project-1", "feature/x");
+        earlier.updated_at = "2026-10-01T08:00:05Z".to_owned();
+        let mut later = Review::new(source, "project-1", "feature/x");
+        later.updated_at = "2026-10-01T08:00:05.5Z".to_owned();
+        store.save(&earlier).expect("persist earlier draft");
+        store.save(&later).expect("persist later draft");
+
+        let mut workspace = Workspace::default();
+        workspace.begin_review_from_session(host_id.clone(), &store, &source_session, "project-1");
+        let resumed = workspace
+            .hosts
+            .get(&host_id)
+            .expect("host")
+            .review
+            .active_review
+            .as_ref()
+            .expect("resumed review");
+
+        assert_eq!(resumed.id, later.id);
+    }
+
+    #[test]
+    fn latest_draft_breaks_an_updated_at_tie_by_id_in_any_order() {
+        let source = ReviewSource::PullRequest {
+            host_id: HostId::new("local"),
+            pr_number: 1,
+        };
+        let mut first = Review::new(source.clone(), "project-1", "feature/x");
+        first.updated_at = "2026-10-01T08:00:05Z".to_owned();
+        let mut second = Review::new(source.clone(), "project-1", "feature/x");
+        second.updated_at = "2026-10-01T08:00:05Z".to_owned();
+        let expected = first.id.clone().max(second.id.clone());
+
+        for drafts in [
+            vec![first.clone(), second.clone()],
+            vec![second.clone(), first.clone()],
+        ] {
+            let picked = latest_draft_for(&source, drafts).expect("a draft");
+            assert_eq!(picked.id, expected);
+        }
     }
 
     #[test]
