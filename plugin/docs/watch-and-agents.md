@@ -190,8 +190,10 @@ setup hook shows only as such a warning; this is tracked in
 report that a session can run checks without having seen it do so.
 
 `launch_unverified` and `launch_timed_out` mean a session may exist although
-`do` reported an error. Run `pohunek session list` and `pohunek session inspect`
-to find it, never retry `do` blindly (a retry can start a second session), and
+`do` reported an error. Run `pohunek session list --json` and
+`pohunek session inspect` on the session whose metadata (`work.link.*`,
+`work.role`) matches the `--dry-run` plan to find it (the error carries no
+session id), never retry `do` blindly (a retry can start a second session), and
 never remove the session or its worktree without the confirmation described in
 [Finished sessions](#finished-sessions). Report the error text: it names the
 cleanup the owner decides on.
@@ -249,8 +251,10 @@ when `do` provides it.
 
 - Allowed: `pohunek session screen` of sessions the manager launched itself
   (the ids its `do` returned), to diagnose a launch or verify a prompt.
+- Allowed: `pohunek session list --json`, to find a session after a launch error.
 - Allowed: `pohunek session inspect` of those sessions, of sessions listed in a
-  row's `sessions[]` or `unlinked_sessions`, and of sessions named in a `do`
+  row's `sessions[]`, `unlinked_sessions` or `orphaned_sessions`, of the session
+  matching a `do` plan after `launch_timed_out`, and of sessions named in a `do`
   refusal; `pohunek session diff` of the same sessions during cleanup.
 - Not allowed: session transcripts (`session read`, `session output`), `screen`
   of any session the manager did not launch, and any other session, unless the
@@ -275,11 +279,12 @@ and the pull request stay.
 The manager removes a finished session only after the owner confirmed that
 removal for that session; a general permission to clean up is not that
 confirmation. Stopping a session is an owner decision of its own. The manager
-first runs only read-only checks, then reports the session and proposes the
+first runs only checks that change no work, then reports the session and proposes the
 stop and the removal with the results of the checks as evidence. The checks that
 must all hold:
 
-1. The session worktree (`worktree_path` from `session inspect`) has no
+1. The session worktree (`worktree_path` from `session inspect`, or `cwd` when
+   `worktree_path` is null) has no
    uncommitted or untracked files: `git -C <path> status --short` prints
    nothing. Ignored files do not fail the check, but `--force` deletes them:
    the proposal shows the output of `git -C <path> status --short --ignored`
@@ -289,11 +294,16 @@ must all hold:
    `git -C <path> rev-list --left-right --count 'HEAD...origin/<branch>'`
    prints two zeros (`0`, a tab, `0`). A branch with no remote counterpart
    fails the check and is reported.
-3. No follow-up step of the same task needs the worktree. An end-to-end run on
+3. No other session in `sessions[]`, `unlinked_sessions` or `orphaned_sessions`
+   has the same path as its `cwd` or `worktree_path`: removing the session that
+   owns a worktree deletes it under the other session. A session with a null
+   `worktree_path` (started with `--cwd` in another session's worktree) owns no
+   worktree, and `session rm` removes none for it.
+4. No follow-up step of the same task needs the worktree. An end-to-end run on
    a provisioned stack finishes first: removing the session removes the
    worktree, and a new session on the same branch would collide (the collision
    is [#84](https://github.com/zajca/pohunek-work/issues/84)).
-4. The session is not waiting on the owner: its activity is not `blocked`, and
+5. The session is not waiting on the owner: its activity is not `blocked`, and
    `pohunek notifications list --session <id> --json` holds no record of kind
    `agent_blocked` or `approval_required` with status `unread` or `read` (the
    statuses the `on_turn` rules count). An `err` answer means the check is
@@ -302,7 +312,7 @@ must all hold:
 After the owner confirmed the stop, the order follows core's rules:
 `pohunek session stop <id>`, confirm the terminal state with `session inspect`,
 `pohunek session diff <id> --json` as the inventory (stop when `ok.truncated` is
-`true`), repeat check 1 (the agent could write until it stopped), a separate
+`true`), repeat checks 1 and 2 (the agent could write or commit until it stopped), a separate
 owner confirmation for deleting the worktree, then `pohunek session rm <id>`.
 Report each removal. A session with unpushed, untracked or uncommitted work is
 never removed; it is reported to the owner. Never pass
