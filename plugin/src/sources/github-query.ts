@@ -116,6 +116,37 @@ export function buildIssueSearchRequest(
   return { query, variables: { q: queryString, top: sizes.issuePageSize, nested: sizes.nestedPageSize, after } };
 }
 
+/**
+ * Issues of a repository by number, each under the alias `i<index>`, with the first page of their
+ * labels. The numbers travel as variables; the batch is bounded by the caller to `issue_page_size`
+ * issues, which is the shape `estimateIssueSearchNodes` already validates.
+ */
+export function buildIgnoredIssuesRequest(
+  owner: string,
+  name: string,
+  numbers: readonly number[],
+  nestedPageSize: number,
+): GraphqlRequest {
+  const declarations = numbers.map((_, index) => `, $n${index.toString()}: Int!`).join("");
+  const aliases = numbers
+    .map(
+      (_, index) =>
+        `i${index.toString()}: issue(number: $n${index.toString()}) { id number labels(first: $nested) { ${LABEL_FIELDS} } }`,
+    )
+    .join("\n    ");
+  const query = `query PohunekWorkIgnoredIssues($owner: String!, $name: String!, $nested: Int!${declarations}) {
+  rateLimit { remaining }
+  repository(owner: $owner, name: $name) {
+    ${aliases}
+  }
+}`;
+  const variables: GraphqlVariables = { owner, name, nested: nestedPageSize };
+  numbers.forEach((number, index) => {
+    variables[`n${index.toString()}`] = number;
+  });
+  return { query, variables };
+}
+
 /** One issue of a repository by number, with the fields the `implement` prompt carries. */
 export function buildIssueDetailRequest(owner: string, name: string, number: number): GraphqlRequest {
   const query = `query PohunekWorkIssueDetail($owner: String!, $name: String!, $number: Int!) {

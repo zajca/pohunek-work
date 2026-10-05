@@ -416,7 +416,25 @@ Linear attachment only). It also needs `github` for every row without pull
 request data (an issue row): while `github` is down the open pull request that
 carries the label is missing. Such a row is `unknown` with the failing source's
 code before rules 1 and 2 are evaluated, offers no action (`attach` included),
-`do` refuses it and `watch` neither notifies it nor prunes its baseline. Rule 8 needs it for every row that has an issue.
+`do` refuses it and `watch` neither notifies it nor prunes its baseline.
+
+The issue source lists only started issues assigned to the owner (Linear) or
+open issues with a started or paused label (GitHub), so an authored pull request
+can join an issue the list does not return, for example one the owner parked
+with the ignore label and moved to Backlog. For a project with `ignore_label`,
+such a row (joined to an issue key, no issue returned, pull request not itself
+ignored) triggers one targeted lookup per project and poll: the labels of
+exactly those issues, requested in batches of the source's page size
+(`[linear] page_size`, `[github] issue_page_size`) with the label pages followed
+to their end. A key whose issue carries the label makes the row ignored; a key
+whose issue does not carry it, or does not exist (an empty Linear result, a
+GitHub `NOT_FOUND` for exactly that lookup), leaves the row as it is. Linear
+looks up only keys of the project's `linear_team` and GitHub only keys of the
+project's `repo`. Any other error, or a label page that cannot be followed
+(`truncated`), makes every row of the lookup `unknown` with the reason
+`<source>:<code>` (`linear` or `github_issues`), under the same rules as above.
+Nothing is asked without `ignore_label`, without such a row, or while the issue
+source or `github` is down. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 

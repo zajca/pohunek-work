@@ -393,3 +393,90 @@ test("a missing labels connection under an ignore label is invalid_response", as
   if (result.ok) return;
   expect(result.code).toBe("invalid_response");
 });
+
+// Targeted ignore-label lookup of issues the list did not return.
+const lookupPage = (nodes: { identifier: string; id?: string; labels: string[]; more?: string }[], hasNextPage = false): unknown => ({
+  data: {
+    issues: {
+      nodes: nodes.map((node, index) => ({
+        id: node.id ?? `id-${index.toString()}`,
+        identifier: node.identifier,
+        labels: {
+          nodes: node.labels.map((name) => ({ name })),
+          pageInfo: { hasNextPage: node.more !== undefined, endCursor: node.more ?? null },
+        },
+      })),
+      pageInfo: { hasNextPage, endCursor: hasNextPage ? "more" : null },
+    },
+  },
+});
+
+async function ignoredKeys(f: typeof fetch, keys: readonly string[], p: LinearProject = withIgnore): ReturnType<ReturnType<typeof createLinearSource>["fetchIgnoredKeys"]> {
+  return source(f).fetchIgnoredKeys(p, keys);
+}
+
+test("the lookup asks the team's issues by number, with the first label page, and reports the labelled keys", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["bug", "pohunek:IGNORE"] }])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"]);
+  expect(result).toMatchObject({ ok: true, source: "linear" });
+  if (!result.ok) return;
+  expect([...result.data]).toEqual(["ABC-1"]);
+  expect(run.calls).toHaveLength(1);
+  expect(run.calls[0]?.body.query).toContain("number: { in: $numbers }");
+  expect(run.calls[0]?.body.query).toContain("team: { key: { eq: $teamKey } }");
+  expect(run.calls[0]?.body.variables).toEqual({ first: 1, teamKey: "ABC", numbers: [1], labelsFirst: 1 });
+});
+
+test("an issue without the ignore label and a key Linear does not return are not reported", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["bug"] }])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"]);
+  expect(result.ok && result.data.size).toBe(0);
+  const empty = fetcher(() => json(lookupPage([])));
+  const none = await ignoredKeys(empty.fetch, ["ABC-9"]);
+  expect(none.ok && none.data.size).toBe(0);
+});
+
+test("keys are batched by page_size and the requested spelling is reported", async () => {
+  const bodies = [lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }]), lookupPage([{ identifier: "ABC-2", labels: [] }])];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, ["abc-1", "ABC-2"]);
+  expect(run.calls.map((c) => c.body.variables["numbers"])).toEqual([[1], [2]]);
+  expect(result.ok && [...result.data]).toEqual(["abc-1"]);
+});
+
+test("keys of another team or of another shape are never asked for", async () => {
+  const run = fetcher(() => json(lookupPage([])));
+  const result = await ignoredKeys(run.fetch, ["XYZ-1", "not-a-key", "ABC-0", "ABC-x"]);
+  expect(run.calls).toHaveLength(0);
+  expect(result.ok && result.data.size).toBe(0);
+});
+
+test("a project without an ignore label asks nothing", async () => {
+  const run = fetcher(() => json(lookupPage([])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"], project);
+  expect(run.calls).toHaveLength(0);
+  expect(result.ok && result.data.size).toBe(0);
+});
+
+test("the lookup follows a label page cut short and fails truncated when it cannot", async () => {
+  const first = lookupPage([{ identifier: "ABC-1", labels: ["bug"], more: "lab-1", id: "uuid-1" }]);
+  const second = { data: { issue: { labels: { nodes: [{ name: "Pohunek:Ignore" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const paged = fetcher((_c, i) => json([first, second][i]));
+  const found = await ignoredKeys(paged.fetch, ["ABC-1"]);
+  expect(found.ok && [...found.data]).toEqual(["ABC-1"]);
+  expect(paged.calls[1]?.body.variables).toEqual({ id: "uuid-1", first: 1, after: "lab-1" });
+  const looping = { data: { issue: { labels: { nodes: [{ name: "x" }], pageInfo: { hasNextPage: true, endCursor: "lab-1" } } } } };
+  const stuck = fetcher((_c, i) => json([first, looping][i]));
+  expect(await ignoredKeys(stuck.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "truncated" });
+});
+
+test("more issues than asked for, an error and a bad shape fail the lookup", async () => {
+  const more = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: [] }], true)));
+  expect(await ignoredKeys(more.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "truncated" });
+  const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
+  expect(await ignoredKeys(limited.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "rate_limited" });
+  const broken = fetcher(() => json({ data: { issues: { nodes: [{ id: "i", identifier: "ABC-1" }], pageInfo: { hasNextPage: false, endCursor: null } } } }));
+  expect(await ignoredKeys(broken.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "invalid_response" });
+  const down = fetcher(() => json({}, 503));
+  expect(await ignoredKeys(down.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "unavailable" });
+});

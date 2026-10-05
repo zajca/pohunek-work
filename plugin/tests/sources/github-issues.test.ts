@@ -431,3 +431,92 @@ describe("ignore label", () => {
     expect(await source.fetchPullRequests(linearWith("pohunek:ignore"))).toMatchObject({ ok: false, code: "truncated" });
   });
 });
+
+describe("ignore label lookup of unlisted issues", () => {
+  const withLabel = (label: string | null): GithubProject => ({ ...githubProject, ignoreLabel: label });
+  const labels = (names: string[], next: string | null = null): Json => ({
+    nodes: names.map((name) => ({ name })),
+    pageInfo: { hasNextPage: next !== null, endCursor: next ?? "E" },
+  });
+  const issueNode = (number: number, names: string[], next: string | null = null): Json => ({
+    id: `I_${number.toString()}`,
+    number,
+    labels: labels(names, next),
+  });
+  const answer = (aliases: Record<string, Json | null>): Json => ({ data: { rateLimit: { remaining: 1 }, repository: aliases } });
+  const notFound = (alias: string): Json => ({ type: "NOT_FOUND", path: ["repository", alias], message: "Could not resolve to an Issue with the number of 9." });
+
+  function keysOf(result: SourceResult<ReadonlySet<string>>): string[] {
+    if (!result.ok) throw new Error(`expected success, got ${result.code}`);
+    expect(result.source).toBe("github_issues");
+    return [...result.data];
+  }
+
+  test("issues are asked for by number as aliases with variables, and the labelled keys are reported case-insensitively", async () => {
+    const { source, requests } = sourceWith(() =>
+      reply(answer({ i0: issueNode(5, ["in-progress", "POHUNEK:ignore"]), i1: issueNode(6, ["bug"]) })),
+    );
+    const found = keysOf(await source.fetchIgnoredKeys(withLabel("pohunek:ignore"), ["acme/widgets#5", "acme/widgets#6"]));
+    expect(found).toEqual(["acme/widgets#5"]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.query).toContain("i0: issue(number: $n0)");
+    expect(requests[0]?.query).toContain("i1: issue(number: $n1)");
+    expect(requests[0]?.variables).toEqual({ owner: "acme", name: "widgets", nested: 5, n0: 5, n1: 6 });
+  });
+
+  test("an issue that does not exist is not reported and does not fail the batch", async () => {
+    const body = { ...answer({ i0: null, i1: issueNode(6, ["pohunek:ignore"]) }), errors: [notFound("i0")] };
+    const { source } = sourceWith(() => reply(body));
+    expect(keysOf(await source.fetchIgnoredKeys(withLabel("pohunek:ignore"), ["acme/widgets#5", "acme/widgets#6"]))).toEqual(["acme/widgets#6"]);
+  });
+
+  test("any other error fails the lookup, including a not-found outside a lookup alias", async () => {
+    const forbidden = { ...answer({ i0: null }), errors: [{ type: "FORBIDDEN", path: ["repository", "i0"] }] };
+    expect(await sourceWith(() => reply(forbidden)).source.fetchIgnoredKeys(withLabel("x"), ["acme/widgets#5"])).toMatchObject({ ok: false, code: "invalid_response" });
+    const repository = { data: { repository: null }, errors: [{ type: "NOT_FOUND", path: ["repository"] }] };
+    expect(await sourceWith(() => reply(repository)).source.fetchIgnoredKeys(withLabel("x"), ["acme/widgets#5"])).toMatchObject({ ok: false, code: "invalid_response" });
+    const mixed = { ...answer({ i0: null }), errors: [notFound("i0"), { type: "FORBIDDEN", path: ["repository", "i0"] }] };
+    expect(await sourceWith(() => reply(mixed)).source.fetchIgnoredKeys(withLabel("x"), ["acme/widgets#5"])).toMatchObject({ ok: false });
+    const limited = { errors: [{ type: "RATE_LIMITED" }] };
+    expect(await sourceWith(() => reply(limited)).source.fetchIgnoredKeys(withLabel("x"), ["acme/widgets#5"])).toMatchObject({ ok: false, code: "rate_limited" });
+  });
+
+  test("keys are batched by issue_page_size", async () => {
+    const numbers = [1, 2, 3, 4, 5];
+    const { source, requests } = sourceWith((request) => {
+      const aliases: Record<string, Json | null> = {};
+      Object.entries(request.variables)
+        .filter(([name]) => /^n\d+$/.test(name))
+        .forEach(([name, value]) => {
+          aliases[`i${name.slice(1)}`] = issueNode(value as number, value === 5 ? ["pohunek:ignore"] : []);
+        });
+      return reply(answer(aliases));
+    });
+    const found = keysOf(await source.fetchIgnoredKeys(withLabel("pohunek:ignore"), numbers.map((n) => `acme/widgets#${n.toString()}`)));
+    expect(found).toEqual(["acme/widgets#5"]);
+    expect(requests.map((r) => Object.keys(r.variables).filter((k) => /^n\d+$/.test(k)).length)).toEqual([4, 1]);
+  });
+
+  test("keys of another repository or shape and a project without an ignore label ask nothing", async () => {
+    const { source, requests } = sourceWith(() => reply(answer({})));
+    expect(keysOf(await source.fetchIgnoredKeys(withLabel("x"), ["other/repo#5", "acme/widgets#0", "acme/widgets#x", "ABC-1"]))).toEqual([]);
+    expect(keysOf(await source.fetchIgnoredKeys(withLabel(null), ["acme/widgets#5"]))).toEqual([]);
+    expect(requests).toHaveLength(0);
+  });
+
+  test("a label page cut short is followed by node id, and one that cannot be followed fails truncated", async () => {
+    const first = answer({ i0: issueNode(5, ["in-progress"], "L5") });
+    const next = { data: { rateLimit: { remaining: 1 }, c0: { labels: labels(["pohunek:ignore"]) } } };
+    const paged = sourceWith((_request, index) => reply(index === 0 ? first : next));
+    expect(keysOf(await paged.source.fetchIgnoredKeys(withLabel("pohunek:ignore"), ["acme/widgets#5"]))).toEqual(["acme/widgets#5"]);
+    expect(paged.requests).toHaveLength(2);
+    const loop = { data: { rateLimit: { remaining: 1 }, c0: { labels: labels(["x"], "L5") } } };
+    const stuck = sourceWith((_request, index) => reply(index === 0 ? first : loop));
+    expect(await stuck.source.fetchIgnoredKeys(withLabel("pohunek:ignore"), ["acme/widgets#5"])).toMatchObject({ ok: false, code: "truncated" });
+  });
+
+  test("a returned issue with another number is a schema mismatch", async () => {
+    const { source } = sourceWith(() => reply(answer({ i0: issueNode(6, []) })));
+    expect(await source.fetchIgnoredKeys(withLabel("x"), ["acme/widgets#5"])).toMatchObject({ ok: false, code: "invalid_response" });
+  });
+});

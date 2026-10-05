@@ -193,8 +193,9 @@ function issueSourceFailure(sources: SourceStatuses, project: Pick<ProjectConfig
 /**
  * Failure text of the source that hides the project's ignore label from the row; null otherwise.
  * A row without pull request data may have lost an open pull request that carries the label
- * while `github` is down. A row whose issue the source did not return may be parked by the
- * issue's label; a Linear pull request without a key may be linked to its issue by a Linear
+ * while `github` is down. A row whose issue the issue source did not list may be parked by the
+ * issue's label: its targeted lookup decides, and while the issue source is down the row is
+ * unknown. A Linear pull request without a key may be linked to its issue by a Linear
  * attachment only.
  */
 export function ignoreLabelUnreadable(
@@ -208,6 +209,7 @@ export function ignoreLabelUnreadable(
     if (githubFailure !== null) return githubFailure;
   }
   if ((item.issue ?? item.resolvedIssue) !== null) return null;
+  if (item.issueLookup !== null) return item.issueLookup.ok ? null : item.issueLookup.reason;
   const authored = item.pullRequest !== null && item.pullRequest.relation === "authored";
   const keyUnknown = project.issueSource.kind === "linear" && authored && item.issueKey === null && !item.noIssue;
   if (item.joinedBy === null && item.issueKey === null && !keyUnknown) return null;

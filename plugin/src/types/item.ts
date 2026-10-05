@@ -106,15 +106,31 @@ export interface WorkItem {
    * issue row and is also set on a secondary pull request row, whose `issue` is null.
    */
   readonly resolvedIssue: Issue | null;
+  /**
+   * Whether the issue behind `issueKey` carries the project's ignore label, for a row whose issue the
+   * issue source did not return (it lists only started issues assigned to the owner). Null when no
+   * lookup ran; a failed lookup keeps the reason for the row's unknown verdict.
+   */
+  readonly issueLookup: IssueLookup | null;
   /** Sessions linked to this item, in pohunek order. */
   readonly sessions: readonly PohunekSession[];
   /** Notifications of the linked sessions. */
   readonly notifications: readonly PohunekNotification[];
 }
 
+/** Outcome of the targeted ignore-label lookup of an issue the issue source did not list. */
+export type IssueLookup =
+  | { readonly ok: true; readonly ignored: boolean }
+  | { readonly ok: false; /** Source and failure code, e.g. `linear:truncated`. */ readonly reason: string };
+
 /** A row is ignored (parked) when its pull request, its issue or the issue it resolved to carries the project's ignore label. */
 export function isIgnoredItem(item: WorkItem): boolean {
-  return (item.pullRequest?.ignored ?? false) || (item.issue?.ignored ?? false) || (item.resolvedIssue?.ignored ?? false);
+  return (
+    (item.pullRequest?.ignored ?? false) ||
+    (item.issue?.ignored ?? false) ||
+    (item.resolvedIssue?.ignored ?? false) ||
+    (item.issueLookup?.ok === true && item.issueLookup.ignored)
+  );
 }
 
 export interface UnlinkedSession {

@@ -8,6 +8,12 @@ import { readKeyringSecret } from "./keyring.ts";
 
 export interface LinearSource {
   fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>>;
+  /**
+   * Of the issue keys asked for, those whose issue carries the project's ignore label. The list
+   * holds only started issues assigned to the owner, so a pull request can join an issue it does
+   * not return. A key that matches no issue of the project's team is not in the result.
+   */
+  fetchIgnoredKeys(project: LinearProject, keys: readonly string[]): Promise<SourceResult<ReadonlySet<string>>>;
 }
 
 export interface LinearDeps {
@@ -71,6 +77,25 @@ query WorkIssueLabels($id: String!, $first: Int!, $after: String) {
     }
   }
 }`;
+
+// Issues of one team by number, with the first page of their labels. At most `page_size` numbers
+// are asked per request, so the document is a subset of the issue page query.
+const IGNORED_ISSUES_QUERY = `
+query WorkIgnoredIssues($first: Int!, $teamKey: String!, $numbers: [Float!]!, $labelsFirst: Int!) {
+  issues(first: $first, filter: { team: { key: { eq: $teamKey } }, number: { in: $numbers } }) {
+    nodes {
+      id
+      identifier
+      labels(first: $labelsFirst) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+const ISSUE_KEY = /^([A-Za-z0-9]+)-([1-9][0-9]*)$/;
 
 const STATE_TYPES: ReadonlySet<string> = new Set([
   "triage",
@@ -359,34 +384,94 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     }
   }
 
-  return {
-    async fetchIssues(project) {
-      const started = performance.now();
-      const elapsed = (): number => Math.round(performance.now() - started);
-      const fail = (code: SourceErrorCode, message: string): SourceResult<never> => ({
-        ok: false,
-        source: "linear",
-        code,
-        message,
-        durationMs: elapsed(),
+  /** Keys of `team` among `keys`, as upper-cased identifier mapped to the requested spelling. */
+  function teamNumbers(team: string, keys: readonly string[]): Map<number, string> {
+    const numbers = new Map<number, string>();
+    for (const key of keys) {
+      const match = ISSUE_KEY.exec(key);
+      if (match !== null && match[1]?.toUpperCase() === team.toUpperCase()) {
+        numbers.set(Number(match[2]), key);
+      }
+    }
+    return numbers;
+  }
+
+  async function collectIgnoredKeys(
+    token: string,
+    team: string,
+    ignoreLabel: string,
+    keys: readonly string[],
+  ): Promise<Set<string>> {
+    const numbers = teamNumbers(team, keys);
+    const requested = [...numbers.keys()];
+    const ignored = new Set<string>();
+    for (let start = 0; start < requested.length; start += config.pageSize) {
+      const batch = requested.slice(start, start + config.pageSize);
+      const data = await post(token, IGNORED_ISSUES_QUERY, {
+        first: batch.length,
+        teamKey: team,
+        numbers: batch,
+        labelsFirst: config.pageSize,
       });
-      const keyringDeps = deps.exec === undefined ? {} : { exec: deps.exec };
-      const secret = await readKeyringSecret(config, keyringDeps);
-      if (!secret.ok) {
-        return fail("unauthenticated", `Linear token unavailable: keyring ${secret.kind} (${secret.message})`);
+      const connection = obj(data["issues"], "issues");
+      if (parsePageInfo(connection["pageInfo"], "issues.pageInfo").hasNextPage) {
+        throw new LinearFailure("truncated", "Linear returned more issues than were asked for");
       }
-      if (!HEADER_SAFE.test(secret.secret)) {
-        return fail("unauthenticated", "Linear token from keyring is not a valid API key");
-      }
-      try {
-        const data = await collectIssues(secret.secret, project.issueSource.team, project.issueSource.pausedStates, project.ignoreLabel);
-        return { ok: true, source: "linear", data, durationMs: elapsed() };
-      } catch (error) {
-        if (error instanceof LinearFailure) {
-          return fail(error.code, error.message);
+      for (const node of arr(connection["nodes"], "issues.nodes")) {
+        const issue = obj(node, "issue");
+        const match = ISSUE_KEY.exec(str(issue, "identifier", "issue.identifier"));
+        const key = match === null ? undefined : numbers.get(Number(match[2]));
+        if (key !== undefined && (await isIgnored(token, issue, ignoreLabel))) {
+          ignored.add(key);
         }
-        throw error;
       }
+    }
+    return ignored;
+  }
+
+  async function withToken<T>(
+    run: (token: string) => Promise<T>,
+  ): Promise<{ ok: true; data: T; durationMs: number } | SourceResult<never>> {
+    const started = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - started);
+    const fail = (code: SourceErrorCode, message: string): SourceResult<never> => ({
+      ok: false,
+      source: "linear",
+      code,
+      message,
+      durationMs: elapsed(),
+    });
+    const keyringDeps = deps.exec === undefined ? {} : { exec: deps.exec };
+    const secret = await readKeyringSecret(config, keyringDeps);
+    if (!secret.ok) {
+      return fail("unauthenticated", `Linear token unavailable: keyring ${secret.kind} (${secret.message})`);
+    }
+    if (!HEADER_SAFE.test(secret.secret)) {
+      return fail("unauthenticated", "Linear token from keyring is not a valid API key");
+    }
+    try {
+      return { ok: true, data: await run(secret.secret), durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof LinearFailure) {
+        return fail(error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  return {
+    async fetchIgnoredKeys(project, keys) {
+      const ignoreLabel = project.ignoreLabel;
+      if (ignoreLabel === null) {
+        return { ok: true, source: "linear", data: new Set<string>(), durationMs: 0 };
+      }
+      const result = await withToken((token) => collectIgnoredKeys(token, project.issueSource.team, ignoreLabel, keys));
+      return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
+    },
+    async fetchIssues(project) {
+      const { team, pausedStates } = project.issueSource;
+      const result = await withToken((token) => collectIssues(token, team, pausedStates, project.ignoreLabel));
+      return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
     },
   };
 }

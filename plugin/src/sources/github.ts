@@ -29,6 +29,7 @@ import type {
 import { exec as defaultExec, SpawnError, type Exec } from "../util/exec.ts";
 import {
   buildConnectionRequest,
+  buildIgnoredIssuesRequest,
   buildIssueDetailRequest,
   buildIssueSearchRequest,
   buildMergedSearchRequest,
@@ -56,6 +57,12 @@ export interface GithubSource {
   fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
   /** Open issues of the project's repository assigned to the owner that carry a started or paused label. */
   fetchIssues(project: GithubProject): Promise<SourceResult<readonly Issue[]>>;
+  /**
+   * Of the issue keys asked for, those whose issue carries the project's ignore label. The issue
+   * search lists only open issues with a started or paused label, so a pull request can join an
+   * issue it does not return. A key whose issue does not exist is not in the result.
+   */
+  fetchIgnoredKeys(project: GithubProject, keys: readonly string[]): Promise<SourceResult<ReadonlySet<string>>>;
   /** One issue of the project's repository by number, with its body; used only when `implement` is planned. */
   fetchIssueDetail(project: GithubProject, number: number): Promise<SourceResult<IssueDetail>>;
 }
@@ -398,7 +405,10 @@ function graphqlErrorFailure(errors: unknown[]): SourceFailureError {
   return new SourceFailureError("invalid_response", `GitHub GraphQL returned errors${detail}`);
 }
 
-async function send(transport: Transport, request: GraphqlRequest): Promise<JsonObject> {
+/** Decides whether one GraphQL error of a response is expected and leaves the rest of the data usable. */
+type ToleratedError = (error: unknown) => boolean;
+
+async function send(transport: Transport, request: GraphqlRequest, tolerated?: ToleratedError): Promise<JsonObject> {
   let response: Response;
   try {
     response = await transport.fetchFn(transport.config.endpoint, {
@@ -443,7 +453,10 @@ async function send(transport: Transport, request: GraphqlRequest): Promise<Json
   const envelope = asObject(body, "envelope");
   const errors = envelope["errors"];
   if (errors !== undefined && errors !== null) {
-    throw graphqlErrorFailure(Array.isArray(errors) ? (errors as unknown[]) : []);
+    const list = Array.isArray(errors) ? (errors as unknown[]) : [];
+    if (tolerated === undefined || list.length === 0 || !list.every(tolerated)) {
+      throw graphqlErrorFailure(list);
+    }
   }
   // rateLimit.remaining is the budget left after this query, so 0 on a complete response is valid;
   // exhaustion arrives as a RATE_LIMITED error or HTTP 403/429.
@@ -815,6 +828,25 @@ function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
 
 // ------------------------------------------------------------------ source
 
+const ISSUE_NUMBER = /^[1-9][0-9]*$/;
+
+/** A `NOT_FOUND` error whose path is exactly `repository.<alias>` of one lookup alias: the issue does not exist. */
+function missingIssueError(aliases: ReadonlySet<string>): ToleratedError {
+  return (raw) => {
+    if (typeof raw !== "object" || raw === null) return false;
+    const error = raw as JsonObject;
+    const path = error["path"];
+    return (
+      error["type"] === "NOT_FOUND" &&
+      Array.isArray(path) &&
+      path.length === 2 &&
+      path[0] === "repository" &&
+      typeof path[1] === "string" &&
+      aliases.has(path[1])
+    );
+  };
+}
+
 function validateInputs(project: ProjectConfig, identity: IdentityConfig): void {
   if (!REPO_PATTERN.test(project.repo)) {
     throw new SourceFailureError("not_configured", `project ${project.name} has an invalid repo`);
@@ -972,6 +1004,68 @@ export function createGithubSource(
     }
   };
 
+  const fetchIgnoredKeys = async (
+    project: GithubProject,
+    keys: readonly string[],
+  ): Promise<SourceResult<ReadonlySet<string>>> => {
+    const startedAt = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - startedAt);
+    try {
+      validateInputs(project, config.identity);
+      const ignoreLabel = project.ignoreLabel;
+      const prefix = `${project.repo.toLowerCase()}#`;
+      const byNumber = new Map<number, string>();
+      for (const key of keys) {
+        const digits = key.slice(prefix.length);
+        if (key.toLowerCase().startsWith(prefix) && ISSUE_NUMBER.test(digits) && Number.isSafeInteger(Number(digits))) {
+          byNumber.set(Number(digits), key);
+        }
+      }
+      const ignored = new Set<string>();
+      if (ignoreLabel === null || byNumber.size === 0) {
+        return { ok: true, source: "github_issues", data: ignored, durationMs: elapsed() };
+      }
+      const [owner = "", name = ""] = project.repo.split("/");
+      const token = await obtainToken(config.github, execFn);
+      const transport: Transport = {
+        token,
+        config: config.github,
+        fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+      };
+      const numbers = [...byNumber.keys()];
+      for (let start = 0; start < numbers.length; start += config.github.issuePageSize) {
+        const batch = numbers.slice(start, start + config.github.issuePageSize);
+        const aliases = new Set(batch.map((_, index) => `i${index.toString()}`));
+        const data = await send(
+          transport,
+          buildIgnoredIssuesRequest(owner, name, batch, config.github.nestedPageSize),
+          missingIssueError(aliases),
+        );
+        const repository = asObject(data["repository"], "repository");
+        const found: { readonly number: number; readonly raw: JsonObject }[] = [];
+        batch.forEach((number, index) => {
+          const raw = repository[`i${index.toString()}`];
+          if (raw === null) return;
+          const issue = asObject(raw, "issue");
+          if (asInteger(issue["number"], "issue.number") !== number) throw schemaMismatch("issue.number");
+          found.push({ number, raw: issue });
+        });
+        // A label page cut short could hide the ignore label.
+        await completeNestedConnections(transport, found.map((entry) => entry.raw), new WeakMap(), collectPendingIssues);
+        for (const { number, raw } of found) {
+          const key = byNumber.get(number);
+          if (key !== undefined && carriesIgnoreLabel(labelNames(raw), ignoreLabel)) ignored.add(key);
+        }
+      }
+      return { ok: true, source: "github_issues", data: ignored, durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof SourceFailureError) {
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+      }
+      throw error;
+    }
+  };
+
   const fetchIssueDetail = async (project: GithubProject, number: number): Promise<SourceResult<IssueDetail>> => {
     const startedAt = performance.now();
     const elapsed = (): number => Math.round(performance.now() - startedAt);
@@ -998,5 +1092,5 @@ export function createGithubSource(
     }
   };
 
-  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIssueDetail };
+  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIgnoredKeys, fetchIssueDetail };
 }

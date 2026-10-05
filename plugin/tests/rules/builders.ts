@@ -166,6 +166,7 @@ export function item(overrides: Partial<WorkItem> = {}): WorkItem {
     noIssue: true,
     issueKey: null,
     resolvedIssue: null,
+    issueLookup: null,
     sessions: [],
     notifications: [],
     ...overrides,

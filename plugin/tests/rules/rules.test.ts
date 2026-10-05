@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isIgnoredItem } from "../../src/types/item.ts";
 import { evaluateOnTurn, ignoreLabelUnreadable, isAiReviewer, isLiveSession, summarizeChecks } from "../../src/rules.ts";
 import {
   T0,
@@ -788,5 +789,28 @@ describe("rule 12 with an ignore label and nothing to pause", () => {
 
   test("with the issue source up the row is the owner's turn", () => {
     expect(onTurn(item(secondary), allOk, withLabel).rule).toBe(5);
+  });
+});
+
+describe("rule 12 with an ignore label and an issue the issue source did not list", () => {
+  const withLabel = { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } as const;
+  const unlisted = item({ key: "linear:ABC-1", issueKey: "ABC-1", joinedBy: "branch_pattern", noIssue: false, pullRequest: pr({ checks: [check("build", "failure")] }) });
+
+  test("a failed lookup makes the row unknown with the lookup's reason, before the pohunek rules", () => {
+    const failedLookup = item({ ...unlisted, issueLookup: { ok: false, reason: "linear:truncated" }, sessions: [session()], notifications: [notification()] });
+    expect(onTurn(failedLookup, allOk, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(ignoreLabelUnreadable(failedLookup, allOk, withLabel)).toBe("linear:truncated");
+  });
+
+  test("a lookup that found the issue unlabelled or labelled leaves the verdict to the rules", () => {
+    for (const ignored of [false, true]) {
+      expect(onTurn(item({ ...unlisted, issueLookup: { ok: true, ignored } }), allOk, withLabel)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });
+    }
+  });
+
+  test("a row ignored by the lookup is an ignored row", () => {
+    expect(isIgnoredItem(item({ ...unlisted, issueLookup: { ok: true, ignored: true } }))).toBe(true);
+    expect(isIgnoredItem(item({ ...unlisted, issueLookup: { ok: true, ignored: false } }))).toBe(false);
+    expect(isIgnoredItem(item({ ...unlisted, issueLookup: { ok: false, reason: "linear:timeout" } }))).toBe(false);
   });
 });
