@@ -36,7 +36,8 @@
   },
   "review": {
     "automatedReviewMarker": "<!-- hermes-codex-review:<repo>#<pr>:<sha> -->",
-    "note": "An automated PR review lands per head commit, usually minutes after CI. Merging requires CI green and the review of the exact head."
+    "trigger": "ai:review",
+    "note": "The automated review runs only for a PR labeled by the trigger label. It lands per head commit, usually minutes after CI. Merging requires CI green and the review of the exact head."
   },
   "surfaces": {
     "plugin": { "path": "plugin", "tagPrefix": "plugin-v", "versionSource": "plugin/package.json" },
