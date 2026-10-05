@@ -412,9 +412,11 @@ do not depend on the issue source for rule 12. A project with `ignore_label`
 needs the issue source for every row whose issue may carry the label: a row
 joined to an issue key and, for a Linear project, an authored pull request
 without a key while the source is down (it may be linked to its issue by a
-Linear attachment only). Such a row is `unknown` with the source's code before
-rules 1 and 2 are evaluated, offers no action (`attach` included) and `do`
-refuses it. Rule 8 needs it for every row that has an issue.
+Linear attachment only). It also needs `github` for every row without pull
+request data (an issue row): while `github` is down the open pull request that
+carries the label is missing. Such a row is `unknown` with the failing source's
+code before rules 1 and 2 are evaluated, offers no action (`attach` included),
+`do` refuses it and `watch` neither notifies it nor prunes its baseline. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 
@@ -662,7 +664,8 @@ Rules:
   issue page also selects `labels(first: page_size)`. Linear caps a query at
   10,000 complexity points, so `[linear] page_size` is validated at load: at
   most 93 in general and at most 66 while a Linear project sets `ignore_label`
-  (`ConfigError` naming `linear.page_size`). While the issue source is down a
+  (`ConfigError` naming `linear.page_size`). While `github` is down an issue row
+  (no pull request data) is `unknown`, and while the issue source is down a
   row whose issue is unknown (joined to a key, or an authored Linear pull
   request without a key) is `unknown` before rules 1 and 2, with no actions and
   no notification, because that issue may carry the label (8.3).

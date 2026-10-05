@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateOnTurn, isAiReviewer, isLiveSession, summarizeChecks } from "../../src/rules.ts";
+import { evaluateOnTurn, ignoreLabelUnreadable, isAiReviewer, isLiveSession, summarizeChecks } from "../../src/rules.ts";
 import {
   T0,
   T1,
@@ -764,6 +764,22 @@ describe("rule 12 with an ignore label and nothing to pause", () => {
     expect(onTurn(item({ ...unkeyed, pullRequest: pr({ relation: "review_requested" }) }), down, withLabel).actor).toBe("me");
     const githubSource = { ...withLabel, issueSource: githubIssueSource };
     expect(onTurn(item({ ...unkeyed, pullRequest: failing }), { ...allOk, github_issues: "truncated", linear: "unused" }, githubSource).rule).toBe(5);
+  });
+
+  test("an issue row without pull request data is unknown while github is down, because the pull request may carry the label", () => {
+    const issueRow = item({ key: "linear:ABC-1", issue: issue(), resolvedIssue: issue(), issueKey: "ABC-1", joinedBy: null, noIssue: false, pullRequest: null, sessions: [session()], notifications: [notification()] });
+    for (const github of ["truncated", "rate_limited"] as const) {
+      expect(onTurn(issueRow, { ...allOk, github }, withLabel)).toEqual({ actor: "unknown", reason: `github:${github}`, rule: null });
+      expect(onTurn(issueRow, { ...allOk, github }, noPause).rule).toBe(1);
+    }
+    expect(onTurn(issueRow, allOk, withLabel).rule).toBe(1);
+    const working = item({ ...issueRow, notifications: [], sessions: [session({ activity: "working" })] });
+    expect(onTurn(working, { ...allOk, github: "truncated" }, withLabel).actor).toBe("unknown");
+  });
+
+  test("a row with its own pull request data and a review request are not made unknown by github alone", () => {
+    expect(ignoreLabelUnreadable(item({ ...secondary, resolvedIssue: issue() }), { ...allOk, github: "truncated" }, withLabel)).toBeNull();
+    expect(ignoreLabelUnreadable(item({ ...secondary, resolvedIssue: issue(), pullRequest: pr({ relation: "review_requested" }) }), allOk, withLabel)).toBeNull();
   });
 
   test("without an ignore label and without paused states the row stays the owner's turn", () => {
