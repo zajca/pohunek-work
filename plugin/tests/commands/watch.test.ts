@@ -309,6 +309,25 @@ test("a pull request of a GitHub issue the issue source did not list stays silen
   expect(h.argvs).toEqual([]);
 });
 
+test("a keyless pull request attached to a parked Linear issue never notifies, and a failed lookup keeps the baseline", async () => {
+  const keyless = { headRefName: "feature/x" } as const;
+  const h = harness([pr({ ...keyless, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.get("widgets github:acme/widgets#12")).toBe("reviewer");
+  const failing = pr({ ...keyless, checks: [check("build", "failure")] });
+  h.world.prs = githubOk([failing]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set([failing.url]), durationMs: 1 };
+  const parked = await guardedTick(h, first.baseline);
+  expect(parked.notified).toEqual([]);
+  expect(parked.baseline?.size).toBe(0);
+  h.world.ignoredKeys = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(down.baseline?.get("widgets github:acme/widgets#12")).toBe("reviewer");
+  expect(h.argvs).toEqual([]);
+});
+
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {
   const h = harness([mine]);
   h.world.prs = { ok: false, source: "github", code: "rate_limited", message: "failed", durationMs: 1 };

@@ -72,8 +72,8 @@ function deps(world: World): Parameters<typeof runList>[2] {
     },
     linear: {
       fetchIssues: () => Promise.resolve(world.issues ?? ok("linear", [])),
-      fetchIgnoredKeys: (_project: unknown, keys: readonly string[]) => {
-        world.lookups?.push([...keys]);
+      fetchIgnoredKeys: (_project: unknown, keys: readonly string[], urls: readonly string[]) => {
+        world.lookups?.push([...keys, ...urls.map((url) => `url:${url}`)]);
         return world.ignoredKeys === undefined ? Promise.reject(new Error("the test did not expect an ignore-label lookup")) : Promise.resolve(world.ignoredKeys);
       },
     },
@@ -275,13 +275,26 @@ describe("an issue the issue source did not list", () => {
     });
   }
 
-  test("nothing is asked when the issue source returned the issue or no pull request joined a missing key", async () => {
+  test("nothing is asked when the issue source returned the issue, and a keyless Linear pull request is asked for by URL only", async () => {
     const lookups: string[][] = [];
     const listed = await runList(unreadableConfig(), baseOptions, deps({ prs: ok("github", [linearSpike]), issues: ok("linear", [issue()]), lookups }));
     expect(listed.items).toHaveLength(1);
-    const unrelated = await runList(unreadableConfig(), baseOptions, deps({ prs: ok("github", [draftPr]), lookups }));
-    expect(unrelated.items).toHaveLength(1);
     expect(lookups).toEqual([]);
+    const keyless = await runList(unreadableConfig(), baseOptions, deps({ prs: ok("github", [draftPr]), ignoredKeys: ok("linear", new Set()), lookups }));
+    expect(keyless.items.map((i) => [i.key, i.ignored])).toEqual([["github:acme/widgets#12", false]]);
+    expect(lookups).toEqual([[`url:${draftPr.url}`]]);
+  });
+
+  test("Linear: a keyless pull request attached to a labelled issue is hidden and counted, and a failed lookup makes it unknown", async () => {
+    const world = { prs: ok("github", [draftPr]), issues: ok("linear", []) };
+    const hidden = await runList(unreadableConfig(), baseOptions, deps({ ...world, ignoredKeys: ok("linear", new Set([draftPr.url])) }));
+    expect(hidden.items).toEqual([]);
+    expect(payload(hidden.stdout).omitted_ignored).toBe(1);
+    const shown = await runList(unreadableConfig(), { ...baseOptions, includeIgnored: true }, deps({ ...world, ignoredKeys: ok("linear", new Set([draftPr.url])) }));
+    expect(shown.items.map((i) => [i.key, i.ignored, i.actions])).toEqual([["github:acme/widgets#12", true, []]]);
+    const failure: SourceResult<never> = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+    const down = await runList(unreadableConfig(), baseOptions, deps({ ...world, ignoredKeys: failure }));
+    expect(down.items.map((i) => [i.on_turn.actor, i.on_turn.reason, i.actions])).toEqual([["unknown", "linear:truncated", []]]);
   });
 });
 

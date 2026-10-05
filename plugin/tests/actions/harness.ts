@@ -166,8 +166,8 @@ export function setup(world: World): Harness {
       linear: {
         fetchIssues: (project) =>
           Promise.resolve(count(project.pohunekLabel === "widgets" ? (world.issues ?? ok("linear", [])) : ok("linear", []))),
-        fetchIgnoredKeys: (_project, keys) => {
-          lookups.push([...keys]);
+        fetchIgnoredKeys: (_project, keys, urls) => {
+          lookups.push([...keys, ...urls.map((url) => `url:${url}`)]);
           if (world.ignoredKeys === undefined) return Promise.reject(new Error("the test did not expect an ignore-label lookup"));
           return Promise.resolve(world.ignoredKeys);
         },

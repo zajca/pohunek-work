@@ -168,3 +168,38 @@ describe("an issue the issue source did not list", () => {
     });
   }
 });
+
+describe("a Linear pull request without a key", () => {
+  const parked = {
+    ...baseConfig,
+    projects: baseConfig.projects.map((p) =>
+      p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+    ),
+  };
+  const keyless = pr({ headRefName: "feature/x", checks: [{ name: "build", outcome: "failure" }] });
+  const rowKey = `github:${keyless.id}`;
+
+  test("fix-ci on a pull request attached to a labelled issue is refused, naming --include-ignored", async () => {
+    for (const dryRun of [true, false]) {
+      const { deps, commands, launches, lookups } = setup({ prs: ok("github", [keyless]), ignoredKeys: ok("linear", new Set([keyless.url])) });
+      const error = await refusal(runDo(parked, options({ key: rowKey, action: "fix-ci", profile: "profile-a", dryRun, yes: !dryRun }), deps));
+      expect(error.code).toBe("precondition_failed");
+      expect(error.message).toContain("--include-ignored");
+      expect(lookups).toEqual([[`url:${keyless.url}`]]);
+      expect(commands).toHaveLength(0);
+      expect(launches).toHaveLength(0);
+    }
+  });
+
+  test("attach is refused while the lookup fails, in dry-run and for real", async () => {
+    const failure = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 } as const;
+    const live = session({ id: "s-1", metadata: { "work.link.provider": "github", "work.link.id": keyless.id, "work.link.kind": "pull_request", "work.link.branch": keyless.headRefName } });
+    for (const dryRun of [true, false]) {
+      const { deps, attached } = setup({ prs: ok("github", [keyless]), sessions: [live], issues: ok("linear", []), ignoredKeys: failure });
+      const error = await refusal(runDo(parked, options({ key: rowKey, action: "attach", dryRun, yes: !dryRun }), deps));
+      expect(error.code).toBe("source_unavailable");
+      expect(error.message).toContain("linear:truncated");
+      expect(attached).toHaveLength(0);
+    }
+  });
+});
