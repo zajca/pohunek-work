@@ -9,11 +9,16 @@ import { readKeyringSecret } from "./keyring.ts";
 export interface LinearSource {
   fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>>;
   /**
-   * Of the issue keys asked for, those whose issue carries the project's ignore label. The list
+   * Of the issue keys and pull request URLs asked for, those whose issue carries the project's
+   * ignore label: a key is the issue's own, a URL is a Linear attachment of the issue. The list
    * holds only started issues assigned to the owner, so a pull request can join an issue it does
-   * not return. A key that matches no issue of the project's team is not in the result.
+   * not return. A key or URL that matches no issue of the project's team is not in the result.
    */
-  fetchIgnoredKeys(project: LinearProject, keys: readonly string[]): Promise<SourceResult<ReadonlySet<string>>>;
+  fetchIgnoredKeys(
+    project: LinearProject,
+    keys: readonly string[],
+    pullRequestUrls: readonly string[],
+  ): Promise<SourceResult<ReadonlySet<string>>>;
 }
 
 export interface LinearDeps {
@@ -86,6 +91,28 @@ query WorkIgnoredIssues($first: Int!, $teamKey: String!, $numbers: [Float!]!, $l
     nodes {
       id
       identifier
+      labels(first: $labelsFirst) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+// Issues of one team that carry one of the pull request URLs as an attachment. Each issue selects
+// the same attachment and label pages as the issue page query, at most `page_size` issues per
+// request, so the document stays within the complexity the loader validates.
+const IGNORED_ATTACHMENT_ISSUES_QUERY = `
+query WorkIgnoredAttachmentIssues($first: Int!, $teamKey: String!, $urls: [String!]!, $attachmentsFirst: Int!, $labelsFirst: Int!) {
+  issues(first: $first, filter: { team: { key: { eq: $teamKey } }, attachments: { some: { url: { in: $urls } } } }) {
+    nodes {
+      id
+      identifier
+      attachments(first: $attachmentsFirst) {
+        nodes { url }
+        pageInfo { hasNextPage endCursor }
+      }
       labels(first: $labelsFirst) {
         nodes { name }
         pageInfo { hasNextPage endCursor }
@@ -384,13 +411,14 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     }
   }
 
-  /** Keys of `team` among `keys`, as upper-cased identifier mapped to the requested spelling. */
-  function teamNumbers(team: string, keys: readonly string[]): Map<number, string> {
-    const numbers = new Map<number, string>();
+  /** Issue numbers of `team` among `keys`, each with every spelling that was asked for. */
+  function teamNumbers(team: string, keys: readonly string[]): Map<number, Set<string>> {
+    const numbers = new Map<number, Set<string>>();
     for (const key of keys) {
       const match = ISSUE_KEY.exec(key);
       if (match !== null && match[1]?.toUpperCase() === team.toUpperCase()) {
-        numbers.set(Number(match[2]), key);
+        const number = Number(match[2]);
+        numbers.set(number, (numbers.get(number) ?? new Set<string>()).add(key));
       }
     }
     return numbers;
@@ -420,9 +448,49 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       for (const node of arr(connection["nodes"], "issues.nodes")) {
         const issue = obj(node, "issue");
         const match = ISSUE_KEY.exec(str(issue, "identifier", "issue.identifier"));
-        const key = match === null ? undefined : numbers.get(Number(match[2]));
-        if (key !== undefined && (await isIgnored(token, issue, ignoreLabel))) {
-          ignored.add(key);
+        const spellings = match === null ? undefined : numbers.get(Number(match[2]));
+        if (spellings !== undefined && (await isIgnored(token, issue, ignoreLabel))) {
+          for (const spelling of spellings) ignored.add(spelling);
+        }
+      }
+    }
+    return ignored;
+  }
+
+  async function collectIgnoredUrls(
+    token: string,
+    team: string,
+    ignoreLabel: string,
+    urls: readonly string[],
+  ): Promise<Set<string>> {
+    const ignored = new Set<string>();
+    const wanted = new Set(urls);
+    for (let start = 0; start < urls.length; start += config.pageSize) {
+      const batch = urls.slice(start, start + config.pageSize);
+      const data = await post(token, IGNORED_ATTACHMENT_ISSUES_QUERY, {
+        first: config.pageSize,
+        teamKey: team,
+        urls: batch,
+        attachmentsFirst: config.pageSize,
+        labelsFirst: config.pageSize,
+      });
+      const connection = obj(data["issues"], "issues");
+      if (parsePageInfo(connection["pageInfo"], "issues.pageInfo").hasNextPage) {
+        throw new LinearFailure("truncated", "Linear returned more issues than one page for the attachment URLs");
+      }
+      for (const node of arr(connection["nodes"], "issues.nodes")) {
+        const issue = obj(node, "issue");
+        const attachments = obj(issue["attachments"], "issue.attachments");
+        const attached = [
+          ...parseAttachmentNodes(attachments["nodes"], "issue.attachments.nodes"),
+          ...(await remainingAttachments(
+            token,
+            str(issue, "id", "issue.id"),
+            parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
+          )),
+        ].filter((url) => wanted.has(url));
+        if (attached.length > 0 && (await isIgnored(token, issue, ignoreLabel))) {
+          for (const url of attached) ignored.add(url);
         }
       }
     }
@@ -460,12 +528,17 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
   }
 
   return {
-    async fetchIgnoredKeys(project, keys) {
+    async fetchIgnoredKeys(project, keys, pullRequestUrls) {
       const ignoreLabel = project.ignoreLabel;
       if (ignoreLabel === null) {
         return { ok: true, source: "linear", data: new Set<string>(), durationMs: 0 };
       }
-      const result = await withToken((token) => collectIgnoredKeys(token, project.issueSource.team, ignoreLabel, keys));
+      const team = project.issueSource.team;
+      const result = await withToken(async (token) => {
+        const byKey = await collectIgnoredKeys(token, team, ignoreLabel, keys);
+        const byUrl = await collectIgnoredUrls(token, team, ignoreLabel, [...new Set(pullRequestUrls)]);
+        return new Set([...byKey, ...byUrl]);
+      });
       return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
     },
     async fetchIssues(project) {

@@ -757,7 +757,11 @@ describe("rule 12 with an ignore label and nothing to pause", () => {
     const unkeyed = item({ key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: null, joinedBy: null, noIssue: false, pullRequest: failing });
     expect(onTurn(unkeyed, down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
     expect(onTurn(unkeyed, down, noPause).rule).toBe(5);
-    expect(onTurn(item({ ...unkeyed, noIssue: true }), allOk, withLabel).rule).toBe(5);
+    const keyless = item({ ...unkeyed, noIssue: true });
+    expect(onTurn(keyless, allOk, withLabel).rule).toBe(5);
+    expect(onTurn(item({ ...keyless, issueLookup: { ok: true, ignored: false } }), allOk, withLabel).rule).toBe(5);
+    expect(onTurn(item({ ...keyless, issueLookup: { ok: false, reason: "linear:truncated" } }), allOk, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(isIgnoredItem(item({ ...keyless, issueLookup: { ok: true, ignored: true } }))).toBe(true);
   });
 
   test("a pull request of someone else without a key and a github project without a key are not unknown", () => {

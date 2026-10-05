@@ -34,8 +34,8 @@ function failed(source: "linear" | "github_issues", code: "truncated" | "timeout
 
 function spy(answer: SourceResult<ReadonlySet<string>> | null): { deps: IssueLookupDeps; asked: string[][] } {
   const asked: string[][] = [];
-  const ask = (_project: unknown, keys: readonly string[]): Promise<SourceResult<ReadonlySet<string>>> => {
-    asked.push([...keys]);
+  const ask = (_project: unknown, keys: readonly string[], urls: readonly string[] = []): Promise<SourceResult<ReadonlySet<string>>> => {
+    asked.push([...keys, ...urls.map((url) => `url:${url}`)]);
     return answer === null ? Promise.reject(new Error("no lookup expected")) : Promise.resolve(answer);
   };
   return { deps: { linear: { fetchIssues: () => Promise.reject(new Error("unused")), fetchIgnoredKeys: ask }, github: { fetchIgnoredKeys: ask } as IssueLookupDeps["github"] }, asked };
@@ -81,11 +81,35 @@ describe("lookupUnlistedIssues", () => {
     expect(out.items[0]?.issueLookup).toEqual({ ok: true, ignored: true });
   });
 
+  describe("a Linear pull request without a key", () => {
+    const keyless = item({ key: "github:acme/widgets#12", issueKey: null, joinedBy: null, noIssue: true, pullRequest: pr({ url: "https://github.example/pr/12" }) });
+
+    test("is asked for by URL, once, and the attached issue's label decides", async () => {
+      const other = item({ ...keyless, key: "github:acme/widgets#13", pullRequest: pr({ number: 13, url: "https://github.example/pr/13" }) });
+      const run = spy(keyed(["https://github.example/pr/12"]));
+      const out = await lookupUnlistedIssues(linearProject, [keyless, other, keyless], allOk, run.deps);
+      expect(run.asked).toEqual([["url:https://github.example/pr/12", "url:https://github.example/pr/13"]]);
+      expect(out.items.map((i) => i.issueLookup)).toEqual([{ ok: true, ignored: true }, { ok: true, ignored: false }, { ok: true, ignored: true }]);
+      expect(out.items[0] === undefined ? false : isIgnoredItem(out.items[0])).toBe(true);
+      expect(out.items[0]?.noIssue).toBe(true);
+    });
+
+    test("is unknown through the failed lookup and asks for keys and URLs in one call", async () => {
+      const run = spy(failed("linear", "timeout"));
+      const out = await lookupUnlistedIssues(linearProject, [keyless, unlisted], allOk, run.deps);
+      expect(run.asked).toEqual([["ABC-1", "url:https://github.example/pr/12"]]);
+      expect(out.items.map((i) => i.issueLookup)).toEqual([{ ok: false, reason: "linear:timeout" }, { ok: false, reason: "linear:timeout" }]);
+    });
+  });
+
   describe("asks nothing", () => {
     const cases: [string, ProjectConfig, ReturnType<typeof item>, SourceStatuses][] = [
       ["a project without an ignore label", { ...linearProject, ignoreLabel: null }, unlisted, allOk],
       ["a row whose issue the list returned", linearProject, item({ ...unlisted, issue: issue(), resolvedIssue: issue() }), allOk],
-      ["a row without an issue key", linearProject, item({ key: "github:acme/widgets#12", issueKey: null, joinedBy: null, noIssue: true }), allOk],
+      ["a github row without an issue key", githubProject, item({ key: "github:acme/widgets#12", issueKey: null, joinedBy: null, noIssue: true }), { ...allOk, linear: "unused", github_issues: "ok" }],
+      ["a Linear row without a key that is not known to be keyless", linearProject, item({ key: "github:acme/widgets#12", issueKey: null, joinedBy: null, noIssue: false }), allOk],
+      ["a Linear row without a key whose pull request is already ignored", linearProject, item({ key: "github:acme/widgets#12", issueKey: null, joinedBy: null, noIssue: true, pullRequest: pr({ ignored: true }) }), allOk],
+      ["a Linear row without a key and a pull request of someone else", linearProject, item({ key: "github:acme/widgets#12", issueKey: null, joinedBy: null, noIssue: true, pullRequest: pr({ relation: "review_requested" }) }), allOk],
       ["a pull request that is already ignored", linearProject, item({ ...unlisted, pullRequest: pr({ ignored: true }) }), allOk],
       ["a pull request of someone else", linearProject, item({ ...unlisted, pullRequest: pr({ relation: "review_requested" }) }), allOk],
       ["an issue row without a pull request", linearProject, item({ ...unlisted, pullRequest: null }), allOk],

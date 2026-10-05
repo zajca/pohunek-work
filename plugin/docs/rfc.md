@@ -422,19 +422,31 @@ The issue source lists only started issues assigned to the owner (Linear) or
 open issues with a started or paused label (GitHub), so an authored pull request
 can join an issue the list does not return, for example one the owner parked
 with the ignore label and moved to Backlog. For a project with `ignore_label`,
-such a row (joined to an issue key, no issue returned, pull request not itself
-ignored) triggers one targeted lookup per project and poll: the labels of
-exactly those issues, requested in batches of the source's page size
-(`[linear] page_size`, `[github] issue_page_size`) with the label pages followed
-to their end. A key whose issue carries the label makes the row ignored; a key
-whose issue does not carry it, or does not exist (an empty Linear result, a
-GitHub `NOT_FOUND` for exactly that lookup), leaves the row as it is. Linear
-looks up only keys of the project's `linear_team` and GitHub only keys of the
-project's `repo`. Any other error, or a label page that cannot be followed
+two kinds of row (pull request not itself ignored, issue not returned) trigger
+one targeted lookup per project and poll: a row joined to an issue key, and, for
+a Linear project, an authored row that resolved to no key while the issue
+source answered (`noIssue`), whose pull request may still be linked by a Linear
+attachment. Linear is asked for the labels of the issues with those keys and of
+the issues of `linear_team` that carry the pull request URL as an attachment
+(`attachments: { some: { url: { in } } }`); GitHub is asked for the labels of
+the issues with those numbers. Requests are batched by the source's page size
+(`[linear] page_size`, `[github] issue_page_size`), keep within the complexity
+and node budgets validated at load, and follow the label and attachment pages
+to their end. An issue that carries the label makes the row ignored; an issue
+that does not, or no issue at all (an empty Linear result, a GitHub `NOT_FOUND`
+for exactly that lookup), leaves the row as it is. Every spelling of a key that
+was asked for is answered. Any other error, or a page that cannot be followed
 (`truncated`), makes every row of the lookup `unknown` with the reason
 `<source>:<code>` (`linear` or `github_issues`), under the same rules as above.
 Nothing is asked without `ignore_label`, without such a row, or while the issue
-source or `github` is down. Rule 8 needs it for every row that has an issue.
+source or `github` is down. GitHub needs no attachment lookup: a closing
+reference, a branch capture and a session link all resolve to a key without the
+issue list.
+
+Documented limits, not hidden: a key of another Linear team than `linear_team`
+or of another repository than `repo`, a key the project cannot parse, and an
+archived Linear issue (`includeArchived` is left at its default) are not looked
+up, so such a row is never made ignored by its issue. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 

@@ -411,8 +411,13 @@ const lookupPage = (nodes: { identifier: string; id?: string; labels: string[]; 
   },
 });
 
-async function ignoredKeys(f: typeof fetch, keys: readonly string[], p: LinearProject = withIgnore): ReturnType<ReturnType<typeof createLinearSource>["fetchIgnoredKeys"]> {
-  return source(f).fetchIgnoredKeys(p, keys);
+async function ignoredKeys(
+  f: typeof fetch,
+  keys: readonly string[],
+  p: LinearProject = withIgnore,
+  urls: readonly string[] = [],
+): ReturnType<ReturnType<typeof createLinearSource>["fetchIgnoredKeys"]> {
+  return source(f).fetchIgnoredKeys(p, keys, urls);
 }
 
 test("the lookup asks the team's issues by number, with the first label page, and reports the labelled keys", async () => {
@@ -479,4 +484,91 @@ test("more issues than asked for, an error and a bad shape fail the lookup", asy
   expect(await ignoredKeys(broken.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "invalid_response" });
   const down = fetcher(() => json({}, 503));
   expect(await ignoredKeys(down.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "unavailable" });
+});
+
+test("every spelling asked for a number is answered", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }])));
+  const result = await ignoredKeys(run.fetch, ["abc-1", "ABC-1"]);
+  expect(run.calls[0]?.body.variables["numbers"]).toEqual([1]);
+  expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", "abc-1"]);
+});
+
+const attachmentPage = (
+  nodes: { identifier: string; id?: string; urls: string[]; moreUrls?: string; labels: string[]; moreLabels?: string }[],
+  hasNextPage = false,
+): unknown => ({
+  data: {
+    issues: {
+      nodes: nodes.map((node, index) => ({
+        id: node.id ?? `id-${index.toString()}`,
+        identifier: node.identifier,
+        attachments: {
+          nodes: node.urls.map((url) => ({ url })),
+          pageInfo: { hasNextPage: node.moreUrls !== undefined, endCursor: node.moreUrls ?? null },
+        },
+        labels: {
+          nodes: node.labels.map((name) => ({ name })),
+          pageInfo: { hasNextPage: node.moreLabels !== undefined, endCursor: node.moreLabels ?? null },
+        },
+      })),
+      pageInfo: { hasNextPage, endCursor: hasNextPage ? "more" : null },
+    },
+  },
+});
+
+const PR_URL = "https://github.example/acme/widgets/pull/12";
+
+test("pull request URLs are matched against the attachments of the team's issues, and a labelled issue reports the URL", async () => {
+  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: ["https://other.example/x", PR_URL], labels: ["Pohunek:Ignore"] }])));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+  expect(run.calls).toHaveLength(1);
+  expect(run.calls[0]?.body.query).toContain("attachments: { some: { url: { in: $urls } } }");
+  expect(run.calls[0]?.body.query).toContain("team: { key: { eq: $teamKey } }");
+  expect(run.calls[0]?.body.variables).toEqual({ first: 1, teamKey: "ABC", urls: [PR_URL], attachmentsFirst: 1, labelsFirst: 1 });
+});
+
+test("an attached issue without the label and a URL nothing is attached to are not reported", async () => {
+  const unlabelled = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: ["bug"] }])));
+  const first = await ignoredKeys(unlabelled.fetch, [], withIgnore, [PR_URL]);
+  expect(first.ok && first.data.size).toBe(0);
+  const none = fetcher(() => json(attachmentPage([])));
+  const second = await ignoredKeys(none.fetch, [], withIgnore, [PR_URL]);
+  expect(second.ok && second.data.size).toBe(0);
+});
+
+test("URLs are batched by page_size, deduplicated, and keys and URLs are answered in one result", async () => {
+  const other = "https://github.example/acme/widgets/pull/13";
+  const bodies = [
+    lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }]),
+    attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: ["pohunek:ignore"] }]),
+    attachmentPage([]),
+  ];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"], withIgnore, [PR_URL, other, PR_URL]);
+  expect(run.calls.map((c) => c.body.variables["urls"] ?? c.body.variables["numbers"])).toEqual([[1], [PR_URL], [other]]);
+  expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", PR_URL].sort());
+});
+
+test("the attachment and label pages of a matched issue are followed to the end", async () => {
+  const first = attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: ["https://other.example/x"], moreUrls: "att-1", labels: ["bug"], moreLabels: "lab-1" }]);
+  const attachments = { data: { issue: { attachments: { nodes: [{ url: PR_URL }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const labels = { data: { issue: { labels: { nodes: [{ name: "pohunek:ignore" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const bodies = [first, attachments, labels];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+  const stuck = fetcher((_c, i) => json([first, { data: { issue: { attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "att-1" } } } } }][i]));
+  expect(await ignoredKeys(stuck.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+});
+
+test("more issues than one page for the URLs, an error and a project without an ignore label", async () => {
+  const more = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true)));
+  expect(await ignoredKeys(more.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+  const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
+  expect(await ignoredKeys(limited.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "rate_limited" });
+  const plain = fetcher(() => json(attachmentPage([])));
+  const result = await ignoredKeys(plain.fetch, [], project, [PR_URL]);
+  expect(plain.calls).toHaveLength(0);
+  expect(result.ok && result.data.size).toBe(0);
 });
