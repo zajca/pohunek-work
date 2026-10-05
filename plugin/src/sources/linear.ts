@@ -104,8 +104,8 @@ query WorkIgnoredIssues($first: Int!, $teamKey: String!, $numbers: [Float!]!, $l
 // the same attachment and label pages as the issue page query, at most `page_size` issues per
 // request, so the document stays within the complexity the loader validates.
 const IGNORED_ATTACHMENT_ISSUES_QUERY = `
-query WorkIgnoredAttachmentIssues($first: Int!, $teamKey: String!, $urls: [String!]!, $attachmentsFirst: Int!, $labelsFirst: Int!) {
-  issues(first: $first, filter: { team: { key: { eq: $teamKey } }, attachments: { some: { url: { in: $urls } } } }) {
+query WorkIgnoredAttachmentIssues($first: Int!, $after: String, $teamKey: String!, $urls: [String!]!, $attachmentsFirst: Int!, $labelsFirst: Int!) {
+  issues(first: $first, after: $after, filter: { team: { key: { eq: $teamKey } }, attachments: { some: { url: { in: $urls } } } }) {
     nodes {
       id
       identifier
@@ -467,31 +467,42 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     const wanted = new Set(urls);
     for (let start = 0; start < urls.length; start += config.pageSize) {
       const batch = urls.slice(start, start + config.pageSize);
-      const data = await post(token, IGNORED_ATTACHMENT_ISSUES_QUERY, {
-        first: config.pageSize,
-        teamKey: team,
-        urls: batch,
-        attachmentsFirst: config.pageSize,
-        labelsFirst: config.pageSize,
-      });
-      const connection = obj(data["issues"], "issues");
-      if (parsePageInfo(connection["pageInfo"], "issues.pageInfo").hasNextPage) {
-        throw new LinearFailure("truncated", "Linear returned more issues than one page for the attachment URLs");
-      }
-      for (const node of arr(connection["nodes"], "issues.nodes")) {
-        const issue = obj(node, "issue");
-        const attachments = obj(issue["attachments"], "issue.attachments");
-        const attached = [
-          ...parseAttachmentNodes(attachments["nodes"], "issue.attachments.nodes"),
-          ...(await remainingAttachments(
-            token,
-            str(issue, "id", "issue.id"),
-            parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
-          )),
-        ].filter((url) => wanted.has(url));
-        if (attached.length > 0 && (await isIgnored(token, issue, ignoreLabel))) {
-          for (const url of attached) ignored.add(url);
+      const seen = new Set<string>();
+      let after: string | null = null;
+      for (;;) {
+        const data = await post(token, IGNORED_ATTACHMENT_ISSUES_QUERY, {
+          first: config.pageSize,
+          teamKey: team,
+          urls: batch,
+          attachmentsFirst: config.pageSize,
+          labelsFirst: config.pageSize,
+          ...(after === null ? {} : { after }),
+        });
+        const connection = obj(data["issues"], "issues");
+        for (const node of arr(connection["nodes"], "issues.nodes")) {
+          const issue = obj(node, "issue");
+          const attachments = obj(issue["attachments"], "issue.attachments");
+          const attached = [
+            ...parseAttachmentNodes(attachments["nodes"], "issue.attachments.nodes"),
+            ...(await remainingAttachments(
+              token,
+              str(issue, "id", "issue.id"),
+              parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
+            )),
+          ].filter((url) => wanted.has(url));
+          if (attached.length > 0 && (await isIgnored(token, issue, ignoreLabel))) {
+            for (const url of attached) ignored.add(url);
+          }
         }
+        const page = parsePageInfo(connection["pageInfo"], "issues.pageInfo");
+        if (!page.hasNextPage) {
+          break;
+        }
+        if (page.endCursor === null || seen.has(page.endCursor)) {
+          throw new LinearFailure("truncated", "Linear issues for the attachment URLs cannot be paginated further");
+        }
+        seen.add(page.endCursor);
+        after = page.endCursor;
       }
     }
     return ignored;

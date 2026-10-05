@@ -496,6 +496,7 @@ test("every spelling asked for a number is answered", async () => {
 const attachmentPage = (
   nodes: { identifier: string; id?: string; urls: string[]; moreUrls?: string; labels: string[]; moreLabels?: string }[],
   hasNextPage = false,
+  endCursor: string | null = hasNextPage ? "more" : null,
 ): unknown => ({
   data: {
     issues: {
@@ -511,7 +512,7 @@ const attachmentPage = (
           pageInfo: { hasNextPage: node.moreLabels !== undefined, endCursor: node.moreLabels ?? null },
         },
       })),
-      pageInfo: { hasNextPage, endCursor: hasNextPage ? "more" : null },
+      pageInfo: { hasNextPage, endCursor },
     },
   },
 });
@@ -562,9 +563,29 @@ test("the attachment and label pages of a matched issue are followed to the end"
   expect(await ignoredKeys(stuck.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
 });
 
-test("more issues than one page for the URLs, an error and a project without an ignore label", async () => {
-  const more = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true)));
-  expect(await ignoredKeys(more.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+test("the issues of one URL batch are followed by cursor and merged across pages", async () => {
+  const bodies = [
+    attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: [PR_URL], labels: ["bug"] }], true, "page-2"),
+    attachmentPage([{ identifier: "ABC-5", id: "uuid-5", urls: [PR_URL], labels: ["pohunek:ignore"] }]),
+  ];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls[0]?.body.variables["after"]).toBeUndefined();
+  expect(run.calls[1]?.body.variables).toEqual({ first: 1, teamKey: "ABC", urls: [PR_URL], attachmentsFirst: 1, labelsFirst: 1, after: "page-2" });
+  expect(run.calls[0]?.body.query).toContain("$after: String");
+});
+
+test("a page of URL issues with more to come but no cursor, or a repeated cursor, is truncated", async () => {
+  const missing = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true, null)));
+  expect(await ignoredKeys(missing.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+  const repeated = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true, "same")));
+  expect(await ignoredKeys(repeated.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+  expect(repeated.calls).toHaveLength(2);
+});
+
+test("an error and a project without an ignore label", async () => {
   const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
   expect(await ignoredKeys(limited.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "rate_limited" });
   const plain = fetcher(() => json(attachmentPage([])));
