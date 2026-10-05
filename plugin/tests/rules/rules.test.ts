@@ -652,7 +652,7 @@ describe("unknown on missing sources", () => {
 
   test("project config is read from the input", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
-    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], reviews: "session", issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(9);
+    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], reviews: "session", issueSource: { kind: "linear", team: "ABC", pausedStates: [] }, ignoreLabel: null }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
   });
 });
@@ -727,5 +727,27 @@ describe("rule 12 on a secondary pull request row", () => {
   test("is unknown, not the owner's rebase, while the issue source is down and the issue is not known", () => {
     expect(onTurn(item({ ...secondary, resolvedIssue: null }), { ...allOk, linear: "timeout" })).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
     expect(onTurn(item({ ...secondary, resolvedIssue: null })).rule).toBe(5);
+  });
+});
+
+describe("rule 12 with an ignore label and nothing to pause", () => {
+  const noPause = { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] } } as const;
+  const withLabel = { ...noPause, ignoreLabel: "Pohunek:Ignore" };
+  const failing = pr({ checks: [check("build", "failure")] });
+  const secondary = { key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: "ABC-1", joinedBy: null, noIssue: false, pullRequest: failing } as const;
+  const down = { ...allOk, linear: "truncated" } as const;
+
+  test("a row whose issue is unknown is unknown while the issue source is down, because the issue may carry the label", () => {
+    expect(onTurn(item(secondary), down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    const joined = item({ key: "linear:ABC-1", issue: null, joinedBy: "branch_pattern", noIssue: false, pullRequest: failing });
+    expect(onTurn(joined, down, withLabel).actor).toBe("unknown");
+  });
+
+  test("without an ignore label and without paused states the row stays the owner's turn", () => {
+    expect(onTurn(item(secondary), down, noPause)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });
+  });
+
+  test("with the issue source up the row is the owner's turn", () => {
+    expect(onTurn(item(secondary), allOk, withLabel).rule).toBe(5);
   });
 });

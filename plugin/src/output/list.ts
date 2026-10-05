@@ -28,7 +28,7 @@ import {
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "pohunekLabel" | "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "profiles">;
+  readonly project: Pick<ProjectConfig, "pohunekLabel" | "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "profiles" | "ignoreLabel">;
   /** Global [profiles]; a project's own table replaces it whole. */
   readonly profiles: ProfilesConfig;
   /** Every session pohunek knows, linked or not: an unlinked session may hold a pull request's head branch. */

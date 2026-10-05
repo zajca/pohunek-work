@@ -24,7 +24,7 @@ export interface RuleInput {
   readonly item: WorkItem;
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "ignoreLabel">;
 }
 
 export interface RuleResult {
@@ -243,16 +243,14 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
 
   // Rule 12: issue source. A row that resolved to an issue key (its own issue row or a
   // secondary pull request row of that issue) whose issue the source did not return may
-  // be paused, so it is unknown while the source is down.
-  if (canPauseIssues(project)) {
-    const resolved = item.issue ?? item.resolvedIssue;
-    if (resolved === null && (item.joinedBy !== null || item.issueKey !== null)) {
-      const issueFailure = issueSourceFailure(sources, project);
-      if (issueFailure !== null) return unknown(issueFailure);
-    }
-    if (resolved !== null && resolved.paused) {
-      return result({ actor: "paused", reason: "paused", rule: 12 });
-    }
+  // be paused or parked by the ignore label, so it is unknown while the source is down.
+  const resolved = item.issue ?? item.resolvedIssue;
+  if (resolved === null && (item.joinedBy !== null || item.issueKey !== null) && (canPauseIssues(project) || project.ignoreLabel !== null)) {
+    const issueFailure = issueSourceFailure(sources, project);
+    if (issueFailure !== null) return unknown(issueFailure);
+  }
+  if (canPauseIssues(project) && resolved !== null && resolved.paused) {
+    return result({ actor: "paused", reason: "paused", rule: 12 });
   }
 
   // Rules 3 to 7 and 9: github.
