@@ -165,6 +165,9 @@ describe("ignored rows", () => {
     expect(hidden.stdout.split("\n").at(-1)).toBe("2 ignored row(s) hidden (use --include-ignored)");
     const shown = await runList(config, { ...baseOptions, json: false, includeIgnored: true }, deps(ignoredWorld));
     expect(shown.stdout).not.toContain("hidden");
+    const marked = shown.stdout.split("\n").filter((line) => line.includes("(ignored)"));
+    expect(marked.map((line) => line.split(" ")[0])).toEqual(["github:acme/widgets#14", "github:acme/widgets#15"]);
+    expect(hidden.stdout).not.toContain("(ignored)");
   });
 
   test("without ignored rows omitted_ignored is 0 and the table has no hidden-row line", async () => {

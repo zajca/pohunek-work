@@ -479,7 +479,7 @@ list of unavailable sources and never makes `list` exit partial. Version 4 adds 
 payload field `omitted_ignored` (the number of ignored rows left out of `items`
 that `--mine`, `--stale-days` and `--project` would have listed; 0 with
 `--include-ignored`). `list` and `list --mine` hide ignored rows unless
-`--include-ignored` is passed; the table then ends with
+`--include-ignored` is passed (the table marks such a row's key with `(ignored)`); without it the table ends with
 `N ignored row(s) hidden (use --include-ignored)` when N > 0.
 A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload

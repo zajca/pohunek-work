@@ -31,7 +31,7 @@ A project file may set the optional key `ignore_label`. Rows whose pull request
 or joined issue carries that label (compared case-insensitively) are hidden from
 `list` (`list --mine` included), refused by `do` and never notified by `watch`;
 without the key the feature is off. `list --include-ignored` shows them (JSON
-`ignored: true`, no actions, the computed `on_turn` kept), and the table ends
+`ignored: true`, no actions, the computed `on_turn` kept; the table marks the key with `(ignored)`), and the table ends
 with `N ignored row(s) hidden (use --include-ignored)` when rows are hidden; the
 JSON `omitted_ignored` counts the hidden rows that `--mine`, `--stale-days` and
 `--project` would have listed (0 with the flag). `do <key> <action>` on an

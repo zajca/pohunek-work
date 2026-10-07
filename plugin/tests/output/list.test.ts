@@ -389,6 +389,19 @@ test("the table names the issue of a secondary pull request row and of no other 
   expect(lines[3]).toStartWith("github:acme/widgets#12 (no issue)");
 });
 
+test("the table marks an ignored row after its issue suffix and leaves other rows unchanged", () => {
+  const parked = buildListItem(item({ key: "github:acme/widgets#14", pullRequest: pr({ id: "acme/widgets#14", number: 14, ignored: true }), noIssue: false, issueKey: "ABC-1" }), context);
+  const parkedNoIssue = buildListItem(item({ pullRequest: pr({ ignored: true }) }), context);
+  const plain = buildListItem(item({ key: "github:acme/widgets#15", pullRequest: pr({ id: "acme/widgets#15", number: 15 }) }), context);
+  expect([parked.ignored, parkedNoIssue.ignored, plain.ignored]).toEqual([true, true, false]);
+  const lines = renderTable([parked, parkedNoIssue, plain], [], [], new Set(), 0).split("\n");
+  expect(lines[1]).toStartWith("github:acme/widgets#14 (ABC-1) (ignored)  ");
+  expect(lines[2]).toStartWith("github:acme/widgets#12 (no issue) (ignored)  ");
+  expect(lines[3]).toStartWith("github:acme/widgets#15 (no issue)  ");
+  expect(lines[3]).not.toContain("ignored");
+  expect(lines[0]?.indexOf("ON TURN")).toBe(lines[3]?.indexOf("me:"));
+});
+
 test("the table shows a github-issue row under its own key and names the issue on a secondary pull request row", () => {
   const issueRow = buildListItem(item({ key: "github-issue:acme/widgets#7", issue: issue({ id: "acme/widgets#7" }), noIssue: false, issueKey: "acme/widgets#7" }), context);
   const secondary = buildListItem(item({ key: "github:acme/widgets#14", pullRequest: pr({ id: "acme/widgets#14", number: 14 }), noIssue: false, issueKey: "acme/widgets#7" }), context);
