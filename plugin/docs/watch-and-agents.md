@@ -57,6 +57,14 @@ Linear request rate. Choose it with the API budget in mind.
   After the baseline exists, a row whose turn is `unknown` during an outage is
   not marked when it comes back.
 - **A repeated state.** A row that stays on your turn notifies once.
+- **Ignored rows.** A row whose pull request or joined issue carries the
+  project's `ignore_label` is never notified and never enters the baseline. When
+  the label is removed while the row is on your turn, the row is new to the
+  baseline and notifies once, like a row that first appears on your turn.
+- **Rows whose label cannot be read.** When the issue source or `github` is
+  down, a row that may be parked is `unknown` with no actions and is not
+  notified. `unknown` rows never update the baseline, so such a row notifies
+  after recovery only when the baseline rules above say so.
 - A failing notification command is logged (`watch_notify_failed`) and is not
   retried on the next poll.
 
@@ -115,7 +123,7 @@ names the issue and when to remove or update the rule.
 
 | Command | Use |
 | --- | --- |
-| `pohunek-work list --mine --json` | the rows where it is the owner's turn, with `on_turn`, `actions[]` (primary first), `sessions[]` and per-source status |
+| `pohunek-work list --mine --json` | the rows where it is the owner's turn, with `on_turn`, `actions[]` (primary first), `sessions[]` and per-source status; rows parked with the project's `ignore_label` are left out and counted in `omitted_ignored` |
 | `pohunek-work list --json` | every row, also those on another actor's turn, with the same fields |
 | `pohunek-work do <key> <action> --dry-run --json` | the plan of an action; changes nothing |
 | `pohunek-work do <key> <action> --yes --json` | runs the plan after the owner confirmed it |
@@ -129,6 +137,11 @@ Rules for the agent:
   confirmed. Without a terminal a write action refuses with
   `confirmation_required`.
 - Never run `merge`; it is refused (`not_supported`).
+- `list --json` and `list --mine --json` leave out rows carrying the project's
+  `ignore_label` (parked work) and report their count as `omitted_ignored`.
+  Never pass `--include-ignored` to `list` or `do` without the owner's explicit
+  say-so. A `precondition_failed` from `do` on a row that carries the label means
+  the work is parked: report it and stop.
 - Exit code 2 is an error: stop. Exit code 3 means `list` printed rows but at
   least one source was unavailable: rows may be missing or `unknown`, so do not
   act on absence.
