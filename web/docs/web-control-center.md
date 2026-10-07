@@ -199,10 +199,15 @@ Files left by an earlier run are brought inside
 the bound when the backend starts: oversize ones are removed (the active one is
 emptied) and loose modes are forced to `0600`. An event larger than one file is
 replaced by a fixed notice, so total disk use stays within the product of the two
-limits. The bound assumes one backend owns the directory, which the single
-launchd job or systemd unit guarantees; two backends sharing one log directory do
-not coordinate. The directory must be a normalized absolute path (no trailing
-slash, `.` or `..`), and a setup failure such as a permission error stops
+limits. A backend holds an exclusive `flock` on
+`pohunek-backend.jsonl.lock` (owner-private like the log files, never rotated or
+removed) from startup until its logger closes, so the bound holds for one writer:
+a second backend on the same directory stops startup with a message naming it.
+The kernel drops the lock when the holder exits or is killed, so a crash or a
+`SIGKILL` never blocks the next launchd or systemd restart. The lock comes from
+libc through `bun:ffi` (glibc on Linux, `libSystem` on macOS); a platform where
+it cannot be loaded or taken stops startup, there is no lock-free fallback. The directory must be a normalized absolute
+path (no trailing slash, `.` or `..`), and a setup failure such as a permission error stops
 startup with a message naming the directory and the cause. A failing write or rotation (a full disk, an I/O error) never fails a
 request: the event goes to standard output, one `log_file_failed` event reports
 it, and the next event tries the files again. A partly written line is cut back
