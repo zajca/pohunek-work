@@ -17,6 +17,7 @@ const KINDS: readonly ConnectionKind[] = [
   "threadComments",
   "closingIssues",
   "issueLabels",
+  "pullRequestLabels",
 ];
 
 /** GraphQL rejects declared-but-unused variables and used-but-undeclared ones. */
@@ -31,16 +32,26 @@ function expectVariablesConsistent(request: GraphqlRequest): void {
 
 test("the search request declares exactly the variables it uses", () => {
   expectVariablesConsistent(
-    buildSearchRequest([{ alias: "authored", queryString: "q", after: null }], sizes, { closingReferences: false }),
+    buildSearchRequest([{ alias: "authored", queryString: "q", after: null }], sizes, { closingReferences: false, pullRequestLabels: false }),
   );
 });
 
 test("the search request declares exactly the variables it uses with and without the closing references", () => {
   const search = [{ alias: "authored", queryString: "q", after: null }];
-  const withReferences = buildSearchRequest(search, sizes, { closingReferences: true });
+  const withReferences = buildSearchRequest(search, sizes, { closingReferences: true, pullRequestLabels: false });
   expectVariablesConsistent(withReferences);
   expect(withReferences.query).toContain("closingIssuesReferences(first: $nested)");
-  expect(buildSearchRequest(search, sizes, { closingReferences: false }).query).not.toContain("closingIssuesReferences");
+  expect(buildSearchRequest(search, sizes, { closingReferences: false, pullRequestLabels: false }).query).not.toContain("closingIssuesReferences");
+});
+
+test("the pull request labels are selected only when the shape asks for them", () => {
+  const search = [{ alias: "authored", queryString: "q", after: null }];
+  const withLabels = buildSearchRequest(search, sizes, { closingReferences: false, pullRequestLabels: true });
+  expectVariablesConsistent(withLabels);
+  expect(withLabels.query).toContain("labels(first: $nested)");
+  const without = buildSearchRequest(search, sizes, { closingReferences: false, pullRequestLabels: false });
+  expect(without.query).not.toContain("labels");
+  expect(without.query).toContain("commits(last: 1)");
 });
 
 test("the issue search request declares exactly the variables it uses and carries the search string as a variable", () => {

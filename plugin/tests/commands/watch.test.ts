@@ -25,7 +25,7 @@ interface Recorded {
 
 interface Harness {
   deps: WatchDeps;
-  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]>; githubIssues: SourceResult<readonly Issue[]> };
+  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]>; githubIssues: SourceResult<readonly Issue[]>; ignoredKeys: SourceResult<ReadonlySet<string>> | null };
   argvs: (readonly string[])[];
   logs: Recorded[];
   setExec(next: () => Promise<ExecResult>): void;
@@ -44,7 +44,7 @@ function githubIssuesOk(issues: readonly Issue[]): SourceResult<readonly Issue[]
 }
 
 function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
-  const world = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]) };
+  const world: Harness["world"] = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]), ignoredKeys: null };
   const argvs: (readonly string[])[] = [];
   const logs: Recorded[] = [];
   let execNext: () => Promise<ExecResult> = () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
@@ -76,9 +76,15 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
         fetchPullRequests: () => Promise.resolve(world.prs),
         fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
         fetchIssues: () => Promise.resolve(world.githubIssues),
+        fetchIgnoredKeys: (): Promise<SourceResult<ReadonlySet<string>>> =>
+          world.ignoredKeys === null ? Promise.reject(new Error("the test did not expect an ignore-label lookup")) : Promise.resolve(world.ignoredKeys),
         fetchIssueDetail: () => Promise.reject(new Error("an issue body is read only when implement is planned")),
       },
-      linear: { fetchIssues: () => Promise.resolve(world.issues) },
+      linear: {
+        fetchIssues: () => Promise.resolve(world.issues),
+        fetchIgnoredKeys: (): Promise<SourceResult<ReadonlySet<string>>> =>
+          world.ignoredKeys === null ? Promise.reject(new Error("the test did not expect an ignore-label lookup")) : Promise.resolve(world.ignoredKeys),
+      },
       logger,
       exec: (argv) => {
         argvs.push(argv);
@@ -230,6 +236,7 @@ test("a failing poll is logged and the loop continues with the next one", async 
     github: {
       fetchMergedPullRequests: () => Promise.resolve({ ok: true, source: "github", data: [], durationMs: 0 }),
       fetchIssues: () => Promise.resolve({ ok: true, source: "github_issues", data: [], durationMs: 0 }),
+      fetchIgnoredKeys: () => Promise.reject(new Error("not used")),
       fetchIssueDetail: () => Promise.reject(new Error("an issue body is read only when implement is planned")),
       fetchPullRequests: () => {
         calls += 1;

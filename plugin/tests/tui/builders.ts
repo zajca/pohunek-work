@@ -38,6 +38,7 @@ export function row(key: string, overrides: Partial<ListItem> = {}): ListItem {
     sessions: [],
     on_turn: { actor: "reviewer", reason: "waiting", rule: 10 },
     actions: [],
+    ignored: false,
     sources: OK,
     ...overrides,
   };
@@ -163,7 +164,7 @@ export function payload(items: readonly ListItem[], projects: readonly ListProje
   };
 }
 
-export function envelopeText(body: ListPayload, cliVersion = OWN_VERSION, protocol = { minimum: 3, maximum: 3 }): string {
+export function envelopeText(body: ListPayload, cliVersion = OWN_VERSION, protocol = { minimum: 4, maximum: 4 }): string {
   return JSON.stringify({ cli_version: cliVersion, protocol, ok: body });
 }
 

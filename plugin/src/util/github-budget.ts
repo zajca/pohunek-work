@@ -13,22 +13,24 @@ export interface NodeBudgetSizes {
   readonly threadCommentPageSize: number;
 }
 
-/** Nested connections of a pull request in the search fragment, without the closing issue references. */
+/** Nested connections of a pull request in the search fragment, without the closing issue references and the labels. */
 const PULL_REQUEST_CONNECTIONS = 5;
 
 export interface SearchShape {
   /** The fragment also requests `closingIssuesReferences` (projects whose issues come from GitHub). */
   readonly closingReferences: boolean;
+  /** The fragment also requests `labels` (projects with an ignore label). */
+  readonly pullRequestLabels: boolean;
 }
 
 /**
  * Upper bound of nodes one search page can request: per pull request the
  * node itself, its nested connections (reviews, threads, timeline, review
- * requests, check contexts and, for a GitHub issue source, the closing issue
- * references) and the comments of every thread.
+ * requests, check contexts and, where the project needs them, the closing
+ * issue references and the labels) and the comments of every thread.
  */
 export function estimateSearchNodes(sizes: NodeBudgetSizes, shape: SearchShape): number {
-  const connections = PULL_REQUEST_CONNECTIONS + (shape.closingReferences ? 1 : 0);
+  const connections = PULL_REQUEST_CONNECTIONS + (shape.closingReferences ? 1 : 0) + (shape.pullRequestLabels ? 1 : 0);
   const perPullRequest =
     1 + connections * sizes.nestedPageSize + sizes.nestedPageSize * sizes.threadCommentPageSize;
   return sizes.pullRequestPageSize * (1 + perPullRequest);
@@ -69,6 +71,7 @@ export function estimateConnectionNodes(kind: ConnectionKind, sizes: ConnectionN
     case "checkContexts":
     case "closingIssues":
     case "issueLabels":
+    case "pullRequestLabels":
       items = sizes.nestedPageSize;
       break;
   }

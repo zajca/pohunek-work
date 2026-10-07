@@ -22,7 +22,7 @@ export const identity: IdentityConfig = {
   reviewTeams: ["acme/reviewers"],
 };
 
-export const project = { pohunekLabel: "widgets", ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], reviews: "session" as const, issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource };
+export const project = { pohunekLabel: "widgets", ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], reviews: "session" as const, issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource, ignoreLabel: null };
 
 /** Issues of the project come from GitHub issues carrying these labels. */
 export const githubIssueSource = { kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] } as const satisfies IssueSource;
@@ -105,6 +105,7 @@ export function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewRequests: [],
     checks: [],
     closingIssueNumbers: [],
+    ignored: false,
     updatedAt: T3,
     ...overrides,
   };
@@ -120,6 +121,7 @@ export function issue(overrides: Partial<Issue> = {}): Issue {
     paused: false,
     assigneeIsMe: true,
     attachmentUrls: [],
+    ignored: false,
     ...overrides,
   };
 }
@@ -164,6 +166,7 @@ export function item(overrides: Partial<WorkItem> = {}): WorkItem {
     noIssue: true,
     issueKey: null,
     resolvedIssue: null,
+    issueLookup: null,
     sessions: [],
     notifications: [],
     ...overrides,

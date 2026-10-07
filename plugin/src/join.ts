@@ -403,6 +403,7 @@ export function joinItems(input: JoinInput): JoinResult {
       noIssue: draft.noIssue,
       issueKey: draft.resolvedKey,
       resolvedIssue: draft.resolvedIssue,
+      issueLookup: null,
       sessions: rowSessions,
       notifications: notifications.filter(
         (n) => n.sessionId !== null && sessionIds.has(n.sessionId),

@@ -263,8 +263,8 @@ test("rofi-issue requires a known issue source and never defaults one", async ()
 
 const GITHUB_KEY = "github-issue:keboola/connection#42";
 
-/** Envelope of `pohunek-work list --json` (contract 3) with the given rows. */
-function listEnvelope(items: readonly object[], protocol = { minimum: 3, maximum: 3 }): string {
+/** Envelope of `pohunek-work list --json` (contract 4) with the given rows. */
+function listEnvelope(items: readonly object[], protocol = { minimum: 4, maximum: 4 }): string {
   return JSON.stringify({ cli_version: "0.3.0", protocol, ok: { items, orphaned_sessions: [], unlinked_sessions: [], projects: [] } });
 }
 
@@ -408,10 +408,11 @@ test("rofi-issue linear refuses a multi-line selection whose first line is a val
 test("rofi-issue github fails clearly on an unusable list envelope", async () => {
   // The error envelope has the shape of `reportError` in plugin/src/cli-errors.ts: `err` is `{class, code, msg}`.
   const cases: [string, string, number, string][] = [
-    ["error envelope", JSON.stringify({ cli_version: "x", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", msg: "bad config" } }), 2, "reported an error: bad config"],
-    ["unsupported contract", listEnvelope([], { minimum: 4, maximum: 4 }), 0, "does not include supported version 3"],
+    ["error envelope", JSON.stringify({ cli_version: "x", protocol: { minimum: 4, maximum: 4 }, err: { class: "configuration", code: "config_invalid", msg: "bad config" } }), 2, "reported an error: bad config"],
+    ["unsupported contract", listEnvelope([], { minimum: 5, maximum: 5 }), 0, "does not include supported version 4"],
+    ["previous contract", listEnvelope([], { minimum: 3, maximum: 3 }), 0, "does not include supported version 4"],
     ["not json", "not json", 0, "not valid JSON"],
-    ["no items", JSON.stringify({ protocol: { minimum: 3, maximum: 3 }, ok: {} }), 0, "no ok.items list"],
+    ["no items", JSON.stringify({ protocol: { minimum: 4, maximum: 4 }, ok: {} }), 0, "no ok.items list"],
     ["failed list", listEnvelope([issueRow(GITHUB_KEY, "T", ["implement"])]), 2, "failed with exit status 2"],
   ];
   for (const [label, json, status, message] of cases) {

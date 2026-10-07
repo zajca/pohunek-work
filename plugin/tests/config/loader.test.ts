@@ -99,6 +99,27 @@ describe("loadConfig valid", () => {
     expect(widgets?.profiles).toBeNull();
   });
 
+  test("ignore_label is absent by default and loads as written when present", async () => {
+    const dir = await copyFixture();
+    expect((await loadProjectConfig(dir, "widgets")).ignoreLabel).toBeNull();
+    await editFile(dir, "projects/widgets.toml", (t) => `${t}ignore_label = "Pohunek:Ignore"\n`);
+    expect((await loadProjectConfig(dir, "widgets")).ignoreLabel).toBe("Pohunek:Ignore");
+  });
+
+  test.each([
+    ['""', "must not be empty"],
+    ['"   "', "must not be empty"],
+    ["5", "must be a string"],
+    ['["x"]', "must be a string"],
+  ])("ignore_label = %s is rejected naming file and key", async (value, problem) => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/widgets.toml", (t) => `${t}ignore_label = ${value}\n`);
+    const error = await loadError(dir);
+    expect(error.file).toBe("projects/widgets.toml");
+    expect(error.key).toBe("project.ignore_label");
+    expect(error.message).toContain(`[project] ignore_label ${problem}`);
+  });
+
   test("per-project policy and profiles replace the global tables whole", async () => {
     const config = await loadConfig(FIXTURE_DIR);
     const gadgets = config.projects[0];
@@ -602,6 +623,35 @@ describe("loadConfig issue_source", () => {
     const error = await loadError(dir);
     expect(error.file).toBe("config.toml");
     expect(error.key).toBe("linear.page_size");
+  });
+
+  test("[linear] page_size is bounded by Linear's complexity limit, tighter with an ignore_label", async () => {
+    const setPageSize = (size: number) => (t: string): string => t.replace(/^page_size = \d+$/m, `page_size = ${size.toString()}`);
+    const withIgnore = (t: string): string => `${t}ignore_label = "Pohunek:Ignore"\n`;
+
+    const plain = await copyFixture();
+    await editFile(plain, "config.toml", setPageSize(93));
+    expect((await loadConfig(plain)).global.linear?.pageSize).toBe(93);
+    await editFile(plain, "config.toml", setPageSize(94));
+    const over = await loadError(plain);
+    expect([over.file, over.key]).toEqual(["config.toml", "linear.page_size"]);
+
+    const labelled = await copyFixture();
+    await editFile(labelled, "projects/widgets.toml", withIgnore);
+    await editFile(labelled, "config.toml", setPageSize(66));
+    expect((await loadConfig(labelled)).global.linear?.pageSize).toBe(66);
+    await editFile(labelled, "config.toml", setPageSize(67));
+    const overLabelled = await loadError(labelled);
+    expect([overLabelled.file, overLabelled.key]).toEqual(["config.toml", "linear.page_size"]);
+    expect(overLabelled.message).toContain("ignore_label");
+  });
+
+  test("an ignore_label on a github project does not tighten [linear] page_size", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject);
+    await editFile(dir, "projects/gadgets.toml", (t) => `${t}ignore_label = "Pohunek:Ignore"\n`);
+    await editFile(dir, "config.toml", (t) => t.replace("page_size = 40", "page_size = 90"));
+    expect((await loadConfig(dir)).global.linear?.pageSize).toBe(90);
   });
 
   test("a missing issue_source is rejected", async () => {

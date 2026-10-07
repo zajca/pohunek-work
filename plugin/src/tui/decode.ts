@@ -154,6 +154,7 @@ function item(value: unknown, path: string): ListItem {
     sessions: array(fields["sessions"], `${path}.sessions`, session),
     on_turn: onTurn(fields["on_turn"], `${path}.on_turn`),
     actions: array(fields["actions"], `${path}.actions`, action),
+    ignored: boolean(fields["ignored"], `${path}.ignored`),
     sources: sources(fields["sources"], `${path}.sources`),
   };
 }

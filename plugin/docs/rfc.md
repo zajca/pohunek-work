@@ -407,8 +407,46 @@ project's issue source (`linear`, or `github_issues` for a `github` project)
 for every row joined to an issue key: while it is unavailable such a row is
 `unknown` with the source's code, because its issue may be paused. Rows not
 joined to an issue (review requests, pull requests without an issue key) and
-projects with an empty `paused_states` (or `paused_labels`) do not depend on the
-issue source for rule 12. Rule 8 needs it for every row that has an issue.
+projects with an empty `paused_states` (or `paused_labels`) and no `ignore_label`
+do not depend on the issue source for rule 12. A project with `ignore_label`
+needs the issue source for every row whose issue may carry the label: a row
+joined to an issue key and, for a Linear project, an authored pull request
+without a key while the source is down (it may be linked to its issue by a
+Linear attachment only). It also needs `github` for every row without pull
+request data (an issue row): while `github` is down the open pull request that
+carries the label is missing. Such a row is `unknown` with the failing source's
+code before rules 1 and 2 are evaluated, offers no action (`attach` included),
+`do` refuses it and `watch` neither notifies it nor prunes its baseline.
+
+The issue source lists only started issues assigned to the owner (Linear) or
+open issues with a started or paused label (GitHub), so an authored pull request
+can join an issue the list does not return, for example one the owner parked
+with the ignore label and moved to Backlog. For a project with `ignore_label`,
+two kinds of row (pull request not itself ignored, issue not returned) trigger
+one targeted lookup per project and poll: a row joined to an issue key, and, for
+a Linear project, an authored row that resolved to no key while the issue
+source answered (`noIssue`), whose pull request may still be linked by a Linear
+attachment. Linear is asked for the labels of the issues with those keys and of
+the issues of `linear_team` that carry the pull request URL as an attachment
+(`attachments: { some: { url: { in } } }`); GitHub is asked for the labels of
+the issues with those numbers. Requests are batched by the source's page size
+(`[linear] page_size`, `[github] issue_page_size`), keep within the complexity
+and node budgets validated at load, and follow the label and attachment pages
+to their end. An issue that carries the label makes the row ignored; an issue
+that does not, or no issue at all (an empty Linear result, a GitHub `NOT_FOUND`
+for exactly that lookup), leaves the row as it is. Every spelling of a key that
+was asked for is answered. Any other error, or a page that cannot be followed
+(`truncated`), makes every row of the lookup `unknown` with the reason
+`<source>:<code>` (`linear` or `github_issues`), under the same rules as above.
+Nothing is asked without `ignore_label`, without such a row, or while the issue
+source or `github` is down. GitHub needs no attachment lookup: a closing
+reference, a branch capture and a session link all resolve to a key without the
+issue list.
+
+Documented limits, not hidden: a key of another Linear team than `linear_team`
+or of another repository than `repo`, a key the project cannot parse, and an
+archived Linear issue (`includeArchived` is left at its default) are not looked
+up, so such a row is never made ignored by its issue. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 
@@ -429,13 +467,13 @@ All interfaces use the same plugin library and the same actions.
 
 Versioned envelope matching the pohunek CLI (`{cli_version, protocol,
 ok|err}`, with the plugin's own contract version). The `list` contract is
-version 3: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
+version 4: version 2 added `on_turn.actor` `paused` and `on_turn.rule` 12;
 version 3 adds the source status `unused`, which a source reports for a project
 that does not use it (`sources.linear` of a project with `issue_source =
 "github"`, `sources.github_issues` of a project with `issue_source = "linear"`),
 the source `github_issues` (the GitHub issue lookup of a `github` project), the
 `github-issue:` row key and the `on_turn` value `{"actor": "agent", "reason":
-"external review", "rule": 3}` of a project with `reviews = "external"`. `unused` is not a failure: it never appears in the
+"external review", "rule": 3}` of a project with `reviews = "external"`; version 4 adds the row field `ignored` (the pull request or the joined issue carries the project's `ignore_label`; the row has no actions but keeps its computed `on_turn`). `unused` is not a failure: it never appears in the
 list of unavailable sources and never makes `list` exit partial. A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload
 it cannot decode. `do` and `setup` version their envelopes separately
@@ -459,6 +497,7 @@ it cannot decode. `do` and `setup` version their envelopes separately
     {"name": "babysit", "delegable": false, "profile": "claude-otel"},
     {"name": "attach", "delegable": true}
   ],
+  "ignored": false,
   "sources": {"linear": "ok", "github": "ok", "github_merged": "ok", "github_issues": "unused", "pohunek": "ok"}
 }
 ```
@@ -624,6 +663,7 @@ branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 policy_checks = []        # merge blockers the owner meets; disjoint from ignored_checks
 ai_reviewers = ["copilot-pull-request-reviewer", "chatgpt-codex-connector", "coderabbitai"]
+# ignore_label = "pohunek:ignore"   # optional; absent = off
 paused_states = ["On hold", "Waiting for Support"]   # only with issue_source = "linear"
 
 # Optional per-project overrides; a table here replaces the global table whole.
@@ -645,6 +685,20 @@ Rules:
   the file and key) and requires `started_labels` and `paused_labels` instead,
   which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
   `policy_checks` and `ai_reviewers` are required for both sources.
+- **`ignore_label` parks work.** It is optional and has no default; a blank
+  or non-string value is an error naming the file and key. A row whose pull
+  request or joined issue carries the label (case-insensitive) is ignored:
+  `ignored: true` in `list --json`, no actions, its computed `on_turn` kept;
+  absent = off. A label list that cannot be read completely fails the source
+  (`truncated`) and never reads as "not ignored". With the key, each Linear
+  issue page also selects `labels(first: page_size)`. Linear caps a query at
+  10,000 complexity points, so `[linear] page_size` is validated at load: at
+  most 93 in general and at most 66 while a Linear project sets `ignore_label`
+  (`ConfigError` naming `linear.page_size`). While `github` is down an issue row
+  (no pull request data) is `unknown`, and while the issue source is down a
+  row whose issue is unknown (joined to a key, or an authored Linear pull
+  request without a key) is `unknown` before rules 1 and 2, with no actions and
+  no notification, because that issue may carry the label (8.3).
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:
@@ -668,7 +722,7 @@ Rules:
   the search and `nested_page_size` for the labels of an issue; a label list longer
   than one page is followed to its end, and anything that cannot be followed
   makes `github_issues` `truncated`. The node budget of the pull request search
-  is validated at load with the closing issue references of 7.3 included, whether
+  is validated at load with the closing issue references of 7.3 and the pull request labels of the ignore label included, whether
   or not a `github` project exists, so the global file is valid or not independently
   of the project files; the issue search is validated against the same limit. The global `[linear]` table of
   `config.toml` and its keyring entry are required only while at least one

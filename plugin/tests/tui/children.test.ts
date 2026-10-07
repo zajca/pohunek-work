@@ -57,7 +57,7 @@ test("a timeout yields no outcome", async () => {
 });
 
 test("an err envelope on exit 2 is decoded", async () => {
-  const stdout = JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 3, maximum: 3 }, err: { class: "configuration", code: "config_invalid", msg: "m" } });
+  const stdout = JSON.stringify({ cli_version: "0.1.0", protocol: { minimum: 4, maximum: 4 }, err: { class: "configuration", code: "config_invalid", msg: "m" } });
   const { exec } = fakeExec({ exitCode: 2, stdout, stderr: "", timedOut: false });
   expect((await runList(exec, ["/bin/x", "list", "--json"], 1000, now)).outcome?.kind).toBe("error");
 });

@@ -127,6 +127,8 @@ export interface PullRequest {
    * closes; empty unless the project's issues come from GitHub.
    */
   readonly closingIssueNumbers: readonly number[];
+  /** The pull request carries the project's `ignore_label`; always false for a project without one. */
+  readonly ignored: boolean;
   readonly updatedAt: string;
 }
 
@@ -161,6 +163,8 @@ export interface Issue {
   readonly assigneeIsMe: boolean;
   /** URLs of pull requests the issue links to; they join by URL equality. */
   readonly attachmentUrls: readonly string[];
+  /** The issue carries the project's `ignore_label`; always false for a project without one. */
+  readonly ignored: boolean;
 }
 
 /** One GitHub issue as read for the prompt of `implement`; the body is provider free text. */

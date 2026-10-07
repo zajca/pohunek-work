@@ -12,7 +12,7 @@ const config: LinearConfig = {
   timeoutMs: 500,
   pageSize: 1,
 };
-const project = { name: "widgets", issueSource: { kind: "linear", team: "ABC", pausedStates: [] } } as unknown as LinearProject;
+const project = { name: "widgets", issueSource: { kind: "linear", team: "ABC", pausedStates: [] }, ignoreLabel: null } as unknown as LinearProject;
 
 async function fixture(name: string): Promise<unknown> {
   return (await Bun.file(new URL(`../fixtures/linear/${name}.json`, import.meta.url)).json()) as unknown;
@@ -83,6 +83,7 @@ test("normalizes issues across two pages, with attachment URLs", async () => {
       paused: false,
       assigneeIsMe: true,
       attachmentUrls: ["https://github.com/acme/widgets/pull/12"],
+      ignored: false,
     },
     {
       id: "ABC-2",
@@ -93,6 +94,7 @@ test("normalizes issues across two pages, with attachment URLs", async () => {
       paused: false,
       assigneeIsMe: true,
       attachmentUrls: [],
+      ignored: false,
     },
   ]);
   expect(calls).toHaveLength(2);
@@ -287,4 +289,307 @@ test("started follows the state type and paused the configured state names, matc
   expect(await withState("on hold", "started", ["On hold"])).toEqual({ state: "on hold", started: true, paused: false });
   expect(await withState("In Progress", "started", [])).toEqual({ state: "In Progress", started: true, paused: false });
   expect(await withState("Todo", "unstarted", ["On hold"])).toEqual({ state: "Todo", started: false, paused: false });
+});
+
+interface LabelPage {
+  data: { issues: { nodes: Record<string, unknown>[] } };
+}
+
+const withIgnore = { ...project, ignoreLabel: "Pohunek:Ignore" } as unknown as LinearProject;
+
+async function labelledPage(
+  names: string[],
+  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
+): Promise<LabelPage> {
+  const page = (await fixture("page2")) as LabelPage;
+  const node = page.data.issues.nodes[0];
+  if (node === undefined) throw new Error("fixture has no node");
+  node["labels"] = { nodes: names.map((name) => ({ name })), pageInfo };
+  return page;
+}
+
+test("without an ignore label the request has no labels selection and ignored is false", async () => {
+  const page = await fixture("page2");
+  const run = fetcher(() => json(page));
+  const result = await source(run.fetch).fetchIssues(project);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(false);
+  expect(run.calls[0]?.body.query).not.toContain("labels");
+  expect(run.calls[0]?.body.variables).not.toHaveProperty("labelsFirst");
+});
+
+test("an ignore label adds the labels selection and matches case-insensitively", async () => {
+  const page = await labelledPage(["bug", "pohunek:ignore"]);
+  const { fetch: f, calls } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(true);
+  expect(calls[0]?.body.query).toContain("labels(first: $labelsFirst)");
+  expect(calls[0]?.body.variables["labelsFirst"]).toBe(1);
+});
+
+test("an issue without the ignore label is not ignored", async () => {
+  const page = await labelledPage(["bug", "pohunek:ignored"]);
+  const { fetch: f, calls } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(false);
+  expect(calls).toHaveLength(1);
+});
+
+test("labels are paged until the ignore label is found", async () => {
+  const first = await labelledPage(["bug"], { hasNextPage: true, endCursor: "lab-1" });
+  const second = {
+    data: { issue: { labels: { nodes: [{ name: "POHUNEK:IGNORE" }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+  };
+  const bodies = [first, second];
+  const { fetch: f, calls } = fetcher((_c, i) => json(bodies[i]));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(true);
+  expect(calls[1]?.body.variables).toEqual({ id: "00000000-0000-0000-0000-000000000002", first: 1, after: "lab-1" });
+});
+
+test("a complete multi-page label list without the label is not ignored", async () => {
+  const first = await labelledPage(["bug"], { hasNextPage: true, endCursor: "lab-1" });
+  const second = { data: { issue: { labels: { nodes: [{ name: "ui" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const bodies = [first, second];
+  const { fetch: f } = fetcher((_c, i) => json(bodies[i]));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data[0]?.ignored).toBe(false);
+});
+
+test("label pagination without a cursor is truncated", async () => {
+  const page = await labelledPage(["bug"], { hasNextPage: true, endCursor: null });
+  const { fetch: f } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.code).toBe("truncated");
+});
+
+test("a repeated label cursor is truncated", async () => {
+  const first = await labelledPage(["bug"], { hasNextPage: true, endCursor: "lab-1" });
+  const again = { data: { issue: { labels: { nodes: [{ name: "ui" }], pageInfo: { hasNextPage: true, endCursor: "lab-1" } } } } };
+  const bodies = [first, again];
+  const { fetch: f } = fetcher((_c, i) => json(bodies[i]));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.code).toBe("truncated");
+});
+
+test("a missing labels connection under an ignore label is invalid_response", async () => {
+  const page = await fixture("page2");
+  const { fetch: f } = fetcher(() => json(page));
+  const result = await source(f).fetchIssues(withIgnore);
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.code).toBe("invalid_response");
+});
+
+// Targeted ignore-label lookup of issues the list did not return.
+const lookupPage = (nodes: { identifier: string; id?: string; labels: string[]; more?: string }[], hasNextPage = false): unknown => ({
+  data: {
+    issues: {
+      nodes: nodes.map((node, index) => ({
+        id: node.id ?? `id-${index.toString()}`,
+        identifier: node.identifier,
+        labels: {
+          nodes: node.labels.map((name) => ({ name })),
+          pageInfo: { hasNextPage: node.more !== undefined, endCursor: node.more ?? null },
+        },
+      })),
+      pageInfo: { hasNextPage, endCursor: hasNextPage ? "more" : null },
+    },
+  },
+});
+
+async function ignoredKeys(
+  f: typeof fetch,
+  keys: readonly string[],
+  p: LinearProject = withIgnore,
+  urls: readonly string[] = [],
+): ReturnType<ReturnType<typeof createLinearSource>["fetchIgnoredKeys"]> {
+  return source(f).fetchIgnoredKeys(p, keys, urls);
+}
+
+test("the lookup asks the team's issues by number, with the first label page, and reports the labelled keys", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["bug", "pohunek:IGNORE"] }])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"]);
+  expect(result).toMatchObject({ ok: true, source: "linear" });
+  if (!result.ok) return;
+  expect([...result.data]).toEqual(["ABC-1"]);
+  expect(run.calls).toHaveLength(1);
+  expect(run.calls[0]?.body.query).toContain("number: { in: $numbers }");
+  expect(run.calls[0]?.body.query).toContain("team: { key: { eq: $teamKey } }");
+  expect(run.calls[0]?.body.variables).toEqual({ first: 1, teamKey: "ABC", numbers: [1], labelsFirst: 1 });
+});
+
+test("an issue without the ignore label and a key Linear does not return are not reported", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["bug"] }])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"]);
+  expect(result.ok && result.data.size).toBe(0);
+  const empty = fetcher(() => json(lookupPage([])));
+  const none = await ignoredKeys(empty.fetch, ["ABC-9"]);
+  expect(none.ok && none.data.size).toBe(0);
+});
+
+test("keys are batched by page_size and the requested spelling is reported", async () => {
+  const bodies = [lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }]), lookupPage([{ identifier: "ABC-2", labels: [] }])];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, ["abc-1", "ABC-2"]);
+  expect(run.calls.map((c) => c.body.variables["numbers"])).toEqual([[1], [2]]);
+  expect(result.ok && [...result.data]).toEqual(["abc-1"]);
+});
+
+test("keys of another team or of another shape are never asked for", async () => {
+  const run = fetcher(() => json(lookupPage([])));
+  const result = await ignoredKeys(run.fetch, ["XYZ-1", "not-a-key", "ABC-0", "ABC-x"]);
+  expect(run.calls).toHaveLength(0);
+  expect(result.ok && result.data.size).toBe(0);
+});
+
+test("a project without an ignore label asks nothing", async () => {
+  const run = fetcher(() => json(lookupPage([])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"], project);
+  expect(run.calls).toHaveLength(0);
+  expect(result.ok && result.data.size).toBe(0);
+});
+
+test("the lookup follows a label page cut short and fails truncated when it cannot", async () => {
+  const first = lookupPage([{ identifier: "ABC-1", labels: ["bug"], more: "lab-1", id: "uuid-1" }]);
+  const second = { data: { issue: { labels: { nodes: [{ name: "Pohunek:Ignore" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const paged = fetcher((_c, i) => json([first, second][i]));
+  const found = await ignoredKeys(paged.fetch, ["ABC-1"]);
+  expect(found.ok && [...found.data]).toEqual(["ABC-1"]);
+  expect(paged.calls[1]?.body.variables).toEqual({ id: "uuid-1", first: 1, after: "lab-1" });
+  const looping = { data: { issue: { labels: { nodes: [{ name: "x" }], pageInfo: { hasNextPage: true, endCursor: "lab-1" } } } } };
+  const stuck = fetcher((_c, i) => json([first, looping][i]));
+  expect(await ignoredKeys(stuck.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "truncated" });
+});
+
+test("more issues than asked for, an error and a bad shape fail the lookup", async () => {
+  const more = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: [] }], true)));
+  expect(await ignoredKeys(more.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "truncated" });
+  const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
+  expect(await ignoredKeys(limited.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "rate_limited" });
+  const broken = fetcher(() => json({ data: { issues: { nodes: [{ id: "i", identifier: "ABC-1" }], pageInfo: { hasNextPage: false, endCursor: null } } } }));
+  expect(await ignoredKeys(broken.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "invalid_response" });
+  const down = fetcher(() => json({}, 503));
+  expect(await ignoredKeys(down.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "unavailable" });
+});
+
+test("every spelling asked for a number is answered", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }])));
+  const result = await ignoredKeys(run.fetch, ["abc-1", "ABC-1"]);
+  expect(run.calls[0]?.body.variables["numbers"]).toEqual([1]);
+  expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", "abc-1"]);
+});
+
+const attachmentPage = (
+  nodes: { identifier: string; id?: string; urls: string[]; moreUrls?: string; labels: string[]; moreLabels?: string }[],
+  hasNextPage = false,
+  endCursor: string | null = hasNextPage ? "more" : null,
+): unknown => ({
+  data: {
+    issues: {
+      nodes: nodes.map((node, index) => ({
+        id: node.id ?? `id-${index.toString()}`,
+        identifier: node.identifier,
+        attachments: {
+          nodes: node.urls.map((url) => ({ url })),
+          pageInfo: { hasNextPage: node.moreUrls !== undefined, endCursor: node.moreUrls ?? null },
+        },
+        labels: {
+          nodes: node.labels.map((name) => ({ name })),
+          pageInfo: { hasNextPage: node.moreLabels !== undefined, endCursor: node.moreLabels ?? null },
+        },
+      })),
+      pageInfo: { hasNextPage, endCursor },
+    },
+  },
+});
+
+const PR_URL = "https://github.example/acme/widgets/pull/12";
+
+test("pull request URLs are matched against the attachments of the team's issues, and a labelled issue reports the URL", async () => {
+  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: ["https://other.example/x", PR_URL], labels: ["Pohunek:Ignore"] }])));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+  expect(run.calls).toHaveLength(1);
+  expect(run.calls[0]?.body.query).toContain("attachments: { some: { url: { in: $urls } } }");
+  expect(run.calls[0]?.body.query).toContain("team: { key: { eq: $teamKey } }");
+  expect(run.calls[0]?.body.variables).toEqual({ first: 1, teamKey: "ABC", urls: [PR_URL], attachmentsFirst: 1, labelsFirst: 1 });
+});
+
+test("an attached issue without the label and a URL nothing is attached to are not reported", async () => {
+  const unlabelled = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: ["bug"] }])));
+  const first = await ignoredKeys(unlabelled.fetch, [], withIgnore, [PR_URL]);
+  expect(first.ok && first.data.size).toBe(0);
+  const none = fetcher(() => json(attachmentPage([])));
+  const second = await ignoredKeys(none.fetch, [], withIgnore, [PR_URL]);
+  expect(second.ok && second.data.size).toBe(0);
+});
+
+test("URLs are batched by page_size, deduplicated, and keys and URLs are answered in one result", async () => {
+  const other = "https://github.example/acme/widgets/pull/13";
+  const bodies = [
+    lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }]),
+    attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: ["pohunek:ignore"] }]),
+    attachmentPage([]),
+  ];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, ["ABC-1"], withIgnore, [PR_URL, other, PR_URL]);
+  expect(run.calls.map((c) => c.body.variables["urls"] ?? c.body.variables["numbers"])).toEqual([[1], [PR_URL], [other]]);
+  expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", PR_URL].sort());
+});
+
+test("the attachment and label pages of a matched issue are followed to the end", async () => {
+  const first = attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: ["https://other.example/x"], moreUrls: "att-1", labels: ["bug"], moreLabels: "lab-1" }]);
+  const attachments = { data: { issue: { attachments: { nodes: [{ url: PR_URL }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const labels = { data: { issue: { labels: { nodes: [{ name: "pohunek:ignore" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+  const bodies = [first, attachments, labels];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+  const stuck = fetcher((_c, i) => json([first, { data: { issue: { attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "att-1" } } } } }][i]));
+  expect(await ignoredKeys(stuck.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+});
+
+test("the issues of one URL batch are followed by cursor and merged across pages", async () => {
+  const bodies = [
+    attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: [PR_URL], labels: ["bug"] }], true, "page-2"),
+    attachmentPage([{ identifier: "ABC-5", id: "uuid-5", urls: [PR_URL], labels: ["pohunek:ignore"] }]),
+  ];
+  const run = fetcher((_c, i) => json(bodies[i]));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls[0]?.body.variables["after"]).toBeUndefined();
+  expect(run.calls[1]?.body.variables).toEqual({ first: 1, teamKey: "ABC", urls: [PR_URL], attachmentsFirst: 1, labelsFirst: 1, after: "page-2" });
+  expect(run.calls[0]?.body.query).toContain("$after: String");
+});
+
+test("a page of URL issues with more to come but no cursor, or a repeated cursor, is truncated", async () => {
+  const missing = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true, null)));
+  expect(await ignoredKeys(missing.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+  const repeated = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true, "same")));
+  expect(await ignoredKeys(repeated.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+  expect(repeated.calls).toHaveLength(2);
+});
+
+test("an error and a project without an ignore label", async () => {
+  const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
+  expect(await ignoredKeys(limited.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "rate_limited" });
+  const plain = fetcher(() => json(attachmentPage([])));
+  const result = await ignoredKeys(plain.fetch, [], project, [PR_URL]);
+  expect(plain.calls).toHaveLength(0);
+  expect(result.ok && result.data.size).toBe(0);
 });

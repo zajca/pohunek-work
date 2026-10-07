@@ -8,6 +8,17 @@ import { readKeyringSecret } from "./keyring.ts";
 
 export interface LinearSource {
   fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>>;
+  /**
+   * Of the issue keys and pull request URLs asked for, those whose issue carries the project's
+   * ignore label: a key is the issue's own, a URL is a Linear attachment of the issue. The list
+   * holds only started issues assigned to the owner, so a pull request can join an issue it does
+   * not return. A key or URL that matches no issue of the project's team is not in the result.
+   */
+  fetchIgnoredKeys(
+    project: LinearProject,
+    keys: readonly string[],
+    pullRequestUrls: readonly string[],
+  ): Promise<SourceResult<ReadonlySet<string>>>;
 }
 
 export interface LinearDeps {
@@ -15,8 +26,10 @@ export interface LinearDeps {
   readonly fetch?: typeof fetch;
 }
 
-const ISSUES_QUERY = `
-query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFirst: Int!) {
+// The label selection is added only when the project has an ignore label.
+function issuesQuery(withLabels: boolean): string {
+  return `
+query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFirst: Int!${withLabels ? ", $labelsFirst: Int!" : ""}) {
   issues(
     first: $first
     after: $after
@@ -35,11 +48,20 @@ query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFi
       attachments(first: $attachmentsFirst) {
         nodes { url }
         pageInfo { hasNextPage endCursor }
+      }${
+        withLabels
+          ? `
+      labels(first: $labelsFirst) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }`
+          : ""
       }
     }
     pageInfo { hasNextPage endCursor }
   }
 }`;
+}
 
 const ATTACHMENTS_QUERY = `
 query WorkIssueAttachments($id: String!, $first: Int!, $after: String) {
@@ -50,6 +72,57 @@ query WorkIssueAttachments($id: String!, $first: Int!, $after: String) {
     }
   }
 }`;
+
+const LABELS_QUERY = `
+query WorkIssueLabels($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    labels(first: $first, after: $after) {
+      nodes { name }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+// Issues of one team by number, with the first page of their labels. At most `page_size` numbers
+// are asked per request, so the document is a subset of the issue page query.
+const IGNORED_ISSUES_QUERY = `
+query WorkIgnoredIssues($first: Int!, $teamKey: String!, $numbers: [Float!]!, $labelsFirst: Int!) {
+  issues(first: $first, filter: { team: { key: { eq: $teamKey } }, number: { in: $numbers } }) {
+    nodes {
+      id
+      identifier
+      labels(first: $labelsFirst) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+// Issues of one team that carry one of the pull request URLs as an attachment. Each issue selects
+// the same attachment and label pages as the issue page query, at most `page_size` issues per
+// request, so the document stays within the complexity the loader validates.
+const IGNORED_ATTACHMENT_ISSUES_QUERY = `
+query WorkIgnoredAttachmentIssues($first: Int!, $after: String, $teamKey: String!, $urls: [String!]!, $attachmentsFirst: Int!, $labelsFirst: Int!) {
+  issues(first: $first, after: $after, filter: { team: { key: { eq: $teamKey } }, attachments: { some: { url: { in: $urls } } } }) {
+    nodes {
+      id
+      identifier
+      attachments(first: $attachmentsFirst) {
+        nodes { url }
+        pageInfo { hasNextPage endCursor }
+      }
+      labels(first: $labelsFirst) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+const ISSUE_KEY = /^([A-Za-z0-9]+)-([1-9][0-9]*)$/;
 
 const STATE_TYPES: ReadonlySet<string> = new Set([
   "triage",
@@ -121,6 +194,10 @@ function parsePageInfo(value: unknown, what: string): PageInfo {
 
 function parseAttachmentNodes(value: unknown, what: string): string[] {
   return arr(value, what).map((node) => str(obj(node, what), "url", what));
+}
+
+function parseLabelNames(value: unknown, what: string): string[] {
+  return arr(value, what).map((node) => str(obj(node, what), "name", what));
 }
 
 /** Failure code for a GraphQL error list; only error codes and paths are used. */
@@ -222,10 +299,55 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     return collected;
   }
 
+  async function remainingLabels(token: string, issueId: string, start: PageInfo): Promise<string[]> {
+    const collected: string[] = [];
+    const seen = new Set<string>();
+    let page = start;
+    while (page.hasNextPage) {
+      const cursor = page.endCursor;
+      if (cursor === null || seen.has(cursor)) {
+        throw new LinearFailure("truncated", "Linear labels cannot be paginated further");
+      }
+      seen.add(cursor);
+      const data = await post(token, LABELS_QUERY, {
+        id: issueId,
+        first: config.pageSize,
+        after: cursor,
+      });
+      const connection = obj(obj(data["issue"], "issue")["labels"], "labels");
+      collected.push(...parseLabelNames(connection["nodes"], "labels.nodes"));
+      page = parsePageInfo(connection["pageInfo"], "labels.pageInfo");
+    }
+    return collected;
+  }
+
+  async function isIgnored(
+    token: string,
+    node: JsonObject,
+    ignoreLabel: string | null,
+  ): Promise<boolean> {
+    if (ignoreLabel === null) {
+      return false;
+    }
+    const wanted = ignoreLabel.toLowerCase();
+    const labels = obj(node["labels"], "issue.labels");
+    const names = parseLabelNames(labels["nodes"], "issue.labels.nodes");
+    if (names.some((name) => name.toLowerCase() === wanted)) {
+      return true;
+    }
+    const rest = await remainingLabels(
+      token,
+      str(node, "id", "issue.id"),
+      parsePageInfo(labels["pageInfo"], "issue.labels.pageInfo"),
+    );
+    return rest.some((name) => name.toLowerCase() === wanted);
+  }
+
   async function parseIssue(
     token: string,
     value: unknown,
     pausedStates: readonly string[],
+    ignoreLabel: string | null,
   ): Promise<Issue> {
     const node = obj(value, "issue");
     const state = obj(node["state"], "issue.state");
@@ -241,6 +363,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
     );
     const stateName = str(state, "name", "issue.state.name");
+    const ignored = await isIgnored(token, node, ignoreLabel);
     return {
       id: str(node, "identifier", "issue.identifier"),
       title: str(node, "title", "issue.title"),
@@ -250,6 +373,7 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
       paused: pausedStates.includes(stateName),
       assigneeIsMe: true,
       attachmentUrls: [...first, ...rest],
+      ignored,
     };
   }
 
@@ -257,20 +381,23 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     token: string,
     teamKey: string,
     pausedStates: readonly string[],
+    ignoreLabel: string | null,
   ): Promise<Issue[]> {
     const issues: Issue[] = [];
     const seen = new Set<string>();
+    const query = issuesQuery(ignoreLabel !== null);
     let after: string | null = null;
     for (;;) {
-      const data = await post(token, ISSUES_QUERY, {
+      const data = await post(token, query, {
         first: config.pageSize,
         after,
         teamKey,
         attachmentsFirst: config.pageSize,
+        ...(ignoreLabel === null ? {} : { labelsFirst: config.pageSize }),
       });
       const connection = obj(data["issues"], "issues");
       for (const node of arr(connection["nodes"], "issues.nodes")) {
-        issues.push(await parseIssue(token, node, pausedStates));
+        issues.push(await parseIssue(token, node, pausedStates, ignoreLabel));
       }
       const page = parsePageInfo(connection["pageInfo"], "issues.pageInfo");
       if (!page.hasNextPage) {
@@ -284,34 +411,151 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
     }
   }
 
-  return {
-    async fetchIssues(project) {
-      const started = performance.now();
-      const elapsed = (): number => Math.round(performance.now() - started);
-      const fail = (code: SourceErrorCode, message: string): SourceResult<never> => ({
-        ok: false,
-        source: "linear",
-        code,
-        message,
-        durationMs: elapsed(),
+  /** Issue numbers of `team` among `keys`, each with every spelling that was asked for. */
+  function teamNumbers(team: string, keys: readonly string[]): Map<number, Set<string>> {
+    const numbers = new Map<number, Set<string>>();
+    for (const key of keys) {
+      const match = ISSUE_KEY.exec(key);
+      if (match !== null && match[1]?.toUpperCase() === team.toUpperCase()) {
+        const number = Number(match[2]);
+        numbers.set(number, (numbers.get(number) ?? new Set<string>()).add(key));
+      }
+    }
+    return numbers;
+  }
+
+  async function collectIgnoredKeys(
+    token: string,
+    team: string,
+    ignoreLabel: string,
+    keys: readonly string[],
+  ): Promise<Set<string>> {
+    const numbers = teamNumbers(team, keys);
+    const requested = [...numbers.keys()];
+    const ignored = new Set<string>();
+    for (let start = 0; start < requested.length; start += config.pageSize) {
+      const batch = requested.slice(start, start + config.pageSize);
+      const data = await post(token, IGNORED_ISSUES_QUERY, {
+        first: batch.length,
+        teamKey: team,
+        numbers: batch,
+        labelsFirst: config.pageSize,
       });
-      const keyringDeps = deps.exec === undefined ? {} : { exec: deps.exec };
-      const secret = await readKeyringSecret(config, keyringDeps);
-      if (!secret.ok) {
-        return fail("unauthenticated", `Linear token unavailable: keyring ${secret.kind} (${secret.message})`);
+      const connection = obj(data["issues"], "issues");
+      if (parsePageInfo(connection["pageInfo"], "issues.pageInfo").hasNextPage) {
+        throw new LinearFailure("truncated", "Linear returned more issues than were asked for");
       }
-      if (!HEADER_SAFE.test(secret.secret)) {
-        return fail("unauthenticated", "Linear token from keyring is not a valid API key");
-      }
-      try {
-        const data = await collectIssues(secret.secret, project.issueSource.team, project.issueSource.pausedStates);
-        return { ok: true, source: "linear", data, durationMs: elapsed() };
-      } catch (error) {
-        if (error instanceof LinearFailure) {
-          return fail(error.code, error.message);
+      for (const node of arr(connection["nodes"], "issues.nodes")) {
+        const issue = obj(node, "issue");
+        const match = ISSUE_KEY.exec(str(issue, "identifier", "issue.identifier"));
+        const spellings = match === null ? undefined : numbers.get(Number(match[2]));
+        if (spellings !== undefined && (await isIgnored(token, issue, ignoreLabel))) {
+          for (const spelling of spellings) ignored.add(spelling);
         }
-        throw error;
       }
+    }
+    return ignored;
+  }
+
+  async function collectIgnoredUrls(
+    token: string,
+    team: string,
+    ignoreLabel: string,
+    urls: readonly string[],
+  ): Promise<Set<string>> {
+    const ignored = new Set<string>();
+    const wanted = new Set(urls);
+    for (let start = 0; start < urls.length; start += config.pageSize) {
+      const batch = urls.slice(start, start + config.pageSize);
+      const seen = new Set<string>();
+      let after: string | null = null;
+      for (;;) {
+        const data = await post(token, IGNORED_ATTACHMENT_ISSUES_QUERY, {
+          first: config.pageSize,
+          teamKey: team,
+          urls: batch,
+          attachmentsFirst: config.pageSize,
+          labelsFirst: config.pageSize,
+          ...(after === null ? {} : { after }),
+        });
+        const connection = obj(data["issues"], "issues");
+        for (const node of arr(connection["nodes"], "issues.nodes")) {
+          const issue = obj(node, "issue");
+          const attachments = obj(issue["attachments"], "issue.attachments");
+          const attached = [
+            ...parseAttachmentNodes(attachments["nodes"], "issue.attachments.nodes"),
+            ...(await remainingAttachments(
+              token,
+              str(issue, "id", "issue.id"),
+              parsePageInfo(attachments["pageInfo"], "issue.attachments.pageInfo"),
+            )),
+          ].filter((url) => wanted.has(url));
+          if (attached.length > 0 && (await isIgnored(token, issue, ignoreLabel))) {
+            for (const url of attached) ignored.add(url);
+          }
+        }
+        const page = parsePageInfo(connection["pageInfo"], "issues.pageInfo");
+        if (!page.hasNextPage) {
+          break;
+        }
+        if (page.endCursor === null || seen.has(page.endCursor)) {
+          throw new LinearFailure("truncated", "Linear issues for the attachment URLs cannot be paginated further");
+        }
+        seen.add(page.endCursor);
+        after = page.endCursor;
+      }
+    }
+    return ignored;
+  }
+
+  async function withToken<T>(
+    run: (token: string) => Promise<T>,
+  ): Promise<{ ok: true; data: T; durationMs: number } | SourceResult<never>> {
+    const started = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - started);
+    const fail = (code: SourceErrorCode, message: string): SourceResult<never> => ({
+      ok: false,
+      source: "linear",
+      code,
+      message,
+      durationMs: elapsed(),
+    });
+    const keyringDeps = deps.exec === undefined ? {} : { exec: deps.exec };
+    const secret = await readKeyringSecret(config, keyringDeps);
+    if (!secret.ok) {
+      return fail("unauthenticated", `Linear token unavailable: keyring ${secret.kind} (${secret.message})`);
+    }
+    if (!HEADER_SAFE.test(secret.secret)) {
+      return fail("unauthenticated", "Linear token from keyring is not a valid API key");
+    }
+    try {
+      return { ok: true, data: await run(secret.secret), durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof LinearFailure) {
+        return fail(error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  return {
+    async fetchIgnoredKeys(project, keys, pullRequestUrls) {
+      const ignoreLabel = project.ignoreLabel;
+      if (ignoreLabel === null) {
+        return { ok: true, source: "linear", data: new Set<string>(), durationMs: 0 };
+      }
+      const team = project.issueSource.team;
+      const result = await withToken(async (token) => {
+        const byKey = await collectIgnoredKeys(token, team, ignoreLabel, keys);
+        const byUrl = await collectIgnoredUrls(token, team, ignoreLabel, [...new Set(pullRequestUrls)]);
+        return new Set([...byKey, ...byUrl]);
+      });
+      return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
+    },
+    async fetchIssues(project) {
+      const { team, pausedStates } = project.issueSource;
+      const result = await withToken((token) => collectIssues(token, team, pausedStates, project.ignoreLabel));
+      return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
     },
   };
 }

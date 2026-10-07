@@ -1,8 +1,8 @@
 {
   "cli_version": "0.1.0",
   "protocol": {
-    "minimum": 3,
-    "maximum": 3
+    "minimum": 4,
+    "maximum": 4
   },
   "ok": {
     "items": [
@@ -50,6 +50,7 @@
             "delegable": false
           }
         ],
+        "ignored": false,
         "sources": {
           "github": "ok",
           "github_merged": "ok",
@@ -89,6 +90,7 @@
             "delegable": false
           }
         ],
+        "ignored": false,
         "sources": {
           "github": "ok",
           "github_merged": "ok",
@@ -122,6 +124,7 @@
             "profile": "profile-a"
           }
         ],
+        "ignored": false,
         "sources": {
           "github": "ok",
           "github_merged": "ok",
@@ -156,6 +159,7 @@
           "rule": 9
         },
         "actions": [],
+        "ignored": false,
         "sources": {
           "github": "ok",
           "github_merged": "ok",
@@ -195,6 +199,35 @@
           "rule": 12
         },
         "actions": [],
+        "ignored": false,
+        "sources": {
+          "github": "ok",
+          "github_merged": "ok",
+          "linear": "ok",
+          "github_issues": "unused",
+          "pohunek": "ok"
+        }
+      },
+      {
+        "key": "linear:ABC-4",
+        "project": "widgets",
+        "issue": {
+          "id": "ABC-4",
+          "title": "Widget cache",
+          "state": "In Progress",
+          "url": "https://example.invalid/issue/ABC-1"
+        },
+        "pull_request": null,
+        "no_issue": false,
+        "issue_key": "ABC-4",
+        "sessions": [],
+        "on_turn": {
+          "actor": "me",
+          "reason": "nothing runs",
+          "rule": 8
+        },
+        "actions": [],
+        "ignored": true,
         "sources": {
           "github": "ok",
           "github_merged": "ok",

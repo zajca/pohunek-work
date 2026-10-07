@@ -1,6 +1,7 @@
 // `pohunek-work list`: fetch every source once per project, join, evaluate
 // the rules and render. Read-only: no pohunek mutation, no provider write.
 import { isGithubProject, isLinearProject, issueSourceStatusKey } from "../config/issue-source.ts";
+import { lookupUnlistedIssues } from "../issue-lookup.ts";
 import { joinItems } from "../join.ts";
 import { isStalePullRequest, staleCutoff } from "../output/stale.ts";
 import {
@@ -201,7 +202,9 @@ export async function collectRows(
     const mergedPullRequests: readonly MergedPullRequest[] = merged.ok ? merged.data : [];
     const issues: readonly Issue[] = issueResult.ok ? issueResult.data : [];
     const joined = joinItems({ project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources });
-    for (const item of joined.items) {
+    const looked = await lookupUnlistedIssues(project, joined.items, sources, deps);
+    if (looked.failure !== null) sourceFailures.push(`${project.pohunekLabel} ${issueSource} lookup: ${looked.failure}`);
+    for (const item of looked.items) {
       rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles, sessions }) });
     }
     orphans.push(...joined.orphanedSessions);

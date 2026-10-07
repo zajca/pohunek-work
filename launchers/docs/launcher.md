@@ -98,7 +98,7 @@ an argument of every invocation; a missing or unknown source is a usage error.
   `pohunek-work` binary) and no `linear_cli`. Rows come from
   `pohunek-work list --json --project <project>`: the `github-issue:` rows whose
   `actions` offer `implement`, shown as key, state and title. The envelope must
-  be an `ok` payload of `list` contract 3, and every key must match
+  be an `ok` payload of `list` contract 4, and every key must match
   `github-issue:<owner>/<name>#<n>`, before anything reaches rofi or an argv.
   The selection runs `pohunek-work do <key> implement` in the terminal; `do`
   asks for confirmation there, so prompt and `work.link.*` metadata are the

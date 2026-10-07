@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateOnTurn, isAiReviewer, isLiveSession, summarizeChecks } from "../../src/rules.ts";
+import { isIgnoredItem } from "../../src/types/item.ts";
+import { evaluateOnTurn, ignoreLabelUnreadable, isAiReviewer, isLiveSession, summarizeChecks } from "../../src/rules.ts";
 import {
   T0,
   T1,
@@ -652,7 +653,7 @@ describe("unknown on missing sources", () => {
 
   test("project config is read from the input", () => {
     const it = item({ pullRequest: pr({ checks: [check("build", "failure")] }) });
-    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], reviews: "session", issueSource: { kind: "linear", team: "ABC", pausedStates: [] } }).rule).toBe(9);
+    expect(onTurn(it, allOk, { ignoredChecks: ["build"], policyChecks: [], aiReviewers: [], reviews: "session", issueSource: { kind: "linear", team: "ABC", pausedStates: [] }, ignoreLabel: null }).rule).toBe(9);
     expect(onTurn(it, allOk, project).rule).toBe(5);
   });
 });
@@ -727,5 +728,93 @@ describe("rule 12 on a secondary pull request row", () => {
   test("is unknown, not the owner's rebase, while the issue source is down and the issue is not known", () => {
     expect(onTurn(item({ ...secondary, resolvedIssue: null }), { ...allOk, linear: "timeout" })).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
     expect(onTurn(item({ ...secondary, resolvedIssue: null })).rule).toBe(5);
+  });
+});
+
+describe("rule 12 with an ignore label and nothing to pause", () => {
+  const noPause = { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] } } as const;
+  const withLabel = { ...noPause, ignoreLabel: "Pohunek:Ignore" };
+  const failing = pr({ checks: [check("build", "failure")] });
+  const secondary = { key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: "ABC-1", joinedBy: null, noIssue: false, pullRequest: failing } as const;
+  const down = { ...allOk, linear: "truncated" } as const;
+
+  test("a row whose issue is unknown is unknown while the issue source is down, because the issue may carry the label", () => {
+    expect(onTurn(item(secondary), down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    const joined = item({ key: "linear:ABC-1", issue: null, joinedBy: "branch_pattern", noIssue: false, pullRequest: failing });
+    expect(onTurn(joined, down, withLabel).actor).toBe("unknown");
+  });
+
+  test("the unknown verdict comes before the pohunek rules, so a blocked or working session cannot decide the row", () => {
+    const sessions = [session({ id: "s-1", activity: "working" })];
+    expect(onTurn(item({ ...secondary, sessions }), down, withLabel).actor).toBe("unknown");
+    const blocked = item({ ...secondary, sessions: [session({ id: "s-1", activity: "idle" })], notifications: [notification()] });
+    expect(onTurn(blocked, down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(onTurn(blocked, allOk, withLabel).rule).toBe(1);
+    expect(onTurn(blocked, down, noPause).rule).toBe(1);
+  });
+
+  test("a Linear pull request without a key may be linked to its issue by an attachment only, so it is unknown while the source is down", () => {
+    const unkeyed = item({ key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: null, joinedBy: null, noIssue: false, pullRequest: failing });
+    expect(onTurn(unkeyed, down, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(onTurn(unkeyed, down, noPause).rule).toBe(5);
+    const keyless = item({ ...unkeyed, noIssue: true });
+    expect(onTurn(keyless, allOk, withLabel).rule).toBe(5);
+    expect(onTurn(item({ ...keyless, issueLookup: { ok: true, ignored: false } }), allOk, withLabel).rule).toBe(5);
+    expect(onTurn(item({ ...keyless, issueLookup: { ok: false, reason: "linear:truncated" } }), allOk, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(isIgnoredItem(item({ ...keyless, issueLookup: { ok: true, ignored: true } }))).toBe(true);
+  });
+
+  test("a pull request of someone else without a key and a github project without a key are not unknown", () => {
+    const unkeyed = { key: "github:acme/widgets#12", issue: null, resolvedIssue: null, issueKey: null, joinedBy: null, noIssue: false } as const;
+    expect(onTurn(item({ ...unkeyed, pullRequest: pr({ relation: "review_requested" }) }), down, withLabel).actor).toBe("me");
+    const githubSource = { ...withLabel, issueSource: githubIssueSource };
+    expect(onTurn(item({ ...unkeyed, pullRequest: failing }), { ...allOk, github_issues: "truncated", linear: "unused" }, githubSource).rule).toBe(5);
+  });
+
+  test("an issue row without pull request data is unknown while github is down, because the pull request may carry the label", () => {
+    const issueRow = item({ key: "linear:ABC-1", issue: issue(), resolvedIssue: issue(), issueKey: "ABC-1", joinedBy: null, noIssue: false, pullRequest: null, sessions: [session()], notifications: [notification()] });
+    for (const github of ["truncated", "rate_limited"] as const) {
+      expect(onTurn(issueRow, { ...allOk, github }, withLabel)).toEqual({ actor: "unknown", reason: `github:${github}`, rule: null });
+      expect(onTurn(issueRow, { ...allOk, github }, noPause).rule).toBe(1);
+    }
+    expect(onTurn(issueRow, allOk, withLabel).rule).toBe(1);
+    const working = item({ ...issueRow, notifications: [], sessions: [session({ activity: "working" })] });
+    expect(onTurn(working, { ...allOk, github: "truncated" }, withLabel).actor).toBe("unknown");
+  });
+
+  test("a row with its own pull request data and a review request are not made unknown by github alone", () => {
+    expect(ignoreLabelUnreadable(item({ ...secondary, resolvedIssue: issue() }), { ...allOk, github: "truncated" }, withLabel)).toBeNull();
+    expect(ignoreLabelUnreadable(item({ ...secondary, resolvedIssue: issue(), pullRequest: pr({ relation: "review_requested" }) }), allOk, withLabel)).toBeNull();
+  });
+
+  test("without an ignore label and without paused states the row stays the owner's turn", () => {
+    expect(onTurn(item(secondary), down, noPause)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });
+  });
+
+  test("with the issue source up the row is the owner's turn", () => {
+    expect(onTurn(item(secondary), allOk, withLabel).rule).toBe(5);
+  });
+});
+
+describe("rule 12 with an ignore label and an issue the issue source did not list", () => {
+  const withLabel = { ...project, issueSource: { kind: "linear", team: "ABC", pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } as const;
+  const unlisted = item({ key: "linear:ABC-1", issueKey: "ABC-1", joinedBy: "branch_pattern", noIssue: false, pullRequest: pr({ checks: [check("build", "failure")] }) });
+
+  test("a failed lookup makes the row unknown with the lookup's reason, before the pohunek rules", () => {
+    const failedLookup = item({ ...unlisted, issueLookup: { ok: false, reason: "linear:truncated" }, sessions: [session()], notifications: [notification()] });
+    expect(onTurn(failedLookup, allOk, withLabel)).toEqual({ actor: "unknown", reason: "linear:truncated", rule: null });
+    expect(ignoreLabelUnreadable(failedLookup, allOk, withLabel)).toBe("linear:truncated");
+  });
+
+  test("a lookup that found the issue unlabelled or labelled leaves the verdict to the rules", () => {
+    for (const ignored of [false, true]) {
+      expect(onTurn(item({ ...unlisted, issueLookup: { ok: true, ignored } }), allOk, withLabel)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });
+    }
+  });
+
+  test("a row ignored by the lookup is an ignored row", () => {
+    expect(isIgnoredItem(item({ ...unlisted, issueLookup: { ok: true, ignored: true } }))).toBe(true);
+    expect(isIgnoredItem(item({ ...unlisted, issueLookup: { ok: true, ignored: false } }))).toBe(false);
+    expect(isIgnoredItem(item({ ...unlisted, issueLookup: { ok: false, reason: "linear:timeout" } }))).toBe(false);
   });
 });

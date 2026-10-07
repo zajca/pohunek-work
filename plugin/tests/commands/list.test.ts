@@ -42,6 +42,9 @@ interface World {
   merged?: SourceResult<readonly MergedPullRequest[]>;
   issues?: SourceResult<readonly Issue[]>;
   githubIssues?: SourceResult<readonly Issue[]>;
+  /** Answer of the ignore-label lookup of unlisted issues; a lookup fails the test when absent. */
+  ignoredKeys?: SourceResult<ReadonlySet<string>>;
+  lookups?: string[][];
   sessions?: SourceResult<readonly PohunekSession[]>;
   registry?: SourceResult<readonly PohunekProject[]>;
 }
@@ -61,9 +64,19 @@ function deps(world: World): Parameters<typeof runList>[2] {
       fetchPullRequests: () => Promise.resolve(world.prs ?? ok("github", [])),
       fetchMergedPullRequests: () => Promise.resolve(world.merged ?? ok("github", [])),
       fetchIssues: () => Promise.resolve(world.githubIssues ?? ok("github_issues", [])),
+      fetchIgnoredKeys: (_project: unknown, keys: readonly string[]) => {
+        world.lookups?.push([...keys]);
+        return world.ignoredKeys === undefined ? Promise.reject(new Error("the test did not expect an ignore-label lookup")) : Promise.resolve(world.ignoredKeys);
+      },
       fetchIssueDetail: () => Promise.reject(new Error("an issue body is read only when implement is planned")),
     },
-    linear: { fetchIssues: () => Promise.resolve(world.issues ?? ok("linear", [])) },
+    linear: {
+      fetchIssues: () => Promise.resolve(world.issues ?? ok("linear", [])),
+      fetchIgnoredKeys: (_project: unknown, keys: readonly string[]) => {
+        world.lookups?.push([...keys]);
+        return world.ignoredKeys === undefined ? Promise.reject(new Error("the test did not expect an ignore-label lookup")) : Promise.resolve(world.ignoredKeys);
+      },
+    },
     logger: silentLogger,
     cliVersion: "0.1.0",
   };
@@ -340,6 +353,7 @@ function spiedDeps(world: World): { deps: Parameters<typeof runList>[2]; fetched
           fetched.push(project.pohunekLabel);
           return Promise.resolve(world.issues ?? ok("linear", []));
         },
+        fetchIgnoredKeys: () => Promise.reject(new Error("not used")),
       },
     },
   };
@@ -421,7 +435,7 @@ describe("a project whose issues come from GitHub", () => {
 
   test("the Linear source is never called and the project reports linear unused", async () => {
     const calls: string[] = [];
-    const spied = { ...deps({ githubIssues: ok("github_issues", []) }), linear: { fetchIssues: () => { calls.push("linear"); return Promise.resolve(ok("linear", [])); } } };
+    const spied = { ...deps({ githubIssues: ok("github_issues", []) }), linear: { fetchIssues: () => { calls.push("linear"); return Promise.resolve(ok("linear", [])); }, fetchIgnoredKeys: () => Promise.reject(new Error("not used")) } };
     const out = await runList(githubWidgets, { mine: false, staleDays: null, json: true, project: "widgets" }, spied);
     expect(calls).toEqual([]);
     expect((JSON.parse(out.stdout) as { ok: { projects: { sources: Record<string, string> }[] } }).ok.projects[0]?.sources["linear"]).toBe("unused");

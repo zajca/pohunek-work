@@ -128,7 +128,7 @@ import re
 import sys
 
 # `list --json` contract versions this picker understands.
-SUPPORTED_LIST_CONTRACT = 3
+SUPPORTED_LIST_CONTRACT = 4
 
 
 def flatten(value):

@@ -1,5 +1,6 @@
 // `attach`: puts the owner's terminal on the one live session linked to a row.
 import type { CollectedRow } from "../commands/list.ts";
+import { ignoreLabelUnreadable } from "../rules.ts";
 import { isLiveSession, type PohunekClient } from "../sources/pohunek.ts";
 import type { PluginConfig } from "../types/config.ts";
 import { ActionError, type AttachPlan } from "./types.ts";
@@ -16,6 +17,11 @@ export function planAttach(row: CollectedRow, config: PluginConfig): AttachPlan 
   // `list` advertises no action on a paused row (rule 12), so `do` accepts none either.
   if (row.listItem.on_turn.actor === "paused") {
     throw new ActionError("precondition_failed", `attach refused: ${row.listItem.key} is paused (rule 12)`);
+  }
+  // The row's issue may carry the ignore label, so `list` advertises no action on it either.
+  const unreadable = ignoreLabelUnreadable(row.item, row.listItem.sources, row.project);
+  if (unreadable !== null) {
+    throw new ActionError("source_unavailable", `attach refused: ${row.listItem.key} may be ignored but its issue is unreadable (${unreadable})`);
   }
   const live = row.item.sessions.filter(isLiveSession);
   const [only] = live;

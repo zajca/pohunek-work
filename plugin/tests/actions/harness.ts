@@ -53,6 +53,8 @@ export interface World {
   issues?: SourceResult<readonly Issue[]>;
   /** Answer of the GitHub issue source; used by a project whose issues come from GitHub. */
   githubIssues?: SourceResult<readonly Issue[]>;
+  /** Answer of the targeted ignore-label lookup of issues the issue source did not list; a lookup fails the test when absent. */
+  ignoredKeys?: SourceResult<ReadonlySet<string>>;
   /** Answer of the single-issue lookup `implement` makes for a GitHub issue; fails the test when absent and read. */
   issueDetail?: (number: number) => SourceResult<IssueDetail>;
   sessions?: readonly PohunekSession[];
@@ -96,6 +98,8 @@ export interface Harness {
   /** Issue numbers whose body was read. */
   issueReads: number[];
   worktreeReads: string[];
+  /** Keys of every ignore-label lookup, one entry per call. */
+  lookups: string[][];
   /** Calls of any source; zero means nothing was read. */
   sourceCalls: () => number;
 }
@@ -106,6 +110,7 @@ export function setup(world: World): Harness {
   const attached: string[] = [];
   const issueReads: number[] = [];
   const worktreeReads: string[] = [];
+  const lookups: string[][] = [];
   let calls = 0;
   const count = <T>(value: T): T => {
     calls += 1;
@@ -137,6 +142,7 @@ export function setup(world: World): Harness {
     attached,
     issueReads,
     worktreeReads,
+    lookups,
     sourceCalls: () => calls,
     deps: {
       pohunek,
@@ -146,6 +152,11 @@ export function setup(world: World): Harness {
         fetchMergedPullRequests: (project) =>
           Promise.resolve(project.pohunekLabel === "widgets" ? (world.merged ?? ok("github", [])) : ok("github", [])),
         fetchIssues: () => Promise.resolve(count(world.githubIssues ?? ok("github_issues", []))),
+        fetchIgnoredKeys: (_project, keys) => {
+          lookups.push([...keys]);
+          if (world.ignoredKeys === undefined) return Promise.reject(new Error("the test did not expect an ignore-label lookup"));
+          return Promise.resolve(world.ignoredKeys);
+        },
         fetchIssueDetail: (_project, number) => {
           issueReads.push(number);
           if (world.issueDetail === undefined) return Promise.reject(new Error("the test did not expect an issue lookup"));
@@ -155,6 +166,11 @@ export function setup(world: World): Harness {
       linear: {
         fetchIssues: (project) =>
           Promise.resolve(count(project.pohunekLabel === "widgets" ? (world.issues ?? ok("linear", [])) : ok("linear", []))),
+        fetchIgnoredKeys: (_project, keys) => {
+          lookups.push([...keys]);
+          if (world.ignoredKeys === undefined) return Promise.reject(new Error("the test did not expect an ignore-label lookup"));
+          return Promise.resolve(world.ignoredKeys);
+        },
       },
       logger: silentLogger,
       cliVersion: "0.1.0",

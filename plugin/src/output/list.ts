@@ -1,7 +1,7 @@
 // Row building and rendering for `pohunek-work list`: the list --json contract
 // (RFC 9.1) and the terminal table.
 import { configuredProfile } from "../config/profiles.ts";
-import { evaluateOnTurn, summarizeChecks } from "../rules.ts";
+import { evaluateOnTurn, ignoreLabelUnreadable, summarizeChecks } from "../rules.ts";
 import { isIssueRowOf } from "../config/row-key.ts";
 import { isLiveSession, worktreeOf } from "../sources/pohunek.ts";
 import { adoptRefusal } from "../actions/adopt.ts";
@@ -22,12 +22,13 @@ import {
   type SourceStatuses,
   type UnlinkedSession,
   type WorkItem,
+  isIgnoredItem,
 } from "../types/item.ts";
 
 export interface RowContext {
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "pohunekLabel" | "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "profiles">;
+  readonly project: Pick<ProjectConfig, "pohunekLabel" | "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "profiles" | "ignoreLabel">;
   /** Global [profiles]; a project's own table replaces it whole. */
   readonly profiles: ProfilesConfig;
   /** Every session pohunek knows, linked or not: an unlinked session may hold a pull request's head branch. */
@@ -72,11 +73,11 @@ function worktreeActionable(item: WorkItem, context: Pick<RowContext, "project" 
  * pull request's head branch can be adopted (`adoptRefusal`); `do` additionally
  * refuses an adoption when a worktree pohunek did not create holds the branch,
  * which only `project show` reveals. `on_turn` keeps the reason either way. `attach` is listed whenever a live linked session
- * exists, which covers rules 1 and 11. A paused row (rule 12) has no action.
+ * exists, which covers rules 1 and 11. A paused row (rule 12), an ignored row and a row whose issue may carry the ignore label but is unreadable have no action.
  * `merge` is never listed. Delegation policy is empty, so nothing is delegable.
  */
-export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles" | "sessions">): ListAction[] {
-  if (onTurn.actor === "paused") return [];
+export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowContext, "project" | "profiles" | "sessions" | "sources">): ListAction[] {
+  if (onTurn.actor === "paused" || isIgnoredItem(item) || ignoreLabelUnreadable(item, context.sources, context.project) !== null) return [];
   const names: string[] = [];
   const primary = ruleAction(onTurn);
   if (primary !== null && (!WORKTREE_ACTIONS.includes(primary) || worktreeActionable(item, context))) names.push(primary);
@@ -127,6 +128,7 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
     })),
     on_turn: { actor: onTurn.actor, reason: onTurn.reason, rule: onTurn.rule },
     actions: rowActions(item, onTurn, context),
+    ignored: isIgnoredItem(item),
     sources: context.sources,
   };
 }

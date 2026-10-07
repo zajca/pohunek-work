@@ -23,6 +23,7 @@ const project = {
   reviews: "session",
   policy: null,
   profiles: null,
+  ignoreLabel: null,
 } satisfies ProjectConfig;
 
 const okSources: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "ok" };
@@ -37,6 +38,7 @@ function issue(id: string, attachmentUrls: string[] = []): Issue {
     paused: false,
     assigneeIsMe: true,
     attachmentUrls,
+    ignored: false,
   };
 }
 
@@ -67,6 +69,7 @@ function pr(
     checks: [],
     closingIssueNumbers: [],
     updatedAt: "2026-01-01T00:00:00Z",
+    ignored: false,
   };
 }
 
@@ -618,6 +621,7 @@ describe("github issue source", () => {
     paused: false,
     assigneeIsMe: true,
     attachmentUrls: [],
+    ignored: false,
     ...overrides,
   });
   const withClosing = (number: number, head: string, closing: number[]): PullRequest => ({ ...pr(number, head), closingIssueNumbers: closing });

@@ -29,6 +29,7 @@ import type {
 import { exec as defaultExec, SpawnError, type Exec } from "../util/exec.ts";
 import {
   buildConnectionRequest,
+  buildIgnoredIssuesRequest,
   buildIssueDetailRequest,
   buildIssueSearchRequest,
   buildMergedSearchRequest,
@@ -56,6 +57,12 @@ export interface GithubSource {
   fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
   /** Open issues of the project's repository assigned to the owner that carry a started or paused label. */
   fetchIssues(project: GithubProject): Promise<SourceResult<readonly Issue[]>>;
+  /**
+   * Of the issue keys asked for, those whose issue carries the project's ignore label. The issue
+   * search lists only open issues with a started or paused label, so a pull request can join an
+   * issue it does not return. A key whose issue does not exist is not in the result.
+   */
+  fetchIgnoredKeys(project: GithubProject, keys: readonly string[]): Promise<SourceResult<ReadonlySet<string>>>;
   /** One issue of the project's repository by number, with its body; used only when `implement` is planned. */
   fetchIssueDetail(project: GithubProject, number: number): Promise<SourceResult<IssueDetail>>;
 }
@@ -304,6 +311,17 @@ function closingIssueNumbers(pr: JsonObject, repo: string, withClosing: boolean)
   return [...numbers].sort((a, b) => a - b);
 }
 
+function labelNames(container: JsonObject): string[] {
+  return connectionNodes(container, "labels", "labels").map((node) =>
+    asString(asObject(node, "label")["name"], "label.name"),
+  );
+}
+
+/** True when a label equals the project's ignore label (case-insensitive); false when the project has none. */
+function carriesIgnoreLabel(labels: readonly string[], ignoreLabel: string | null): boolean {
+  return ignoreLabel !== null && firstLabelOf(labels, [ignoreLabel]) !== null;
+}
+
 function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: ProjectConfig): PullRequest {
   const repo = asString(asObject(pr["repository"], "repository")["nameWithOwner"], "repository.nameWithOwner");
   const number = asInteger(pr["number"], "number");
@@ -338,6 +356,7 @@ function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: P
     reviewRequests: requests,
     checks: rollup === null ? [] : connectionNodes(rollup, "contexts", "contexts").map(toCheck),
     closingIssueNumbers: closingIssueNumbers(pr, project.repo, project.issueSource.kind === "github"),
+    ignored: project.ignoreLabel !== null && carriesIgnoreLabel(labelNames(pr), project.ignoreLabel),
     updatedAt: asString(pr["updatedAt"], "updatedAt"),
   };
 }
@@ -386,7 +405,10 @@ function graphqlErrorFailure(errors: unknown[]): SourceFailureError {
   return new SourceFailureError("invalid_response", `GitHub GraphQL returned errors${detail}`);
 }
 
-async function send(transport: Transport, request: GraphqlRequest): Promise<JsonObject> {
+/** Decides whether one GraphQL error of a response is expected and leaves the rest of the data usable. */
+type ToleratedError = (error: unknown) => boolean;
+
+async function send(transport: Transport, request: GraphqlRequest, tolerated?: ToleratedError): Promise<JsonObject> {
   let response: Response;
   try {
     response = await transport.fetchFn(transport.config.endpoint, {
@@ -431,7 +453,10 @@ async function send(transport: Transport, request: GraphqlRequest): Promise<Json
   const envelope = asObject(body, "envelope");
   const errors = envelope["errors"];
   if (errors !== undefined && errors !== null) {
-    throw graphqlErrorFailure(Array.isArray(errors) ? (errors as unknown[]) : []);
+    const list = Array.isArray(errors) ? (errors as unknown[]) : [];
+    if (tolerated === undefined || list.length === 0 || !list.every(tolerated)) {
+      throw graphqlErrorFailure(list);
+    }
   }
   // rateLimit.remaining is the budget left after this query, so 0 on a complete response is valid;
   // exhaustion arrives as a RATE_LIMITED error or HTTP 403/429.
@@ -524,7 +549,7 @@ function collectPendingIssues(issues: readonly JsonObject[], seen: SeenCursors):
   return pending;
 }
 
-function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursors, withClosing: boolean): PendingPage[] {
+function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursors, shape: SearchShape): PendingPage[] {
   const pending: PendingPage[] = [];
   const check = pendingChecker(pending, seen);
 
@@ -534,8 +559,11 @@ function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursor
     check("reviewRequests", prId, pr, "reviewRequests");
     check("timelineItems", prId, pr, "timelineItems");
     check("reviewThreads", prId, pr, "reviewThreads");
-    if (withClosing) {
+    if (shape.closingReferences) {
       check("closingIssues", prId, pr, "closingIssuesReferences");
+    }
+    if (shape.pullRequestLabels) {
+      check("pullRequestLabels", prId, pr, "labels");
     }
     for (const raw of connectionNodes(pr, "reviewThreads", "reviewThreads")) {
       const thread = asObject(raw, "thread");
@@ -778,9 +806,7 @@ function firstLabelOf(labels: readonly string[], wanted: readonly string[]): str
  * is the deciding label.
  */
 function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
-  const labels = connectionNodes(raw, "labels", "labels").map((node) =>
-    asString(asObject(node, "label")["name"], "label.name"),
-  );
+  const labels = labelNames(raw);
   const paused = firstLabelOf(labels, project.issueSource.pausedLabels);
   const started = firstLabelOf(labels, project.issueSource.startedLabels);
   const state = paused ?? started;
@@ -796,10 +822,30 @@ function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
     paused: paused !== null,
     assigneeIsMe: true,
     attachmentUrls: [],
+    ignored: carriesIgnoreLabel(labels, project.ignoreLabel),
   };
 }
 
 // ------------------------------------------------------------------ source
+
+const ISSUE_NUMBER = /^[1-9][0-9]*$/;
+
+/** A `NOT_FOUND` error whose path is exactly `repository.<alias>` of one lookup alias: the issue does not exist. */
+function missingIssueError(aliases: ReadonlySet<string>): ToleratedError {
+  return (raw) => {
+    if (typeof raw !== "object" || raw === null) return false;
+    const error = raw as JsonObject;
+    const path = error["path"];
+    return (
+      error["type"] === "NOT_FOUND" &&
+      Array.isArray(path) &&
+      path.length === 2 &&
+      path[0] === "repository" &&
+      typeof path[1] === "string" &&
+      aliases.has(path[1])
+    );
+  };
+}
 
 function validateInputs(project: ProjectConfig, identity: IdentityConfig): void {
   if (!REPO_PATTERN.test(project.repo)) {
@@ -874,7 +920,10 @@ export function createGithubSource(
     try {
       validateInputs(project, config.identity);
       const searches = buildSearches(project, config.identity);
-      const shape: SearchShape = { closingReferences: project.issueSource.kind === "github" };
+      const shape: SearchShape = {
+        closingReferences: project.issueSource.kind === "github",
+        pullRequestLabels: project.ignoreLabel !== null,
+      };
       if (estimateRequestNodes(config.github, searches.length, shape) > GITHUB_MAX_NODES) {
         throw new SourceFailureError(
           "not_configured",
@@ -890,7 +939,7 @@ export function createGithubSource(
       const collected = await runSearches(transport, searches, shape);
       const raws = [...collected.values()].map((entry) => entry.raw);
       await completeNestedConnections(transport, raws, new WeakMap(), (roots, seen) =>
-        collectPendingPullRequests(roots, seen, shape.closingReferences),
+        collectPendingPullRequests(roots, seen, shape),
       );
       const data = [...collected.values()].map((entry) => toPullRequest(entry.raw, entry.relation, project));
       return { ok: true, source: "github", data, durationMs: elapsed() };
@@ -955,6 +1004,68 @@ export function createGithubSource(
     }
   };
 
+  const fetchIgnoredKeys = async (
+    project: GithubProject,
+    keys: readonly string[],
+  ): Promise<SourceResult<ReadonlySet<string>>> => {
+    const startedAt = performance.now();
+    const elapsed = (): number => Math.round(performance.now() - startedAt);
+    try {
+      validateInputs(project, config.identity);
+      const ignoreLabel = project.ignoreLabel;
+      const prefix = `${project.repo.toLowerCase()}#`;
+      const byNumber = new Map<number, string>();
+      for (const key of keys) {
+        const digits = key.slice(prefix.length);
+        if (key.toLowerCase().startsWith(prefix) && ISSUE_NUMBER.test(digits) && Number.isSafeInteger(Number(digits))) {
+          byNumber.set(Number(digits), key);
+        }
+      }
+      const ignored = new Set<string>();
+      if (ignoreLabel === null || byNumber.size === 0) {
+        return { ok: true, source: "github_issues", data: ignored, durationMs: elapsed() };
+      }
+      const [owner = "", name = ""] = project.repo.split("/");
+      const token = await obtainToken(config.github, execFn);
+      const transport: Transport = {
+        token,
+        config: config.github,
+        fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+      };
+      const numbers = [...byNumber.keys()];
+      for (let start = 0; start < numbers.length; start += config.github.issuePageSize) {
+        const batch = numbers.slice(start, start + config.github.issuePageSize);
+        const aliases = new Set(batch.map((_, index) => `i${index.toString()}`));
+        const data = await send(
+          transport,
+          buildIgnoredIssuesRequest(owner, name, batch, config.github.nestedPageSize),
+          missingIssueError(aliases),
+        );
+        const repository = asObject(data["repository"], "repository");
+        const found: { readonly number: number; readonly raw: JsonObject }[] = [];
+        batch.forEach((number, index) => {
+          const raw = repository[`i${index.toString()}`];
+          if (raw === null) return;
+          const issue = asObject(raw, "issue");
+          if (asInteger(issue["number"], "issue.number") !== number) throw schemaMismatch("issue.number");
+          found.push({ number, raw: issue });
+        });
+        // A label page cut short could hide the ignore label.
+        await completeNestedConnections(transport, found.map((entry) => entry.raw), new WeakMap(), collectPendingIssues);
+        for (const { number, raw } of found) {
+          const key = byNumber.get(number);
+          if (key !== undefined && carriesIgnoreLabel(labelNames(raw), ignoreLabel)) ignored.add(key);
+        }
+      }
+      return { ok: true, source: "github_issues", data: ignored, durationMs: elapsed() };
+    } catch (error) {
+      if (error instanceof SourceFailureError) {
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+      }
+      throw error;
+    }
+  };
+
   const fetchIssueDetail = async (project: GithubProject, number: number): Promise<SourceResult<IssueDetail>> => {
     const startedAt = performance.now();
     const elapsed = (): number => Math.round(performance.now() - startedAt);
@@ -981,5 +1092,5 @@ export function createGithubSource(
     }
   };
 
-  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIssueDetail };
+  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIgnoredKeys, fetchIssueDetail };
 }

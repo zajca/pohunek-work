@@ -26,8 +26,8 @@ describe("decodeListEnvelope", () => {
     ["[]", "envelope is not an object"],
     ['{"protocol":{"minimum":1,"maximum":1},"ok":{}}', "cli_version is not a string"],
     ['{"cli_version":"1","ok":{}}', "protocol is not an object"],
-    ['{"cli_version":"1","protocol":{"minimum":3,"maximum":3}}', "envelope has neither ok nor err"],
-    ['{"cli_version":"1","protocol":{"minimum":3,"maximum":3},"ok":{"items":{}}}', "ok.items is not an array"],
+    ['{"cli_version":"1","protocol":{"minimum":4,"maximum":4}}', "envelope has neither ok nor err"],
+    ['{"cli_version":"1","protocol":{"minimum":4,"maximum":4},"ok":{"items":{}}}', "ok.items is not an array"],
   ])("malformed %p: %s", (text, message) => {
     expect(decodeListEnvelope(text)).toEqual({ kind: "malformed", message });
   });
@@ -53,10 +53,22 @@ describe("decodeListEnvelope", () => {
     expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].sources.github_issues is not a string" });
   });
 
+  test("the ignored flag of a row is required, boolean and round-trips", () => {
+    const good = JSON.parse(envelopeText(payload([row("linear:A-1", { ignored: true })]))) as { ok: { items: Record<string, unknown>[] } };
+    const first = good.ok.items[0];
+    if (first === undefined) throw new Error("fixture");
+    const outcome = decodeListEnvelope(JSON.stringify(good));
+    expect(outcome.kind === "ok" ? outcome.payload.items[0]?.ignored : null).toBe(true);
+    first["ignored"] = "yes";
+    expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].ignored is not a boolean" });
+    delete first["ignored"];
+    expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].ignored is not a boolean" });
+  });
+
   test("the err envelope is decoded with its class, code and message", () => {
     const text = JSON.stringify({
       cli_version: "0.1.0",
-      protocol: { minimum: 3, maximum: 3 },
+      protocol: { minimum: 4, maximum: 4 },
       err: { class: "configuration", code: "config_invalid", msg: "config.toml: tui is required" },
     });
     expect(decodeListEnvelope(text)).toEqual({
@@ -67,9 +79,10 @@ describe("decodeListEnvelope", () => {
   });
 
   test.each([
-    [{ minimum: 4, maximum: 5 }],
+    [{ minimum: 5, maximum: 6 }],
+    [{ minimum: 3, maximum: 3 }],
     [{ minimum: 0, maximum: 0 }],
-  ])("protocol %p excludes v3: incompatible, payload not read", (protocol) => {
+  ])("protocol %p excludes v4: incompatible, payload not read", (protocol) => {
     const outcome = decodeListEnvelope(JSON.stringify({ cli_version: "9.0.0", protocol, ok: "anything" }));
     expect(outcome.kind).toBe("incompatible");
   });

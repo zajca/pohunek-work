@@ -24,7 +24,7 @@ export interface RuleInput {
   readonly item: WorkItem;
   readonly sources: SourceStatuses;
   readonly identity: IdentityConfig;
-  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews">;
+  readonly project: Pick<ProjectConfig, "ignoredChecks" | "policyChecks" | "aiReviewers" | "issueSource" | "reviews" | "ignoreLabel">;
 }
 
 export interface RuleResult {
@@ -190,6 +190,32 @@ function issueSourceFailure(sources: SourceStatuses, project: Pick<ProjectConfig
   return failedSources(sources, [issueSourceStatusKey(project)]);
 }
 
+/**
+ * Failure text of the source that hides the project's ignore label from the row; null otherwise.
+ * A row without pull request data may have lost an open pull request that carries the label
+ * while `github` is down. A row whose issue the issue source did not list may be parked by the
+ * issue's label: its targeted lookup decides, and while the issue source is down the row is
+ * unknown. A Linear pull request without a key may be linked to its issue by a Linear
+ * attachment only.
+ */
+export function ignoreLabelUnreadable(
+  item: WorkItem,
+  sources: SourceStatuses,
+  project: Pick<ProjectConfig, "issueSource" | "ignoreLabel">,
+): string | null {
+  if (project.ignoreLabel === null) return null;
+  if (item.pullRequest === null) {
+    const githubFailure = failedSources(sources, ["github"]);
+    if (githubFailure !== null) return githubFailure;
+  }
+  if ((item.issue ?? item.resolvedIssue) !== null) return null;
+  if (item.issueLookup !== null) return item.issueLookup.ok ? null : item.issueLookup.reason;
+  const authored = item.pullRequest !== null && item.pullRequest.relation === "authored";
+  const keyUnknown = project.issueSource.kind === "linear" && authored && item.issueKey === null && !item.noIssue;
+  if (item.joinedBy === null && item.issueKey === null && !keyUnknown) return null;
+  return issueSourceFailure(sources, project);
+}
+
 function failedSources(
   sources: SourceStatuses,
   needed: readonly SourceName[],
@@ -226,6 +252,11 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   const pohunekFailure = failedSources(sources, ["pohunek"]);
   if (pohunekFailure !== null) return unknown(pohunekFailure);
 
+  // The ignore label can park the row through an issue the source did not return, so no
+  // rule below may decide it, the pohunek rules included.
+  const unreadable = ignoreLabelUnreadable(item, sources, project);
+  if (unreadable !== null) return unknown(unreadable);
+
   const linkedIds = new Set(item.sessions.map((session) => session.id));
   const blocked = item.notifications.some(
     (notification) =>
@@ -241,18 +272,16 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
     return result({ actor: "agent", reason: "working", rule: 2 });
   }
 
-  // Rule 12: issue source. A row that resolved to an issue key (its own issue row or a
+  // Rule 12: paused issues. A row that resolved to an issue key (its own issue row or a
   // secondary pull request row of that issue) whose issue the source did not return may
   // be paused, so it is unknown while the source is down.
-  if (canPauseIssues(project)) {
-    const resolved = item.issue ?? item.resolvedIssue;
-    if (resolved === null && (item.joinedBy !== null || item.issueKey !== null)) {
-      const issueFailure = issueSourceFailure(sources, project);
-      if (issueFailure !== null) return unknown(issueFailure);
-    }
-    if (resolved !== null && resolved.paused) {
-      return result({ actor: "paused", reason: "paused", rule: 12 });
-    }
+  const resolved = item.issue ?? item.resolvedIssue;
+  if (resolved === null && (item.joinedBy !== null || item.issueKey !== null) && canPauseIssues(project)) {
+    const issueFailure = issueSourceFailure(sources, project);
+    if (issueFailure !== null) return unknown(issueFailure);
+  }
+  if (canPauseIssues(project) && resolved !== null && resolved.paused) {
+    return result({ actor: "paused", reason: "paused", rule: 12 });
   }
 
   // Rules 3 to 7 and 9: github.

@@ -9,7 +9,7 @@ import {
 } from "../../src/output/list.ts";
 import { sanitizeCell } from "../../src/output/sanitize.ts";
 import type { OnTurn, RuleNumber } from "../../src/types/item.ts";
-import { LIST_CONTRACT_VERSION } from "../../src/types/item.ts";
+import { isIgnoredItem, LIST_CONTRACT_VERSION } from "../../src/types/item.ts";
 import {
   allOk,
   check,
@@ -67,6 +67,10 @@ function sampleEnvelope(): unknown {
       }),
       context,
     ),
+    buildListItem(
+      item({ key: "linear:ABC-4", issue: issue({ id: "ABC-4", ignored: true }), pullRequest: null, noIssue: false, issueKey: "ABC-4" }),
+      context,
+    ),
   ];
   return buildListEnvelope(
     "0.1.0",
@@ -100,13 +104,46 @@ test("envelope carries the contract version and exactly one of ok or err", () =>
 test("a row has exactly the contract keys", () => {
   const row = buildListItem(item(), context);
   expect(Object.keys(row).sort()).toEqual(
-    ["actions", "issue", "issue_key", "key", "no_issue", "on_turn", "project", "pull_request", "sessions", "sources"].sort(),
+    ["actions", "ignored", "issue", "issue_key", "key", "no_issue", "on_turn", "project", "pull_request", "sessions", "sources"].sort(),
   );
   expect(Object.keys(row.pull_request ?? {}).sort()).toEqual(
     ["checks", "draft", "fix_delivered", "id", "mergeable", "rerequested", "review_decision", "threads_answered", "title", "updated_at", "url"].sort(),
   );
   expect(row.on_turn.rule).toBe(9);
   expect(row.actions).toEqual([]);
+});
+
+describe("ignored rows", () => {
+  const fixCi: OnTurn = { actor: "me", reason: "fix CI", rule: 5 };
+  const failing = (ignored: boolean): ReturnType<typeof pr> => pr({ ignored, checks: [check("build", "failure")] });
+  const live = [session({ worktreePath: "/wt/a" })];
+
+  test("isIgnoredItem is true through the pull request, the issue or the resolved issue", () => {
+    expect(isIgnoredItem(item({ pullRequest: pr({ ignored: true }) }))).toBe(true);
+    expect(isIgnoredItem(item({ issue: issue({ ignored: true }), pullRequest: null }))).toBe(true);
+    expect(isIgnoredItem(item({ key: "github:acme/widgets#14", issue: null, resolvedIssue: issue({ ignored: true }) }))).toBe(true);
+  });
+
+  test("isIgnoredItem is false when nothing carries the label", () => {
+    expect(isIgnoredItem(item({ issue: issue(), pullRequest: pr(), resolvedIssue: issue() }))).toBe(false);
+    expect(isIgnoredItem(item({ issue: null, pullRequest: null, resolvedIssue: null }))).toBe(false);
+  });
+
+  test("an ignored row keeps its verdict but lists no action, not even attach", () => {
+    const base = item({ pullRequest: failing(false), sessions: live });
+    expect(buildListItem(base, context).actions.map((action) => action.name)).toEqual(["fix-ci", "attach"]);
+
+    const row = buildListItem(item({ pullRequest: failing(true), sessions: live }), context);
+    expect(row.ignored).toBe(true);
+    expect(row.on_turn).toEqual(buildListItem(base, context).on_turn);
+    expect(row.on_turn.actor).toBe("me");
+    expect(row.actions).toEqual([]);
+    expect(rowActions(item({ pullRequest: failing(true), sessions: live }), fixCi, context)).toEqual([]);
+  });
+
+  test("a row that is not ignored reports ignored false", () => {
+    expect(buildListItem(item(), context).ignored).toBe(false);
+  });
 });
 
 test("--mine keeps only rows on the owner's turn", () => {

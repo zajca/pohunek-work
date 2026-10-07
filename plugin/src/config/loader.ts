@@ -19,6 +19,7 @@ import type {
   TuiInitialView,
   WatchConfig,
 } from "../types/config.ts";
+import { fitsLinearComplexity, LINEAR_MAX_COMPLEXITY } from "../util/linear-budget.ts";
 import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
 import {
@@ -107,10 +108,10 @@ function parseGithub(root: Table, file: string): GithubConfig {
     mergedLookbackDays: readPositiveInt(table, "merged_lookback_days", file, path),
   };
   // The authored and the directly requested searches always run in one request. The worst case
-  // includes the closing issue references, which only projects with a GitHub issue source request:
-  // a limit that depends on the project files would make the global file valid or not by what the
-  // project files contain.
-  if (estimateRequestNodes(config, 2, { closingReferences: true }) > GITHUB_MAX_NODES) {
+  // includes the closing issue references (projects with a GitHub issue source) and the labels
+  // (projects with an ignore label): a limit that depends on the project files would make the
+  // global file valid or not by what the project files contain.
+  if (estimateRequestNodes(config, 2, { closingReferences: true, pullRequestLabels: true }) > GITHUB_MAX_NODES) {
     throw fail(
       file,
       [...path, "pull_request_page_size"],
@@ -136,7 +137,7 @@ function parseLinear(root: Table, file: string): LinearConfig {
     file,
     path,
   );
-  return {
+  const config: LinearConfig = {
     endpoint: readHttpsUrl(table, "endpoint", file, path),
     secretToolBin: readAbsolutePath(table, "secret_tool_bin", file, path),
     keyringService: readString(table, "keyring_service", file, path),
@@ -144,6 +145,17 @@ function parseLinear(root: Table, file: string): LinearConfig {
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
     pageSize: readPositiveInt(table, "page_size", file, path),
   };
+  if (!fitsLinearComplexity(config.pageSize, false)) throw linearPageSizeError(file, config.pageSize, false);
+  return config;
+}
+
+function linearPageSizeError(file: string, pageSize: number, labels: boolean): ConfigError {
+  const reason = labels ? "with the label page of a project with an ignore_label " : "";
+  return fail(
+    file,
+    ["linear", "page_size"],
+    `${pageSize.toString()} ${reason}exceeds Linear's query complexity limit of ${LINEAR_MAX_COMPLEXITY.toString()} points; lower page_size`,
+  );
 }
 
 function parsePohunek(root: Table, file: string): PohunekConfig {
@@ -391,7 +403,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels"],
+    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels", "ignore_label"],
     file,
     path,
   );
@@ -422,6 +434,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     ignoredChecks,
     policyChecks,
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
+    ignoreLabel: "ignore_label" in table ? readString(table, "ignore_label", file, path) : null,
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,
   };
@@ -468,6 +481,14 @@ export async function loadConfig(configDir: string): Promise<PluginConfig> {
         `is required because ${PROJECTS_DIR}/${linearProject.name}${TOML_SUFFIX} uses issue_source = "linear"`,
       );
     }
+  }
+  // Only a project with an ignore_label selects the label page of every issue.
+  if (
+    global.linear !== null &&
+    projects.some((project) => project.issueSource.kind === "linear" && project.ignoreLabel !== null) &&
+    !fitsLinearComplexity(global.linear.pageSize, true)
+  ) {
+    throw linearPageSizeError(GLOBAL_FILE, global.linear.pageSize, true);
   }
   return { configDir, global, projects };
 }
