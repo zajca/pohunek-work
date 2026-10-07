@@ -52,6 +52,14 @@ A single small concern is a stack of one: one PR on `main` with `Closes #N`.
 5. **Open and verify**: write title and body to a scratch file, then
    `gh pr create --base <base> --head <slice-branch> --title "<title>" --body-file <file>`.
    Confirm the URL and check CI (`gh pr checks <n>`).
+
+   **Review trigger.** The automated review runs only for a PR that carries
+   the `ai:review` label, so add it right after opening (`gh pr edit <n>
+   --add-label ai:review`; create the label first with `gh label create
+   ai:review` if the repository does not have it yet) and verify it from
+   `gh pr view <n> --json labels`. Re-apply it after every push to the PR
+   when the reviewer removed it, and never assume a review is coming for an
+   unlabeled PR.
 6. **Update the issue** per `github-workflow`: one comment with the ordered PR
    links and the standard handoff content (branches and worktree, HEAD, scope
    covered, exact checks with real results, remaining work). Status stays

@@ -93,8 +93,8 @@ workaround here.
 
 - Invoking `deliver-issue` is the owner's explicit request to commit, push,
   open the issue's pull requests and merge them once CI is green and the
-  automated review of the exact head (the `hermes-codex-review` review) has no
-  unanswered actionable finding. It never authorizes releases, tags,
+  automated review of the exact head (the `hermes-codex-review` review, which
+  runs only for a PR labeled `ai:review`) has no unanswered actionable finding. It never authorizes releases, tags,
   force-pushes to `main` or work outside the issue.
 - The same invocation lets agents create issues, comment, link sub-issues and
   set the project status on `zajca/pohunek-work` (and file follow-ups in
