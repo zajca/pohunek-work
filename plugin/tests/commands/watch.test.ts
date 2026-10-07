@@ -60,6 +60,7 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
     listSessions: () => Promise.resolve({ ok: true, source: "pohunek", data: [], durationMs: 1 }),
     listNotifications: () => Promise.resolve({ ok: true, source: "pohunek", data: [], durationMs: 1 }),
     launchSession: () => Promise.reject(new Error("not used")),
+    waitSession: () => Promise.reject(new Error("not used")),
     listWorktrees: () => Promise.reject(new Error("not used")),
     attach: () => Promise.reject(new Error("not used")),
   };

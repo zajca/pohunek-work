@@ -70,6 +70,8 @@ export interface ActionsConfig {
   readonly launchTimeoutMs: number;
   /** Extra time after `launchTimeoutMs` before the plugin ends the pohunek process itself. */
   readonly launchKillMarginMs: number;
+  /** Time `do` waits for a new session to start working on its prompt before it reports the launch as unverified; 1 to 8000 (the bound of `pohunek session wait --timeout-ms`). */
+  readonly promptDeliveryTimeoutMs: number;
 }
 
 export interface PolicyConfig {

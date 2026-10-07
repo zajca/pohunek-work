@@ -294,6 +294,18 @@ launch may be its own pull or rebase; the plugin therefore compares the worktree
 check the session before acting. The `review` session is read-only, so there a differing head stays
 `launch_unverified`.
 
+After `session new` and the metadata check, `do` runs
+`pohunek session wait <id> --activity working --timeout-ms <prompt_delivery_timeout_ms>` and
+succeeds only when the wait ends with `reason = "activity_matched"`. When the session does not
+become working (the wait timed out while it is still running, the session ended, or the wait call
+failed) `do` fails as `launch_unverified` naming the session id. The message says the prompt may
+not have been delivered; the owner then reads `pohunek session screen <id> --json`, does not
+resend the prompt unasked (a duplicate prompt can double-run work) and decides whether to remove
+the session with `pohunek session rm <id>`. A matched wait shows that the session left idle, not
+that the prompt was consumed: a session blocked on a folder-trust dialog also reports activity
+`working`. `prompt_delivery_timeout_ms` is required and has no built-in default; core accepts a
+wait timeout of 1..8000 ms only, and the plugin validates the same range.
+
 ## 8. The `on_turn` Column
 
 ### 8.1 Rules
@@ -637,6 +649,7 @@ issue_number_prefix = "issue-"   # GitHub issue branch: <branch_prefix>/<issue_n
 issue_body_max_length = 8000     # characters of a GitHub issue body that reach the prompt
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
+prompt_delivery_timeout_ms = 5000   # time `do` waits for the launched session to leave idle; 1..8000 (core limit), required
 
 [policy]                  # empty: every action needs the owner
 delegable = []

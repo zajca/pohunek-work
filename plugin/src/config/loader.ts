@@ -216,6 +216,18 @@ function readIssueNumberPrefix(table: Table, file: string, path: readonly string
   return value;
 }
 
+/** `pohunek session wait --timeout-ms` accepts 1 to 8000; the core CLI rejects any other value. */
+const SESSION_WAIT_MAX_TIMEOUT_MS = 8000;
+
+function readPromptDeliveryTimeout(table: Table, file: string, path: KeyPath): number {
+  const key = "prompt_delivery_timeout_ms";
+  const value = readPositiveInt(table, key, file, path);
+  if (value > SESSION_WAIT_MAX_TIMEOUT_MS) {
+    throw fail(file, [...path, key], `must not exceed ${SESSION_WAIT_MAX_TIMEOUT_MS.toString()} (pohunek session wait limit)`);
+  }
+  return value;
+}
+
 function parseActions(root: Table, file: string): ActionsConfig {
   const table = requireTable(root, "actions", file);
   const path = ["actions"];
@@ -229,6 +241,7 @@ function parseActions(root: Table, file: string): ActionsConfig {
       "issue_body_max_length",
       "launch_timeout_ms",
       "launch_kill_margin_ms",
+      "prompt_delivery_timeout_ms",
     ],
     file,
     path,
@@ -241,6 +254,7 @@ function parseActions(root: Table, file: string): ActionsConfig {
     issueBodyMaxLength: readPositiveInt(table, "issue_body_max_length", file, path),
     launchTimeoutMs: readPositiveInt(table, "launch_timeout_ms", file, path),
     launchKillMarginMs: readPositiveInt(table, "launch_kill_margin_ms", file, path),
+    promptDeliveryTimeoutMs: readPromptDeliveryTimeout(table, file, path),
   };
 }
 

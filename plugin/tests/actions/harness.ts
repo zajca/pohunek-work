@@ -4,7 +4,7 @@ import { ActionError, type RefusalCode } from "../../src/actions/types.ts";
 import type { DoDeps, DoOptions } from "../../src/commands/do.ts";
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
-import type { LaunchRequest, PohunekClient, PohunekWorktree } from "../../src/sources/pohunek.ts";
+import type { LaunchRequest, PohunekClient, PohunekWorktree, WaitRequest, WaitedSession } from "../../src/sources/pohunek.ts";
 import type { PluginConfig } from "../../src/types/config.ts";
 import type {
   Issue,
@@ -61,6 +61,8 @@ export interface World {
   launch?: (request: LaunchRequest) => SourceResult<PohunekSession>;
   /** Warning kinds the fake daemon reports with a created session. */
   launchWarnings?: readonly string[];
+  /** `session wait` answer; by default the session reached the awaited activity. */
+  wait?: (request: WaitRequest) => SourceResult<WaitedSession>;
   /** `project show` answer; by default the new session's worktree holds `worktreeHead`. */
   worktrees?: (project: string) => SourceResult<readonly PohunekWorktree[]>;
   worktreeHead?: string;
@@ -98,6 +100,8 @@ export interface Harness {
   /** Issue numbers whose body was read. */
   issueReads: number[];
   worktreeReads: string[];
+  /** Every `session wait` request, in call order. */
+  waits: WaitRequest[];
   /** Keys of every ignore-label lookup, one entry per call. */
   lookups: string[][];
   /** Calls of any source; zero means nothing was read. */
@@ -110,6 +114,7 @@ export function setup(world: World): Harness {
   const attached: string[] = [];
   const issueReads: number[] = [];
   const worktreeReads: string[] = [];
+  const waits: WaitRequest[] = [];
   const lookups: string[][] = [];
   let calls = 0;
   const count = <T>(value: T): T => {
@@ -124,6 +129,12 @@ export function setup(world: World): Harness {
       launches.push(request);
       const result = (world.launch ?? echoLaunch)(request);
       return Promise.resolve(result.ok ? { ...result, data: { session: result.data, warnings: world.launchWarnings ?? [] } } : result);
+    },
+    waitSession: (request) => {
+      waits.push(request);
+      return Promise.resolve(
+        world.wait?.(request) ?? ok("pohunek", { reason: "activity_matched" as const, session: session({ id: request.sessionId, activity: "working" }) }),
+      );
     },
     listWorktrees: (project) => {
       worktreeReads.push(project);
@@ -142,6 +153,7 @@ export function setup(world: World): Harness {
     attached,
     issueReads,
     worktreeReads,
+    waits,
     lookups,
     sourceCalls: () => calls,
     deps: {

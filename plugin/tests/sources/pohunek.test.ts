@@ -395,3 +395,41 @@ test("attach refuses a half origin environment and maps a failed start", async (
   });
   expect(failureOf(await missing.attach("s-1"))).toEqual({ code: "unavailable", message: "cannot start /fake/pohunek" });
 });
+
+const ENVELOPE = { cli_version: "0.0.0", protocol: { minimum: 4, maximum: 4 } };
+
+const WAIT_BODY = (reason: string): string =>
+  JSON.stringify({
+    ...ENVELOPE,
+    ok: { reason, session: { id: "s-new", state: "running", activity: "working", runtime: { state: "connected" }, metadata: {} } },
+  });
+
+test("waitSession runs session wait for the working activity with the given budgets", async () => {
+  const { exec, calls } = fakeExec(() => reply(WAIT_BODY("activity_matched")));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).waitSession({ sessionId: "s-new", timeoutMs: 4000, execTimeoutMs: 14000 });
+  if (!result.ok) throw new Error("expected ok");
+  expect(calls[0]?.argv).toEqual(["/fake/pohunek", "session", "wait", "s-new", "--activity", "working", "--timeout-ms", "4000", "--json"]);
+  expect(calls[0]?.timeoutMs).toBe(14000);
+  expect(result.data.reason).toBe("activity_matched");
+  expect(result.data.session.activity).toBe("working");
+});
+
+test("waitSession reports a timeout reason with the session as it stands", async () => {
+  const { exec } = fakeExec(() => reply(WAIT_BODY("timeout").replace("working", "idle")));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).waitSession({ sessionId: "s-new", timeoutMs: 1, execTimeoutMs: 2 });
+  if (!result.ok) throw new Error("expected ok");
+  expect(result.data.reason).toBe("timeout");
+  expect(result.data.session.activity).toBe("idle");
+});
+
+test("waitSession maps an unknown reason, a missing session, a core error and a process timeout", async () => {
+  const request = { sessionId: "s-new", timeoutMs: 1, execTimeoutMs: 2 };
+  const run = (handler: () => ExecResult): Promise<SourceResult<unknown>> =>
+    createPohunekClient(CONFIG, { exec: fakeExec(handler).exec, env: {} }).waitSession(request);
+  expect(failureOf(await run(() => reply(WAIT_BODY("other")))).code).toBe("invalid_response");
+  expect(failureOf(await run(() => reply(JSON.stringify({ ...ENVELOPE, ok: { reason: "timeout" } })))).message).toContain("$.ok.session");
+  const notFound = JSON.stringify({ ...ENVELOPE, err: { code: "session_not_found", class: "state" } });
+  const missing = failureOf(await run(() => reply(notFound, 1)));
+  expect(missing.message).toContain("session_not_found");
+  expect(failureOf(await run(() => ({ exitCode: null, stdout: "", stderr: "", timedOut: true }))).code).toBe("timeout");
+});

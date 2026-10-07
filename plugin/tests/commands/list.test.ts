@@ -55,6 +55,7 @@ function deps(world: World): Parameters<typeof runList>[2] {
     listSessions: () => Promise.resolve(world.sessions ?? ok("pohunek", [])),
     listNotifications: () => Promise.resolve(ok("pohunek", [])),
     launchSession: () => Promise.reject(new Error("not used")),
+    waitSession: () => Promise.reject(new Error("not used")),
     listWorktrees: () => Promise.reject(new Error("not used")),
     attach: () => Promise.reject(new Error("not used")),
   };

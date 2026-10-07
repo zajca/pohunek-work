@@ -40,6 +40,12 @@ export interface PohunekClient {
   listNotifications(): Promise<SourceResult<readonly PohunekNotification[]>>;
   /** Runs `pohunek session new` with `args` (without the `--json` flag) and returns the created session. */
   launchSession(request: LaunchRequest): Promise<SourceResult<LaunchedSession>>;
+  /**
+   * Runs `pohunek session wait <id> --activity working` once; the CLI blocks
+   * until the session works or `timeoutMs` passes (core accepts 1..8000).
+   * `execTimeoutMs` bounds the process itself.
+   */
+  waitSession(request: WaitRequest): Promise<SourceResult<WaitedSession>>;
   /** Git worktrees of one project as `project show` reports them, with their head commits. */
   listWorktrees(project: string): Promise<SourceResult<readonly PohunekWorktree[]>>;
   /** Runs `pohunek attach <id>` on the caller's terminal; resolves with its exit code when the owner detaches. */
@@ -53,6 +59,21 @@ export interface LaunchedSession {
    * `base_branch_fallback`): the session was created, but not as requested.
    */
   readonly warnings: readonly string[];
+}
+
+export interface WaitRequest {
+  readonly sessionId: string;
+  /** Wait budget handed to `session wait --timeout-ms`. */
+  readonly timeoutMs: number;
+  /** Longest time the pohunek process may run. */
+  readonly execTimeoutMs: number;
+}
+
+export interface WaitedSession {
+  /** `activity_matched` when the session reached the awaited activity, `timeout` when the wait budget ran out. */
+  readonly reason: "activity_matched" | "timeout";
+  /** The session as the daemon reports it when the wait ended. */
+  readonly session: PohunekSession;
 }
 
 export interface PohunekWorktree {
@@ -396,6 +417,22 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
         }
         const session = parseSession(outcome.payload, "$.ok");
         return { ok: true, data: { session, warnings: parseLaunchWarnings(asObject(outcome.payload, "$.ok"), "$.ok") } };
+      }),
+    waitSession: (request) =>
+      wrap(async () => {
+        const outcome = await call(
+          ["session", "wait", request.sessionId, "--activity", "working", "--timeout-ms", String(request.timeoutMs), "--json"],
+          { timeoutMs: request.execTimeoutMs },
+        );
+        if (!outcome.ok) {
+          return outcome;
+        }
+        const payload = asObject(outcome.payload, "$.ok");
+        const reason = payload["reason"];
+        if (reason !== "activity_matched" && reason !== "timeout") {
+          return invalid("$.ok.reason", "activity_matched or timeout");
+        }
+        return { ok: true, data: { reason, session: parseSession(payload["session"], "$.ok.session") } };
       }),
     listWorktrees: (project) =>
       wrap(async () => {

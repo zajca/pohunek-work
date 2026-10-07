@@ -28,7 +28,7 @@ if (bin === undefined || label === undefined || headBranch === undefined || head
 
 const TIMEOUT_MS = 60_000;
 const config = {
-  global: { actions: { launchTimeoutMs: TIMEOUT_MS, launchKillMarginMs: 5_000 }, pohunek: { bin, timeoutMs: TIMEOUT_MS, notificationsPageSize: 10 } },
+  global: { actions: { launchTimeoutMs: TIMEOUT_MS, launchKillMarginMs: 5_000, promptDeliveryTimeoutMs: 5_000 }, pohunek: { bin, timeoutMs: TIMEOUT_MS, notificationsPageSize: 10 } },
 } as unknown as PluginConfig;
 const client = createPohunekClient(config.global.pohunek);
 const suffix = Date.now().toString(36);
