@@ -489,9 +489,12 @@ describe("log directory lock", () => {
       const dir = join(root, "logs");
       await mkdir(join(dir, LOG_LOCK_FILE_NAME), { recursive: true, mode: 0o700 });
       const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
-      // Opening a directory with O_CREAT fails with EISDIR before any type check.
-      expect(refused.message.includes("EISDIR")).toBe(true);
+      // Linux refuses the open itself (EISDIR); macOS opens the directory read-only and
+      // the later type check refuses it ("not a regular file").
+      expect(/EISDIR|not a regular file/.test(refused.message)).toBe(true);
+      expect(refused.message.includes(dir)).toBe(true);
       expect((await readdir(dir)).includes(LOG_FILE_NAME)).toBe(false);
+      expect((await stat(join(dir, LOG_LOCK_FILE_NAME))).isDirectory()).toBe(true);
     });
   });
 
