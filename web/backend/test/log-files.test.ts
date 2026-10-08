@@ -166,6 +166,7 @@ describe("backend log destination", () => {
       await mkdir(activeDir, { mode: 0o700 });
       const targetFile = join(root, "target-file");
       await writeFile(targetFile, "keep\n", { mode: 0o644 });
+      await chmod(targetFile, 0o644);
       await symlink(targetFile, join(activeDir, LOG_FILE_NAME));
       expectRefusedLogger(activeDir);
       expect(await readFile(targetFile, "utf8")).toBe("keep\n");
