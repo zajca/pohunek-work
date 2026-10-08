@@ -273,8 +273,24 @@ Adoption is refused with a typed code when the head branch cannot be checked out
 | the head lives in a fork (`isCrossRepository`) | `precondition_failed` | yes |
 | the head branch is not a plain ref (option-like, `..`) or the head commit is not a full SHA | `invalid_value` | yes |
 | an unlinked session of the project holds a worktree on the head branch | `precondition_failed` | yes |
-| any other worktree holds the head branch (the primary checkout, a manual worktree) | `precondition_failed` | no, `project show` only |
+| any other worktree holds the head branch (the primary checkout, a manual worktree, a session of another project) | `precondition_failed` | no, `project show` only |
 | the worktrees cannot be read | `source_unavailable` | no |
+
+Every refusal that is caused by a holder of the branch carries a read-only diagnosis (`src/actions/branch-holder.ts`), and
+the `already_running` refusals name the attach command. `do` never stops, removes or frees anything:
+
+- a holder no pohunek session owns (the primary checkout, a hand-made worktree) is refused with the instruction to switch that
+  checkout; it is never offered for release;
+- a live holder session is offered `do <key> attach` (when it is the one live linked session) or `pohunek attach <id>`;
+- a finished holder session whose worktree passes all seven `cleanup` checks on fresh evidence, and whose session list is
+  unchanged on a second read, is offered `pohunek session rm <id>` (the diagnosis runs only when no linked session owns a
+  worktree, so `do <key> cleanup` does not apply), with the count of ignored files that would be lost and the warning that
+  `session rm` force-removes the worktree without rechecking; a changed or unreadable second read is refused as `evidence_stale`;
+- every other holder (dirty or untracked files, ahead or behind commits, not finished, shared, git or pohunek unreadable or
+  unparsable) is refused with the failed checks and the uncommitted or untracked entries, bounded by `[actions]
+  holder_entries_listed`, and no removal command.
+
+Git and pohunek strings (paths, ids, check details) are JSON-quoted, ASCII-only and cut at `[actions] holder_entry_max_length`.
 
 `list` offers the action exactly when `do` would plan it, except for the last two rows: they need
 `project show`, which `list` does not call for every row, so `list` still offers the action and
@@ -723,6 +739,8 @@ git_bin = "/usr/bin/git"            # absolute path; cleanup runs git through it
 git_timeout_ms = 15000              # per git call of cleanup except the fetch
 cleanup_remote = "origin"           # remote fetched before the branch_in_sync check; one safe ref segment
 cleanup_timeout_ms = 60000          # per pohunek call of cleanup (stop, rm, diff) and the git fetch
+holder_entries_listed = 5           # dirty or untracked entries a branch-holder refusal names before "and N more"
+holder_entry_max_length = 120       # characters of one path or check detail kept in a branch-holder refusal
 
 [policy]                  # empty: every action needs the owner
 delegable = []

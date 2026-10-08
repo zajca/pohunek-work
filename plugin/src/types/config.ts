@@ -80,6 +80,10 @@ export interface ActionsConfig {
   readonly cleanupRemote: string;
   /** Time `cleanup` allows one pohunek call (stop, rm, diff) and the git fetch. */
   readonly cleanupTimeoutMs: number;
+  /** Uncommitted or untracked entries a branch-holder refusal names before it says "and N more". */
+  readonly holderEntriesListed: number;
+  /** Characters of one git- or pohunek-derived string (path, check detail) kept in a branch-holder refusal. */
+  readonly holderEntryMaxLength: number;
 }
 
 export interface PolicyConfig {

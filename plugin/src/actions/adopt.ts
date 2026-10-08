@@ -11,6 +11,8 @@ export interface AdoptRefusal {
   readonly code: "precondition_failed" | "invalid_value";
   /** Reason without the action name; the caller prefixes `<action> refused: `. */
   readonly reason: string;
+  /** The unlinked session that holds a worktree on the head branch; null for every other refusal. */
+  readonly holder: (PohunekSession & { readonly worktreePath: string }) | null;
 }
 
 /**
@@ -21,19 +23,23 @@ export interface AdoptRefusal {
  */
 export function adoptRefusal(pr: PullRequest, sessions: readonly PohunekSession[], projectLabel: string): AdoptRefusal | null {
   if (pr.isCrossRepository) {
-    return { code: "precondition_failed", reason: `the head branch of ${pr.id} lives in a fork, not on origin` };
+    return { code: "precondition_failed", reason: `the head branch of ${pr.id} lives in a fork, not on origin`, holder: null };
   }
   if (!COMMIT_SHA.test(pr.headSha)) {
-    return { code: "invalid_value", reason: `head commit ${JSON.stringify(pr.headSha)} of ${pr.id} is not a full SHA` };
+    return { code: "invalid_value", reason: `head commit ${JSON.stringify(pr.headSha)} of ${pr.id} is not a full SHA`, holder: null };
   }
   if (!FETCHABLE_BRANCH.test(pr.headRefName) || pr.headRefName.includes("..")) {
-    return { code: "invalid_value", reason: `head branch of ${pr.id} cannot be fetched by name safely` };
+    return { code: "invalid_value", reason: `head branch of ${pr.id} cannot be fetched by name safely`, holder: null };
   }
-  const holder = sessions.find((s) => s.projectLabel === projectLabel && s.branch === pr.headRefName && s.worktreePath !== null);
+  const holder = sessions.find(
+    (s): s is PohunekSession & { readonly worktreePath: string } =>
+      s.projectLabel === projectLabel && s.branch === pr.headRefName && s.worktreePath !== null,
+  );
   if (holder !== undefined) {
     return {
       code: "precondition_failed",
-      reason: `session ${holder.id} (not linked to this row) already holds a worktree on ${pr.headRefName}; link or remove it`,
+      reason: `session ${holder.id} (not linked to this row) already holds a worktree on ${pr.headRefName}`,
+      holder,
     };
   }
   return null;

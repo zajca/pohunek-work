@@ -149,6 +149,8 @@ git_bin = "/usr/bin/git"         # absolute path; cleanup runs git through it
 git_timeout_ms = 15000           # per git call of cleanup except the fetch
 cleanup_remote = "origin"        # remote fetched before the branch_in_sync check; one safe ref segment
 cleanup_timeout_ms = 60000       # per pohunek call of cleanup (stop, rm, diff) and the git fetch
+holder_entries_listed = 5        # dirty or untracked entries a branch-holder refusal names before "and N more"
+holder_entry_max_length = 120    # characters of one path or check detail kept in a branch-holder refusal
 
 [notify]
 command = "/usr/bin/notify-send"
