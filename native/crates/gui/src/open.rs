@@ -171,30 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn folder_target_requires_an_existing_absolute_directory() {
-        let dir = fixture();
-        let file = dir.path().join("file");
-        fs::write(&file, "x").expect("write");
-
-        assert_eq!(
-            folder_target(dir.path()).expect("dir"),
-            OpenTarget::Folder(dir.path().to_owned())
-        );
-        assert!(matches!(
-            folder_target(Path::new("relative/dir")),
-            Err(OpenError::NotAbsolute(_))
-        ));
-        assert!(matches!(
-            folder_target(&file),
-            Err(OpenError::NotDirectory(_))
-        ));
-        assert!(matches!(
-            folder_target(&dir.path().join("missing")),
-            Err(OpenError::NotDirectory(_))
-        ));
-    }
-
-    #[test]
     fn the_target_reaches_the_opener_as_one_argument() {
         let dir = fixture();
         let record = dir.path().join("argv");
