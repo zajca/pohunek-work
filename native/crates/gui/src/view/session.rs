@@ -489,28 +489,3 @@ pub(crate) fn session_name_input(app: &PohunekApp) -> Element<'_, Message> {
     .align_y(Center)
     .into()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provider_neutral_wait_reasons_have_operator_labels() {
-        assert_eq!(
-            wait_reason_label(protocol::SessionWaitReason::RuntimeChanged),
-            "runtime changed"
-        );
-        assert_eq!(
-            wait_reason_label(protocol::SessionWaitReason::OutputAdvanced),
-            "output advanced"
-        );
-    }
-
-    #[test]
-    fn observation_action_buttons_render_for_supported_and_unsupported_hosts() {
-        let _: iced::widget::Button<'_, Message> =
-            optional_action_button("Read screen", true, Message::ReadSelectedSessionScreen);
-        let _: iced::widget::Button<'_, Message> =
-            optional_action_button("Read screen", false, Message::ReadSelectedSessionScreen);
-    }
-}

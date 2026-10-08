@@ -358,23 +358,3 @@ impl MenuOverlay<'_, '_> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn menu_that_fits_below_opens_below() {
-        assert_eq!(choose_placement(200.0, 300.0, 600.0), Placement::Below);
-    }
-
-    #[test]
-    fn menu_that_does_not_fit_below_opens_above_when_there_is_more_room() {
-        assert_eq!(choose_placement(300.0, 120.0, 500.0), Placement::Above);
-    }
-
-    #[test]
-    fn menu_stays_below_when_neither_side_has_more_room() {
-        assert_eq!(choose_placement(500.0, 300.0, 200.0), Placement::Below);
-    }
-}

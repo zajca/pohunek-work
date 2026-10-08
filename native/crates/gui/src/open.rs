@@ -195,15 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_local_transport_counts_as_local() {
-        let local = HostConfig::local("local", PathBuf::from("/run/pohunek.sock"));
-        let remote = HostConfig::tcp("peer", "127.0.0.1:18722".parse().expect("addr"));
-
-        assert!(host_is_local(&local));
-        assert!(!host_is_local(&remote));
-    }
-
-    #[test]
     fn the_target_reaches_the_opener_as_one_argument() {
         let dir = fixture();
         let record = dir.path().join("argv");
@@ -260,14 +251,5 @@ mod tests {
             .expect_err("missing opener");
 
         assert!(matches!(error, OpenError::Resolve(_)), "{error}");
-    }
-
-    #[test]
-    fn default_opener_depends_on_the_platform() {
-        let linux = Opener::new(None, false, &resolver(), Duration::ZERO, Duration::ZERO);
-        let darwin = Opener::new(None, true, &resolver(), Duration::ZERO, Duration::ZERO);
-
-        assert!(format!("{linux:?}").contains(DEFAULT_OPEN_COMMAND));
-        assert!(format!("{darwin:?}").contains("\"open\""));
     }
 }

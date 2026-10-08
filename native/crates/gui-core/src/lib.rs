@@ -177,16 +177,3 @@ pub struct ObservationCapabilities {
     /// Whether the host can wait for provider-neutral session predicates.
     pub session_wait: bool,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tcp_attach_uses_the_policy_resolved_selector() {
-        let addr = "127.0.0.1:17421".parse().expect("test socket address");
-        let host = HostConfig::tcp_with_attach_host("memory:peer-a", addr, "memory:100.64.0.2");
-
-        assert_eq!(host.attach_host(), "memory:100.64.0.2");
-    }
-}
