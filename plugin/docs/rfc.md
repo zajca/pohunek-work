@@ -619,12 +619,12 @@ carries `work.link.provider = github`, `work.link.kind = issue`,
 unchanged. The body never enters `list`, logs or errors.
 
 `cleanup` is an owner decision, not an on-turn rule action, so `list` never
-advertises it. `do <key> cleanup [--project <label>] [--dry-run] [--yes]
+advertises it. `do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes]
 [--json]` reads the linked session and evaluates seven checks, each failing
 closed on uncertain evidence (source error, timeout, unparsable output, missing
 branch or remote, detached head): `session_finished` (stopped, done, failed, or
 running and idle), `worktree_owned` (`project show` lists the path with the
-session id), `worktree_clean` (only ignored files allowed), `branch_in_sync`
+session id), `worktree_clean` (only ignored files allowed; it also fails when the worktree contains submodules, whose state is not verified, or when a tracked file is marked assume-unchanged or skip-worktree; status runs with `--ignore-submodules=none`), `branch_in_sync`
 (after a fetch of `[actions] cleanup_remote`, `0 0`), `worktree_not_shared` (no
 other non-terminal session at or under the path), `not_awaiting_owner` (not
 `blocked`, no `unread` or `read` `agent_blocked` or `approval_required`
@@ -640,7 +640,7 @@ removes nothing. It then stops the session, re-runs every check, runs `session
 rm` (never `--accept-unconfirmed-cleanup`) and re-reads `session list`. Other
 codes it returns: `unknown_item`, `ambiguous_item`, `source_unavailable`,
 `no_session`, `ambiguous_session`, `command_failed`, `command_timed_out`,
-`verification_failed` and `command_unverified`.
+`verification_failed`, `command_unverified` and `invalid_value` (session id, worktree path or branch not plain). A row marked ignored is refused without `--include-ignored`.
 
 Each launch action resolves its agent profile and prompt template through a
 per-project pohunek action with `provider = "none"` (for example

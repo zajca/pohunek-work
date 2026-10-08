@@ -120,6 +120,10 @@ export async function runCleanup(config: PluginConfig, options: DoOptions, deps:
   });
   const stdout = options.json
     ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan), result: resultJson(result) })
-    : display(`removed session ${result.sessionId} and its worktree (${String(result.worktreesRemoved)} removed); it is no longer listed`);
+    : display(
+        result.worktreesRemoved === 0
+          ? `removed session ${result.sessionId}; no worktree was removed; it is no longer listed`
+          : `removed session ${result.sessionId} and ${String(result.worktreesRemoved)} worktree(s); it is no longer listed`,
+      );
   return { stdout, warnings };
 }

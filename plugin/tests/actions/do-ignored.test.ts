@@ -25,6 +25,22 @@ for (const action of ["fix-ci", "ready", "attach"] as const) {
   }
 }
 
+test("cleanup on an ignored row is refused without --include-ignored and reaches its own checks with it", async () => {
+  const { deps, commands, events } = (() => {
+    const h = setup({ prs: ok("github", [PARKED]) });
+    return { ...h };
+  })();
+  for (const dryRun of [true, false]) {
+    const error = await refusal(runDo(baseConfig, options({ key: KEY, action: "cleanup", dryRun, yes: !dryRun }), deps));
+    expect(error.code).toBe("precondition_failed");
+    expect(error.message).toContain("--include-ignored");
+  }
+  const allowed = await refusal(runDo(baseConfig, options({ key: KEY, action: "cleanup", dryRun: true, yes: false, includeIgnored: true }), deps));
+  expect(allowed.code).toBe("no_session");
+  expect(commands).toHaveLength(0);
+  expect(events.filter((e) => e !== "list")).toEqual([]);
+});
+
 test("the refusal is logged like any other refusal", async () => {
   const events: string[] = [];
   const { deps } = setup({ prs: ok("github", [PARKED]) });

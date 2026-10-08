@@ -340,7 +340,7 @@ The checks, all of which must hold:
 | --- | --- |
 | `session_finished` | the session is `stopped`, `done` or `failed`, or `running` and `idle` |
 | `worktree_owned` | `project show` lists the worktree path with this session id; a session started with `--cwd` in another session's worktree owns none |
-| `worktree_clean` | no uncommitted or untracked file; ignored files are allowed and listed in the inventory |
+| `worktree_clean` | no uncommitted or untracked file; ignored files are allowed and listed in the inventory; it also fails when the worktree contains submodules (their state is not verified) or a tracked file is marked assume-unchanged or skip-worktree, and status runs with `--ignore-submodules=none` |
 | `branch_in_sync` | after a fetch of the configured remote the branch is `0 0` ahead/behind; a branch with no remote counterpart or a detached head fails |
 | `worktree_not_shared` | no other non-terminal session has the path as its `cwd` or `worktree_path`, or a path below it |
 | `not_awaiting_owner` | the session is not `blocked` and no `unread` or `read` `agent_blocked` or `approval_required` notification names it or a session sharing the worktree; an error reading notifications fails the check |

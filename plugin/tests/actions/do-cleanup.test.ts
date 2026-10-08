@@ -22,6 +22,8 @@ type Answer = ExecResult | ((state: State) => ExecResult);
 interface GitAnswers {
   prefix: Answer;
   status: Answer;
+  staged: Answer;
+  tagged: Answer;
   symbolic: Answer;
   fetch: Answer;
   revList: Answer;
@@ -34,7 +36,7 @@ function out(stdout: string, exitCode: number | null = 0, timedOut = false): Exe
 const CLEAN_STATUS = "!! node_modules/a.js\0!! target/debug/x\0";
 
 function defaultGit(): GitAnswers {
-  return { prefix: out("\n"), status: out(CLEAN_STATUS), symbolic: out(`${BRANCH}\n`), fetch: out(""), revList: out("0\t0\n") };
+  return { prefix: out("\n"), status: out(CLEAN_STATUS), staged: out("100644 0123abc 0\tsrc/a.ts\0"), tagged: out("H src/a.ts\0"), symbolic: out(`${BRANCH}\n`), fetch: out(""), revList: out("0\t0\n") };
 }
 
 interface Scenario {
@@ -87,6 +89,8 @@ function build(scenario: Scenario = {}): Built {
       switch (argv[6]) {
         case "rev-parse":
           return answer(git.prefix);
+        case "ls-files":
+          return answer(argv[7] === "-v" ? git.tagged : git.staged);
         case "status":
           return answer(git.status);
         case "symbolic-ref":
@@ -217,12 +221,14 @@ describe("cleanup --dry-run", () => {
     const prefix = [GIT, "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", PATH];
     expect(built.gitCalls.map((c) => c.argv)).toEqual([
       [...prefix, "rev-parse", "--show-prefix"],
-      [...prefix, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"],
+      [...prefix, "status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=all", "--ignored"],
+      [...prefix, "ls-files", "-z", "--stage"],
+      [...prefix, "ls-files", "-v", "-z"],
       [...prefix, "symbolic-ref", "--short", "HEAD"],
       [...prefix, "fetch", "origin", `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`],
       [...prefix, "rev-list", "--left-right", "--count", `HEAD...refs/remotes/origin/${BRANCH}`],
     ]);
-    expect(built.gitCalls.map((c) => c.options.timeoutMs)).toEqual([15000, 15000, 15000, 60000, 15000]);
+    expect(built.gitCalls.map((c) => c.options.timeoutMs)).toEqual([15000, 15000, 15000, 15000, 15000, 60000, 15000]);
   });
 });
 
@@ -251,6 +257,15 @@ describe("cleanup checks fail closed", () => {
     ["worktree_clean", "a path that is a subdirectory of a parent repo", { prefix: out("sub/dir/\n") }],
     ["worktree_clean", "a failed rev-parse (no .git)", { prefix: out("", 128) }],
     ["worktree_clean", "a rev-parse timeout", { prefix: out("", null, true) }],
+    ["worktree_clean", "a gitlink in the index", { staged: out("100644 0123abc 0\ta\u0000160000 4567def 0\tsub\0") }],
+    ["worktree_clean", "a submodule status record", { status: out(" M sub\0") }],
+    ["worktree_clean", "a failed ls-files --stage", { staged: out("", 128) }],
+    ["worktree_clean", "unparsable ls-files --stage output", { staged: out("garbage\0") }],
+    ["worktree_clean", "ls-files --stage output cut short", { staged: out("100644 0123abc 0\ta") }],
+    ["worktree_clean", "an assume-unchanged entry", { tagged: out("H a\0h b\0") }],
+    ["worktree_clean", "a skip-worktree entry", { tagged: out("S b\0") }],
+    ["worktree_clean", "a failed ls-files -v", { tagged: out("", null, true) }],
+    ["worktree_clean", "unparsable ls-files -v output", { tagged: out("Hb\0") }],
     ["worktree_clean", "a git timeout", { status: out("", null, true) }],
     ["worktree_clean", "git that cannot start", { status: SPAWN }],
     ["worktree_clean", "a git failure", { status: out("", 128) }],
@@ -469,7 +484,14 @@ describe("cleanup real run", () => {
   test("the text output of a real run reports the removal", async () => {
     const built = build();
     const outcome = await runDo(baseConfig, cleanup({ json: false }), built.h.deps);
-    expect(outcome.stdout).toContain("removed session s-done");
+    expect(outcome.stdout).toContain("removed session s-done and 1 worktree(s)");
+  });
+
+  test("the text output does not claim a removed worktree when none was removed", async () => {
+    const built = build({ world: { remove: () => { built.state.removed = true; return ok("pohunek", { removed: true, stopped: true, worktreesRemoved: 0, worktreesFailed: 0, acceptedUnconfirmedProcesses: 0 }); } } });
+    const outcome = await runDo(baseConfig, cleanup({ json: false }), built.h.deps);
+    expect(outcome.stdout).toContain("no worktree was removed");
+    expect(outcome.stdout).not.toContain("(0 removed)");
   });
 
   test("a check that fails after the stop leaves the session stopped and removes nothing", async () => {
@@ -522,11 +544,11 @@ describe("cleanup real run", () => {
   });
 
   test("a live sharer that appears between the evidence pass and the rm refuses the removal", async () => {
-    // Reads: 1 plan, 2 post-stop state, 3 just before the rm.
+    // Reads: 1 plan, 2 before the stop, 3 after it, 4 just before the rm.
     let reads = 0;
     const done = (): PohunekSession => session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
     const built = build({
-      world: { listSessions: () => ok("pohunek", ++reads >= 3 ? [done(), SHARER_LIVE] : [done()]) },
+      world: { listSessions: () => ok("pohunek", ++reads >= 4 ? [done(), SHARER_LIVE] : [done()]) },
     });
     const error = await refusal(runDo(baseConfig, cleanup(), built.h.deps));
     expect(error.code).toBe("precondition_failed");
@@ -535,7 +557,7 @@ describe("cleanup real run", () => {
     expect(mutations(built)).toEqual([]);
   });
 
-  test("a new finished sharer with a pending notification, or a target running again, refuses the removal", async () => {
+  test("a finished sharer that appears (or changes state) before the rm is stale evidence, and a target running again refuses too", async () => {
     let reads = 0;
     const done = (): PohunekSession => session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
     const late = session({ id: "s-late", state: "done", activity: null, worktreePath: PATH });
@@ -544,18 +566,51 @@ describe("cleanup real run", () => {
       world: {
         listSessions: () => {
           reads += 1;
-          if (reads >= 3) notified = true;
-          return ok("pohunek", reads >= 3 ? [done(), late] : [done()]);
+          if (reads >= 4) notified = true;
+          return ok("pohunek", reads >= 4 ? [done(), late] : [done()]);
         },
         notifications: () => ok("pohunek", notified ? [notification({ sessionId: "s-late" })] : []),
       },
     });
-    await expectRefusal(runDo(baseConfig, cleanup(), sharer.h.deps), "precondition_failed", "not_awaiting_owner");
+    await expectRefusal(runDo(baseConfig, cleanup(), sharer.h.deps), "precondition_failed", "changed since the evidence");
     expect(mutations(sharer)).toEqual([]);
     let seen = 0;
-    const running = build({ world: { listSessions: () => ok("pohunek", [++seen >= 3 ? { ...done(), state: "running", activity: "working" } : done()]) } });
+    const running = build({ world: { listSessions: () => ok("pohunek", [++seen >= 4 ? { ...done(), state: "running", activity: "working" } : done()]) } });
     await expectRefusal(runDo(baseConfig, cleanup(), running.h.deps), "precondition_failed", "just before the removal");
     expect(mutations(running)).toEqual([]);
+  });
+
+  test("a finished sharer that only changes state before the rm refuses the removal", async () => {
+    let reads = 0;
+    const done = (): PohunekSession => session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
+    const sharer = (state: string): PohunekSession => session({ id: "s-prev", state, activity: null, cwd: PATH });
+    const built = build({ world: { listSessions: () => ok("pohunek", [done(), sharer(++reads >= 4 ? "failed" : "done")]) } });
+    await expectRefusal(runDo(baseConfig, cleanup(), built.h.deps), "precondition_failed", "changed since the evidence");
+    expect(mutations(built)).toEqual([]);
+  });
+
+  test("a session that turns to working after the plan is neither stopped nor removed", async () => {
+    let reads = 0;
+    const idle = session({ id: "s-done", state: "running", activity: "idle", branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
+    const built = build({
+      target: { state: "running", activity: "idle" },
+      world: { listSessions: () => ok("pohunek", [++reads >= 2 ? { ...idle, activity: "working" } : idle]) },
+    });
+    await expectRefusal(runDo(baseConfig, cleanup(), built.h.deps), "precondition_failed", "not finished or idle");
+    expect(mutations(built)).toEqual([]);
+  });
+
+  test("a session that turns blocked or vanishes after the plan is not stopped either", async () => {
+    for (const change of [{ activity: "blocked" }, { worktreePath: "/wt/elsewhere" }, null] as const) {
+      let reads = 0;
+      const idle = session({ id: "s-done", state: "running", activity: "idle", branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
+      const built = build({
+        target: { state: "running", activity: "idle" },
+        world: { listSessions: () => ok("pohunek", ++reads >= 2 ? (change === null ? [] : [{ ...idle, ...change }]) : [idle]) },
+      });
+      await expectRefusal(runDo(baseConfig, cleanup(), built.h.deps), "precondition_failed");
+      expect(mutations(built)).toEqual([]);
+    }
   });
 
   test("a truncated diff after the stop leaves the session stopped and removes nothing", async () => {
@@ -597,8 +652,8 @@ describe("cleanup real run", () => {
       world: {
         listSessions: () => {
           reads += 1;
-          // The first read is the plan's; later reads show another worktree.
-          const s = session({ id: "s-done", state: reads === 1 ? "running" : "stopped", activity: reads === 1 ? "idle" : null, branch: BRANCH, worktreePath: reads === 1 ? PATH : "/wt/elsewhere", metadata: LINK });
+          // Reads 1 and 2 (plan, before the stop) match; later reads show another worktree.
+          const s = session({ id: "s-done", state: reads <= 2 ? "running" : "stopped", activity: reads <= 2 ? "idle" : null, branch: BRANCH, worktreePath: reads <= 2 ? PATH : "/wt/elsewhere", metadata: LINK });
           return ok("pohunek", [s]);
         },
       },
@@ -611,7 +666,7 @@ describe("cleanup real run", () => {
       world: {
         listSessions: () => {
           seen += 1;
-          return ok("pohunek", seen === 1 ? [session({ id: "s-done", state: "running", activity: "idle", branch: BRANCH, worktreePath: PATH, metadata: LINK })] : []);
+          return ok("pohunek", seen <= 2 ? [session({ id: "s-done", state: "running", activity: "idle", branch: BRANCH, worktreePath: PATH, metadata: LINK })] : []);
         },
       },
     });
@@ -626,7 +681,7 @@ describe("cleanup real run", () => {
       world: {
         listSessions: () => {
           reads += 1;
-          return reads === 1
+          return reads <= 2
             ? ok("pohunek", [session({ id: "s-done", state: "running", activity: "idle", branch: BRANCH, worktreePath: PATH, metadata: LINK })])
             : fail("pohunek", "timeout");
         },
@@ -660,14 +715,32 @@ describe("cleanup real run", () => {
       world: {
         listSessions: (): SourceResult<readonly PohunekSession[]> => {
           reads += 1;
-          // Reads 1 to 3 are the plan's, the post-stop one and the one before the rm; the fourth verifies the removal.
-          return reads <= 3
+          // Reads 1 to 4 are the plan's, the pre-stop, the post-stop and the pre-rm ones; the fifth verifies the removal.
+          return reads <= 4
             ? ok("pohunek", [session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK })])
             : fail("pohunek", "unavailable");
         },
       },
     });
     await expectRefusal(runDo(baseConfig, cleanup(), unreadable.h.deps), "command_unverified");
+  });
+});
+
+describe("submodule and hidden-entry parsers", () => {
+  test("countGitlinks counts mode 160000 only", async () => {
+    const { countGitlinks } = await import("../../src/actions/cleanup.ts");
+    expect(countGitlinks("")).toBe(0);
+    expect(countGitlinks("100644 0123abc 0\ta\u0000100755 0123abc 0\tb\0")).toBe(0);
+    expect(countGitlinks("160000 0123abc 0\tsub dir\0")).toBe(1);
+    for (const bad of ["x", "160000 abc 0\tsub", "160000 abc\tsub\0"]) expect(countGitlinks(bad)).toBeNull();
+  });
+
+  test("countHiddenTags counts every tag but H", async () => {
+    const { countHiddenTags } = await import("../../src/actions/cleanup.ts");
+    expect(countHiddenTags("")).toBe(0);
+    expect(countHiddenTags("H a\0H b c\0")).toBe(0);
+    expect(countHiddenTags("H a\0h b\0S c\0")).toBe(2);
+    for (const bad of ["H a", "Ha\0", "H\0"]) expect(countHiddenTags(bad)).toBeNull();
   });
 });
 

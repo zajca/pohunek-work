@@ -2,7 +2,8 @@
 // `session rm` force-removes the worktree, so every check reads evidence first,
 // fails closed on anything uncertain, and runs again after the stop, because the
 // agent can write until it has stopped. Messages carry no raw git output;
-// pohunek-provided values (session ids, states, activities) appear only quoted.
+// pohunek-provided free text (states, activities, ids of other sessions) is quoted,
+// and the target session id is validated against SESSION_ID before any argv use.
 import { isAbsolute } from "node:path";
 import type { CollectedRow } from "../commands/list.ts";
 import type { PohunekClient } from "../sources/pohunek.ts";
@@ -186,6 +187,31 @@ async function worktreeOwned(target: Target, deps: CleanupDeps): Promise<Cleanup
     : { name, ok: false, detail: "project show does not list the worktree as owned by the session" };
 }
 
+/** Index entries of `ls-files -z --stage` with mode 160000 (submodules); null when the output is not that format. */
+export function countGitlinks(stdout: string): number | null {
+  if (stdout === "") return 0;
+  if (!stdout.endsWith("\0")) return null;
+  let count = 0;
+  for (const record of stdout.slice(0, -1).split("\0")) {
+    const match = /^(\d{6}) [0-9a-f]+ \d\t./.exec(record);
+    if (match === null) return null;
+    if (match[1] === "160000") count += 1;
+  }
+  return count;
+}
+
+/** Entries of `ls-files -v -z` whose tag is not `H` (cached); null when the output is not that format. */
+export function countHiddenTags(stdout: string): number | null {
+  if (stdout === "") return 0;
+  if (!stdout.endsWith("\0")) return null;
+  let count = 0;
+  for (const record of stdout.slice(0, -1).split("\0")) {
+    if (record.length < 3 || record[1] !== " ") return null;
+    if (record[0] !== "H") count += 1;
+  }
+  return count;
+}
+
 async function worktreeClean(target: Target, config: PluginConfig, deps: CleanupDeps): Promise<{ check: CleanupCheck; ignored: readonly string[] }> {
   const name = "worktree_clean";
   // A worktree whose own `.git` is gone would be read through a parent repository.
@@ -194,7 +220,7 @@ async function worktreeClean(target: Target, config: PluginConfig, deps: Cleanup
   if (prefix.stdout.replace(/\n$/, "") !== "") {
     return { check: { name, ok: false, detail: "the path is only a subdirectory of another repository, not a worktree root" }, ignored: [] };
   }
-  const status = await git(deps, config, target.worktreePath, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"], config.global.actions.gitTimeoutMs);
+  const status = await git(deps, config, target.worktreePath, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=all", "--ignored"], config.global.actions.gitTimeoutMs);
   if (!status.ok) return { check: { name, ok: false, detail: `git status failed: ${status.reason}` }, ignored: [] };
   const entries = parseStatus(status.stdout);
   if (entries === null) return { check: { name, ok: false, detail: "git status output could not be parsed" }, ignored: [] };
@@ -204,6 +230,22 @@ async function worktreeClean(target: Target, config: PluginConfig, deps: Cleanup
       ignored: entries.ignored,
     };
   }
+  const refuse = (detail: string): { check: CleanupCheck; ignored: readonly string[] } => ({ check: { name, ok: false, detail }, ignored: entries.ignored });
+
+  // A submodule commit that was never pushed is lost with the worktree even when status is clean.
+  const staged = await git(deps, config, target.worktreePath, ["ls-files", "-z", "--stage"], config.global.actions.gitTimeoutMs);
+  if (!staged.ok) return refuse(`git ls-files failed: ${staged.reason}`);
+  const gitlinks = countGitlinks(staged.stdout);
+  if (gitlinks === null) return refuse("git ls-files output could not be parsed");
+  if (gitlinks > 0) return refuse("the worktree contains submodules; their state is not verified");
+
+  // assume-unchanged and skip-worktree entries hide edits from status.
+  const tagged = await git(deps, config, target.worktreePath, ["ls-files", "-v", "-z"], config.global.actions.gitTimeoutMs);
+  if (!tagged.ok) return refuse(`git ls-files -v failed: ${tagged.reason}`);
+  const hidden = countHiddenTags(tagged.stdout);
+  if (hidden === null) return refuse("git ls-files -v output could not be parsed");
+  if (hidden > 0) return refuse(`${String(hidden)} tracked entries are marked assume-unchanged or skip-worktree, so status cannot show their edits`);
+
   return { check: { name, ok: true, detail: `no uncommitted or untracked entries; ${String(entries.ignored.length)} ignored entries are lost with the worktree` }, ignored: entries.ignored };
 }
 
@@ -425,10 +467,10 @@ async function recheckBeforeRemoval(plan: CleanupPlan, evidence: Evidence, stopp
   const sharers = sharersOf(target, listed.data);
   const shared = worktreeNotShared(sharers);
   if (!shared.ok) throw refuse(`worktree_not_shared: ${shared.detail}`);
-  const known = new Set(evidence.inventory.sharers.map((s) => s.sessionId));
-  if (sharers.some((s) => !known.has(s.id))) {
-    const awaiting = await notAwaitingOwner(latest, sharers, deps);
-    if (!awaiting.ok) throw refuse(`not_awaiting_owner: ${awaiting.detail}`);
+  // The evidence was gathered for exactly these sharers in exactly these states; any difference is stale evidence.
+  const known = new Map(evidence.inventory.sharers.map((s) => [s.sessionId, s.state]));
+  if (sharers.length !== known.size || sharers.some((s) => known.get(s.id) !== s.state)) {
+    throw refuse("the sessions sharing the worktree changed since the evidence was read; run cleanup again");
   }
 }
 
@@ -443,8 +485,22 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
     throw new ActionError("precondition_failed", `cleanup refused: failed checks: ${failedNames(plan.checks)}; nothing was stopped or removed`);
   }
 
+  // The session may have changed between the plan and now: decide on the stop from a fresh read.
+  const before = await rereadSessions(deps.pohunek, false);
+  const current = before.find((s) => s.id === plan.sessionId);
+  if (current === undefined || current.worktreePath !== plan.worktreePath || current.branch !== plan.branch) {
+    throw new ActionError("precondition_failed", "cleanup refused: the session is gone or points at another worktree; nothing was stopped or removed");
+  }
+  const needsStop = !isTerminal(current.state);
+  if (needsStop && !(current.state === "running" && current.activity === "idle")) {
+    throw new ActionError(
+      "precondition_failed",
+      `cleanup refused: session ${plan.sessionId} is ${quoted(current.state)} with activity ${quoted(current.activity)}, not finished or idle; nothing was stopped or removed`,
+    );
+  }
+
   let stopped = false;
-  if (plan.state === "running") {
+  if (needsStop) {
     const stop = await deps.pohunek.stopSession(plan.sessionId, timeoutMs);
     if (!stop.ok) throw sourceError("pohunek session stop", stop);
     stopped = true;
