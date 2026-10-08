@@ -1,4 +1,5 @@
 me 4  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
+ignored hidden: 2
    KEY                      TURN                    PR    REVIEW  CHECKS  SESSIONS     TITLE           |github:acme/widgets#12  (project widgets)  no issue
 >  github:acme/widgets#12   me: leave draft (r6)    #12 d -       success -            Add widget cache|turn: me: leave draft (r6)
    github:acme/w... (ABC-1) me: request review (r9) #14   -       none    -            Add widget cache|  the pull request is a draft: mark it ready when done
@@ -10,7 +11,6 @@ me 4  agent 0  reviewer 1  paused 1  unknown 0  data <1m old  view: all
                                                                                                        |actions: ready*
                                                                                                        |sources: github=ok github_merged=ok linear=ok
                                                                                                        |github_issues=unused pohunek=ok
-                                                                                                       |
                                                                                                        |
                                                                                                        |
                                                                                                        |

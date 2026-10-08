@@ -3,9 +3,9 @@ import { notificationArgv, runWatch, unknownProject, watchTick, type Baseline, t
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
-import type { Issue, PohunekProject, PullRequest, SourceResult } from "../../src/types/sources.ts";
+import type { Issue, PohunekNotification, PohunekProject, PohunekSession, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import { SpawnError, type ExecResult } from "../../src/util/exec.ts";
-import { check, githubIssueSource, issue, pr } from "../rules/builders.ts";
+import { check, githubIssueSource, issue, notification, pr, session } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 
@@ -25,7 +25,15 @@ interface Recorded {
 
 interface Harness {
   deps: WatchDeps;
-  world: { prs: SourceResult<readonly PullRequest[]>; issues: SourceResult<readonly Issue[]>; githubIssues: SourceResult<readonly Issue[]>; ignoredKeys: SourceResult<ReadonlySet<string>> | null };
+  world: {
+    prs: SourceResult<readonly PullRequest[]>;
+    issues: SourceResult<readonly Issue[]>;
+    githubIssues: SourceResult<readonly Issue[]>;
+    sessions: readonly PohunekSession[];
+    notifications: readonly PohunekNotification[];
+    /** Answer of the ignore-label lookup of unlisted issues; a lookup fails the test when absent. */
+    ignoredKeys: SourceResult<ReadonlySet<string>> | null;
+  };
   argvs: (readonly string[])[];
   logs: Recorded[];
   setExec(next: () => Promise<ExecResult>): void;
@@ -44,7 +52,7 @@ function githubIssuesOk(issues: readonly Issue[]): SourceResult<readonly Issue[]
 }
 
 function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
-  const world: Harness["world"] = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]), ignoredKeys: null };
+  const world: Harness["world"] = { prs: githubOk(prs), issues: linearOk([]), githubIssues: githubIssuesOk([]), sessions: [], notifications: [], ignoredKeys: null };
   const argvs: (readonly string[])[] = [];
   const logs: Recorded[] = [];
   let execNext: () => Promise<ExecResult> = () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
@@ -57,8 +65,8 @@ function harness(prs: readonly PullRequest[], sleeps: number[] = []): Harness {
   };
   const pohunek: PohunekClient = {
     listProjects: () => Promise.resolve({ ok: true, source: "pohunek", data: registry, durationMs: 1 }),
-    listSessions: () => Promise.resolve({ ok: true, source: "pohunek", data: [], durationMs: 1 }),
-    listNotifications: () => Promise.resolve({ ok: true, source: "pohunek", data: [], durationMs: 1 }),
+    listSessions: () => Promise.resolve({ ok: true, source: "pohunek", data: world.sessions, durationMs: 1 }),
+    listNotifications: () => Promise.resolve({ ok: true, source: "pohunek", data: world.notifications, durationMs: 1 }),
     launchSession: () => Promise.reject(new Error("not used")),
     waitSession: () => Promise.reject(new Error("not used")),
     listWorktrees: () => Promise.reject(new Error("not used")),
@@ -160,6 +168,185 @@ test("a paused issue without a pull request disappears and notifies once when it
   h.world.issues = linearOk([issue()]);
   const resumed = await tick(h, state);
   expect(resumed.notified).toEqual(["widgets linear:ABC-1"]);
+});
+
+test("an ignored row on the owner's turn never notifies, and losing the label notifies once", async () => {
+  const parked = pr({ headRefName: "feature/abc-1", isDraft: true, ignored: true });
+  const h = harness([waiting]);
+  let state = (await tick(h, null)).baseline;
+  h.world.prs = githubOk([parked]);
+  const ignoredTick = await tick(h, state);
+  state = ignoredTick.baseline;
+  expect(ignoredTick.notified).toEqual([]);
+  expect(state?.has("widgets github:acme/widgets#12")).toBe(false);
+  expect(h.argvs).toEqual([]);
+  const stillParked = await tick(h, state);
+  expect(stillParked.notified).toEqual([]);
+  h.world.prs = githubOk([mine]);
+  const unparked = await tick(h, stillParked.baseline);
+  expect(unparked.notified).toEqual(["widgets github:acme/widgets#12"]);
+  expect(h.argvs).toHaveLength(1);
+  expect((await tick(h, unparked.baseline)).notified).toEqual([]);
+});
+
+test("a row parked during a partial poll leaves the baseline and notifies once when it returns", async () => {
+  const other = pr({ id: "acme/widgets#13", number: 13, url: "https://example.invalid/acme/widgets/pull/13", headRefName: "feature/abc-2" });
+  const h = harness([mine, other]);
+  let state = (await tick(h, null)).baseline;
+  expect(state?.get("widgets github:acme/widgets#12")).toBe("me");
+  expect(state?.get("widgets github:acme/widgets#13")).toBe("me");
+  h.world.prs = githubOk([pr({ headRefName: "feature/abc-1", ignored: true })]);
+  h.world.issues = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const partial = await tick(h, state);
+  state = partial.baseline;
+  expect(partial.notified).toEqual([]);
+  expect(state?.has("widgets github:acme/widgets#12")).toBe(false);
+  expect(state?.get("widgets github:acme/widgets#13")).toBe("me");
+  h.world.prs = githubOk([mine, other]);
+  h.world.issues = linearOk([]);
+  const unparked = await tick(h, state);
+  expect(unparked.notified).toEqual(["widgets github:acme/widgets#12"]);
+  expect(h.argvs).toHaveLength(1);
+});
+
+const guarded = {
+  ...config,
+  projects: config.projects.map((p) =>
+    p.name === "widgets" && p.issueSource.kind === "linear" ? { ...p, issueSource: { ...p.issueSource, pausedStates: [] }, ignoreLabel: "Pohunek:Ignore" } : p,
+  ),
+};
+const truncated: SourceResult<never> = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+
+async function guardedTick(h: Harness, baseline: Baseline): Promise<{ baseline: Baseline; notified: readonly string[] }> {
+  return watchTick(guarded, options, h.deps, baseline, new AbortController().signal);
+}
+
+test("a pull request whose issue may carry the ignore label never notifies while the issue source is down", async () => {
+  const spike = { headRefName: "alice/ABC-1/spike" } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.issues = linearOk([issue({ ignored: true })]);
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.size).toBe(0);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.issues = truncated;
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("a blocked session does not notify a row whose issue may carry the ignore label while the issue source is down", async () => {
+  const spike = pr({ headRefName: "alice/ABC-1/spike", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
+  const h = harness([spike]);
+  h.world.sessions = [session({ id: "s-1", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1", "work.link.branch": spike.headRefName } })];
+  h.world.issues = linearOk([issue({ ignored: true })]);
+  const first = await guardedTick(h, null);
+  h.world.notifications = [notification({ sessionId: "s-1" })];
+  h.world.issues = truncated;
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("an issue row never notifies while github is down, even with a blocked session, and keeps its baseline", async () => {
+  const h = harness([]);
+  h.world.sessions = [session({ id: "s-1", metadata: { "work.link.provider": "linear", "work.link.id": "ABC-1" } })];
+  h.world.issues = linearOk([issue()]);
+  h.world.notifications = [notification({ sessionId: "s-1" })];
+  for (const code of ["truncated", "rate_limited"] as const) {
+    h.world.prs = { ok: false, source: "github", code, message: "failed", durationMs: 1 };
+    const down = await guardedTick(h, new Map([["widgets linear:ABC-1", "agent"]]));
+    expect(down.notified).toEqual([]);
+    expect(down.baseline?.get("widgets linear:ABC-1")).toBe("agent");
+  }
+  expect(h.argvs).toEqual([]);
+});
+
+test("a pull request linked to its issue only by a Linear attachment never notifies while Linear is down", async () => {
+  const attached = pr({ headRefName: "feature/x", reviewDecision: "APPROVED", checks: [check("b", "pending")] });
+  const h = harness([attached]);
+  h.world.issues = linearOk([issue({ ignored: true, attachmentUrls: [attached.url] })]);
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.size).toBe(0);
+  h.world.prs = githubOk([pr({ headRefName: "feature/x", checks: [check("build", "failure")] })]);
+  h.world.issues = truncated;
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("a pull request of a parked issue the issue source did not list never notifies, and losing the label notifies once", async () => {
+  const spike = { headRefName: "alice/ABC-1/spike" } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.size).toBe(1);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(["ABC-1"]), durationMs: 1 };
+  const parked = await guardedTick(h, first.baseline);
+  expect(parked.notified).toEqual([]);
+  expect(parked.baseline?.size).toBe(0);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const unparked = await guardedTick(h, parked.baseline);
+  expect(unparked.notified).toEqual(["widgets linear:ABC-1"]);
+  expect(h.argvs).toHaveLength(1);
+});
+
+test("a failed ignore-label lookup keeps the baseline and notifies nobody", async () => {
+  const spike = { headRefName: "alice/ABC-1/spike" } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const first = await guardedTick(h, null);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.ignoredKeys = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(down.baseline?.get("widgets linear:ABC-1")).toBe("reviewer");
+  expect(h.logs).toContainEqual({ level: "error", event: "source_failed" });
+  expect(h.argvs).toEqual([]);
+});
+
+test("a pull request of a GitHub issue the issue source did not list stays silent when the issue is labelled or the lookup fails", async () => {
+  const githubParked = {
+    ...config,
+    projects: config.projects.map((p) =>
+      p.name === "widgets"
+        ? { ...p, issueSource: githubIssueSource, branchPattern: /^alice\/(?<key>[0-9]+)\//, branchPatternSource: "^alice/(?P<key>[0-9]+)/", ignoreLabel: "Pohunek:Ignore" }
+        : p,
+    ),
+  };
+  const tickGithub = (h: Harness, baseline: Baseline): Promise<{ baseline: Baseline; notified: readonly string[] }> =>
+    watchTick(githubParked, options, h.deps, baseline, new AbortController().signal);
+  const spike = { headRefName: "alice/5/spike", closingIssueNumbers: [5] } as const;
+  const h = harness([pr({ ...spike, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "github_issues", data: new Set(), durationMs: 1 };
+  const first = await tickGithub(h, null);
+  h.world.prs = githubOk([pr({ ...spike, checks: [check("build", "failure")] })]);
+  h.world.ignoredKeys = { ok: true, source: "github_issues", data: new Set(["acme/widgets#5"]), durationMs: 1 };
+  const parked = await tickGithub(h, first.baseline);
+  expect(parked.notified).toEqual([]);
+  h.world.ignoredKeys = { ok: false, source: "github_issues", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await tickGithub(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(h.argvs).toEqual([]);
+});
+
+test("a keyless pull request attached to a parked Linear issue never notifies, and a failed lookup keeps the baseline", async () => {
+  const keyless = { headRefName: "feature/x" } as const;
+  const h = harness([pr({ ...keyless, reviewDecision: "APPROVED", checks: [check("b", "pending")] })]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set(), durationMs: 1 };
+  const first = await guardedTick(h, null);
+  expect(first.baseline?.get("widgets github:acme/widgets#12")).toBe("reviewer");
+  const failing = pr({ ...keyless, checks: [check("build", "failure")] });
+  h.world.prs = githubOk([failing]);
+  h.world.ignoredKeys = { ok: true, source: "linear", data: new Set([failing.url]), durationMs: 1 };
+  const parked = await guardedTick(h, first.baseline);
+  expect(parked.notified).toEqual([]);
+  expect(parked.baseline?.size).toBe(0);
+  h.world.ignoredKeys = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const down = await guardedTick(h, first.baseline);
+  expect(down.notified).toEqual([]);
+  expect(down.baseline?.get("widgets github:acme/widgets#12")).toBe("reviewer");
+  expect(h.argvs).toEqual([]);
 });
 
 test("an unavailable source keeps the baseline null, so the recovery poll does not notify", async () => {

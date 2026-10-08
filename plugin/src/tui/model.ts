@@ -183,10 +183,10 @@ export function selectedRow(state: State): ListItem | null {
 }
 
 export function layoutOf(state: State): Layout {
-  const payload = state.data?.payload ?? { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [] };
+  const payload = state.data?.payload ?? { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [], omitted_ignored: 0 };
   const flags =
     state.data === null
-      ? { partial: false, versionMismatch: false, listStderr: state.listStderr.length > 0, hiddenUnknown: false }
+      ? { partial: false, versionMismatch: false, listStderr: state.listStderr.length > 0, hiddenUnknown: false, hiddenIgnored: false }
       : headerFlags(payload, state.filters, state.settings.cliVersion, state.data.cliVersion, state.listStderr.length);
   return computeLayout(state.size, columnsFor(payload), flags, state.settings.detailMinWidth);
 }

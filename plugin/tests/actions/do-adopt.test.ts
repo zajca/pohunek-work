@@ -173,7 +173,7 @@ test("the session an adoption started owns the worktree: the next action reuses 
 
   const adopted = session({ id: "s-new", state: "stopped", activity: null, branch: BRANCH, worktreePath: "/wt/new", metadata: result.metadata });
   const world: World = { prs: ok("github", [pullRequest]), sessions: [adopted] };
-  const listed = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
+  const listed = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
   const row = listed.items.find((item) => item.key === key);
   expect(row?.sessions.map((s) => s.id)).toEqual(["s-new"]);
   expect(row?.actions.map((a) => a.name)).toEqual(["fix-ci"]);

@@ -29,6 +29,8 @@ export interface DoOptions {
   /** Skips the interactive confirmation. */
   readonly yes: boolean;
   readonly json: boolean;
+  /** Allows acting on a row that carries the ignore label. */
+  readonly includeIgnored: boolean;
 }
 
 export interface DoDeps extends Omit<ListDeps, "cliVersion"> {
@@ -156,7 +158,7 @@ async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Prom
 
 async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps, action: ActionPlan["action"]): Promise<DoOutput> {
   const { logger } = deps;
-  const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, deps);
+  const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, options.includeIgnored, deps);
   const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github, pohunek: deps.pohunek });
   const argv = displayArgv(config.global.pohunek.bin, plan);
   logger.info("do_plan", { key: plan.key, action: plan.action, profile: plan.profile, branch: plan.branch, cwd: plan.cwd, argv });
@@ -201,7 +203,7 @@ function readyJson(plan: ReadyPlan): Record<string, unknown> {
 
 async function runReady(config: PluginConfig, options: DoOptions, deps: DoDeps): Promise<DoOutput> {
   const { logger } = deps;
-  const { row, warnings } = await resolveRow(config, options.key, options.project, deps);
+  const { row, warnings } = await resolveRow(config, options.key, options.project, options.includeIgnored, deps);
   const plan = planReady(row, config);
   logger.info("do_plan", { key: plan.key, action: plan.action, argv: [...plan.argv], verify_argv: [...plan.verifyArgv] });
   if (options.dryRun) {
@@ -232,7 +234,7 @@ function attachText(plan: AttachPlan): string {
 /** Not a write, so there is no confirmation: the terminal goes to the session until the owner detaches. */
 async function runAttach(config: PluginConfig, options: DoOptions, deps: DoDeps): Promise<DoOutput> {
   const { logger } = deps;
-  const { row, warnings } = await resolveRow(config, options.key, options.project, deps);
+  const { row, warnings } = await resolveRow(config, options.key, options.project, options.includeIgnored, deps);
   const plan = planAttach(row, config);
   logger.info("do_plan", { key: plan.key, action: plan.action, session_id: plan.sessionId, argv: [...plan.argv] });
   if (options.dryRun) {

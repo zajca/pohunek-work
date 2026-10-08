@@ -27,10 +27,25 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
-A project file may set the optional key `ignore_label`. A pull request or issue
-that carries that label (compared case-insensitively) marks its row as ignored:
-the `list --json` row has `ignored: true` and no actions. Without the key the
-feature is off.
+A project file may set the optional key `ignore_label`. Rows whose pull request
+or joined issue carries that label (compared case-insensitively) are hidden from
+`list` (`list --mine` included), refused by `do` and never notified by `watch`;
+without the key the feature is off. `list --include-ignored` shows them (JSON
+`ignored: true`, no actions, the computed `on_turn` kept; the table marks the key with `(ignored)`), and the table ends
+with `N ignored row(s) hidden (use --include-ignored)` when rows are hidden; the
+JSON `omitted_ignored` counts the hidden rows that `--mine`, `--stale-days` and
+`--project` would have listed (0 with the flag). `do <key> <action>` on an
+ignored row fails with `precondition_failed` unless `--include-ignored` is
+passed, also with `--dry-run`.
+
+The issue source lists only started issues assigned to the owner (Linear) or
+open issues with a started or paused label (GitHub), so a pull request can join
+an issue it does not return, for example one parked with the label and moved to
+Backlog. For a project with `ignore_label` the plugin then asks the issue source
+for the labels of exactly those issues (batched by `[linear] page_size` or
+`[github] issue_page_size`; nothing is asked otherwise). When that lookup, the
+issue source or `github` fails, a row that may be parked is `unknown`, offers no
+action (`attach` included), is refused by `do` and is not notified by `watch`.
 
 The result is one table with a derived `on_turn` column, a set of named
 actions (`implement`, `babysit`, `fix-ci`, `rebase`, `review`, `ready`,

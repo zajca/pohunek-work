@@ -39,7 +39,7 @@ function ownerSession(overrides: Partial<PohunekSession> = {}): PohunekSession {
 }
 
 async function listed(world: World): Promise<ListItem[]> {
-  const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets" }, setup(world).deps);
+  const out = await runList(config, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
   return [...out.items];
 }
 

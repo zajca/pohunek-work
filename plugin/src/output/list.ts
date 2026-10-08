@@ -144,12 +144,14 @@ export function buildListEnvelope(
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
   projects: readonly ListProjectStatus[],
+  omittedIgnored: number,
 ): ListEnvelope {
   const ok: ListPayload = {
     items,
     orphaned_sessions: orphanedSessions,
     unlinked_sessions: unlinkedSessions,
     projects,
+    omitted_ignored: omittedIgnored,
   };
   return {
     cli_version: cliVersion,
@@ -175,11 +177,12 @@ function onTurnCell(item: ListItem): string {
   return actor === "me" || actor === "unknown" ? `${actor}: ${reason}${ruleText}` : `${actor}${ruleText}`;
 }
 
-/** Row key; a `github:` row that resolved to an issue names it, e.g. `github:o/r#9 (ABC-11)`. */
+/** Row key; a `github:` row that resolved to an issue names it, e.g. `github:o/r#9 (ABC-11)`; an ignored row ends with ` (ignored)`. */
 function keyCell(item: ListItem): string {
-  if (item.no_issue) return `${item.key} (no issue)`;
-  if (item.issue_key !== null && !isIssueRowOf(item.key, item.issue_key)) return `${item.key} (${item.issue_key})`;
-  return item.key;
+  const marker = item.ignored ? " (ignored)" : "";
+  if (item.no_issue) return `${item.key} (no issue)${marker}`;
+  if (item.issue_key !== null && !isIssueRowOf(item.key, item.issue_key)) return `${item.key} (${item.issue_key})${marker}`;
+  return `${item.key}${marker}`;
 }
 
 function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
@@ -189,12 +192,13 @@ function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
     .join(",");
 }
 
-/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now. */
+/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now; a final line counts the hidden ignored rows. */
 export function renderTable(
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
   liveSessionIds: ReadonlySet<string>,
+  omittedIgnored: number,
 ): string {
   const rows = items.map((item) => {
     const pr = item.pull_request;
@@ -226,6 +230,7 @@ export function renderTable(
       ),
     );
   }
+  if (omittedIgnored > 0) lines.push(`${omittedIgnored.toString()} ignored row(s) hidden (use --include-ignored)`);
   return lines.join("\n");
 }
 

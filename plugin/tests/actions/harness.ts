@@ -178,8 +178,8 @@ export function setup(world: World): Harness {
       linear: {
         fetchIssues: (project) =>
           Promise.resolve(count(project.pohunekLabel === "widgets" ? (world.issues ?? ok("linear", [])) : ok("linear", []))),
-        fetchIgnoredKeys: (_project, keys) => {
-          lookups.push([...keys]);
+        fetchIgnoredKeys: (_project, keys, urls) => {
+          lookups.push([...keys, ...urls.map((url) => `url:${url}`)]);
           if (world.ignoredKeys === undefined) return Promise.reject(new Error("the test did not expect an ignore-label lookup"));
           return Promise.resolve(world.ignoredKeys);
         },
@@ -198,7 +198,7 @@ export function setup(world: World): Harness {
 }
 
 export function options(overrides: Partial<DoOptions> = {}): DoOptions {
-  return { key: "linear:ABC-1", action: "implement", profile: null, project: "widgets", dryRun: false, yes: true, json: true, ...overrides };
+  return { key: "linear:ABC-1", action: "implement", profile: null, project: "widgets", dryRun: false, yes: true, json: true, includeIgnored: false, ...overrides };
 }
 
 export async function refusal(promise: Promise<unknown>): Promise<ActionError> {

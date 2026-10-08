@@ -205,3 +205,20 @@ test("doctor reports the launcher requirements as warnings next to the config fa
   expect(result.out).toContain("FAIL config_invalid config");
   expect(result.out).toMatch(/^warn warn launcher_scripts: not installed; run 'pohunek-work setup scripts'$/m);
 });
+
+test("--include-ignored is accepted by list and do (parsing passes, the missing config is the next error)", async () => {
+  const dir = await tempDir();
+  for (const args of [["list", "--include-ignored", "--json"], ["do", "ABC-1", "review", "--include-ignored", "--json"]]) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    const envelope = JSON.parse(result.out) as { err: { class: string } };
+    expect(envelope.err.class).toBe("configuration");
+  }
+});
+
+test("--include-ignored is a usage error for commands that do not take it", async () => {
+  const dir = await tempDir();
+  const result = await run(["doctor", "--include-ignored"], dir);
+  expect(result.code).toBe(2);
+  expect(result.err).toContain("usage:");
+});

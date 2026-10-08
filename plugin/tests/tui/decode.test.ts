@@ -53,6 +53,21 @@ describe("decodeListEnvelope", () => {
     expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].sources.github_issues is not a string" });
   });
 
+  test("omitted_ignored is a required non-negative integer and round-trips", () => {
+    const good = JSON.parse(envelopeText(payload([row("linear:A-1")], undefined, 3))) as { ok: Record<string, unknown> };
+    const outcome = decodeListEnvelope(JSON.stringify(good));
+    expect(outcome.kind === "ok" ? outcome.payload.omitted_ignored : null).toBe(3);
+    const rejected = (value: unknown, message: string): void => {
+      good.ok["omitted_ignored"] = value;
+      expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message });
+    };
+    rejected(-1, "ok.omitted_ignored is negative");
+    rejected(1.5, "ok.omitted_ignored is not an integer");
+    rejected("2", "ok.omitted_ignored is not an integer");
+    delete good.ok["omitted_ignored"];
+    expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.omitted_ignored is not an integer" });
+  });
+
   test("the ignored flag of a row is required, boolean and round-trips", () => {
     const good = JSON.parse(envelopeText(payload([row("linear:A-1", { ignored: true })]))) as { ok: { items: Record<string, unknown>[] } };
     const first = good.ok.items[0];

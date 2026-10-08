@@ -208,6 +208,7 @@ function bannerLines(state: State, payload: ListPayload, dataVersion: string): S
   }
   const hidden = hiddenUnknownCount(payload, state.filters);
   if (hidden > 0) lines.push(toSafe(`${hidden.toString()} unknown rows hidden (f)`));
+  if (payload.omitted_ignored > 0) lines.push(toSafe(`ignored hidden: ${payload.omitted_ignored.toString()}`));
   return lines;
 }
 

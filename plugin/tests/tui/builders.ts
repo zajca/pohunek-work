@@ -155,12 +155,13 @@ export const PROJECTS_PARTIAL: readonly ListProjectStatus[] = [
   { project: "ops", sources: { github: "rate_limited", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "ok" } },
 ];
 
-export function payload(items: readonly ListItem[], projects: readonly ListProjectStatus[] = PROJECTS_OK): ListPayload {
+export function payload(items: readonly ListItem[], projects: readonly ListProjectStatus[] = PROJECTS_OK, omittedIgnored = 0): ListPayload {
   return {
     items,
     orphaned_sessions: [{ id: "s-orphan", name: "old work", linkId: "DMD-1" }],
     unlinked_sessions: [{ id: "s-loose", name: null, project: "connection", state: "running", activity: "idle" }],
     projects,
+    omitted_ignored: omittedIgnored,
   };
 }
 
