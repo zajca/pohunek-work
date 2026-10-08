@@ -29,6 +29,7 @@ export type RefusalCode =
   | "launch_failed"
   | "launch_timed_out"
   | "launch_unverified"
+  | "setup_failed"
   | "not_supported"
   | "not_draft"
   | "no_session"

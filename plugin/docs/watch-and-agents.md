@@ -200,14 +200,14 @@ for an existing pull request branch) checks the pull request head: with a
 warning it fails as `launch_unverified` although the session runs, and when only
 the head differs for an adopting launch the launch succeeds and
 `ok.result.head_mismatch` (`expected`, `actual`) is present; report it, the
-session's own prompt makes it stop on a different head. **Temporary:** a new
-worktree may need project setup before an agent can run checks, and a failed
-setup hook shows only as such a warning; this is tracked in
-[#86](https://github.com/zajca/pohunek-work/issues/86). Until it lands, do not
-report that a session can run checks without having seen it do so.
+session's own prompt makes it stop on a different head. A failed project setup
+hook (`post-create`, RFC 10.1) fails `do` as `setup_failed` for every action, before the other checks:
+the session runs without its setup. The error names the session, the hook's message and its detail
+(core discards the hook's output, so read the host's hook log). Do not report that the session can
+run checks; leave removal (`pohunek session rm <id>`) to the owner.
 
-`launch_unverified` and `launch_timed_out` mean a session may exist although
-`do` reported an error. For `launch_unverified` the error names the session
+`setup_failed`, `launch_unverified` and `launch_timed_out` mean a session may exist although
+`do` reported an error. For `setup_failed` and `launch_unverified` the error names the session
 id: run `pohunek session inspect` on it. When the session did not become
 working within `prompt_delivery_timeout_ms`, also read
 `pohunek session screen <id> --json`; do not resend the prompt unasked, and

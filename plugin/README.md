@@ -85,7 +85,11 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   untrusted-data block (both keys are required, `issue_number_prefix` may be empty);
   after `session new`, `do` waits up to the required `[actions] prompt_delivery_timeout_ms`
   (1..8000) for the session to become working and otherwise fails as `launch_unverified`
-  naming the session (read its screen; the owner decides on removal); `review` starts in a fresh worktree of the pull
+  naming the session (read its screen; the owner decides on removal); a failed `post-create`
+  setup hook of core (host-global `~/.config/pohunek/hooks/post-create` or in-repo
+  `.pohunek/hooks/post-create`, no plugin key; example for `keboola/connection` in
+  [docs/rfc.md](docs/rfc.md) 10.1) makes `do` fail as `setup_failed` with the hook's message and
+  detail, the session left running for the owner to remove; `review` starts in a fresh worktree of the pull
   request head and checks the checked-out commit after the launch; `babysit`, `fix-ci` and
   `rebase` start in the worktree of a linked session, or adopt the pull request's own head branch
   in a fresh worktree when none owns one (RFC 7.5). When the branch is already

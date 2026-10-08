@@ -86,7 +86,22 @@ export interface LaunchedSession {
    * `base_branch_fallback`): the session was created, but not as requested.
    */
   readonly warnings: readonly string[];
+  /**
+   * Warnings of a lifecycle hook (`hook`) or of the legacy `.pohunek/setup` script (`setup_script`): the
+   * project's setup did not run to completion, so the session starts in an unprovisioned worktree.
+   */
+  readonly setupFailures: readonly SetupFailure[];
 }
+
+/** Daemon-written text of one failed setup hook; core discards the hook's own output, so none of it is here. */
+export interface SetupFailure {
+  readonly kind: string;
+  readonly message: string;
+  readonly detail: string | null;
+}
+
+/** Warning kinds that mean the project's setup failed. */
+export const SETUP_WARNING_KINDS: readonly string[] = ["hook", "setup_script"];
 
 export interface WaitRequest {
   readonly sessionId: string;
@@ -254,6 +269,22 @@ function parseLaunchWarnings(obj: Json, path: string): string[] {
   return asArray(raw, `${path}.warnings`).map((entry, index) =>
     reqString(asObject(entry, `${path}.warnings[${String(index)}]`), "kind", `${path}.warnings[${String(index)}]`),
   );
+}
+
+function parseSetupFailures(obj: Json, path: string): SetupFailure[] {
+  const raw = obj["warnings"];
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  return asArray(raw, `${path}.warnings`).flatMap((entry, index) => {
+    const warningPath = `${path}.warnings[${String(index)}]`;
+    const warning = asObject(entry, warningPath);
+    const kind = reqString(warning, "kind", warningPath);
+    if (!SETUP_WARNING_KINDS.includes(kind)) {
+      return [];
+    }
+    return [{ kind, message: reqString(warning, "message", warningPath), detail: optString(warning, "detail", warningPath) }];
+  });
 }
 
 function parseWorktree(raw: unknown, path: string): PohunekWorktree {
@@ -459,7 +490,8 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
           return outcome;
         }
         const session = parseSession(outcome.payload, "$.ok");
-        return { ok: true, data: { session, warnings: parseLaunchWarnings(asObject(outcome.payload, "$.ok"), "$.ok") } };
+        const payload = asObject(outcome.payload, "$.ok");
+        return { ok: true, data: { session, warnings: parseLaunchWarnings(payload, "$.ok"), setupFailures: parseSetupFailures(payload, "$.ok") } };
       }),
     waitSession: (request) =>
       wrap(async () => {
