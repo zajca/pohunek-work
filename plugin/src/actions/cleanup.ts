@@ -220,7 +220,7 @@ async function worktreeClean(target: Target, config: PluginConfig, deps: Cleanup
   if (prefix.stdout.replace(/\n$/, "") !== "") {
     return { check: { name, ok: false, detail: "the path is only a subdirectory of another repository, not a worktree root" }, ignored: [] };
   }
-  const status = await git(deps, config, target.worktreePath, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=all", "--ignored"], config.global.actions.gitTimeoutMs);
+  const status = await git(deps, config, target.worktreePath, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=normal", "--ignored"], config.global.actions.gitTimeoutMs);
   if (!status.ok) return { check: { name, ok: false, detail: `git status failed: ${status.reason}` }, ignored: [] };
   const entries = parseStatus(status.stdout);
   if (entries === null) return { check: { name, ok: false, detail: "git status output could not be parsed" }, ignored: [] };
@@ -432,11 +432,18 @@ function failedNames(checks: readonly CleanupCheck[]): string {
   return checks.filter((c) => !c.ok).map((c) => c.name).join(", ");
 }
 
-function sourceError(what: string, result: Extract<SourceResult<unknown>, { ok: false }>): ActionError {
+function sourceError(what: string, result: Extract<SourceResult<unknown>, { ok: false }>, aftermath: string): ActionError {
   if (result.code === "timeout") {
-    return new ActionError("command_timed_out", `${what} did not finish in time; the state of the session is unknown, check \`pohunek session list\` before retrying`);
+    return new ActionError("command_timed_out", `${what} did not finish in time; ${aftermath}`);
   }
-  return new ActionError("command_failed", `${what} failed (${result.code})`);
+  return new ActionError("command_failed", `${what} failed (${result.code}); ${aftermath}`);
+}
+
+/** What the session list says about the session after a `session rm` that reported a problem. */
+async function listingAfterRemoval(plan: CleanupPlan, deps: CleanupDeps): Promise<string> {
+  const listed = await deps.pohunek.listSessions();
+  if (!listed.ok) return "the session list could not be re-read";
+  return listed.data.some((s) => s.id === plan.sessionId) ? "the session is still listed" : "the session is no longer listed";
 }
 
 async function rereadSessions(pohunek: PohunekClient, stoppedAlready: boolean): Promise<readonly PohunekSession[]> {
@@ -502,7 +509,7 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
   let stopped = false;
   if (needsStop) {
     const stop = await deps.pohunek.stopSession(plan.sessionId, timeoutMs);
-    if (!stop.ok) throw sourceError("pohunek session stop", stop);
+    if (!stop.ok) throw sourceError("pohunek session stop", stop, "nothing was removed; check `pohunek session list` for the state of the session");
     stopped = true;
   }
 
@@ -529,12 +536,21 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
   await recheckBeforeRemoval(plan, evidence, stopped, deps);
 
   const removal = await deps.pohunek.removeSession(plan.sessionId, timeoutMs);
-  if (!removal.ok) throw sourceError("pohunek session rm", removal);
+  if (!removal.ok) {
+    const kept = stopped ? "; the session stays stopped if it still exists" : "";
+    throw sourceError("pohunek session rm", removal, `the state of the session is unknown, check \`pohunek session list\` and the worktree on disk${kept}`);
+  }
   if (!removal.data.removed) {
-    throw new ActionError("command_failed", "pohunek session rm reported removed=false");
+    throw new ActionError(
+      "command_unverified",
+      `pohunek session rm reported removed=false; a concurrent removal may have deleted the session and its worktree (${await listingAfterRemoval(plan, deps)}), check the worktree on disk`,
+    );
   }
   if (removal.data.worktreesFailed > 0) {
-    throw new ActionError("command_failed", `pohunek session rm could not remove ${String(removal.data.worktreesFailed)} worktree(s); the session is removed, check the worktree on disk`);
+    throw new ActionError(
+      "command_unverified",
+      `pohunek session rm could not remove ${String(removal.data.worktreesFailed)} worktree(s); the session is probably gone (${await listingAfterRemoval(plan, deps)}), check the worktree on disk`,
+    );
   }
 
   if (removal.data.acceptedUnconfirmedProcesses > 0) {

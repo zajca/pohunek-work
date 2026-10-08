@@ -221,7 +221,7 @@ describe("cleanup --dry-run", () => {
     const prefix = [GIT, "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", PATH];
     expect(built.gitCalls.map((c) => c.argv)).toEqual([
       [...prefix, "rev-parse", "--show-prefix"],
-      [...prefix, "status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=all", "--ignored"],
+      [...prefix, "status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=normal", "--ignored"],
       [...prefix, "ls-files", "-z", "--stage"],
       [...prefix, "ls-files", "-v", "-z"],
       [...prefix, "symbolic-ref", "--short", "HEAD"],
@@ -266,6 +266,7 @@ describe("cleanup checks fail closed", () => {
     ["worktree_clean", "a skip-worktree entry", { tagged: out("S b\0") }],
     ["worktree_clean", "a failed ls-files -v", { tagged: out("", null, true) }],
     ["worktree_clean", "unparsable ls-files -v output", { tagged: out("Hb\0") }],
+    ["worktree_clean", "a collapsed untracked directory record", { status: out("?? build/\0!! target/\0") }],
     ["worktree_clean", "a git timeout", { status: out("", null, true) }],
     ["worktree_clean", "git that cannot start", { status: SPAWN }],
     ["worktree_clean", "a git failure", { status: out("", 128) }],
@@ -613,6 +614,44 @@ describe("cleanup real run", () => {
     }
   });
 
+  test("a sharer that disappears between the evidence pass and the rm refuses the removal", async () => {
+    const done = (): PohunekSession => session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
+    const prev = session({ id: "s-prev", state: "done", activity: null, worktreePath: PATH });
+    let reads = 0;
+    const built = build({ world: { listSessions: () => ok("pohunek", ++reads >= 4 ? [done()] : [done(), prev]) } });
+    await expectRefusal(runDo(baseConfig, cleanup(), built.h.deps), "precondition_failed", "changed since the evidence");
+    expect(mutations(built)).toEqual([]);
+  });
+
+  test("failures of stop and rm say what is known about the session", async () => {
+    const stopFailed = build({ target: { state: "running", activity: "idle" }, world: { stop: () => fail("pohunek", "unavailable") } });
+    await expectRefusal(runDo(baseConfig, cleanup(), stopFailed.h.deps), "command_failed", "nothing was removed");
+    const rmFailed = build({ target: { state: "running", activity: "idle" }, world: { remove: () => fail("pohunek", "unavailable") } });
+    const error = await refusal(runDo(baseConfig, cleanup(), rmFailed.h.deps));
+    expect(error.code).toBe("command_failed");
+    expect(error.message).toContain("state of the session is unknown");
+    expect(error.message).toContain("worktree on disk");
+    expect(error.message).toContain("stays stopped");
+    const untouched = build({ world: { remove: () => fail("pohunek", "timeout") } });
+    const timedOut = await refusal(runDo(baseConfig, cleanup(), untouched.h.deps));
+    expect(timedOut.code).toBe("command_timed_out");
+    expect(timedOut.message).not.toContain("stays stopped");
+  });
+
+  test("a rm that reports a problem says what session list shows", async () => {
+    const gone = build({
+      world: {
+        remove: () => {
+          gone.state.removed = true;
+          return ok("pohunek", { removed: false, stopped: true, worktreesRemoved: 0, worktreesFailed: 0, acceptedUnconfirmedProcesses: 0 });
+        },
+      },
+    });
+    await expectRefusal(runDo(baseConfig, cleanup(), gone.h.deps), "command_unverified", "no longer listed");
+    const still = build({ world: { remove: () => ok("pohunek", { removed: true, stopped: true, worktreesRemoved: 0, worktreesFailed: 1, acceptedUnconfirmedProcesses: 0 }) } });
+    await expectRefusal(runDo(baseConfig, cleanup(), still.h.deps), "command_unverified", "still listed");
+  });
+
   test("a truncated diff after the stop leaves the session stopped and removes nothing", async () => {
     const calls = { diff: 0 };
     const built = build({
@@ -693,9 +732,9 @@ describe("cleanup real run", () => {
 
   test("rm results that are not a clean removal are command_failed", async () => {
     const notRemoved = build({ world: { remove: () => ok("pohunek", { removed: false, stopped: true, worktreesRemoved: 0, worktreesFailed: 0, acceptedUnconfirmedProcesses: 0 }) } });
-    await expectRefusal(runDo(baseConfig, cleanup(), notRemoved.h.deps), "command_failed", "removed=false");
+    await expectRefusal(runDo(baseConfig, cleanup(), notRemoved.h.deps), "command_unverified", "removed=false");
     const worktreeFailed = build({ world: { remove: () => ok("pohunek", { removed: true, stopped: true, worktreesRemoved: 0, worktreesFailed: 1, acceptedUnconfirmedProcesses: 0 }) } });
-    await expectRefusal(runDo(baseConfig, cleanup(), worktreeFailed.h.deps), "command_failed", "1 worktree");
+    await expectRefusal(runDo(baseConfig, cleanup(), worktreeFailed.h.deps), "command_unverified", "1 worktree");
     const errored = build({ world: { remove: () => fail("pohunek", "unavailable") } });
     await expectRefusal(runDo(baseConfig, cleanup(), errored.h.deps), "command_failed", "session rm");
     const slow = build({ world: { remove: () => fail("pohunek", "timeout") } });

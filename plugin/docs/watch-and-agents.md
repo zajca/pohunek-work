@@ -127,7 +127,7 @@ names the issue and when to remove or update the rule.
 | `pohunek-work list --json` | every row, also those on another actor's turn, with the same fields |
 | `pohunek-work do <key> <action> --dry-run --json` | the plan of an action; changes nothing |
 | `pohunek-work do <key> <action> --yes --json` | runs the plan after the owner confirmed it |
-| `pohunek-work do <key> cleanup --dry-run --json` | the cleanup inventory and every check of a finished session; reads only, plus `git fetch` of the configured remote into `refs/remotes/<remote>/<branch>` of the session's repository (this updates the remote-tracking ref and FETCH_HEAD, no work files) |
+| `pohunek-work do <key> cleanup --dry-run --json` | the cleanup inventory and every check of a finished session; reads only, plus `git fetch` of the configured remote into `refs/remotes/<remote>/<branch>` of the session's repository (this updates the remote-tracking ref and FETCH_HEAD, no work files; git may also run auto-maintenance) |
 | `pohunek-work doctor` | setup problems; the exit code names the first failed check |
 | `pohunek session inspect <id> --json` | state, activity, branch, `worktree_path` and `metadata` (`work.role`, `work.rev`, `work.link.*`) of one session |
 | `pohunek session screen <id> --json` | the rendered terminal of one session |
@@ -252,7 +252,7 @@ worktree. Handle both this way:
 1. Report the holder: the path from the message, or `worktree_path` and `state`
    from `pohunek session inspect` when a session id is named.
 2. Show whether the holder is clean: `do <key> cleanup --dry-run --json` for
-   the holder's key reports the ignored files that would be lost and every
+   the holder's key reports the ignored entries that would be lost and every
    check. Without a key, `git -C <path> status --short --ignored` shows
    untracked (`??`) and ignored (`!!`) files, which are lost when the
    worktree is removed.
@@ -313,11 +313,11 @@ confirmation. The procedure:
 1. Run `pohunek-work do <key> cleanup --dry-run --json` (add `--project <label>`
    when the key is ambiguous). It reads only, except that it runs `git fetch` of the configured
    remote into `refs/remotes/<remote>/<branch>` of the session's repository
-   (the remote-tracking ref and FETCH_HEAD change, no work files). It exits 0
+   (the remote-tracking ref and FETCH_HEAD change, no work files; git may also run auto-maintenance in the repository). It exits 0
    even when a check fails, and reports `eligible`, every check in `plan.checks[]` and the
    inventory in `plan.inventory`.
 2. Report `eligible`, each failed check and the inventory to the owner:
-   the ignored files that would be lost, ahead/behind, the diff base and size,
+   the ignored entries that would be lost, ahead/behind, the diff base and size,
    the sessions sharing the worktree, and the `session stop` and `session rm`
    argv.
 3. Decide whether a later step of the same task needs the worktree. This stays
@@ -329,7 +329,7 @@ confirmation. The procedure:
    `pohunek-work do <key> cleanup --yes --json`. There is no interactive
    prompt: without `--yes` a real run refuses with `confirmation_required`.
 
-A real run is not tied to the dry run the owner reviewed: files ignored by git
+A real run is not tied to the dry run the owner reviewed: entries ignored by git
 that appear between the dry run and `--yes` are lost too. Run `--dry-run` again
 right before asking for confirmation when time has passed or the session may
 still be active.
@@ -340,16 +340,20 @@ The checks, all of which must hold:
 | --- | --- |
 | `session_finished` | the session is `stopped`, `done` or `failed`, or `running` and `idle` |
 | `worktree_owned` | `project show` lists the worktree path with this session id; a session started with `--cwd` in another session's worktree owns none |
-| `worktree_clean` | no uncommitted or untracked file; ignored files are allowed and listed in the inventory; it also fails when the worktree contains submodules (their state is not verified) or a tracked file is marked assume-unchanged or skip-worktree, and status runs with `--ignore-submodules=none` |
+| `worktree_clean` | no uncommitted or untracked file (status runs with `--untracked-files=normal`, so an untracked directory is one dirty entry); ignored files are allowed and an ignored directory is one inventory entry; it also fails when the worktree contains submodules (their state is not verified) or a tracked file is marked assume-unchanged or skip-worktree, and status runs with `--ignore-submodules=none` |
 | `branch_in_sync` | after a fetch of the configured remote the branch is `0 0` ahead/behind; a branch with no remote counterpart or a detached head fails |
 | `worktree_not_shared` | no other non-terminal session has the path as its `cwd` or `worktree_path`, or a path below it |
 | `not_awaiting_owner` | the session is not `blocked` and no `unread` or `read` `agent_blocked` or `approval_required` notification names it or a session sharing the worktree; an error reading notifications fails the check |
 | `diff_complete` | `session diff` is not truncated |
 
-A real run stops the session when it is running, re-runs every check (the agent
-could write or commit until it stopped), runs `session rm` without
-`--accept-unconfirmed-cleanup` and re-reads `session list`. Report the result
-(`result` in the JSON) to the owner.
+A real run first re-reads the session: a `working` or `blocked` session is
+refused with `precondition_failed` and nothing is stopped. It stops the session
+when it is running, re-runs every check (the agent could write or commit until
+it stopped), refuses when the sessions sharing the worktree changed since the
+evidence, runs `session rm` without `--accept-unconfirmed-cleanup` and re-reads
+`session list`. An `rm` result with `removed=false` or failed worktrees is
+`command_unverified`: the session may be gone, so check `pohunek session list`
+and the disk. Report the result (`result` in the JSON) to the owner.
 
 When a check fails, report it with its detail and stop. The manager never works
 around a failed check: no `git worktree remove --force`, no direct

@@ -74,7 +74,7 @@ export interface ActionsConfig {
   readonly promptDeliveryTimeoutMs: number;
   /** Absolute path of the git binary `cleanup` reads worktrees with. */
   readonly gitBin: string;
-  /** Time one git command of `cleanup` may take (status, rev-list, symbolic-ref). */
+  /** Time one local git command of `cleanup` may take (rev-parse, status, ls-files, symbolic-ref, rev-list); the fetch uses `cleanupTimeoutMs`. */
   readonly gitTimeoutMs: number;
   /** Remote whose branch a cleaned-up worktree branch must match (one remote name). */
   readonly cleanupRemote: string;
