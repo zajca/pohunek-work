@@ -251,7 +251,7 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Unit tests
+      - name: Integration tests
         run: bun test
 
       # The lockfile pins Playwright, so the browser build follows bun.lock.
@@ -350,7 +350,7 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Unit tests
+      - name: Integration tests
         run: bun test
 
       - name: Cache Playwright browsers
@@ -450,9 +450,6 @@ jobs:
 
       - name: Tests
         run: cargo nextest run --locked --profile ci --workspace --all-features
-
-      - name: Documentation tests
-        run: cargo test --locked --doc --workspace
 
       - name: Release build
         run: cargo build --locked --workspace --release

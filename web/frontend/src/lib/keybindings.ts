@@ -24,7 +24,7 @@ export type ShortcutTargetKind = "plain" | "editable" | "activation-control";
 
 export type ShortcutHandler = (shortcut: AppShortcut, event: KeyboardEvent) => void;
 
-/** Resolves a keyboard event without depending on browser globals, so mappings stay unit-testable. */
+/** Resolves a keyboard event without depending on browser globals. */
 export function resolveKeybinding(input: KeybindingInput): AppShortcut | undefined {
   if (input.isComposing === true || input.repeat === true || input.altKey === true) {
     return undefined;

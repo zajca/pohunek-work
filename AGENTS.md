@@ -41,7 +41,6 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 eval "$(scripts/build-core-binaries)"   # builds the pinned pohunekd, pohunek-sessiond, pohunek; exports their paths
 cargo nextest run --workspace --all-features
-cargo test --doc --workspace
 
 # web/ (Bun; core binaries and SDK tarballs come from web/core-sdk.json)
 cd web

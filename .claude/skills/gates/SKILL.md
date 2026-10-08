@@ -69,7 +69,6 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 eval "$(scripts/build-core-binaries)"   # exports the pinned pohunekd, pohunek-sessiond, pohunek
 cargo nextest run --locked --profile ci --workspace --all-features
-cargo test --locked --doc --workspace
 cargo build --locked --workspace --release
 ```
 

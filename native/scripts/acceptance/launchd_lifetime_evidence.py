@@ -5,8 +5,8 @@
 `ps`, `launchctl` exit statuses, boot time) in its state directory. This helper
 is the only code that interprets those files: small query commands answer the
 caller's questions, and `assemble` turns the whole state directory into the
-evidence document. Evaluation is a pure function of the state directory, so it
-is unit-tested on any host (`native/scripts/tests/test_launchd_lifetime_evidence.py`).
+evidence document. Its integration tests build observation directories and
+exercise the helper on any host (`native/scripts/tests/test_launchd_lifetime_evidence.py`).
 
 Stdlib only and Python 3.9 compatible: the Xcode Command Line Tools ship
 Python 3.9 as `/usr/bin/python3`.
