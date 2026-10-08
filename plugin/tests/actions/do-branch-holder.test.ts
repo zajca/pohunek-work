@@ -147,7 +147,7 @@ describe("a live holder (D2)", () => {
     const live = session({ id: "s-live", activity: "idle", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear", "work.role": "implement" }, worktreePath: "/wt/owner" });
     const waiting = pr({ headRefName: "alice/ABC-1/x", reviewRequests: [{ kind: "user", login: "someone" }] });
     const { deps } = setup({ issues: ok("linear", [issue()]), prs: ok("github", [waiting]), sessions: [live] });
-    await expectRefusal(runDo(baseConfig, options({ key: "linear:ABC-1", action: "babysit", profile: "profile-a" }), deps), "already_running", "attach with `pohunek-work do linear:ABC-1 attach --project widgets`");
+    await expectRefusal(runDo(baseConfig, options({ key: "linear:ABC-1", action: "babysit", profile: "profile-a" }), deps), "already_running", "attach with `pohunek-work do linear:ABC-1 attach --project=widgets`");
   });
 
   test("already_running names pohunek attach for a live session of someone else in the worktree", async () => {
@@ -301,7 +301,7 @@ describe("a holder that cannot be released safely (D4)", () => {
   });
 });
 
-describe("linked holders and the release command (D3)", () => {
+describe("linked holders and attach advice (D2)", () => {
   function fakeRow(sessions: readonly PohunekSession[]): CollectedRow {
     return { listItem: { key: "linear:ABC-1" }, item: { sessions }, project: { pohunekLabel: "widgets" } } as unknown as CollectedRow;
   }
@@ -312,18 +312,6 @@ describe("linked holders and the release command (D3)", () => {
   }
 
   const holder = { path: PATH, branch: BRANCH, sessionId: "s-held" };
-
-  test("the one linked session that owns a worktree is released with do cleanup", async () => {
-    const text = await diagnoseBranchHolder(holder, context([HOLDER], [HOLDER]));
-    expect(text).toContain("can be released with `pohunek-work do linear:ABC-1 cleanup`");
-    expect(text).toContain("`cleanup` checks everything again");
-  });
-
-  test("several linked sessions that own a worktree make do cleanup ambiguous, so session rm is named", async () => {
-    const second = session({ id: "s-second", state: "stopped", activity: null, worktreePath: "/wt/second", metadata: {} });
-    const text = await diagnoseBranchHolder(holder, context([HOLDER, second], [HOLDER, second]));
-    expect(text).toContain("can be released with `pohunek session rm s-held`");
-  });
 
   test("a live linked holder is offered do attach", async () => {
     const live = { ...HOLDER, state: "running", activity: "idle" };
@@ -399,27 +387,23 @@ describe("suggested commands carry the options of the launch", () => {
     return diagnoseBranchHolder(holder, { row, scope, sessions: [held], config: baseConfig, deps: { pohunek: built.h.deps.pohunek, exec: built.h.deps.exec } });
   }
 
-  test("--project and --include-ignored are repeated on the release command", async () => {
-    const text = await diagnose(linkedRow, { project: "widgets", includeIgnored: true }, HOLDER);
-    expect(text).toContain("`pohunek-work do linear:ABC-1 cleanup --project widgets --include-ignored`");
-  });
-
-  test("no options are added when the launch had none", async () => {
-    const text = await diagnose(linkedRow, { project: null, includeIgnored: false }, HOLDER);
-    expect(text).toContain("`pohunek-work do linear:ABC-1 cleanup`");
-  });
-
   test("the attach command of a live linked holder repeats the options", async () => {
     const live = { ...HOLDER, state: "running", activity: "idle" };
     const row = { ...linkedRow, item: { sessions: [live] } } as unknown as CollectedRow;
     const text = await diagnose(row, { project: "widgets", includeIgnored: true }, live);
-    expect(text).toContain("`pohunek-work do linear:ABC-1 attach --project widgets --include-ignored`");
+    expect(text).toContain("`pohunek-work do linear:ABC-1 attach --project=widgets --include-ignored`");
+  });
+
+  test("a project label that looks like an option is stays inside one --project= word", async () => {
+    const live = { ...HOLDER, state: "running", activity: "idle" };
+    const row = { ...linkedRow, item: { sessions: [live] } } as unknown as CollectedRow;
+    expect(await diagnose(row, { project: "--evil", includeIgnored: false }, live)).toContain("attach --project=--evil`");
   });
 
   test("a project label is shell-quoted, and one that cannot be shown falls back to pohunek", async () => {
     const live = { ...HOLDER, state: "running", activity: "idle" };
     const row = { ...linkedRow, item: { sessions: [live] } } as unknown as CollectedRow;
-    expect(await diagnose(row, { project: "my project; rm -rf x", includeIgnored: false }, live)).toContain("attach --project 'my project; rm -rf x'`");
+    expect(await diagnose(row, { project: "my project; rm -rf x", includeIgnored: false }, live)).toContain("attach --project='my project; rm -rf x'`");
     expect(await diagnose(row, { project: "pro\u010Dekt", includeIgnored: false }, live)).toContain("`pohunek attach s-held`");
   });
 
@@ -430,7 +414,7 @@ describe("suggested commands carry the options of the launch", () => {
     await expectRefusal(
       runDo(baseConfig, options({ key: "linear:ABC-1", action: "babysit", profile: "profile-a", includeIgnored: true }), deps),
       "already_running",
-      "`pohunek-work do linear:ABC-1 attach --project widgets --include-ignored`",
+      "`pohunek-work do linear:ABC-1 attach --project=widgets --include-ignored`",
     );
   });
 });

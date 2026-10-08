@@ -62,12 +62,16 @@ function shellWord(value: string): string | null {
   return SAFE_WORD.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/** `pohunek-work do <key> <verb>` with the options that make it resolve the row the launch resolved. */
+/**
+ * `pohunek-work do <key> <verb>` with the options that make it resolve the row the launch resolved.
+ * The project is one `--project=<value>` word: the CLI parser rejects a separate value that starts with a dash.
+ */
 function doCommand(row: CollectedRow, scope: RowScope, verb: string): string | null {
-  const words = [row.listItem.key, verb, ...(scope.project === null ? [] : ["--project", scope.project]), ...(scope.includeIgnored ? ["--include-ignored"] : [])].map((w) =>
-    w.startsWith("--") ? w : shellWord(w),
-  );
-  return words.includes(null) ? null : `pohunek-work do ${words.join(" ")}`;
+  const key = shellWord(row.listItem.key);
+  const project = scope.project === null ? null : shellWord(scope.project);
+  if (key === null || (scope.project !== null && project === null)) return null;
+  const options = [...(project === null ? [] : [`--project=${project}`]), ...(scope.includeIgnored ? ["--include-ignored"] : [])];
+  return ["pohunek-work", "do", key, verb, ...options].join(" ");
 }
 
 function attachCommand(row: CollectedRow, scope: RowScope, session: PohunekSession): string | null {
@@ -87,17 +91,6 @@ export function attachAdvice(row: CollectedRow, scope: RowScope, live: readonly 
     return command === null ? [] : [`\`${command}\``];
   });
   return commands.length > 0 ? `attach with ${commands.join(" or ")}` : "inspect it with `pohunek session list`";
-}
-
-/** The one linked session that owns a worktree is the one `do <key> cleanup` acts on. */
-function releaseCommand(row: CollectedRow, scope: RowScope, session: PohunekSession): { command: string; revalidates: boolean } {
-  const owners = row.item.sessions.filter((s) => s.worktreePath !== null);
-  const [only] = owners;
-  if (only !== undefined && owners.length === 1 && only.id === session.id) {
-    const linked = doCommand(row, scope, "cleanup");
-    if (linked !== null) return { command: linked, revalidates: true };
-  }
-  return { command: `pohunek session rm ${session.id}`, revalidates: false };
 }
 
 function listEntries(entries: readonly string[], config: PluginConfig): string {
@@ -171,13 +164,9 @@ export async function diagnoseBranchHolder(holder: BranchHolder, ctx: HolderCont
 
   const { failures, dirty, ignored } = await releaseEvidence(holder, session, ctx);
   if (failures.length > 0) return refusalText(by, failures, dirty, config);
-  const { command, revalidates } = releaseCommand(row, ctx.scope, session);
-  const caution = revalidates
-    ? "`cleanup` checks everything again before it removes anything."
-    : "`pohunek session rm` force-removes the worktree and does not recheck anything: run `pohunek session list` immediately before and release only if the session is still finished.";
   return (
     `${by}; when this was read the session was finished, its worktree clean and in sync with ${config.global.actions.cleanupRemote}, and every other cleanup check passed, ` +
-    `so it can be released with \`${command}\` (${String(ignored)} ignored entries are lost with the worktree). ${caution} ` +
+    `so it can be released with \`pohunek session rm ${session.id}\` (${String(ignored)} ignored entries are lost with the worktree). \`pohunek session rm\` force-removes the worktree and does not recheck anything: run \`pohunek session list\` immediately before and release only if the session is still finished. ` +
     "`do` itself removes nothing."
   );
 }

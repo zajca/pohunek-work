@@ -261,10 +261,9 @@ What it offers depends on the holder:
 - **A finished session whose worktree passes every `cleanup` check** (see
   [Finished sessions](#finished-sessions)): the message states that, when it was
   read, the session was finished and clean and in sync, and offers
-  `pohunek-work do <key> cleanup` when it is the one linked session that owns a
-  worktree (`cleanup` checks everything again before it removes anything) and
-  `pohunek session rm <id>` otherwise, plus the number of ignored files the
-  release loses. `pohunek session rm` force-removes the worktree and does not
+  `pohunek session rm <id>` plus the number of ignored files the release loses.
+  The diagnosis only runs when no linked session owns a worktree, so `do <key>
+  cleanup` does not apply. `session rm` force-removes the worktree and does not
   recheck, so the owner runs `pohunek session list` immediately before. `do`
   itself removes nothing; the owner decides.
 - **Anything else** (dirty or untracked files, unpushed or unfetched commits,
@@ -279,8 +278,8 @@ fresh (including one `git fetch` of `[actions] cleanup_remote`). The session lis
 is then read once more and compared with the evidence (the session is still
 finished in the same worktree and the sessions sharing it are unchanged); a
 change or an unreadable list is refused as `evidence_stale` with no removal
-command. Commands that name the row repeat the launch's `--project` and
-`--include-ignored`. Paths, session ids and check details
+command. The attach commands that name the row repeat the launch's
+`--project=<label>` (shell-quoted) and `--include-ignored`. Paths, session ids and check details
 from git or pohunek appear in the message only as JSON-quoted, ASCII-only
 strings cut at `[actions] holder_entry_max_length` characters.
 

@@ -282,9 +282,10 @@ the `already_running` refusals name the attach command. `do` never stops, remove
 - a holder no pohunek session owns (the primary checkout, a hand-made worktree) is refused with the instruction to switch that
   checkout; it is never offered for release;
 - a live holder session is offered `do <key> attach` (when it is the one live linked session) or `pohunek attach <id>`;
-- a finished holder session whose worktree passes all seven `cleanup` checks on fresh evidence is marked safe to release with
-  `do <key> cleanup` (the one linked session that owns a worktree) or `pohunek session rm <id>`, and the ignored files that
-  would be lost are counted;
+- a finished holder session whose worktree passes all seven `cleanup` checks on fresh evidence, and whose session list is
+  unchanged on a second read, is offered `pohunek session rm <id>` (the diagnosis runs only when no linked session owns a
+  worktree, so `do <key> cleanup` does not apply), with the count of ignored files that would be lost and the warning that
+  `session rm` force-removes the worktree without rechecking; a changed or unreadable second read is refused as `evidence_stale`;
 - every other holder (dirty or untracked files, ahead or behind commits, not finished, shared, git or pohunek unreadable or
   unparsable) is refused with the failed checks and the uncommitted or untracked entries, bounded by `[actions]
   holder_entries_listed`, and no removal command.
@@ -738,6 +739,8 @@ git_bin = "/usr/bin/git"            # absolute path; cleanup runs git through it
 git_timeout_ms = 15000              # per git call of cleanup except the fetch
 cleanup_remote = "origin"           # remote fetched before the branch_in_sync check; one safe ref segment
 cleanup_timeout_ms = 60000          # per pohunek call of cleanup (stop, rm, diff) and the git fetch
+holder_entries_listed = 5           # dirty or untracked entries a branch-holder refusal names before "and N more"
+holder_entry_max_length = 120       # characters of one path or check detail kept in a branch-holder refusal
 
 [policy]                  # empty: every action needs the owner
 delegable = []
