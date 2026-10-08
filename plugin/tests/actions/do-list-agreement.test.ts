@@ -48,7 +48,7 @@ function linked(pullRequest: PullRequest, worktreePath: string | null): PohunekS
 
 async function listedRow(pullRequest: PullRequest, sessions: readonly PohunekSession[]): Promise<ListItem> {
   const { deps } = setup({ prs: ok("github", [pullRequest]), sessions });
-  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, deps);
+  const out = await runList(baseConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, deps);
   const row = out.items.find((item) => item.key === `github:${pullRequest.id}`);
   if (row === undefined) throw new Error(`no row for ${pullRequest.id}`);
   return row;
@@ -153,7 +153,7 @@ test("rule 5 with a policy-only failure lists no action and do --dry-run refuses
 test("a pull request joined to a paused issue lists no action and do --dry-run refuses every action", async () => {
   const pullRequest = pr({ headRefName: "alice/ABC-1/work", headSha: SHA, isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
   const world = { prs: ok("github", [pullRequest]), issues: ok("linear", [issue({ state: "On hold", paused: true })]), sessions: [linked(pullRequest, "/wt/owner")] };
-  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
+  const out = await runList(baseConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
   expect(out.items.map((item) => [item.key, item.on_turn, item.actions])).toEqual([
     ["linear:ABC-1", { actor: "paused", reason: "paused", rule: 12 }, []],
   ]);
@@ -168,7 +168,7 @@ test("a secondary pull request of a paused Linear issue is paused, lists no acti
   const secondary = pr({ id: "acme/widgets#13", number: 13, headRefName: "alice/ABC-1/b", headSha: SHA, isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] });
   const owner = session({ id: "s-sec", state: "stopped", activity: null, branch: secondary.headRefName, worktreePath: "/wt/sec", metadata: { "work.link.id": secondary.id, "work.link.provider": "github", "work.role": "implement" } });
   const world = { prs: ok("github", [winner, secondary]), issues: ok("linear", [issue({ state: "On hold", paused: true })]), sessions: [owner] };
-  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
+  const out = await runList(baseConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
   const row = out.items.find((item) => item.key === "github:acme/widgets#13");
   expect(row).toMatchObject({ issue: null, issue_key: "ABC-1", on_turn: { actor: "paused", reason: "paused", rule: 12 }, actions: [] });
   for (const action of ["babysit", "fix-ci", "rebase", "ready", "attach"] as const) {
@@ -181,7 +181,7 @@ test("a secondary pull request of a Linear issue is unknown while Linear is down
   const winner = pr({ id: "acme/widgets#12", number: 12, headRefName: "alice/ABC-1/a", headSha: SHA });
   const secondary = pr({ id: "acme/widgets#13", number: 13, headRefName: "alice/ABC-1/b", headSha: SHA, mergeable: "CONFLICTING" });
   const world = { prs: ok("github", [winner, secondary]), issues: fail("linear", "timeout") };
-  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
+  const out = await runList(baseConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
   const row = out.items.find((item) => item.key === "github:acme/widgets#13");
   expect(row).toMatchObject({ on_turn: { actor: "unknown", reason: "linear:timeout", rule: null }, actions: [] });
 });
@@ -190,7 +190,7 @@ test("a secondary pull request of a Linear issue is unknown while Linear is down
 test("with external reviews rule 3 lists no review and do refuses it with not_supported", async () => {
   const theirs = pr({ relation: "review_requested", headRefName: BRANCH, headSha: SHA });
   const { deps } = setup({ prs: ok("github", [theirs]) });
-  const out = await runList(externalReviewsConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, deps);
+  const out = await runList(externalReviewsConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, deps);
   const row = out.items.find((item) => item.key === `github:${theirs.id}`);
   expect(row?.on_turn).toEqual({ actor: "agent", reason: "external review", rule: 3 });
   expect(row?.actions).toEqual([]);
@@ -201,7 +201,7 @@ test("with external reviews rule 3 lists no review and do refuses it with not_su
 test("with session reviews rule 3 lists review and do --dry-run accepts it", async () => {
   const theirs = pr({ relation: "review_requested", headRefName: BRANCH, headSha: SHA });
   const { deps } = setup({ prs: ok("github", [theirs]) });
-  const out = await runList(baseConfig, { mine: false, staleDays: null, json: true, project: "widgets", includeIgnored: false }, deps);
+  const out = await runList(baseConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, deps);
   const row = out.items.find((item) => item.key === `github:${theirs.id}`);
   expect(row?.on_turn).toEqual({ actor: "me", reason: "review", rule: 3 });
   expect(row?.actions.map((action) => action.name)).toEqual(["review"]);

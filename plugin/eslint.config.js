@@ -36,9 +36,9 @@ export default tseslint.config(
           patterns: [
             {
               regex:
-                "^\\.\\./(?!(types/item|types/config|actions/types|log|util/exec|paths|output/sanitize|output/stale)\\.ts$|config/|tui/)",
+                "^\\.\\./(?!(types/item|types/config|actions/types|log|util/exec|paths|output/sanitize|output/session-label|output/stale)\\.ts$|config/|tui/)",
               message:
-                "the TUI may import only types/item.ts, types/config.ts, actions/types.ts, log.ts, util/exec.ts, paths.ts, output/sanitize.ts, output/stale.ts, config/ and tui/",
+                "the TUI may import only types/item.ts, types/config.ts, actions/types.ts, log.ts, util/exec.ts, paths.ts, output/sanitize.ts, output/session-label.ts, output/stale.ts, config/ and tui/",
             },
           ],
         },

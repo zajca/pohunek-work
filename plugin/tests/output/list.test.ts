@@ -6,7 +6,9 @@ import {
   filterMine,
   renderTable,
   rowActions,
+  sessionIndicator,
 } from "../../src/output/list.ts";
+import { sessionLabel } from "../../src/output/session-label.ts";
 import { sanitizeCell } from "../../src/output/sanitize.ts";
 import type { OnTurn, RuleNumber } from "../../src/types/item.ts";
 import { isIgnoredItem, LIST_CONTRACT_VERSION } from "../../src/types/item.ts";
@@ -38,7 +40,7 @@ function sampleEnvelope(): unknown {
         noIssue: false,
         issueKey: "ABC-1",
         joinedBy: "branch_pattern",
-        sessions: [session({ metadata: { "work.role": "babysit" } })],
+        sessions: [session({ metadata: { "work.role": "babysit" }, updatedAt: "2026-05-02T10:00:00Z" })],
       }),
       context,
     ),
@@ -175,7 +177,6 @@ test("table renders rows, no-issue marker and orphans", () => {
     rows,
     [{ id: "s-9", name: "x", linkId: "ABC-9" }],
     [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }],
-    new Set(),
     0,
   );
   expect(text.split("\n")[0]).toMatch(/^KEY\s+ON TURN\s+PR\s+REVIEW\s+CHECKS\s+SESSIONS\s+TITLE$/);
@@ -198,7 +199,6 @@ test("the table is strict ASCII: escapes, bidi and zero-width characters become 
     [row],
     [{ id: "s-9", name: "o\u001b[2J", linkId: "ABC-9" }],
     [{ id: "s-8", name: "\u202Ename", project: "widgets", state: "running", activity: "idle" }],
-    new Set(),
     0,
   );
   expect(/^[\x20-\x7e\n]*$/.test(text)).toBe(true);
@@ -328,7 +328,7 @@ describe("actions per row (docs/tui-plan.md 4.5)", () => {
 
   test("the table shows a paused row as paused with its rule", () => {
     const paused = buildListItem(item({ key: "linear:ABC-1", issue: issue({ state: "On hold", paused: true }), joinedBy: "branch_pattern", noIssue: false }), context);
-    expect(renderTable([paused], [], [], new Set(), 0)).toContain("paused (r12)");
+    expect(renderTable([paused], [], [], 0)).toContain("paused (r12)");
   });
 
   test("a rule 4 or 5 row without a worktree keeps its on_turn reason and lists the action for reuse or adoption", () => {
@@ -383,7 +383,7 @@ test("the table names the issue of a secondary pull request row and of no other 
   const plain = buildListItem(item(), context);
   expect(secondary.issue_key).toBe("ABC-1");
   expect(plain.issue_key).toBeNull();
-  const lines = renderTable([secondary, winner, plain], [], [], new Set(), 0).split("\n");
+  const lines = renderTable([secondary, winner, plain], [], [], 0).split("\n");
   expect(lines[1]).toStartWith("github:acme/widgets#14 (ABC-1)");
   expect(lines[2]).toStartWith("linear:ABC-1 ");
   expect(lines[3]).toStartWith("github:acme/widgets#12 (no issue)");
@@ -394,7 +394,7 @@ test("the table marks an ignored row after its issue suffix and leaves other row
   const parkedNoIssue = buildListItem(item({ pullRequest: pr({ ignored: true }) }), context);
   const plain = buildListItem(item({ key: "github:acme/widgets#15", pullRequest: pr({ id: "acme/widgets#15", number: 15 }) }), context);
   expect([parked.ignored, parkedNoIssue.ignored, plain.ignored]).toEqual([true, true, false]);
-  const lines = renderTable([parked, parkedNoIssue, plain], [], [], new Set(), 0).split("\n");
+  const lines = renderTable([parked, parkedNoIssue, plain], [], [], 0).split("\n");
   expect(lines[1]).toStartWith("github:acme/widgets#14 (ABC-1) (ignored)  ");
   expect(lines[2]).toStartWith("github:acme/widgets#12 (no issue) (ignored)  ");
   expect(lines[3]).toStartWith("github:acme/widgets#15 (no issue)  ");
@@ -405,7 +405,7 @@ test("the table marks an ignored row after its issue suffix and leaves other row
 test("the table shows a github-issue row under its own key and names the issue on a secondary pull request row", () => {
   const issueRow = buildListItem(item({ key: "github-issue:acme/widgets#7", issue: issue({ id: "acme/widgets#7" }), noIssue: false, issueKey: "acme/widgets#7" }), context);
   const secondary = buildListItem(item({ key: "github:acme/widgets#14", pullRequest: pr({ id: "acme/widgets#14", number: 14 }), noIssue: false, issueKey: "acme/widgets#7" }), context);
-  const lines = renderTable([issueRow, secondary], [], [], new Set(), 0).split("\n");
+  const lines = renderTable([issueRow, secondary], [], [], 0).split("\n");
   expect(lines[1]).toStartWith("github-issue:acme/widgets#7 ");
   expect(lines[1]).not.toContain("(acme/widgets#7)");
   expect(lines[2]).toStartWith("github:acme/widgets#14 (acme/widgets#7)");
@@ -422,13 +422,81 @@ test("implement is listed on a github-issue row and on a linear row on rule 8", 
 test("table appends the hidden ignored count after the session lines, and nothing for 0", () => {
   const rows = [buildListItem(item({ pullRequest: pr({ isDraft: true }) }), context)];
   const unlinked = [{ id: "s-8", name: "scratch", project: "widgets", state: "running", activity: "idle" }];
-  const lines = renderTable(rows, [], unlinked, new Set(), 3).split("\n");
+  const lines = renderTable(rows, [], unlinked, 3).split("\n");
   expect(lines.at(-1)).toBe("3 ignored row(s) hidden (use --include-ignored)");
   expect(lines.at(-2)).toContain("unlinked session s-8");
-  expect(renderTable(rows, [], unlinked, new Set(), 0)).not.toContain("hidden");
+  expect(renderTable(rows, [], unlinked, 0)).not.toContain("hidden");
 });
 
 test("the envelope carries omitted_ignored", () => {
   const envelope = buildListEnvelope("0.1.0", [], [], [], [], 5);
   expect("ok" in envelope && envelope.ok.omitted_ignored).toBe(5);
+});
+
+describe("session indicator", () => {
+  const live = session({ id: "s-1" });
+  const blocking = (overrides: Parameters<typeof notification>[0] = {}): ReturnType<typeof notification> => notification({ sessionId: "s-1", ...overrides });
+
+  test("waiting_input comes from an open blocking notification of the session", () => {
+    expect(sessionIndicator(live, [blocking()])).toBe("waiting_input");
+    expect(sessionIndicator(live, [blocking({ kind: "approval_required", status: "read" })])).toBe("waiting_input");
+    expect(sessionIndicator(session({ id: "s-1", state: "stopped", activity: null }), [blocking()])).toBe("waiting_input");
+  });
+
+  test("other notifications do not make a session wait", () => {
+    expect(sessionIndicator(live, [blocking({ status: "acknowledged" })])).toBe("running");
+    expect(sessionIndicator(live, [blocking({ kind: "turn_completed" })])).toBe("running");
+    expect(sessionIndicator(live, [blocking({ sessionId: "s-2" })])).toBe("running");
+    expect(sessionIndicator(live, [blocking({ sessionId: null })])).toBe("running");
+  });
+
+  test("lost, running and the raw state otherwise", () => {
+    expect(sessionIndicator(session({ runtimeState: "lost" }), [])).toBe("lost");
+    expect(sessionIndicator(session({ runtimeState: null }), [])).toBe("running");
+    expect(sessionIndicator(session({ state: "stopped", activity: null }), [])).toBe("stopped");
+    expect(sessionIndicator(session({ state: "done", activity: null }), [])).toBe("done");
+    expect(sessionIndicator(session({ state: "starting" as never, activity: null }), [])).toBe("starting");
+    expect(sessionIndicator(session({ state: "stopped", runtimeState: "lost" }), [])).toBe("stopped");
+  });
+
+  test("a list row carries the indicator and updated_at of each linked session", () => {
+    const built = buildListItem(
+      item({
+        pullRequest: pr(),
+        sessions: [
+          session({ id: "s-1", updatedAt: "2026-06-15T10:00:00Z" }),
+          session({ id: "s-2", state: "done", activity: null, updatedAt: null }),
+        ],
+        notifications: [blocking()],
+      }),
+      context,
+    );
+    expect(built.sessions.map((s) => [s.id, s.indicator, s.updated_at])).toEqual([
+      ["s-1", "waiting_input", "2026-06-15T10:00:00Z"],
+      ["s-2", "done", null],
+    ]);
+  });
+
+  test("the table shows activity for a live session and the indicator for every other one", () => {
+    const rows = [
+      buildListItem(item({ key: "github:a/b#1", pullRequest: pr(), sessions: [session({ id: "s-1", metadata: { "work.role": "implement" } })] }), context),
+      buildListItem(item({ key: "github:a/b#2", pullRequest: pr(), sessions: [session({ id: "s-1", activity: null })] }), context),
+      buildListItem(item({ key: "github:a/b#3", pullRequest: pr(), sessions: [session({ id: "s-1", metadata: { "work.role": "review" } })], notifications: [blocking()] }), context),
+      buildListItem(item({ key: "github:a/b#4", pullRequest: pr(), sessions: [session({ id: "s-1", runtimeState: "lost" })] }), context),
+      buildListItem(item({ key: "github:a/b#5", pullRequest: pr(), sessions: [session({ id: "s-1", state: "stopped", activity: null }), session({ id: "s-2", state: "done", activity: null })] }), context),
+    ];
+    const lines = renderTable(rows, [], [], 0).split("\n");
+    expect(lines[1]).toContain("implement:idle");
+    expect(lines[2]).toContain("?:live");
+    expect(lines[3]).toContain("review:waiting_input");
+    expect(lines[4]).toContain("?:lost");
+    expect(lines[5]).toContain("?:stopped,?:done");
+  });
+
+  test("sessionLabel falls back to live only for a running session without activity", () => {
+    const base = { id: "s", name: null, role: null, state: "running", updated_at: null };
+    expect(sessionLabel({ ...base, activity: "working", indicator: "running" })).toBe("working");
+    expect(sessionLabel({ ...base, activity: null, indicator: "running" })).toBe("live");
+    expect(sessionLabel({ ...base, activity: "working", indicator: "waiting_input" })).toBe("waiting_input");
+  });
 });

@@ -81,11 +81,13 @@ test("listSessions normalizes metadata, runtime state and activity", async () =>
     state: "running",
     activity: "working",
     runtimeState: "connected",
+    updatedAt: "2026-01-01T00:00:00Z",
     metadata: { "pohunek_work.item": "acme/widgets#12" },
   });
   expect(lost?.metadata).toEqual({});
   expect(lost?.runtimeState).toBe("lost");
   expect(stopped?.activity).toBeNull();
+  expect(stopped?.updatedAt).toBe("2026-01-01T00:00:00Z");
   expect(stopped?.runtimeState).toBeNull();
   expect(stopped?.branch).toBeNull();
 });
@@ -101,7 +103,7 @@ test("isLiveSession: running with a lost runtime is not live", async () => {
 test("isLiveSession: absent runtime counts as not lost", () => {
   const session: PohunekSession = {
     id: "s", name: null, projectLabel: null, branch: null, worktreePath: null, cwd: null,
-    state: "running", activity: null, runtimeState: null, metadata: {},
+    state: "running", activity: null, runtimeState: null, updatedAt: null, metadata: {},
   };
   expect(isLiveSession(session)).toBe(true);
   expect(isLiveSession({ ...session, state: "done" })).toBe(false);

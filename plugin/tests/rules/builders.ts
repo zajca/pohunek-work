@@ -137,6 +137,7 @@ export function session(overrides: Partial<PohunekSession> = {}): PohunekSession
     state: "running",
     activity: "idle",
     runtimeState: "connected",
+    updatedAt: null,
     metadata: {},
     ...overrides,
   };

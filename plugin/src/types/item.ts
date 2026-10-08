@@ -179,6 +179,10 @@ export interface ListSession {
   readonly role: string | null;
   readonly state: string;
   readonly activity: string | null;
+  /** `waiting_input`, `lost`, `running` or the raw session state (`stopped`, `done`, ...). */
+  readonly indicator: string;
+  /** ISO-8601 time of the last session change; null when pohunek reports none. */
+  readonly updated_at: string | null;
 }
 
 export interface ListAction {

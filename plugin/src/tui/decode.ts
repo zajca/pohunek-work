@@ -130,6 +130,8 @@ function session(value: unknown, path: string): ListSession {
     role: nullableString(fields["role"], `${path}.role`),
     state: string(fields["state"], `${path}.state`),
     activity: nullableString(fields["activity"], `${path}.activity`),
+    indicator: string(fields["indicator"], `${path}.indicator`),
+    updated_at: nullableString(fields["updated_at"], `${path}.updated_at`),
   };
 }
 

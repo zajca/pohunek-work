@@ -38,6 +38,18 @@ JSON `omitted_ignored` counts the hidden rows that `--mine`, `--stale-days` and
 ignored row fails with `precondition_failed` unless `--include-ignored` is
 passed, also with `--dry-run`.
 
+Each session of a `list --json` row carries `indicator` (`waiting_input` when a
+blocked notification of the session is open, `lost`, `running`, or the raw state
+such as `stopped` or `done`) and `updated_at` (the session's last change, or
+null). `waiting_input` comes from `agent_blocked` and `approval_required`
+notifications only; telling a working live session from one waiting for input by
+its `activity` depends on core (`zajca/pohunek#544`). The table shows
+`<role>:<indicator>`, or the `activity` for a live session.
+`list --mine --finished-hours <n>` also keeps rows not on your turn whose agent
+work ended in the last `n` hours: no session is running or waiting for input and
+a session is `stopped` or `done` with an `updated_at` inside the window. The
+flag needs `--mine`; `on_turn` is unchanged.
+
 The issue source lists only started issues assigned to the owner (Linear) or
 open issues with a started or paused label (GitHub), so a pull request can join
 an issue it does not return, for example one parked with the label and moved to

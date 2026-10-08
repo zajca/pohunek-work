@@ -15,6 +15,20 @@ describe("decodeListEnvelope", () => {
     expect(outcome.payload).toEqual(raw.ok as typeof outcome.payload);
   });
 
+  test("a session needs a string indicator and a nullable updated_at", () => {
+    const good = JSON.parse(envelopeText(payload([row("linear:A-1", { sessions: [{ id: "s-1", name: null, role: null, state: "stopped", activity: null, indicator: "stopped", updated_at: null }] })]))) as { ok: { items: { sessions: Record<string, unknown>[] }[] } };
+    expect(decodeListEnvelope(JSON.stringify(good)).kind).toBe("ok");
+    const first = good.ok.items[0]?.sessions[0];
+    if (first === undefined) throw new Error("fixture");
+    first["updated_at"] = "2026-06-15T10:00:00Z";
+    expect(decodeListEnvelope(JSON.stringify(good)).kind).toBe("ok");
+    first["updated_at"] = 5;
+    expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].sessions[0].updated_at is not a string" });
+    first["updated_at"] = null;
+    delete first["indicator"];
+    expect(decodeListEnvelope(JSON.stringify(good))).toEqual({ kind: "malformed", message: "ok.items[0].sessions[0].indicator is not a string" });
+  });
+
   test("round-trips every rule row", () => {
     const outcome = decodeListEnvelope(envelopeText(payload(RULE_ROWS)));
     expect(outcome.kind === "ok" ? outcome.payload.items : null).toEqual(RULE_ROWS);

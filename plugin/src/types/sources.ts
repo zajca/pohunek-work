@@ -195,6 +195,8 @@ export interface PohunekSession {
   readonly activity: SessionActivity | null;
   /** `runtime.state` (for example `lost`); null when the runtime block is absent. */
   readonly runtimeState: string | null;
+  /** ISO-8601 time of the last session change; null when pohunek omits it. */
+  readonly updatedAt: string | null;
   /** Empty when the session has no metadata (pohunek omits the field). */
   readonly metadata: Readonly<Record<string, string>>;
 }

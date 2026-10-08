@@ -4,7 +4,7 @@ turn: me: answer agent (r1)
 issue: DMD-101 [In Progress] Agent asks a question
   https://linear.app/acme/issue/DMD-101
 sessions:
-  s-01ABC DMD-101 role=implement state=running activity=idle
+  s-01ABC DMD-101 role=implement state=running indicator=running activity=idle updated=-
 actions: attach*
 sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
@@ -14,7 +14,7 @@ turn: agent (r2)
 issue: DMD-102 [In Progress] Agent is working
   https://linear.app/acme/issue/DMD-102
 sessions:
-  s-02 DMD-101 role=implement state=running activity=working
+  s-02 DMD-101 role=implement state=running indicator=running activity=working updated=-
 actions: attach*
 sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 
@@ -135,7 +135,7 @@ turn: me: check agent (r11)
 issue: DMD-112 [In Progress] Agent went idle
   https://linear.app/acme/issue/DMD-112
 sessions:
-  s-12 DMD-101 role=implement state=running activity=idle
+  s-12 DMD-101 role=implement state=running indicator=running activity=idle updated=-
 actions: attach*
 sources: github=ok github_merged=ok linear=ok github_issues=unused pohunek=ok
 

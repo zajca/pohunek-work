@@ -65,7 +65,7 @@ function pr(number: number, overrides: Partial<NonNullable<ListItem["pull_reques
   };
 }
 
-const liveSession = { id: "s-01ABC", name: "DMD-101", role: "implement", state: "running", activity: "idle" } as const;
+const liveSession = { id: "s-01ABC", name: "DMD-101", role: "implement", state: "running", activity: "idle", indicator: "running", updated_at: null } as const;
 
 /** One row per rule of RFC 8.1 (rule 5 twice), an unknown row and a second project. */
 export const RULE_ROWS: readonly ListItem[] = [

@@ -36,7 +36,9 @@
             "name": "impl",
             "role": "babysit",
             "state": "running",
-            "activity": "idle"
+            "activity": "idle",
+            "indicator": "running",
+            "updated_at": "2026-05-02T10:00:00Z"
           }
         ],
         "on_turn": {
