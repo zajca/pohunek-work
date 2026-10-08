@@ -1,5 +1,0 @@
-{
-  "cli_version": "0.31.6",
-  "protocol": { "minimum": 4, "maximum": 4 },
-  "err": { "class": "transport", "code": "framing", "msg": "protocol framing error: control line exceeded maximum length", "recover": "" }
-}
