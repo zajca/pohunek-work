@@ -10,6 +10,7 @@ import { isGithubProject, issueSourceStatusKey } from "./config/issue-source.ts"
 import { issueRowKey } from "./config/row-key.ts";
 import type { ProjectConfig } from "./types/config.ts";
 import { isLiveSession } from "./sources/pohunek.ts";
+import { samePullRequestUrl } from "./util/pr-url.ts";
 import type {
   Issue,
   MergedPullRequest,
@@ -132,7 +133,9 @@ function resolveLinearIssueKey(
     return { key: bySession.linkId, joinedBy: "session_link" };
   }
 
-  const byAttachment = issues.find((issue) => issue.attachmentUrls.includes(pr.url));
+  const byAttachment = issues.find((issue) =>
+    issue.attachmentUrls.some((url) => samePullRequestUrl(url, pr.url)),
+  );
   if (byAttachment !== undefined) {
     return { key: byAttachment.id, joinedBy: "issue_reference" };
   }

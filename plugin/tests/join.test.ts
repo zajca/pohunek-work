@@ -165,6 +165,28 @@ describe("join precedence", () => {
     expect(items[0]?.joinedBy).toBe("issue_reference");
   });
 
+  test.each([
+    ["a trailing slash", "https://github.com/acme/widgets/pull/2/"],
+    ["a /files suffix", "https://github.com/acme/widgets/pull/2/files"],
+    ["another letter case", "https://GitHub.com/Acme/Widgets/pull/2"],
+    ["a query and a fragment", "https://github.com/acme/widgets/pull/2?diff=split#top"],
+  ])("a github.com attachment with %s joins the pull request", (_name, attachment) => {
+    const { items } = run({
+      issues: [issue("ABC-3", [attachment])],
+      pullRequests: [{ ...pr(2, "feature/y"), url: "https://github.com/acme/widgets/pull/2" }],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "linear:ABC-3", joinedBy: "issue_reference" });
+  });
+
+  test("an attachment of pull request 12 does not join pull request 123", () => {
+    const { items } = run({
+      issues: [issue("ABC-3", ["https://github.com/acme/widgets/pull/12"])],
+      pullRequests: [{ ...pr(123, "feature/y"), url: "https://github.com/acme/widgets/pull/123" }],
+    });
+    expect(items.map((i) => i.key)).toEqual(["github:acme/widgets#123", "linear:ABC-3"]);
+  });
+
   test("attachment url must match exactly", () => {
     const { items } = run({
       issues: [issue("ABC-3", ["https://github.example/acme/widgets/pull/2/files"])],

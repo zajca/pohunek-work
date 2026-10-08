@@ -438,13 +438,18 @@ two kinds of row (pull request not itself ignored, issue not returned) trigger
 one targeted lookup per project and poll: a row joined to an issue key, and, for
 a Linear project, an authored row that resolved to no key while the issue
 source answered (`noIssue`), whose pull request may still be linked by a Linear
-attachment. Linear is asked for the labels of the issues with those keys and of
-the issues of `linear_team` that carry the pull request URL as an attachment
-(`attachments: { some: { url: { in } } }`); GitHub is asked for the labels of
-the issues with those numbers. Requests are batched by the source's page size
+attachment. Linear is asked, with `includeArchived: true`, for the issues with those
+keys (of any team) and for the issues of any team that carry the pull request
+URL as an attachment, restricted server side to issues that carry the label
+(`labels: { some: { name: { eqIgnoreCase } } }`); GitHub is asked for the
+labels of the issues with those numbers. A pull request URL matches an
+attachment by its canonical form `https://github.com/<owner>/<repo>/pull/<n>`
+(lower case, without trailing slash, `/files`, `/commits` or `/checks` suffix,
+query or fragment); the join of a Linear attachment to a pull request (7.3) uses
+the same form. Requests are batched by the source's page size
 (`[linear] page_size`, `[github] issue_page_size`), keep within the complexity
-and node budgets validated at load, and follow the label and attachment pages
-to their end. An issue that carries the label makes the row ignored; an issue
+and node budgets validated at load, and follow the attachment (Linear) and
+label (GitHub) pages to their end. An issue that carries the label makes the row ignored; an issue
 that does not, or no issue at all (an empty Linear result, a GitHub `NOT_FOUND`
 for exactly that lookup), leaves the row as it is. Every spelling of a key that
 was asked for is answered. Any other error, or a page that cannot be followed
@@ -455,10 +460,12 @@ source or `github` is down. GitHub needs no attachment lookup: a closing
 reference, a branch capture and a session link all resolve to a key without the
 issue list.
 
-Documented limits, not hidden: a key of another Linear team than `linear_team`
-or of another repository than `repo`, a key the project cannot parse, and an
-archived Linear issue (`includeArchived` is left at its default) are not looked
-up, so such a row is never made ignored by its issue. Rule 8 needs it for every row that has an issue.
+Documented limits, not hidden: a key of another repository than `repo` and a key
+the project cannot parse are not looked up (the project does not track such
+issues, and a string that is not `<TEAM>-<n>` names no Linear issue), and an
+attachment URL that is not an `https://github.com` pull request URL, or that
+uses another host spelling such as `www.github.com` or `http://`, is matched
+only character for character. Rule 8 needs it for every row that has an issue.
 Rule 13 needs the merged pull request lookup (`github_merged`, 8.1) and only
 for the rows described there.
 
