@@ -487,6 +487,29 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
+      - name: Resolve the pinned core revision
+        id: core
+        run: echo "rev=$(grep '^pohunek-protocol = ' Cargo.toml | sed -n -e 's/.*tag = "\([^"]*\)".*/\1/p' -e 's/.*rev = "\([0-9a-f]\{40\}\)".*/\1/p' | head -n 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the core binaries
+        id: core-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/core-binaries
+          key: core-binaries-${{ runner.os }}-${{ steps.core.outputs.rev }}-${{ hashFiles('native/scripts/build-core-binaries') }}
+
+      - name: Build the core binaries
+        if: ${{ steps.core-cache.outputs.cache-hit != 'true' }}
+        run: scripts/build-core-binaries "$RUNNER_TEMP/core-binaries" > /dev/null
+
+      - name: Locate the core binaries
+        run: |
+          {
+            echo "POHUNEK_DAEMON_BIN=$RUNNER_TEMP/core-binaries/bin/pohunekd"
+            echo "POHUNEK_WORKER_BIN=$RUNNER_TEMP/core-binaries/bin/pohunek-sessiond"
+            echo "POHUNEK_CLI_BIN=$RUNNER_TEMP/core-binaries/bin/pohunek"
+          } >> "$GITHUB_ENV"
+
       - name: Test GUI
         timeout-minutes: 15
         run: cargo test --locked -p pohunek-gui
