@@ -24,6 +24,8 @@ interface GitAnswers {
   symbolic: Answer;
   fetch: Answer;
   revList: Answer;
+  staged: Answer;
+  tagged: Answer;
 }
 
 function out(stdout: string, exitCode: number | null = 0, timedOut = false): ExecResult {
@@ -31,7 +33,7 @@ function out(stdout: string, exitCode: number | null = 0, timedOut = false): Exe
 }
 
 function defaultGit(): GitAnswers {
-  return { prefix: out("\n"), status: out(CLEAN_STATUS), symbolic: out(`${BRANCH}\n`), fetch: out(""), revList: out("0\t0\n") };
+  return { prefix: out("\n"), status: out(CLEAN_STATUS), symbolic: out(`${BRANCH}\n`), fetch: out(""), revList: out("0\t0\n"), staged: out(""), tagged: out("") };
 }
 
 const HOLDER = session({ id: "s-held", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: {} });
@@ -63,6 +65,8 @@ function build(scenario: Scenario = {}): Built {
       switch (argv[6]) {
         case "rev-parse":
           return answer(git.prefix);
+        case "ls-files":
+          return answer(argv[7] === "-v" ? git.tagged : git.staged);
         case "status":
           return answer(git.status);
         case "symbolic-ref":
@@ -112,7 +116,7 @@ describe("a finished holder (D1, D3)", () => {
     const built = build();
     await refused(built);
     const verbs = built.gitCalls.map((argv) => argv[6]);
-    expect(verbs).toEqual(["rev-parse", "status", "symbolic-ref", "fetch", "rev-list"]);
+    expect(verbs).toEqual(["rev-parse", "status", "ls-files", "ls-files", "symbolic-ref", "fetch", "rev-list"]);
     expect(built.h.commands).toEqual(built.gitCalls);
   });
 });
