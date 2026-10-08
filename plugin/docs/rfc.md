@@ -678,11 +678,12 @@ checks (a container stack, dependencies, an environment file) has to be created 
 (core RFC `docs/design/per-project-actions-and-worktree-hooks.md`, zajca/pohunek#13); the plugin
 adds no setup mechanism and no configuration key for it.
 
-- **Where the hook lives.** Host-global: the executable-or-`sh`-runnable file
+- **Where the hook lives.** Host-global: the file
   `hooks/post-create` in the host config directory (`~/.config/pohunek/hooks/post-create`);
   it needs no change to the shared repository, and core reads the file when a worktree is created. In-repo: `.pohunek/hooks/post-create` (legacy alias
   `.pohunek/setup`), which needs the repository maintainers' agreement. Both run, the
-  host-global one first. Core runs the hook inside `session new`, in the new worktree, with a
+  host-global one first. Core runs the file as `sh <file>` (its shebang and executable bit are ignored, so it is a POSIX
+  `sh` script) inside `session new`, in the new worktree, with a
   cleared environment (only `PATH`, `HOME` and `POHUNEK_*` context variables), a timeout and its
   output discarded, so a hook sets its own `PATH`, acts only on the worktrees it is meant for
   (exit 0 elsewhere) and writes its own log.
@@ -690,10 +691,11 @@ adds no setup mechanism and no configuration key for it.
   worktree that already exists (`babysit`, `fix-ci` and `rebase` with `--cwd`) does not run the
   hook again.
 - **Failure.** Core treats a failing, timed-out or unstartable hook as a non-fatal warning and
-  starts the session anyway. `do` reads the `session new` warnings and, for kind `hook` or
-  `setup_script` (the legacy alias), fails as `setup_failed` (exit 2; human and `--json` error
+  starts the session anyway. `do` reads the `session new` warnings and, for kind `hook` (which also
+  reports the `.pohunek/setup` fallback) or `setup_script` (a reserved kind core defines but does not
+  emit today), fails as `setup_failed` (exit 2; human and `--json` error
   envelope) naming the session, the warning's message and its detail (script path and exit
-  status, in strict ASCII). It does so before the prompt delivery wait. The session keeps
+  status, in strict ASCII). It does so before every other launch check, including the prompt delivery wait. The session keeps
   running, because the agent already received the prompt and removing a session is the
   owner's decision; the message gives the `pohunek session rm <id>` command. Other warning
   kinds keep their behavior. Core discards the hook's stdout and stderr, so the output tail is
@@ -723,8 +725,9 @@ mkdir -p "$LOG_DIR" || exit 1
 ```
 
 `wt:setup` attaches the main checkout's shared containers to the worktree network, so removing
-such a worktree has to disconnect them first. Keep the setup within the daemon's hook timeout
-(300 s unless the host configures another).
+such a worktree has to disconnect them first. Core stops a hook after a fixed 300 s, but `do` waits
+for `session new` only `[actions] launch_timeout_ms`: a setup that takes longer reports
+`launch_timed_out` instead of `setup_failed`, so the setup has to finish within that budget.
 
 ## 11. Storage and Configuration
 

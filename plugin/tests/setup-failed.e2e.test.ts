@@ -37,10 +37,25 @@ const HOOK_WARNING: Warning = {
   message: "The post-create hook failed; the session proceeded without it.",
   detail: "/work/widgets/.pohunek/hooks/post-create exited with status exit status: 7",
 };
+const SETUP_FALLBACK_WARNING: Warning = {
+  kind: "hook",
+  message: "The post-create hook failed; the session proceeded without it.",
+  detail: "/work/widgets/.pohunek/setup exited with status exit status: 3",
+};
 const SETUP_SCRIPT_WARNING: Warning = {
   kind: "setup_script",
-  message: "The .pohunek/setup script failed; the session proceeded without it.",
-  detail: "/work/widgets/.pohunek/setup exited with status exit status: 3",
+  message: "The setup script failed.",
+  detail: "/work/widgets/.pohunek/setup timed out",
+};
+const BASE_BRANCH_FALLBACK_WARNING: Warning = {
+  kind: "base_branch_fallback",
+  message: 'Requested base branch "feature/x" not found; used "main" instead.',
+  detail: "git could not resolve refs/heads/feature/x",
+};
+const HOSTILE_WARNING: Warning = {
+  kind: "hook",
+  message: "The post-create hook failed;\nsecond line \u001b]8;;http://evil.example\u0007link",
+  detail: "/work/wid\u00e9gets/\u202eevil exited with status exit status: 1",
 };
 const FETCH_WARNING: Warning = {
   kind: "fetch",
@@ -366,7 +381,7 @@ test("under --json a failed hook is an action error envelope with code setup_fai
   expect(subcommands(await box.calls(), "session wait")).toHaveLength(0);
 });
 
-test("a failed legacy setup script is a setup_failed error too", async () => {
+test("the .pohunek/setup fallback and the reserved setup_script kind are setup_failed errors too", async () => {
   const box = await sandbox([SETUP_SCRIPT_WARNING]);
   const result = await box.run(["do", ROW_KEY, "implement", "--yes", "--json"]);
 
@@ -376,6 +391,25 @@ test("a failed legacy setup script is a setup_failed error too", async () => {
   expect(err.code).toBe("setup_failed");
   expect(err.msg).toContain(SETUP_SCRIPT_WARNING.detail);
   expect(subcommands(await box.calls(), "session wait")).toHaveLength(0);
+
+  const fallback = await sandbox([SETUP_FALLBACK_WARNING]);
+  const fallbackResult = await fallback.run(["do", ROW_KEY, "implement", "--yes", "--json"]);
+  expect(fallbackResult.code).toBe(2);
+  expect(parseErrEnvelope(fallbackResult.out).msg).toContain(SETUP_FALLBACK_WARNING.detail);
+});
+
+test("warning text from the daemon reaches the human and the JSON error as strict ASCII on one line", async () => {
+  const human = await (await sandbox([HOSTILE_WARNING])).run(["do", ROW_KEY, "implement", "--yes"]);
+  expect(human.code).toBe(2);
+  const lines = human.err.trimEnd().split("\n");
+  expect(lines).toHaveLength(1);
+  expect(/^[\x20-\x7e]*$/.test(lines[0] ?? "")).toBe(true);
+
+  const json = await (await sandbox([HOSTILE_WARNING])).run(["do", ROW_KEY, "implement", "--yes", "--json"]);
+  const err = parseErrEnvelope(json.out);
+  expect(Object.keys(err).sort()).toEqual(["class", "code", "msg"]);
+  expect(err.code).toBe("setup_failed");
+  expect(/^[\x20-\x7e]*$/.test(err.msg)).toBe(true);
 });
 
 test("a hook warning next to a fetch warning still fails the launch", async () => {
@@ -406,6 +440,16 @@ test("a fetch warning alone leaves the launch successful and the session is wait
   const waits = subcommands(calls, "session wait");
   expect(waits).toHaveLength(1);
   expect(waits[0]?.argv[2]).toBe(SESSION_ID);
+});
+
+test("a base_branch_fallback warning alone leaves the launch successful", async () => {
+  const box = await sandbox([BASE_BRANCH_FALLBACK_WARNING]);
+  const result = await box.run(["do", ROW_KEY, "implement", "--yes", "--json"]);
+
+  expect(result.code).toBe(0);
+  const envelope = JSON.parse(result.out) as { ok: { result: { warnings: string[] } } };
+  expect(envelope.ok.result.warnings).toEqual(["base_branch_fallback"]);
+  expect(subcommands(await box.calls(), "session wait")).toHaveLength(1);
 });
 
 test("a launch without warnings succeeds in text mode", async () => {

@@ -201,7 +201,7 @@ warning it fails as `launch_unverified` although the session runs, and when only
 the head differs for an adopting launch the launch succeeds and
 `ok.result.head_mismatch` (`expected`, `actual`) is present; report it, the
 session's own prompt makes it stop on a different head. A failed project setup
-hook (`post-create`, RFC 10.1) fails `do` as `setup_failed` for every action, before the other checks:
+hook (`post-create`, RFC 10.1) fails `do` as `setup_failed` for every action, before the other launch checks:
 the session runs without its setup. The error names the session, the hook's message and its detail
 (core discards the hook's output, so read the host's hook log). Do not report that the session can
 run checks; leave removal (`pohunek session rm <id>`) to the owner.

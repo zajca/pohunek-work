@@ -668,6 +668,8 @@ export async function executePlan(
     throw new ActionError("launch_failed", `${launched.code}: ${launched.message}`);
   }
   const { session, warnings, setupFailures } = launched.data;
+  // First, so that a failed setup is never hidden behind another launch finding.
+  requireSetupSucceeded(session.id, setupFailures);
   // The daemon's own record has to carry exactly the link that was planned.
   const mismatched = Object.entries(plan.metadata).filter(([key, value]) => session.metadata[key] !== value);
   if (mismatched.length > 0) {
@@ -676,7 +678,6 @@ export async function executePlan(
       `session ${session.id} was created but its metadata differs from the plan for: ${mismatched.map(([key]) => key).join(", ")}`,
     );
   }
-  requireSetupSucceeded(session.id, setupFailures);
   const result: ActionResult = {
     sessionId: session.id,
     name: session.name,

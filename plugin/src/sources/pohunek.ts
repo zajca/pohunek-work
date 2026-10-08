@@ -87,8 +87,9 @@ export interface LaunchedSession {
    */
   readonly warnings: readonly string[];
   /**
-   * Warnings of a lifecycle hook (`hook`) or of the legacy `.pohunek/setup` script (`setup_script`): the
-   * project's setup did not run to completion, so the session starts in an unprovisioned worktree.
+   * Warnings of a lifecycle hook (`hook`, which also covers the `.pohunek/setup` fallback) or of the
+   * reserved `setup_script` kind: the project's setup did not run to completion, so the session starts in
+   * an unprovisioned worktree.
    */
   readonly setupFailures: readonly SetupFailure[];
 }
