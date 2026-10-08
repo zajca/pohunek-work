@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { LOG_FILE_NAME, LOG_LOCK_FILE_NAME, LogFileError, rotatingFileLogger, st
 import { createFixtureRoot, startFixtureDaemon } from "@pohunek/testkit";
 
 const LOG_HOLDER_SCRIPT = fileURLToPath(new URL("./support/log-holder.ts", import.meta.url));
+const FIFO_PEER_DELAY_MS = 2_000;
 
 describe("backend log destination", () => {
   test("a failed start is recorded in the configured log directory", async () => {
@@ -150,7 +151,101 @@ describe("backend log destination", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test("symlinked log paths cannot change their targets", async () => {
+    const root = await createFixtureRoot("pk-log-");
+    try {
+      const targetDir = join(root, "target-dir");
+      await mkdir(targetDir, { mode: 0o700 });
+      await writeFile(join(targetDir, LOG_FILE_NAME), "keep\n", { mode: 0o600 });
+      await symlink(targetDir, join(root, "link-dir"));
+      expectRefusedLogger(`${join(root, "link-dir")}/`);
+      expect(await readFile(join(targetDir, LOG_FILE_NAME), "utf8")).toBe("keep\n");
+
+      const activeDir = join(root, "active");
+      await mkdir(activeDir, { mode: 0o700 });
+      const targetFile = join(root, "target-file");
+      await writeFile(targetFile, "keep\n", { mode: 0o644 });
+      await symlink(targetFile, join(activeDir, LOG_FILE_NAME));
+      expectRefusedLogger(activeDir);
+      expect(await readFile(targetFile, "utf8")).toBe("keep\n");
+
+      const rotatedDir = join(root, "rotated");
+      await mkdir(rotatedDir, { mode: 0o700 });
+      await symlink(targetFile, join(rotatedDir, `${LOG_FILE_NAME}.1`));
+      rotatingFileLogger({ dir: rotatedDir, maxFileBytes: 4096, maxFiles: 3 }).close();
+      expect((await readdir(rotatedDir)).includes(`${LOG_FILE_NAME}.1`)).toBe(false);
+      expect(await readFile(targetFile, "utf8")).toBe("keep\n");
+      expect((await stat(targetFile)).mode & 0o777).toBe(0o644);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("FIFO log slots fail promptly and release the startup lock", async () => {
+    const root = await createFixtureRoot("pk-log-");
+    try {
+      const activeDir = join(root, "active");
+      const rotatedDir = join(root, "rotated");
+      await mkdir(activeDir, { mode: 0o700 });
+      await mkdir(rotatedDir, { mode: 0o700 });
+      const active = makeFifoWithLatePeer(join(activeDir, LOG_FILE_NAME));
+      const rotatedPath = join(rotatedDir, `${LOG_FILE_NAME}.1`);
+      const rotated = makeFifoWithLatePeer(rotatedPath);
+      try {
+        const started = performance.now();
+        expectRefusedLogger(activeDir);
+        expectRefusedLogger(rotatedDir);
+        expect(performance.now() - started < FIFO_PEER_DELAY_MS).toBe(true);
+      } finally {
+        await Promise.all([stopHolder(active), stopHolder(rotated)]);
+      }
+      await rm(rotatedPath);
+      rotatingFileLogger({ dir: rotatedDir, maxFileBytes: 4096, maxFiles: 3 }).close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("closing an earlier logger again cannot release a later holder", async () => {
+    const root = await createFixtureRoot("pk-log-");
+    try {
+      const logDir = join(root, "logs");
+      const first = rotatingFileLogger({ dir: logDir, maxFileBytes: 4096, maxFiles: 2 });
+      expectRefusedLogger(logDir);
+      first.close();
+      const second = rotatingFileLogger({ dir: logDir, maxFileBytes: 4096, maxFiles: 2 });
+      try {
+        first.close();
+        expectRefusedLogger(logDir);
+      } finally {
+        second.close();
+      }
+      rotatingFileLogger({ dir: logDir, maxFileBytes: 4096, maxFiles: 2 }).close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
+
+function expectRefusedLogger(dir: string): void {
+  let failure: unknown;
+  try {
+    rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 3 }).close();
+  } catch (error: unknown) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(LogFileError);
+}
+
+function makeFifoWithLatePeer(path: string): ChildProcess {
+  const created = spawnSync("mkfifo", ["-m", "600", path]);
+  if (created.status !== 0) {
+    throw new Error(`mkfifo failed for ${path}`);
+  }
+  const delaySeconds = String(FIFO_PEER_DELAY_MS / 1000);
+  return spawn("sh", ["-c", 'sleep "$1"; exec 3<>"$0"; sleep "$1"', path, delaySeconds], { stdio: "ignore" });
+}
 
 interface Holder {
   readonly child: ChildProcess;
