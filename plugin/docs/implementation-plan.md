@@ -144,6 +144,7 @@ issue_number_prefix = "issue-"
 issue_body_max_length = 8000
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
+prompt_delivery_timeout_ms = 5000
 
 [notify]
 command = "/usr/bin/notify-send"

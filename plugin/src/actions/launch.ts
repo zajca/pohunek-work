@@ -563,6 +563,37 @@ async function verifyHead(plan: ActionPlan, expected: string, result: ActionResu
   return null;
 }
 
+const PROMPT_UNCONFIRMED =
+  "the prompt may not have been delivered: read `pohunek session screen <id> --json` before acting, and do not resend the prompt unasked (a second prompt can run the work twice)";
+
+/**
+ * Waits for the new session to start working, which shows the prompt reached
+ * it. A matched wait is necessary, not sufficient (a blocked dialog also
+ * reports `working`), so the owner still reads the screen when it fails.
+ */
+async function verifyPromptDelivery(sessionId: string, pohunek: PohunekClient, config: PluginConfig): Promise<void> {
+  const { promptDeliveryTimeoutMs, launchKillMarginMs } = config.global.actions;
+  const waited = await pohunek.waitSession({
+    sessionId,
+    timeoutMs: promptDeliveryTimeoutMs,
+    execTimeoutMs: promptDeliveryTimeoutMs + launchKillMarginMs,
+  });
+  const advice = PROMPT_UNCONFIRMED.replace("<id>", sessionId);
+  const owner = `remove the session with \`pohunek session rm ${sessionId}\` only if you decide to`;
+  if (!waited.ok) {
+    throw new ActionError(
+      "launch_unverified",
+      `session ${sessionId} was created but waiting for it to start working failed (${waited.code}: ${waited.message}); ${advice}; ${owner}`,
+    );
+  }
+  if (waited.data.reason === "activity_matched") return;
+  const why =
+    waited.data.session.state === "running"
+      ? `it stayed ${waited.data.session.activity ?? "without a reported activity"} for ${promptDeliveryTimeoutMs.toString()} ms`
+      : `it ended (state ${waited.data.session.state})`;
+  throw new ActionError("launch_unverified", `session ${sessionId} was created but did not start working: ${why}; ${advice}; ${owner}`);
+}
+
 /**
  * Runs the plan once. The process gets `launchKillMarginMs` more than the
  * daemon so the daemon's own timeout answer arrives first. A timeout is not
@@ -606,6 +637,7 @@ export async function executePlan(
     warnings,
     headMismatch: null,
   };
+  await verifyPromptDelivery(session.id, pohunek, config);
   if (plan.expectedHead === null) return result;
   return { ...result, headMismatch: await verifyHead(plan, plan.expectedHead, result, pohunek) };
 }

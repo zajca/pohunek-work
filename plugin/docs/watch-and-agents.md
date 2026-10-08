@@ -169,10 +169,13 @@ session can sit on an empty prompt while `running`
 3. Report "started" only after step 1 held. Report the outcome of the work only
    from the pull request (see the next section), never from `running`.
 
-**Temporary:** this check stands in for delivery verification in `do`. Remove it
-when [#83](https://github.com/zajca/pohunek-work/issues/83) lands and `do`
-verifies delivery itself (core side:
-[zajca/pohunek#543](https://github.com/zajca/pohunek/issues/543),
+**Temporary:** `do` waits for the launched session to leave idle
+(`session wait --activity working`, bounded by `[actions]
+prompt_delivery_timeout_ms`) and fails as `launch_unverified` naming the
+session when it does not. That is not proof that the prompt was consumed: a
+session blocked on a folder-trust dialog reports activity `working`. The screen
+read stays until core exposes a delivery acknowledgement
+([zajca/pohunek#543](https://github.com/zajca/pohunek/issues/543),
 [#544](https://github.com/zajca/pohunek/issues/544)).
 
 Also read `ok.result.warnings` in the output of `do --json` (the key is absent
@@ -191,7 +194,10 @@ report that a session can run checks without having seen it do so.
 
 `launch_unverified` and `launch_timed_out` mean a session may exist although
 `do` reported an error. For `launch_unverified` the error names the session
-id: run `pohunek session inspect` on it. For `launch_timed_out` the error
+id: run `pohunek session inspect` on it. When the session did not become
+working within `prompt_delivery_timeout_ms`, also read
+`pohunek session screen <id> --json`; do not resend the prompt unasked, and
+leave removal (`pohunek session rm <id>`) to the owner. For `launch_timed_out` the error
 carries no session id: run `pohunek session list --json`, match every `--meta`
 pair of the `--dry-run` argv (including `work.rev`) and take the newest
 matching session; matching only `work.link.*` and `work.role` can hit an older

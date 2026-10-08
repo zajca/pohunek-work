@@ -49,7 +49,10 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   branch is `<branch_prefix>/<issue_number_prefix><n>/<slug>` (the project's
   `branch_pattern` has to capture `<n>` from it) and the prompt carries the issue
   title and body, cut to `[actions] issue_body_max_length` characters, inside an
-  untrusted-data block (both keys are required, `issue_number_prefix` may be empty); `review` starts in a fresh worktree of the pull
+  untrusted-data block (both keys are required, `issue_number_prefix` may be empty);
+  after `session new`, `do` waits up to the required `[actions] prompt_delivery_timeout_ms`
+  (1..8000) for the session to become working and otherwise fails as `launch_unverified`
+  naming the session (read its screen; the owner decides on removal); `review` starts in a fresh worktree of the pull
   request head and checks the checked-out commit after the launch; `babysit`, `fix-ci` and
   `rebase` start in the worktree of a linked session, or adopt the pull request's own head branch
   in a fresh worktree when none owns one (RFC 7.5);

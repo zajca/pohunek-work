@@ -254,7 +254,7 @@ the owner, nothing runs), so an issue in Todo is not launchable until it is move
 owner can decide to widen it. It is also refused when a stopped linked session still owns a
 worktree (S2), and `babysit` is refused when any live session, linked or not, runs in the
 target worktree (S2: the daemon does not refuse it). Config adds a required `[actions]`
-table (`branch_prefix`, `slug_max_length`, `launch_timeout_ms`, `launch_kill_margin_ms`);
+table (`branch_prefix`, `slug_max_length`, `launch_timeout_ms`, `launch_kill_margin_ms`, `prompt_delivery_timeout_ms`);
 the installed config of M0 needs it appended by the installer (a.1) before `list` works with
 this branch. `scripts/spike-launch.ts` is the manual real-daemon check of both launch shapes.
 

@@ -67,7 +67,7 @@ describe("loadConfig valid", () => {
       pohunek: { bin: "/usr/local/bin/pohunek", timeoutMs: 10000, notificationsPageSize: 25 },
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
-      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000 },
+      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000, promptDeliveryTimeoutMs: 4000 },
       notify: { command: "/usr/bin/notify-send", timeoutMs: 5000 },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
@@ -158,6 +158,7 @@ describe("loadConfig missing keys", () => {
     ["config.toml", "issue_body_max_length = 2000\n", "actions.issue_body_max_length", "[actions] issue_body_max_length is required"],
     ["config.toml", "launch_timeout_ms = 120000\n", "actions.launch_timeout_ms", "[actions] launch_timeout_ms is required"],
     ["config.toml", "launch_kill_margin_ms = 10000\n", "actions.launch_kill_margin_ms", "[actions] launch_kill_margin_ms is required"],
+    ["config.toml", "prompt_delivery_timeout_ms = 4000\n", "actions.prompt_delivery_timeout_ms", "[actions] prompt_delivery_timeout_ms is required"],
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
     ["projects/widgets.toml", 'ignored_checks = ["CI / Flaky"]\n', "project.ignored_checks", "[project] ignored_checks is required"],
     ["projects/widgets.toml", 'policy_checks = ["Policy / Label"]\n', "project.policy_checks", "[project] policy_checks is required"],
@@ -288,6 +289,7 @@ describe("loadConfig github issue page size", () => {
 describe("loadConfig invalid values", () => {
   test.each([
     ["wrong type", "timeout_ms = 20000", 'timeout_ms = "20000"', "github.timeout_ms"],
+    ["zero prompt delivery timeout", "prompt_delivery_timeout_ms = 4000", "prompt_delivery_timeout_ms = 0", "actions.prompt_delivery_timeout_ms"],
     ["zero timeout", "timeout_ms = 20000", "timeout_ms = 0", "github.timeout_ms"],
     ["negative page size", "page_size = 40", "page_size = -1", "linear.page_size"],
     ["fractional page size", "nested_page_size = 50", "nested_page_size = 1.5", "github.nested_page_size"],
@@ -549,6 +551,7 @@ describe("loadConfig [tui]", () => {
   });
 
   test.each([
+    ["prompt_delivery_timeout_ms = 4000", "prompt_delivery_timeout_ms = 8001", "actions.prompt_delivery_timeout_ms", "must not exceed 8000 (pohunek session wait limit)"],
     ["poll_interval_secs = 300", "poll_interval_secs = 2147484", "watch.poll_interval_secs", "must not exceed 2147483 (timer limit)"],
     ["timeout_ms = 5000", "timeout_ms = 2147483648", "notify.timeout_ms", "must not exceed 2147483647 (timer limit)"],
     ["refresh_interval_secs = 300", "refresh_interval_secs = 2147484", "tui.refresh_interval_secs", "must not exceed 2147483 (timer limit)"],
