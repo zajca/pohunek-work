@@ -629,7 +629,7 @@ session id), `worktree_clean` (only ignored files allowed), `branch_in_sync`
 other non-terminal session at or under the path), `not_awaiting_owner` (not
 `blocked`, no `unread` or `read` `agent_blocked` or `approval_required`
 notification naming it or a sharer; a read error fails) and `diff_complete`
-(`session diff` not truncated). `--dry-run` exits 0 whatever the checks say. The
+(`session diff` not truncated). `--dry-run` exits 0 whatever the checks say; it reads only, except for the `git fetch` of `cleanup_remote` into `refs/remotes/<remote>/<branch>` of the session's repository (remote-tracking ref and FETCH_HEAD, no work files). The
 JSON is `plan.checks[]` (`name`, `ok`, `detail`), `plan.eligible`,
 `plan.inventory` (ignored files, ahead/behind, diff base and size, sharing
 sessions, the stop and rm argv) and, after a real run, `result` (what was
@@ -714,6 +714,10 @@ issue_body_max_length = 8000     # characters of a GitHub issue body that reach 
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
 prompt_delivery_timeout_ms = 5000   # time `do` waits for the launched session to leave idle; 1..8000 (core limit), required
+git_bin = "/usr/bin/git"            # absolute path; cleanup runs git through it
+git_timeout_ms = 15000              # per git call of cleanup except the fetch
+cleanup_remote = "origin"           # remote fetched before the branch_in_sync check; one safe ref segment
+cleanup_timeout_ms = 60000          # per pohunek call of cleanup (stop, rm, diff) and the git fetch
 
 [policy]                  # empty: every action needs the owner
 delegable = []

@@ -146,9 +146,9 @@ launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
 prompt_delivery_timeout_ms = 5000
 git_bin = "/usr/bin/git"         # absolute path; cleanup runs git through it
-git_timeout_ms = 10000           # per git call of cleanup
+git_timeout_ms = 15000           # per git call of cleanup except the fetch
 cleanup_remote = "origin"        # remote fetched before the branch_in_sync check; one safe ref segment
-cleanup_timeout_ms = 60000       # per pohunek call of cleanup (stop, rm, diff)
+cleanup_timeout_ms = 60000       # per pohunek call of cleanup (stop, rm, diff) and the git fetch
 
 [notify]
 command = "/usr/bin/notify-send"

@@ -194,6 +194,11 @@ function optString(obj: Json, key: string, path: string): string | null {
   return typeof value === "string" ? value : invalid(`${path}.${key}`, "a string");
 }
 
+function optArray(obj: Json, key: string, path: string): readonly unknown[] {
+  const value = obj[key];
+  return value === undefined || value === null ? [] : asArray(value, `${path}.${key}`);
+}
+
 function reqNumber(obj: Json, key: string, path: string): number {
   const value = obj[key];
   return typeof value === "number" && Number.isFinite(value) ? value : invalid(`${path}.${key}`, "a number");
@@ -517,7 +522,8 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
             stopped: reqBoolean(payload, "stopped", "$.ok"),
             worktreesRemoved: reqCount(payload, "worktrees_removed", "$.ok"),
             worktreesFailed: reqCount(payload, "worktrees_failed", "$.ok"),
-            acceptedUnconfirmedProcesses: asArray(payload["accepted_unconfirmed_processes"], "$.ok.accepted_unconfirmed_processes").length,
+            // pohunek omits the field when no process was accepted.
+            acceptedUnconfirmedProcesses: optArray(payload, "accepted_unconfirmed_processes", "$.ok").length,
           },
         };
       }),

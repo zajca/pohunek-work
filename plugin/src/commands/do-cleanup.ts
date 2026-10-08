@@ -18,25 +18,30 @@ function display(text: string): string {
   return toAsciiLines(text).join("\n");
 }
 
+/** Provider text in the text output, escaped so a newline cannot forge a plan line. */
+function esc(value: string | null): string {
+  return JSON.stringify(value);
+}
+
 function planText(plan: CleanupPlan): string {
   const { inventory } = plan;
   return [
     "action:  cleanup",
     `key:     ${plan.key}`,
     `project: ${plan.project}`,
-    `session: ${plan.sessionId} (${plan.state})`,
-    `worktree: ${plan.worktreePath}`,
-    `branch:  ${plan.branch}`,
+    `session: ${esc(plan.sessionId)} (${esc(plan.state)})`,
+    `worktree: ${esc(plan.worktreePath)}`,
+    `branch:  ${esc(plan.branch)}`,
     `eligible: ${plan.eligible ? "yes" : "no"}`,
     "checks:",
     ...plan.checks.map((c) => `  [${c.ok ? "ok" : "FAIL"}] ${c.name}: ${c.detail}`),
     "inventory:",
     `  ahead/behind: ${inventory.ahead === null || inventory.behind === null ? "not measured" : `${String(inventory.ahead)}/${String(inventory.behind)}`}`,
-    `  diff base: ${inventory.base ?? "not read"}`,
+    `  diff base: ${inventory.base === null ? "not read" : esc(inventory.base)}`,
     `  diff size: ${inventory.diffBytes === null ? "not read" : `${String(inventory.diffBytes)} bytes`}`,
-    `  sharers: ${inventory.sharers.length === 0 ? "none" : inventory.sharers.map((s) => `${s.sessionId} (${s.state})`).join(", ")}`,
+    `  sharers: ${inventory.sharers.length === 0 ? "none" : inventory.sharers.map((s) => `${esc(s.sessionId)} (${esc(s.state)})`).join(", ")}`,
     `  ignored files that are lost with the worktree (${String(inventory.ignored.length)}):`,
-    ...inventory.ignored.map((path) => `    ${path}`),
+    ...inventory.ignored.map((path) => `    ${esc(path)}`),
     `stop:    ${commandLine(plan.stopArgv)} (only while the session runs)`,
     `remove:  ${commandLine(plan.removeArgv)}`,
   ].join("\n");

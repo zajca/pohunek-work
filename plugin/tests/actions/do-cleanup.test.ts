@@ -201,6 +201,16 @@ describe("cleanup --dry-run", () => {
     expect(text).toContain(`remove:  ${BIN} session rm s-done --json`);
   });
 
+  test("a file name with a newline cannot forge a line of the text output; JSON keeps it exact", async () => {
+    const forged = "x\neligible: yes";
+    const built = build({ git: { status: out(`!! ${forged}\0`) } });
+    const text = (await runDo(baseConfig, cleanup({ dryRun: true, yes: false, json: false }), built.h.deps)).stdout;
+    expect(text.split("\n").filter((line) => line.startsWith("eligible:"))).toEqual(["eligible: yes"]);
+    expect(text.split("\n").filter((line) => line.trimStart().startsWith("eligible: yes"))).toHaveLength(1);
+    expect(text).toContain('"x\\neligible: yes"');
+    expect((await dryRun(build({ git: { status: out(`!! ${forged}\0`) } }))).inventory.ignored).toEqual([forged]);
+  });
+
   test("git runs with the configured binary, safe flags, the worktree and the configured timeouts", async () => {
     const built = build();
     await dryRun(built);
@@ -355,7 +365,7 @@ describe("cleanup target and argv validation", () => {
   test("several linked sessions with a worktree are ambiguous_session", async () => {
     const second = session({ id: "s-second", worktreePath: "/wt/second", metadata: LINK, state: "stopped", activity: null });
     const built = build({ others: [second] });
-    await expectRefusal(runDo(baseConfig, cleanup(), built.h.deps), "ambiguous_session", "s-done, s-second");
+    await expectRefusal(runDo(baseConfig, cleanup(), built.h.deps), "ambiguous_session", '"s-done", "s-second"');
     expect(mutations(built)).toEqual([]);
     expect(built.gitCalls).toHaveLength(0);
   });
@@ -511,6 +521,43 @@ describe("cleanup real run", () => {
     }
   });
 
+  test("a live sharer that appears between the evidence pass and the rm refuses the removal", async () => {
+    // Reads: 1 plan, 2 post-stop state, 3 just before the rm.
+    let reads = 0;
+    const done = (): PohunekSession => session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
+    const built = build({
+      world: { listSessions: () => ok("pohunek", ++reads >= 3 ? [done(), SHARER_LIVE] : [done()]) },
+    });
+    const error = await refusal(runDo(baseConfig, cleanup(), built.h.deps));
+    expect(error.code).toBe("precondition_failed");
+    expect(error.message).toContain("worktree_not_shared");
+    expect(error.message).toContain("just before the removal");
+    expect(mutations(built)).toEqual([]);
+  });
+
+  test("a new finished sharer with a pending notification, or a target running again, refuses the removal", async () => {
+    let reads = 0;
+    const done = (): PohunekSession => session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK });
+    const late = session({ id: "s-late", state: "done", activity: null, worktreePath: PATH });
+    let notified = false;
+    const sharer = build({
+      world: {
+        listSessions: () => {
+          reads += 1;
+          if (reads >= 3) notified = true;
+          return ok("pohunek", reads >= 3 ? [done(), late] : [done()]);
+        },
+        notifications: () => ok("pohunek", notified ? [notification({ sessionId: "s-late" })] : []),
+      },
+    });
+    await expectRefusal(runDo(baseConfig, cleanup(), sharer.h.deps), "precondition_failed", "not_awaiting_owner");
+    expect(mutations(sharer)).toEqual([]);
+    let seen = 0;
+    const running = build({ world: { listSessions: () => ok("pohunek", [++seen >= 3 ? { ...done(), state: "running", activity: "working" } : done()]) } });
+    await expectRefusal(runDo(baseConfig, cleanup(), running.h.deps), "precondition_failed", "just before the removal");
+    expect(mutations(running)).toEqual([]);
+  });
+
   test("a truncated diff after the stop leaves the session stopped and removes nothing", async () => {
     const calls = { diff: 0 };
     const built = build({
@@ -613,8 +660,8 @@ describe("cleanup real run", () => {
       world: {
         listSessions: (): SourceResult<readonly PohunekSession[]> => {
           reads += 1;
-          // Reads 1 and 2 are the plan's and the post-stop one; the third is the verification of the removal.
-          return reads <= 2
+          // Reads 1 to 3 are the plan's, the post-stop one and the one before the rm; the fourth verifies the removal.
+          return reads <= 3
             ? ok("pohunek", [session({ id: "s-done", state: "stopped", activity: null, branch: BRANCH, worktreePath: PATH, cwd: PATH, metadata: LINK })])
             : fail("pohunek", "unavailable");
         },

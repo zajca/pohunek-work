@@ -127,7 +127,7 @@ names the issue and when to remove or update the rule.
 | `pohunek-work list --json` | every row, also those on another actor's turn, with the same fields |
 | `pohunek-work do <key> <action> --dry-run --json` | the plan of an action; changes nothing |
 | `pohunek-work do <key> <action> --yes --json` | runs the plan after the owner confirmed it |
-| `pohunek-work do <key> cleanup --dry-run --json` | the cleanup inventory and every check of a finished session; changes nothing |
+| `pohunek-work do <key> cleanup --dry-run --json` | the cleanup inventory and every check of a finished session; reads only, plus `git fetch` of the configured remote into `refs/remotes/<remote>/<branch>` of the session's repository (this updates the remote-tracking ref and FETCH_HEAD, no work files) |
 | `pohunek-work doctor` | setup problems; the exit code names the first failed check |
 | `pohunek session inspect <id> --json` | state, activity, branch, `worktree_path` and `metadata` (`work.role`, `work.rev`, `work.link.*`) of one session |
 | `pohunek session screen <id> --json` | the rendered terminal of one session |
@@ -311,8 +311,10 @@ removal for that session; a general permission to clean up is not that
 confirmation. The procedure:
 
 1. Run `pohunek-work do <key> cleanup --dry-run --json` (add `--project <label>`
-   when the key is ambiguous). It changes nothing, exits 0 even when a check
-   fails, and reports `eligible`, every check in `plan.checks[]` and the
+   when the key is ambiguous). It reads only, except that it runs `git fetch` of the configured
+   remote into `refs/remotes/<remote>/<branch>` of the session's repository
+   (the remote-tracking ref and FETCH_HEAD change, no work files). It exits 0
+   even when a check fails, and reports `eligible`, every check in `plan.checks[]` and the
    inventory in `plan.inventory`.
 2. Report `eligible`, each failed check and the inventory to the owner:
    the ignored files that would be lost, ahead/behind, the diff base and size,
@@ -326,6 +328,11 @@ confirmation. The procedure:
 4. Only after the owner confirmed THAT removal, run
    `pohunek-work do <key> cleanup --yes --json`. There is no interactive
    prompt: without `--yes` a real run refuses with `confirmation_required`.
+
+A real run is not tied to the dry run the owner reviewed: files ignored by git
+that appear between the dry run and `--yes` are lost too. Run `--dry-run` again
+right before asking for confirmation when time has passed or the session may
+still be active.
 
 The checks, all of which must hold:
 

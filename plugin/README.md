@@ -91,7 +91,7 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 - `pohunek-work do <key> attach` attaches the terminal to the one live linked
   session;
 - `pohunek-work do <key> cleanup [--project <label>] [--dry-run] [--yes] [--json]`
-  removes a finished session and its worktree. `--dry-run` prints the inventory
+  removes a finished session and its worktree. `--dry-run` reads only, except for a `git fetch` of the configured remote into the remote-tracking ref of the session's repository (no work files); it prints the inventory
   (ignored files that would be lost, ahead/behind, diff base and size, sessions
   sharing the worktree, the `session stop` and `session rm` argv) and the result
   of every check, and exits 0 even when a check fails. A real run needs `--yes`

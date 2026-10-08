@@ -1,8 +1,8 @@
 // `cleanup`: stops and removes a finished session together with its worktree.
 // `session rm` force-removes the worktree, so every check reads evidence first,
 // fails closed on anything uncertain, and runs again after the stop, because the
-// agent can write until it has stopped. Messages are static or carry numbers:
-// git and pohunek output never reaches them.
+// agent can write until it has stopped. Messages carry no raw git output;
+// pohunek-provided values (session ids, states, activities) appear only quoted.
 import { isAbsolute } from "node:path";
 import type { CollectedRow } from "../commands/list.ts";
 import type { PohunekClient } from "../sources/pohunek.ts";
@@ -101,6 +101,11 @@ interface Target {
   readonly branch: string;
 }
 
+/** Provider text inside a message or detail, quoted so it cannot add lines or forge fields. */
+function quoted(value: string | null): string {
+  return JSON.stringify(value);
+}
+
 function isTerminal(state: string): boolean {
   return TERMINAL_STATES.includes(state);
 }
@@ -164,11 +169,11 @@ export function parseStatus(stdout: string): StatusEntries | null {
 
 function sessionFinished(session: PohunekSession): CleanupCheck {
   const { state, activity } = session;
-  if (isTerminal(state)) return { name: "session_finished", ok: true, detail: `session state is ${state}` };
+  if (isTerminal(state)) return { name: "session_finished", ok: true, detail: `session state is ${quoted(state)}` };
   if (state === "running" && activity === "idle") {
     return { name: "session_finished", ok: true, detail: "session is running and idle; it is stopped first" };
   }
-  return { name: "session_finished", ok: false, detail: `session state is ${state} with activity ${activity ?? "none"}; only a finished or idle session is cleaned up` };
+  return { name: "session_finished", ok: false, detail: `session state is ${quoted(state)} with activity ${quoted(activity)}; only a finished or idle session is cleaned up` };
 }
 
 async function worktreeOwned(target: Target, deps: CleanupDeps): Promise<CleanupCheck> {
@@ -251,10 +256,10 @@ function worktreeNotShared(sharers: readonly PohunekSession[]): CleanupCheck {
   const name = "worktree_not_shared";
   const live = sharers.filter((s) => !isTerminal(s.state));
   if (live.length > 0) {
-    return { name, ok: false, detail: `${String(live.length)} other session(s) that are not finished use the worktree: ${live.map((s) => s.id).join(", ")}` };
+    return { name, ok: false, detail: `${String(live.length)} other session(s) that are not finished use the worktree: ${live.map((s) => quoted(s.id)).join(", ")}` };
   }
   if (sharers.length > 0) {
-    return { name, ok: true, detail: `only finished sessions also point at the worktree: ${sharers.map((s) => s.id).join(", ")}` };
+    return { name, ok: true, detail: `only finished sessions also point at the worktree: ${sharers.map((s) => quoted(s.id)).join(", ")}` };
   }
   return { name, ok: true, detail: "no other session uses the worktree" };
 }
@@ -356,7 +361,7 @@ export async function planCleanup(
   if (owners.length > 1) {
     throw new ActionError(
       "ambiguous_session",
-      `cleanup refused: several linked sessions of ${row.listItem.key} own a worktree (${owners.map((s) => s.id).join(", ")}); remove one with \`pohunek session rm <id>\``,
+      `cleanup refused: several linked sessions of ${row.listItem.key} own a worktree (${owners.map((s) => quoted(s.id)).join(", ")}); remove one with \`pohunek session rm <id>\``,
     );
   }
   const project = row.project.pohunekLabel;
@@ -402,6 +407,32 @@ async function rereadSessions(pohunek: PohunekClient, stoppedAlready: boolean): 
 }
 
 /**
+ * Reads the session list once more right before `session rm`: the target must still be
+ * finished in the same worktree, and no unfinished session may have started sharing it.
+ * Notifications are read again when the set of sharers changed.
+ */
+async function recheckBeforeRemoval(plan: CleanupPlan, evidence: Evidence, stopped: boolean, deps: CleanupDeps): Promise<void> {
+  const kept = stopped ? "the session stays stopped" : "the session was not touched";
+  const refuse = (what: string): ActionError =>
+    new ActionError("precondition_failed", `cleanup refused just before the removal: ${what}; ${kept} and nothing was removed`);
+  const listed = await deps.pohunek.listSessions();
+  if (!listed.ok) throw refuse(`the session list could not be re-read (${listed.code})`);
+  const latest = listed.data.find((s) => s.id === plan.sessionId);
+  if (latest === undefined || !isTerminal(latest.state) || latest.worktreePath !== plan.worktreePath || latest.branch !== plan.branch) {
+    throw refuse("the session is gone, running again or points at another worktree");
+  }
+  const target = validTarget(latest, plan.project);
+  const sharers = sharersOf(target, listed.data);
+  const shared = worktreeNotShared(sharers);
+  if (!shared.ok) throw refuse(`worktree_not_shared: ${shared.detail}`);
+  const known = new Set(evidence.inventory.sharers.map((s) => s.sessionId));
+  if (sharers.some((s) => !known.has(s.id))) {
+    const awaiting = await notAwaitingOwner(latest, sharers, deps);
+    if (!awaiting.ok) throw refuse(`not_awaiting_owner: ${awaiting.detail}`);
+  }
+}
+
+/**
  * Stops the session when it still runs, re-reads the evidence, and removes it only
  * when every check still holds. Never passes `--accept-unconfirmed-cleanup`.
  */
@@ -425,7 +456,7 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
     throw new ActionError("verification_failed", `session ${plan.sessionId} is no longer listed after the stop; nothing was removed`);
   }
   if (!isTerminal(fresh.state)) {
-    throw new ActionError("verification_failed", `session ${plan.sessionId} is ${fresh.state} after the stop, not finished; nothing was removed`);
+    throw new ActionError("verification_failed", `session ${plan.sessionId} is ${quoted(fresh.state)} after the stop, not finished; nothing was removed`);
   }
   if (fresh.worktreePath !== plan.worktreePath || fresh.branch !== plan.branch) {
     throw new ActionError("verification_failed", `the worktree or branch of session ${plan.sessionId} changed since the plan; nothing was removed`);
@@ -438,6 +469,8 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
     const kept = stopped ? "the session stays stopped" : "the session was not touched";
     throw new ActionError("precondition_failed", `cleanup refused after the stop: failed checks: ${failedNames(evidence.checks)}; ${kept} and nothing was removed`);
   }
+
+  await recheckBeforeRemoval(plan, evidence, stopped, deps);
 
   const removal = await deps.pohunek.removeSession(plan.sessionId, timeoutMs);
   if (!removal.ok) throw sourceError("pohunek session rm", removal);

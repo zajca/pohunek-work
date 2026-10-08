@@ -466,6 +466,17 @@ test("removeSession runs session rm without --accept-unconfirmed-cleanup and par
   expect(result.data).toEqual({ removed: true, stopped: true, worktreesRemoved: 1, worktreesFailed: 0, acceptedUnconfirmedProcesses: 1 });
 });
 
+test("removeSession reads an omitted or null accepted_unconfirmed_processes as none, the shape core really prints", async () => {
+  const real: Record<string, unknown> = { ...REMOVED };
+  delete real["accepted_unconfirmed_processes"];
+  for (const payload of [real, { ...real, accepted_unconfirmed_processes: null }]) {
+    const { exec } = fakeExec(() => reply(okEnvelope(payload)));
+    const result = await createPohunekClient(CONFIG, { exec, env: {} }).removeSession("s-1", 1);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.data.acceptedUnconfirmedProcesses).toBe(0);
+  }
+});
+
 test("removeSession fails on every invalid shape", async () => {
   const bad: Record<string, unknown>[] = [
     { ...REMOVED, removed: "true" },
@@ -473,7 +484,6 @@ test("removeSession fails on every invalid shape", async () => {
     { ...REMOVED, worktrees_removed: -1 },
     { ...REMOVED, worktrees_failed: 1.5 },
     { ...REMOVED, worktrees_failed: "0" },
-    { ...REMOVED, accepted_unconfirmed_processes: undefined },
     { ...REMOVED, accepted_unconfirmed_processes: "none" },
   ];
   for (const payload of bad) {
