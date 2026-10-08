@@ -91,7 +91,7 @@ export async function runCleanup(config: PluginConfig, options: DoOptions, deps:
   if (!options.dryRun && !options.yes) {
     throw new ActionError("confirmation_required", "cleanup removes the worktree for good: review --dry-run, then pass --yes");
   }
-  const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, deps);
+  const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, options.includeIgnored, deps);
   const cleanupDeps = { pohunek: deps.pohunek, exec: deps.exec };
   const plan = await planCleanup(row, sessions, config, cleanupDeps);
   logger.info("do_plan", {
