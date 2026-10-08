@@ -304,3 +304,113 @@ fn discover_search_path(
         cause,
     })
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use std::fs;
+
+    use pohunek_platform::shell_env::{LOGIN_SHELL_OUTPUT, LOGIN_SHELL_TIMEOUT};
+
+    use super::*;
+
+    fn fake_shell(dir: &Path, profile: &str) -> PathBuf {
+        let path = dir.join("fake-shell");
+        fs::write(
+            &path,
+            format!("#!/bin/sh\n{profile}\nexport PATH\nexec /bin/sh -c \"$3\"\n"),
+        )
+        .expect("write shell");
+        crate::test_support::make_executable(&path);
+        path
+    }
+
+    fn executable(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write executable");
+        crate::test_support::make_executable(&path);
+        path
+    }
+
+    fn resolver(
+        shell: &Path,
+        selectors: Vec<(&'static str, OsString)>,
+        program: &str,
+    ) -> BinResolver {
+        let mut variables = vec![("SHELL", shell.as_os_str().to_owned())];
+        variables.extend(selectors);
+        BinResolver::with_discovery_cause(program, move || {
+            let settings = LoginShellSettings {
+                timeout: LOGIN_SHELL_TIMEOUT,
+                max_output_bytes: LOGIN_SHELL_OUTPUT,
+            };
+            let login = login_shell_spec(&settings, |name| {
+                variables
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.clone())
+            });
+            compose_search_path(true, Ok("/usr/bin:/bin".to_owned()), login, None)
+        })
+    }
+
+    #[test]
+    fn login_shell_profile_uses_forwarded_shell_identity_to_resolve_program() {
+        let _watchdog = crate::test_support::watchdog();
+        let dir = crate::test_support::fixture();
+        let prefix = dir.path().join("by-shell/bin");
+        fs::create_dir_all(&prefix).expect("prefix");
+        let program = executable(&prefix, "profile-shell-tool");
+        let shell = fake_shell(
+            dir.path(),
+            &format!("[ \"$SHELL\" = \"$0\" ] && PATH='{}'", prefix.display()),
+        );
+
+        assert_eq!(
+            resolver(&shell, vec![], "profile-shell-tool")
+                .resolve()
+                .expect("resolve through login shell"),
+            program
+        );
+    }
+
+    #[test]
+    fn login_shell_profile_uses_forwarded_zdotdir_and_xdg_config_home() {
+        let _watchdog = crate::test_support::watchdog();
+        let dir = crate::test_support::fixture();
+        let zsh_prefix = dir.path().join("zdot-prefix");
+        let fish_prefix = dir.path().join("xdg-prefix");
+        fs::create_dir_all(&zsh_prefix).expect("zsh prefix");
+        fs::create_dir_all(&fish_prefix).expect("fish prefix");
+        let zsh_program = executable(&zsh_prefix, "profile-zdot-tool");
+        let fish_program = executable(&fish_prefix, "profile-xdg-tool");
+        let zdotdir = dir.path().join("zdotdir");
+        let xdg = dir.path().join("xdg");
+        fs::create_dir_all(&zdotdir).expect("zdotdir");
+        fs::create_dir_all(&xdg).expect("xdg");
+        fs::write(zdotdir.join("path"), zsh_prefix.display().to_string()).expect("zsh profile");
+        fs::write(xdg.join("path"), fish_prefix.display().to_string()).expect("xdg profile");
+        let shell = fake_shell(
+            dir.path(),
+            "[ -n \"$ZDOTDIR\" ] && PATH=\"$(/bin/cat \"$ZDOTDIR/path\")\"\n[ -n \"$XDG_CONFIG_HOME\" ] && PATH=\"$PATH:$(/bin/cat \"$XDG_CONFIG_HOME/path\")\"",
+        );
+        let resolver = resolver(
+            &shell,
+            vec![
+                ("ZDOTDIR", zdotdir.into_os_string()),
+                ("XDG_CONFIG_HOME", xdg.into_os_string()),
+            ],
+            "profile-zdot-tool",
+        );
+
+        assert_eq!(
+            resolver.resolve().expect("resolve ZDOTDIR tool"),
+            zsh_program
+        );
+        assert_eq!(
+            resolver
+                .resolve_name(OsStr::new("profile-xdg-tool"))
+                .expect("resolve XDG_CONFIG_HOME tool"),
+            fish_program
+        );
+    }
+}
