@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { ftruncateSync, writeSync } from "node:fs";
+import { existsSync, ftruncateSync, readdirSync, readFileSync, readlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -353,6 +353,38 @@ describe("rotating log file failure handling", () => {
 });
 
 describe("log directory lock", () => {
+  test("the lock descriptor is open for reading and writing", async () => {
+    // NFS emulates flock with byte-range locks that need a writable descriptor.
+    // Descriptor flags are only inspectable through procfs; skip where it is absent (macOS).
+    if (!existsSync("/proc/self/fdinfo")) {
+      return;
+    }
+    await withRoot((root) => {
+      const dir = join(root, "logs");
+      const logger = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      try {
+        const lockPath = join(dir, LOG_LOCK_FILE_NAME);
+        const lockFds = readdirSync("/proc/self/fd").filter((fd) => {
+          try {
+            return readlinkSync(`/proc/self/fd/${fd}`) === lockPath;
+          } catch {
+            return false;
+          }
+        });
+        expect(lockFds.length).toBe(1);
+        const info = readFileSync(`/proc/self/fdinfo/${lockFds[0]}`, "utf8");
+        const flags = /^flags:\s*([0-7]+)/m.exec(info)?.[1];
+        expect(flags === undefined).toBe(false);
+        const O_ACCMODE = 0o3;
+        const O_RDWR = 0o2;
+        expect(parseInt(flags ?? "0", 8) & O_ACCMODE).toBe(O_RDWR);
+      } finally {
+        logger.close();
+      }
+      return Promise.resolve();
+    });
+  });
+
   test("a second logger in this process is refused until the first closes", async () => {
     await withRoot((root) => {
       const dir = join(root, "logs");
@@ -489,8 +521,8 @@ describe("log directory lock", () => {
       const dir = join(root, "logs");
       await mkdir(join(dir, LOG_LOCK_FILE_NAME), { recursive: true, mode: 0o700 });
       const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
-      // Linux refuses the open itself (EISDIR); macOS opens the directory read-only and
-      // the later type check refuses it ("not a regular file").
+      // Opening a directory read-write is refused by the open itself (EISDIR); the
+      // later type check ("not a regular file") remains as a second line of defence.
       expect(/EISDIR|not a regular file/.test(refused.message)).toBe(true);
       expect(refused.message.includes(dir)).toBe(true);
       expect((await readdir(dir)).includes(LOG_FILE_NAME)).toBe(false);

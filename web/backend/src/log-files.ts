@@ -301,13 +301,15 @@ function requireCurrentOwner(uid: number, path: string): void {
 /**
  * Takes the lifetime lock of the family and returns its descriptor. The lock
  * file is opened like the active file: no symlink followed, a regular file
- * owned by the current user, mode forced to 0600.
+ * owned by the current user, mode forced to 0600. It is opened read-write
+ * because over NFS Linux emulates flock(2) with byte-range locks, and an
+ * exclusive byte-range lock requires a descriptor open for writing.
  */
 function acquireFamilyLock(dir: string): number {
   const path = join(dir, LOG_LOCK_FILE_NAME);
   const descriptor = openSync(
     path,
-    constants.O_RDONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     FILE_MODE,
   );
   try {
