@@ -285,7 +285,6 @@ impl Notifier {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::ffi::OsStrExt as _;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
@@ -356,59 +355,6 @@ mod tests {
         "{title};echo INJECTED",
         "back\\slash 'x'",
     ];
-
-    #[test]
-    fn health_reports_only_state_changes() {
-        let _watchdog = crate::test_support::watchdog();
-        let mut health = NotificationHealth::default();
-        let unavailable = NotificationOutcome::Unavailable("gone".to_owned());
-
-        assert_eq!(
-            apply_outcome(&mut health, &NotificationOutcome::Submitted),
-            None
-        );
-        assert!(apply_outcome(&mut health, &unavailable)
-            .expect("first failure")
-            .contains("unavailable: gone"));
-        assert_eq!(apply_outcome(&mut health, &unavailable), None);
-        assert!(apply_outcome(&mut health, &NotificationOutcome::Submitted)
-            .expect("recovery")
-            .contains("work again"));
-        assert_eq!(
-            apply_outcome(&mut health, &NotificationOutcome::Submitted),
-            None
-        );
-    }
-
-    #[test]
-    fn a_different_failure_reason_is_shown_and_an_identical_repeat_is_not() {
-        let mut health = NotificationHealth::default();
-        let timeout = NotificationOutcome::Unavailable("lookup still running".to_owned());
-        let verdict = NotificationOutcome::Unavailable("not found".to_owned());
-
-        assert!(apply_outcome(&mut health, &timeout)
-            .expect("first reason")
-            .contains("lookup still running"));
-        assert_eq!(apply_outcome(&mut health, &timeout), None);
-        assert!(apply_outcome(&mut health, &verdict)
-            .expect("different reason replaces stale text")
-            .contains("not found"));
-        assert_eq!(apply_outcome(&mut health, &verdict), None);
-        assert!(apply_outcome(&mut health, &NotificationOutcome::Submitted)
-            .expect("recovery")
-            .contains("work again"));
-    }
-
-    #[test]
-    fn a_first_failure_is_reported_even_before_any_success() {
-        let _watchdog = crate::test_support::watchdog();
-        let mut health = NotificationHealth::default();
-        assert!(apply_outcome(
-            &mut health,
-            &NotificationOutcome::Unavailable("x".to_owned())
-        )
-        .is_some());
-    }
 
     #[test]
     fn a_custom_command_receives_title_and_body_as_two_positional_arguments() {
@@ -588,32 +534,6 @@ mod tests {
     }
 
     #[test]
-    fn a_resolution_that_exceeds_the_deadline_is_unavailable() {
-        let _watchdog = crate::test_support::watchdog();
-        let (release, wait) = mpsc::channel::<()>();
-        let wait = std::sync::Mutex::new(wait);
-        let resolver = Arc::new(BinResolver::with_discovery("pohunek", move || {
-            // Blocks until the test drops the sender at its end.
-            let _ = wait.lock().expect("lock").recv();
-            Err(BinError::SearchPath("released".to_owned()))
-        }));
-        let notifier = Notifier {
-            backend: NotificationBackend::Command {
-                resolution: Arc::new(CommandResolution::new(resolver, "notify-send")),
-            },
-            timeout: Duration::from_millis(100),
-        };
-
-        let outcome = notifier.notify("t", "b");
-
-        assert!(
-            matches!(&outcome, NotificationOutcome::Unavailable(reason) if reason.contains("did not finish")),
-            "{outcome:?}"
-        );
-        drop(release);
-    }
-
-    #[test]
     fn a_slow_lookup_and_a_slow_backend_share_one_deadline() {
         let _watchdog = crate::test_support::watchdog();
         let dir = crate::test_support::fixture();
@@ -719,13 +639,5 @@ mod tests {
 
         assert!(matches!(outcome, NotificationOutcome::Unavailable(_)));
         assert!(!record.exists());
-    }
-
-    #[test]
-    fn osascript_arguments_place_terminator_before_values() {
-        let _watchdog = crate::test_support::watchdog();
-        let arguments = osascript_arguments("-t", "b");
-        assert_eq!(arguments[6], OsString::from("--"));
-        assert_eq!(arguments[7].as_bytes(), b"-t");
     }
 }

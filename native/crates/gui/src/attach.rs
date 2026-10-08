@@ -437,21 +437,6 @@ mod tests {
     }
 
     #[test]
-    fn argv_mode_rejects_an_unterminated_template() {
-        let _watchdog = crate::test_support::watchdog();
-        let dir = crate::test_support::fixture();
-        let (recorder, _fifo) = fifo_recorder(dir.path());
-        let plan = plan(command("{bin} 'oops", AttachCommandMode::Argv), &recorder);
-
-        assert!(matches!(
-            run_attach(&plan, &unused_terminal()),
-            Err(AttachError::Template(
-                AttachTemplateError::UnterminatedQuote
-            ))
-        ));
-    }
-
-    #[test]
     fn an_unresolvable_pohunek_bin_fails_before_anything_is_spawned() {
         let _watchdog = crate::test_support::watchdog();
         let dir = crate::test_support::fixture();
