@@ -103,7 +103,7 @@ function notification(id: string, sessionId: string | null): PohunekNotification
   };
 }
 
-const githubProject: ProjectConfig = { ...project, issueSource: { kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] } };
+const githubProject: ProjectConfig = { ...project, issueSource: { kind: "github", signal: "labels", startedLabels: ["in-progress"], pausedLabels: ["on-hold"], projectStatus: null } };
 
 function run(partial: Partial<JoinInput>): ReturnType<typeof joinItems> {
   return joinItems({

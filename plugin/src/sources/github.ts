@@ -5,7 +5,7 @@
 // in the Authorization header to the configured endpoint. Failure messages are
 // static text plus a short GraphQL error type; provider text never reaches them.
 
-import type { GithubConfig, GithubProject, IdentityConfig, ProjectConfig } from "../types/config.ts";
+import type { GithubConfig, GithubProject, GithubProjectStatus, IdentityConfig, ProjectConfig } from "../types/config.ts";
 import type {
   Actor,
   Check,
@@ -33,6 +33,7 @@ import {
   buildIssueDetailRequest,
   buildIssueSearchRequest,
   buildMergedSearchRequest,
+  buildProjectStatusValidationRequest,
   buildSearchRequest,
   CONNECTION_KINDS,
   type ConnectionKind,
@@ -55,7 +56,7 @@ export interface GithubSource {
   fetchPullRequests(project: ProjectConfig): Promise<SourceResult<readonly PullRequest[]>>;
   /** Pull requests of the owner merged within `merged_lookback_days`. */
   fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
-  /** Open issues of the project's repository assigned to the owner that carry a started or paused label. */
+  /** Open issues of the project's repository assigned to the owner that the configured signal (labels, Project status or both) marks as started or paused. */
   fetchIssues(project: GithubProject): Promise<SourceResult<readonly Issue[]>>;
   /**
    * Of the issue keys asked for, those whose issue carries the project's ignore label. The issue
@@ -319,7 +320,7 @@ function labelNames(container: JsonObject): string[] {
 
 /** True when a label equals the project's ignore label (case-insensitive); false when the project has none. */
 function carriesIgnoreLabel(labels: readonly string[], ignoreLabel: string | null): boolean {
-  return ignoreLabel !== null && firstLabelOf(labels, [ignoreLabel]) !== null;
+  return ignoreLabel !== null && firstNameOf(labels, [ignoreLabel]) !== null;
 }
 
 function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: ProjectConfig): PullRequest {
@@ -539,14 +540,24 @@ function pendingChecker(pending: PendingPage[], seen: SeenCursors): CheckConnect
   };
 }
 
-/** Pages still missing from the labels of issues: a label page cut short could hide a started or paused label. */
-function collectPendingIssues(issues: readonly JsonObject[], seen: SeenCursors): PendingPage[] {
-  const pending: PendingPage[] = [];
-  const check = pendingChecker(pending, seen);
-  for (const issue of issues) {
-    check("issueLabels", asString(issue["id"], "id"), issue, "labels");
-  }
-  return pending;
+/**
+ * Pages still missing from the labels of issues, and from their Project items when the document
+ * requested them: a page cut short could hide a started or paused label or the item of the
+ * configured Project.
+ */
+function issuePendingCollector(withProjectItems: boolean): CollectPending {
+  return (issues, seen) => {
+    const pending: PendingPage[] = [];
+    const check = pendingChecker(pending, seen);
+    for (const issue of issues) {
+      const issueId = asString(issue["id"], "id");
+      check("issueLabels", issueId, issue, "labels");
+      if (withProjectItems) {
+        check("issueProjectItems", issueId, issue, "projectItems");
+      }
+    }
+    return pending;
+  };
 }
 
 function collectPendingPullRequests(prs: readonly JsonObject[], seen: SeenCursors, shape: SearchShape): PendingPage[] {
@@ -621,6 +632,7 @@ async function completeNestedConnections(
   roots: readonly JsonObject[],
   seen: SeenCursors,
   collect: CollectPending,
+  statusField: string | null = null,
 ): Promise<void> {
   for (;;) {
     const pending = collect(roots, seen);
@@ -637,7 +649,7 @@ async function completeNestedConnections(
       const data = await send(transport, buildConnectionRequest(specs, {
         nestedPageSize: transport.config.nestedPageSize,
         threadCommentPageSize: transport.config.threadCommentPageSize,
-      }));
+      }, statusField));
       batch.forEach((page, index) => {
         const fetched = walkPath(data[`c${index}`], CONNECTION_KINDS[page.kind].path, page.kind);
         const target = asObject(page.container[page.connectionKey], page.kind);
@@ -769,12 +781,16 @@ async function runMergedSearch(transport: Transport, queryString: string): Promi
 }
 
 /** Follows the issue search to its end; a page that cannot be followed fails instead of dropping results. */
-async function runIssueSearch(transport: Transport, queryString: string): Promise<JsonObject[]> {
+async function runIssueSearch(
+  transport: Transport,
+  queryString: string,
+  statusField: string | null,
+): Promise<JsonObject[]> {
   const found: JsonObject[] = [];
   const used = new Set<string>();
   let after: string | null = null;
   for (;;) {
-    const data = await send(transport, buildIssueSearchRequest(queryString, after, transport.config));
+    const data = await send(transport, buildIssueSearchRequest(queryString, after, transport.config, statusField));
     const connection = asObject(data["issues"], "issue search");
     for (const node of asArray(connection["nodes"], "issue search.nodes")) {
       found.push(asObject(node, "issue search node"));
@@ -794,21 +810,55 @@ async function runIssueSearch(transport: Transport, queryString: string): Promis
   }
 }
 
-/** The first configured label the issue carries, spelled as GitHub returns it; label names compare case-insensitively. */
-function firstLabelOf(labels: readonly string[], wanted: readonly string[]): string | null {
-  const folded = wanted.map((label) => label.toLowerCase());
-  return labels.find((label) => folded.includes(label.toLowerCase())) ?? null;
+/** The first of the wanted names among the found ones, spelled as GitHub returns it; names compare case-insensitively. */
+function firstNameOf(found: readonly string[], wanted: readonly string[]): string | null {
+  const folded = wanted.map((name) => name.toLowerCase());
+  return found.find((name) => folded.includes(name.toLowerCase())) ?? null;
+}
+
+const SINGLE_SELECT_VALUE = "ProjectV2ItemFieldSingleSelectValue";
+
+/**
+ * Option names the configured Project's items of the issue carry in the status field, as GitHub
+ * spells them. Items of other Projects (another number or owner) and an unset field yield nothing;
+ * a value that is not a single-select value is a schema mismatch.
+ */
+function projectOptionNames(raw: JsonObject, status: GithubProjectStatus): string[] {
+  const names: string[] = [];
+  for (const node of connectionNodes(raw, "projectItems", "projectItems")) {
+    const item = asObject(node, "project item");
+    const project = asObject(item["project"], "project item.project");
+    if (asInteger(project["number"], "project item.project.number") !== status.number) continue;
+    // An owner without a login is neither a user nor an organization, so it cannot own the configured Project.
+    const login = asObject(project["owner"], "project item.project.owner")["login"];
+    if (typeof login !== "string" || login.toLowerCase() !== status.owner.toLowerCase()) continue;
+    const value = item["fieldValueByName"];
+    if (value === null || value === undefined) continue;
+    const field = asObject(value, "project item.fieldValueByName");
+    if (field["__typename"] !== SINGLE_SELECT_VALUE) {
+      throw schemaMismatch("project item.fieldValueByName type");
+    }
+    names.push(asString(field["name"], "project item.fieldValueByName.name"));
+  }
+  return names;
 }
 
 /**
- * Started: a started label and no paused label. Paused: a paused label. An
- * issue with neither kind of label is not on the table and yields null. `state`
- * is the deciding label.
+ * Started: a started label or option and no paused one. Paused: a paused label or option, which
+ * outranks every started one. An issue with neither is not on the table and yields null. `state` is
+ * the deciding name, the label before the option when both signals decide the same side.
  */
 function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
+  const source = project.issueSource;
   const labels = labelNames(raw);
-  const paused = firstLabelOf(labels, project.issueSource.pausedLabels);
-  const started = firstLabelOf(labels, project.issueSource.startedLabels);
+  const options = source.projectStatus === null ? [] : projectOptionNames(raw, source.projectStatus);
+  const usesLabels = source.signal !== "project";
+  const paused =
+    (usesLabels ? firstNameOf(labels, source.pausedLabels) : null) ??
+    (source.projectStatus === null ? null : firstNameOf(options, source.projectStatus.pausedOptions));
+  const started =
+    (usesLabels ? firstNameOf(labels, source.startedLabels) : null) ??
+    (source.projectStatus === null ? null : firstNameOf(options, source.projectStatus.startedOptions));
   const state = paused ?? started;
   if (state === null) {
     return null;
@@ -824,6 +874,70 @@ function toIssue(raw: JsonObject, project: GithubProject): Issue | null {
     attachmentUrls: [],
     ignored: carriesIgnoreLabel(labels, project.ignoreLabel),
   };
+}
+
+/** A `NOT_FOUND` error on the path to the Project, or to its field: the validation reports which one is missing. */
+function missingProjectPartError(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null) return false;
+  const error = raw as JsonObject;
+  const path = error["path"];
+  const expected = ["repositoryOwner", "projectV2", "field"];
+  return (
+    error["type"] === "NOT_FOUND" &&
+    Array.isArray(path) &&
+    path.length >= 1 &&
+    path.length <= expected.length &&
+    path.every((segment, index) => segment === expected[index])
+  );
+}
+
+/**
+ * Checks that the configured Project, its field and every configured option exist. A failure is
+ * `not_configured` with the missing part named; an unreadable answer fails like any other request.
+ */
+async function validateProjectStatus(transport: Transport, status: GithubProjectStatus): Promise<void> {
+  if (!LOGIN_PATTERN.test(status.owner)) {
+    throw new SourceFailureError("not_configured", "status_project_owner is not a valid GitHub login");
+  }
+  const data = await send(
+    transport,
+    buildProjectStatusValidationRequest(status.owner, status.number, status.field),
+    missingProjectPartError,
+  );
+  const owner = data["repositoryOwner"];
+  if (owner === null) {
+    throw new SourceFailureError("not_configured", "the GitHub Project owner does not exist (status_project_owner)");
+  }
+  const project = asObject(owner, "repositoryOwner")["projectV2"];
+  if (project === null || project === undefined) {
+    throw new SourceFailureError(
+      "not_configured",
+      "the GitHub Project does not exist or the token cannot read it (status_project_owner, status_project_number; reading needs the read:project scope)",
+    );
+  }
+  const projectObject = asObject(project, "projectV2");
+  if (asInteger(projectObject["number"], "projectV2.number") !== status.number) {
+    throw schemaMismatch("projectV2.number");
+  }
+  const field = projectObject["field"];
+  if (field === null || field === undefined) {
+    throw new SourceFailureError("not_configured", "the GitHub Project has no field named status_field");
+  }
+  const fieldObject = asObject(field, "projectV2.field");
+  if (fieldObject["__typename"] !== "ProjectV2SingleSelectField") {
+    throw new SourceFailureError("not_configured", "the GitHub Project field named status_field is not a single-select field");
+  }
+  const known = asArray(fieldObject["options"], "projectV2.field.options").map((option) =>
+    asString(asObject(option, "projectV2.field.option")["name"], "projectV2.field.option.name").toLowerCase(),
+  );
+  for (const option of [...status.startedOptions, ...status.pausedOptions]) {
+    if (!known.includes(option.toLowerCase())) {
+      throw new SourceFailureError(
+        "not_configured",
+        `the status field has no option named "${option}" (status_started_options, status_paused_options)`,
+      );
+    }
+  }
 }
 
 // ------------------------------------------------------------------ source
@@ -992,8 +1106,19 @@ export function createGithubSource(
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
       };
-      const raws = await runIssueSearch(transport, queryString);
-      await completeNestedConnections(transport, raws, new WeakMap(), collectPendingIssues);
+      const status = project.issueSource.projectStatus;
+      if (status !== null) {
+        await validateProjectStatus(transport, status);
+      }
+      const statusField = status === null ? null : status.field;
+      const raws = await runIssueSearch(transport, queryString, statusField);
+      await completeNestedConnections(
+        transport,
+        raws,
+        new WeakMap(),
+        issuePendingCollector(status !== null),
+        statusField,
+      );
       const data = raws.flatMap((raw) => toIssue(raw, project) ?? []);
       return { ok: true, source: "github_issues", data, durationMs: elapsed() };
     } catch (error) {
@@ -1051,7 +1176,7 @@ export function createGithubSource(
           found.push({ number, raw: issue });
         });
         // A label page cut short could hide the ignore label.
-        await completeNestedConnections(transport, found.map((entry) => entry.raw), new WeakMap(), collectPendingIssues);
+        await completeNestedConnections(transport, found.map((entry) => entry.raw), new WeakMap(), issuePendingCollector(false));
         for (const { number, raw } of found) {
           const key = byNumber.get(number);
           if (key !== undefined && carriesIgnoreLabel(labelNames(raw), ignoreLabel)) ignored.add(key);

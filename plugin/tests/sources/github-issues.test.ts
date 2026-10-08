@@ -1,7 +1,7 @@
 // The GitHub issue source and the closing issue references of the pull request source.
 import { describe, expect, test } from "bun:test";
 import { createGithubSource, type FetchLike } from "../../src/sources/github.ts";
-import type { GithubConfig, GithubProject, IdentityConfig, ProjectConfig } from "../../src/types/config.ts";
+import type { GithubConfig, GithubProject, GithubProjectStatus, IdentityConfig, ProjectConfig } from "../../src/types/config.ts";
 import type { Issue, PullRequest, SourceResult } from "../../src/types/sources.ts";
 import type { Exec } from "../../src/util/exec.ts";
 import { githubIssueSource } from "../rules/builders.ts";
@@ -205,6 +205,345 @@ describe("issues", () => {
     const result = await source.fetchIssues({ ...githubProject, repo: "not a repo" });
     expect(result).toMatchObject({ ok: false, code: "not_configured" });
     expect(requests).toHaveLength(0);
+  });
+});
+
+const validationOk = await fixture("project-status-validation");
+
+describe("project status signal", () => {
+  const status: GithubProjectStatus = {
+    owner: "Acme",
+    number: 3,
+    field: "Status",
+    startedOptions: ["in progress"],
+    pausedOptions: ["Blocked"],
+  };
+  const projectOnly: GithubProject = {
+    ...githubProject,
+    issueSource: { kind: "github", signal: "project", startedLabels: [], pausedLabels: [], projectStatus: status },
+  };
+  const both: GithubProject = {
+    ...githubProject,
+    issueSource: { ...githubIssueSource, signal: "both", projectStatus: status },
+  };
+  const withStatus = (project: GithubProject, projectStatus: GithubProjectStatus): GithubProject => ({
+    ...project,
+    issueSource: { ...project.issueSource, projectStatus },
+  });
+
+  const item = (value: string | null, number = 3, owner = "acme"): Json => ({
+    project: { number, owner: { __typename: "Organization", login: owner } },
+    fieldValueByName: value === null ? null : { __typename: "ProjectV2ItemFieldSingleSelectValue", name: value },
+  });
+  const connection = (nodes: Json[], next: string | null = null): Json => ({
+    nodes,
+    pageInfo: { hasNextPage: next !== null, endCursor: next ?? "P" },
+  });
+
+  /** A search page with one issue (number 7) carrying the given labels and Project items. */
+  function singleIssue(labels: readonly string[], projectItems: Json): Json {
+    return {
+      data: {
+        rateLimit: { remaining: 1 },
+        issues: {
+          issueCount: 1,
+          pageInfo: { hasNextPage: false, endCursor: "I1" },
+          nodes: [
+            {
+              id: "I_node_7",
+              number: 7,
+              url: "https://github.example/acme/widgets/issues/7",
+              title: "Cache widgets",
+              labels: connection(labels.map((name) => ({ name }))),
+              projectItems,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  /** Answers the validation request with the validation fixture and every other request with `search`. */
+  function sourceFor(search: Responder, validation: Json = validationOk): ReturnType<typeof sourceWith> {
+    return sourceWith((request, index) =>
+      request.query.includes("PohunekWorkProjectStatus") ? reply(validation) : search(request, index),
+    );
+  }
+
+  test("started and paused options of the configured Project decide, selected by owner and number", async () => {
+    const page = await fixture("issues-project-page");
+    const { source, requests } = sourceFor(() => reply(page));
+    const issues = expectIssues(await source.fetchIssues(projectOnly));
+    expect(issues).toEqual([
+      {
+        id: "acme/widgets#7",
+        title: "Cache widgets",
+        url: "https://github.example/acme/widgets/issues/7",
+        state: "In Progress",
+        started: true,
+        paused: false,
+        assigneeIsMe: true,
+        attachmentUrls: [],
+        ignored: false,
+      },
+      {
+        id: "acme/widgets#8",
+        title: "Blocked widget work",
+        url: "https://github.example/acme/widgets/issues/8",
+        state: "Blocked",
+        started: false,
+        paused: true,
+        assigneeIsMe: true,
+        attachmentUrls: [],
+        ignored: false,
+      },
+    ]);
+    expect(requests).toHaveLength(2);
+  });
+
+  test("the validation runs first, with owner, number and field as variables", async () => {
+    const page = await fixture("issues-project-page");
+    const { source, requests } = sourceFor(() => reply(page));
+    expectIssues(await source.fetchIssues(projectOnly));
+    expect(requests[0]?.variables).toEqual({ o: "Acme", n: 3, f: "Status" });
+    expect(requests[0]?.query).not.toContain("Acme");
+    expect(requests[1]?.variables).toEqual({
+      q: "repo:acme/widgets is:issue is:open assignee:owner-user",
+      top: 4,
+      nested: 5,
+      after: null,
+      statusField: "Status",
+    });
+    expect(requests[1]?.query).toContain("projectItems(first: $nested)");
+    expect(requests[1]?.query).not.toContain("Status");
+  });
+
+  test("a labels-only project neither validates nor requests the Project items", async () => {
+    const page = await fixture("issues-page");
+    const { source, requests } = sourceWith(() => reply(page));
+    expectIssues(await source.fetchIssues(githubProject));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.query).not.toContain("projectItems");
+    expect(requests[0]?.variables).not.toHaveProperty("statusField");
+  });
+
+  test("labels do not count when the signal is the Project alone", async () => {
+    const page = singleIssue(["in-progress", "on-hold"], connection([]));
+    const { source } = sourceFor(() => reply(page));
+    expect(expectIssues(await source.fetchIssues(projectOnly))).toEqual([]);
+  });
+
+  test("an item of another Project number or owner, an unset value and no item yield no row", async () => {
+    for (const items of [
+      connection([item("In Progress", 4)]),
+      connection([item("In Progress", 3, "other-org")]),
+      connection([item(null)]),
+      connection([]),
+    ]) {
+      const { source } = sourceFor(() => reply(singleIssue([], items)));
+      expect(expectIssues(await source.fetchIssues(projectOnly))).toEqual([]);
+    }
+  });
+
+  test("an item whose Project owner has no login yields no row instead of failing the source", async () => {
+    const noLogin = { project: { number: 3, owner: { __typename: "Issue" } }, fieldValueByName: item("In Progress")["fieldValueByName"] };
+    const { source } = sourceFor(() => reply(singleIssue([], connection([noLogin]))));
+    expect(expectIssues(await source.fetchIssues(projectOnly))).toEqual([]);
+  });
+
+  test("owner logins and option names compare case-insensitively and state keeps GitHub's spelling", async () => {
+    const page = singleIssue([], connection([item("IN PROGRESS", 3, "ACME")]));
+    const { source } = sourceFor(() => reply(page));
+    const issues = expectIssues(await source.fetchIssues(withStatus(projectOnly, { ...status, owner: "aCmE" })));
+    expect(issues).toMatchObject([{ state: "IN PROGRESS", started: true, paused: false }]);
+  });
+
+  test("a paused option outranks a started option", async () => {
+    const page = singleIssue([], connection([item("In Progress"), item("blocked")]));
+    const { source } = sourceFor(() => reply(page));
+    expect(expectIssues(await source.fetchIssues(projectOnly))).toMatchObject([
+      { state: "blocked", started: false, paused: true },
+    ]);
+  });
+
+  test("an option that is neither started nor paused yields no row", async () => {
+    const { source } = sourceFor(() => reply(singleIssue([], connection([item("Done")]))));
+    expect(expectIssues(await source.fetchIssues(projectOnly))).toEqual([]);
+  });
+
+  test("the ignore label is still read from the labels when the signal is the Project", async () => {
+    const page = singleIssue(["Ignore-Me"], connection([item("In Progress")]));
+    const { source } = sourceFor(() => reply(page));
+    expect(expectIssues(await source.fetchIssues({ ...projectOnly, ignoreLabel: "ignore-me" }))).toMatchObject([
+      { ignored: true },
+    ]);
+  });
+
+  describe("both signals", () => {
+    test.each([
+      { labels: ["in-progress"], option: null, state: "in-progress", paused: false },
+      { labels: [], option: "In Progress", state: "In Progress", paused: false },
+      { labels: ["in-progress"], option: "In Progress", state: "in-progress", paused: false },
+      { labels: ["in-progress"], option: "Blocked", state: "Blocked", paused: true },
+      { labels: ["on-hold"], option: "In Progress", state: "on-hold", paused: true },
+      { labels: ["on-hold"], option: "Blocked", state: "on-hold", paused: true },
+      { labels: [], option: "Blocked", state: "Blocked", paused: true },
+      { labels: ["on-hold"], option: null, state: "on-hold", paused: true },
+    ])("labels $labels with option $option decide $state", async ({ labels, option, state, paused }) => {
+      const { source } = sourceFor(() => reply(singleIssue(labels, connection([item(option)]))));
+      expect(expectIssues(await source.fetchIssues(both))).toMatchObject([{ state, started: !paused, paused }]);
+    });
+
+    test("an issue with neither signal yields no row", async () => {
+      const { source } = sourceFor(() => reply(singleIssue(["bug"], connection([item("Done")]))));
+      expect(expectIssues(await source.fetchIssues(both))).toEqual([]);
+    });
+  });
+
+  describe("project items pagination", () => {
+    test("a Project item page cut short is followed so the configured item further down is not missed", async () => {
+      const first = singleIssue([], connection([item("Done", 9)], "P1"));
+      const next = await fixture("issue-project-items-page");
+      const { source, requests } = sourceFor((_request, index) => reply(index === 1 ? first : next));
+      const issues = expectIssues(await source.fetchIssues(projectOnly));
+      expect(requests).toHaveLength(3);
+      expect(requests[2]?.variables).toEqual({ nested: 5, statusField: "Status", id_c0: "I_node_7", after_c0: "P1" });
+      expect(requests[2]?.query).toContain("... on Issue { projectItems(first: $nested, after: $after_c0)");
+      expect(issues).toMatchObject([{ id: "acme/widgets#7", state: "In Progress", started: true }]);
+    });
+
+    test("a paused item on a later page still pauses the issue", async () => {
+      const first = singleIssue([], connection([item("In Progress")], "P1"));
+      const next = { data: { rateLimit: { remaining: 1 }, c0: { projectItems: connection([item("Blocked")]) } } };
+      const { source } = sourceFor((_request, index) => reply(index === 1 ? first : next));
+      expect(expectIssues(await source.fetchIssues(projectOnly))).toMatchObject([{ state: "Blocked", paused: true }]);
+    });
+
+    test("a repeating Project item cursor is truncated", async () => {
+      const first = singleIssue([], connection([item("Done", 9)], "P1"));
+      const next = { data: { rateLimit: { remaining: 1 }, c0: { projectItems: connection([item("Done", 9)], "P1") } } };
+      const { source } = sourceFor((_request, index) => reply(index === 1 ? first : next));
+      expect(await source.fetchIssues(projectOnly)).toMatchObject({ ok: false, code: "truncated", source: "github_issues" });
+    });
+
+    test("a Project item page that reports more items without a cursor is truncated", async () => {
+      const page = singleIssue([], { nodes: [item("Done", 9)], pageInfo: { hasNextPage: true, endCursor: null } });
+      const { source } = sourceFor(() => reply(page));
+      expect(await source.fetchIssues(projectOnly)).toMatchObject({ ok: false, code: "truncated" });
+    });
+
+    test("a follow-up that fails fails the source and never returns the first page alone", async () => {
+      const first = singleIssue([], connection([item("In Progress")], "P1"));
+      const { source } = sourceFor((_request, index) => (index === 1 ? reply(first) : reply({}, 502)));
+      expect(await source.fetchIssues(projectOnly)).toMatchObject({ ok: false, code: "unavailable" });
+    });
+  });
+
+  describe("field value type", () => {
+    test("a value of the configured Project that is not a single-select value is invalid_response", async () => {
+      const text = { project: { number: 3, owner: { __typename: "Organization", login: "acme" } }, fieldValueByName: { __typename: "ProjectV2ItemFieldTextValue" } };
+      const { source } = sourceFor(() => reply(singleIssue([], connection([text]))));
+      expect(await source.fetchIssues(projectOnly)).toMatchObject({ ok: false, code: "invalid_response", source: "github_issues" });
+    });
+
+    test("a value of another Project is not inspected", async () => {
+      const other = { project: { number: 4, owner: { __typename: "Organization", login: "acme" } }, fieldValueByName: { __typename: "ProjectV2ItemFieldTextValue" } };
+      const { source } = sourceFor(() => reply(singleIssue([], connection([other, item("In Progress")]))));
+      expect(expectIssues(await source.fetchIssues(projectOnly))).toMatchObject([{ started: true }]);
+    });
+
+    test("a single-select value without a name is invalid_response", async () => {
+      const broken = item("x");
+      broken["fieldValueByName"] = { __typename: "ProjectV2ItemFieldSingleSelectValue" };
+      const { source } = sourceFor(() => reply(singleIssue([], connection([broken]))));
+      expect(await source.fetchIssues(projectOnly)).toMatchObject({ ok: false, code: "invalid_response" });
+    });
+  });
+
+  describe("validation failures fail the source", () => {
+    const answer = (projectV2: unknown, errors?: unknown[]): Json => ({
+      data: { rateLimit: { remaining: 1 }, repositoryOwner: projectV2 === undefined ? null : { projectV2 } },
+      ...(errors === undefined ? {} : { errors }),
+    });
+    const field = (value: unknown): Json => ({ number: 3, field: value });
+    const singleSelect = (...names: string[]): Json => ({
+      __typename: "ProjectV2SingleSelectField",
+      name: "Status",
+      options: names.map((name) => ({ name })),
+    });
+
+    async function failure(validation: Json, project: GithubProject = projectOnly): Promise<{ result: SourceResult<readonly Issue[]>; requests: Recorded[] }> {
+      const { source, requests } = sourceFor(() => reply(singleIssue([], connection([item("In Progress")]))), validation);
+      return { result: await source.fetchIssues(project), requests };
+    }
+
+    test("a missing Project (null with NOT_FOUND) is not_configured and no search runs", async () => {
+      const { result, requests } = await failure(
+        answer(null, [{ type: "NOT_FOUND", path: ["repositoryOwner", "projectV2"], message: "Could not resolve" }]),
+      );
+      expect(result).toMatchObject({ ok: false, code: "not_configured", source: "github_issues" });
+      expect(requests).toHaveLength(1);
+    });
+
+    test("a missing owner is not_configured", async () => {
+      const { result } = await failure({ data: { rateLimit: { remaining: 1 }, repositoryOwner: null }, errors: [{ type: "NOT_FOUND", path: ["repositoryOwner"] }] });
+      expect(result).toMatchObject({ ok: false, code: "not_configured" });
+    });
+
+    test("a missing field is not_configured", async () => {
+      const { result, requests } = await failure(
+        answer(field(null), [{ type: "NOT_FOUND", path: ["repositoryOwner", "projectV2", "field"] }]),
+      );
+      expect(result).toMatchObject({ ok: false, code: "not_configured" });
+      if (!result.ok) expect(result.message).toContain("status_field");
+      expect(requests).toHaveLength(1);
+    });
+
+    test("a field that is not single-select is not_configured", async () => {
+      const { result } = await failure(answer(field({ __typename: "ProjectV2IterationField" })));
+      expect(result).toMatchObject({ ok: false, code: "not_configured" });
+    });
+
+    test("a started or paused option the field does not have is not_configured and named", async () => {
+      for (const options of [["Todo", "Blocked"], ["In Progress", "Todo"]]) {
+        const { result, requests } = await failure(answer(field(singleSelect(...options))));
+        expect(result).toMatchObject({ ok: false, code: "not_configured" });
+        if (!result.ok) expect(result.message).toMatch(/"(in progress|Blocked)"/);
+        expect(requests).toHaveLength(1);
+      }
+    });
+
+    test("options compare case-insensitively against the field", async () => {
+      const { source } = sourceFor(() => reply(singleIssue([], connection([item("In Progress")]))), answer(field(singleSelect("IN PROGRESS", "blocked"))));
+      expect(expectIssues(await source.fetchIssues(projectOnly))).toHaveLength(1);
+    });
+
+    test("any other GraphQL error stays invalid_response", async () => {
+      const { result } = await failure(answer(null, [{ type: "FORBIDDEN", path: ["repositoryOwner", "projectV2"] }]));
+      expect(result).toMatchObject({ ok: false, code: "invalid_response" });
+    });
+
+    test("a response without the owner object is invalid_response", async () => {
+      const { result } = await failure({ data: { rateLimit: { remaining: 1 } } });
+      expect(result).toMatchObject({ ok: false, code: "invalid_response" });
+    });
+
+    test("a transport failure of the validation is typed and no search runs", async () => {
+      const requests: Recorded[] = [];
+      const source = createGithubSource(
+        { github: githubConfig, identity },
+        { exec, fetch: (_input, init) => { requests.push(JSON.parse(init.body as string) as Recorded); return Promise.resolve(reply({}, 502)); } },
+      );
+      expect(await source.fetchIssues(projectOnly)).toMatchObject({ ok: false, code: "unavailable" });
+      expect(requests).toHaveLength(1);
+    });
+
+    test("an owner that is not a GitHub login is not_configured before any request", async () => {
+      const { source, requests } = sourceWith(() => reply({}));
+      const result = await source.fetchIssues(withStatus(projectOnly, { ...status, owner: "bad owner" }));
+      expect(result).toMatchObject({ ok: false, code: "not_configured" });
+      expect(requests).toHaveLength(0);
+    });
   });
 });
 

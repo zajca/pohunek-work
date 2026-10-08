@@ -316,13 +316,13 @@ Evaluated top to bottom; the first rule that holds decides.
 | --- | --- | --- | --- |
 | 1 | A linked session has an unacknowledged `agent_blocked` or `approval_required` notification | me: answer agent | pohunek notifications |
 | 2 | A linked session is live with `activity = working` | agent | pohunek session state |
-| 12 | Evaluated right after 2: the row's issue is paused (Linear: a configured `paused_states` state; GitHub: a configured `paused_labels` label) | paused (no actions) | issue state or labels, join |
+| 12 | Evaluated right after 2: the row's issue is paused (Linear: a configured `paused_states` state; GitHub: a configured `paused_labels` label or `status_paused_options` option) | paused (no actions) | issue state, labels or project field, join |
 | 3 | Someone else's PR requests a review from me | me: review; with `reviews = "external"` (11.3): agent: external review | GitHub `reviewRequests`, project `reviews` |
 | 4 | Changes requested and the fix is not fully delivered (8.2) | me: respond | reviews, timeline, threads, `reviewRequests` |
 | 5 | The PR conflicts with its base; otherwise a check failed that is neither ignored nor a policy check; otherwise a policy check failed | me: rebase / fix CI / policy check: `<names>` | `statusCheckRollup`, `mergeable` |
 | 6 | The PR is a draft | me: leave draft | `isDraft` |
 | 7 | Approved, checks green, mergeable | me: merge | `reviewDecision`, checks, `mergeable` |
-| 8 | Issue in a started state (Linear: state type `started`; GitHub: a `started_labels` label and no `paused_labels` label), assigned to me, with no PR and no live linked session | me: nothing runs | issue state or labels, assignee, join |
+| 8 | Issue in a started state (Linear: state type `started`; GitHub: a `started_labels` label or `status_started_options` option and no paused label or option), assigned to me, with no PR and no live linked session | me: nothing runs | issue state, labels or project field, assignee, join |
 | 11 | Evaluated right after 8: same issue conditions, no PR, and a live linked session that is idle (rule 2 did not hold) | me: check agent | issue state or labels, assignee, join, pohunek session state |
 | 13 | Evaluated right after 8: same issue conditions and no live linked session, and a merged PR resolves to the issue (7.3) | me: close or follow up | issue state or labels, assignee, join, merged PR search |
 | 9 | Open non-draft PR with no pending review request and no decision | me: request review | `reviewRequests`, `reviewDecision` |
@@ -352,8 +352,8 @@ a failing check, a draft). On a row of a paused issue rules 1 and 2 still win:
 a blocked agent still needs an answer and a working agent is still shown as
 working. A paused row lists no actions and `do` refuses every action on it,
 `attach` included. A Linear state name must match a `paused_states` entry
-exactly; a GitHub label is matched against `paused_labels` case-insensitively,
-as GitHub treats label names.
+exactly; a GitHub label is matched against `paused_labels` and a GitHub Project
+option against `status_paused_options` case-insensitively.
 A paused issue without a pull request gets no row at all, so a session linked
 to it, blocked or working, is not shown in `list`; it is not reported as
 orphaned either. When the issue leaves the paused state, the row is evaluated
@@ -431,7 +431,7 @@ code before rules 1 and 2 are evaluated, offers no action (`attach` included),
 `do` refuses it and `watch` neither notifies it nor prunes its baseline.
 
 The issue source lists only started issues assigned to the owner (Linear) or
-open issues with a started or paused label (GitHub), so an authored pull request
+open issues with a started or paused label or Project option (GitHub), so an authored pull request
 can join an issue the list does not return, for example one the owner parked
 with the ignore label and moved to Backlog. For a project with `ignore_label`,
 an authored pull request that is not itself ignored triggers one targeted lookup
@@ -709,8 +709,14 @@ repo = "keboola/connection"
 issue_source = "linear"   # "linear" or "github"; required
 reviews = "session"       # "session" or "external"; required
 linear_team = "DMD"       # only with issue_source = "linear"
-# started_labels = ["in progress"]   # only with issue_source = "github"; at least one
-# paused_labels = ["on hold"]        # only with issue_source = "github"; may be empty
+# issue_signal = "both"              # only with issue_source = "github"; "labels", "project" or "both"; required
+# started_labels = ["in progress"]   # issue_signal "labels" or "both"; at least one
+# paused_labels = ["on hold"]        # issue_signal "labels" or "both"; may be empty
+# status_project_owner = "keboola"   # issue_signal "project" or "both": login of the Project owner
+# status_project_number = 12         # issue_signal "project" or "both": Project number
+# status_field = "Status"            # issue_signal "project" or "both": exact single-select field name
+# status_started_options = ["In Progress"]   # issue_signal "project" or "both"; at least one
+# status_paused_options = ["Blocked"]        # issue_signal "project" or "both"; may be empty
 branch_pattern = "^zajca/(?P<key>DMD-[0-9]+)/"
 ignored_checks = ["CD / Enqueue E2E"]
 policy_checks = []        # merge blockers the owner meets; disjoint from ignored_checks
@@ -734,8 +740,8 @@ Rules:
 - **`issue_source` selects where a project's issues come from.** It is
   required and has no default. `linear` requires `linear_team` and
   `paused_states` and queries Linear; `github` rejects both keys (an error naming
-  the file and key) and requires `started_labels` and `paused_labels` instead,
-  which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
+  the file and key) and requires `issue_signal` plus the keys of that signal
+  instead, which `linear` rejects in turn. `branch_pattern`, `ignored_checks`,
   `policy_checks` and `ai_reviewers` are required for both sources.
 - **`ignore_label` parks work.** It is optional and has no default; a blank
   or non-string value is an error naming the file and key. Rows carrying the
@@ -766,21 +772,46 @@ Rules:
   The key is a fact about the project's review process, so it lives in
   `[project]` and not in the global `[actions]` table.
 - **A `github` project lists the owner's open issues of `repo` that are
-  assigned to `identity.github_login` and carry a label.** `started_labels` (a
-  non-empty list) marks an issue as started: rule 8 applies to it. `paused_labels`
-  (a list that may be empty) marks it as paused: rule 12 applies, and a paused
-  label outranks a started one. Label names are compared case-insensitively
-  and a label may not appear in both lists. An issue that is not assigned to the
-  owner, or has neither kind of label, produces no row, exactly like a Linear
-  issue outside a started state: an issue has to be assigned **and** labelled
-  before it appears. The issue search and its labels are bounded
-  by the global `[github]` page sizes: `issue_page_size` (1 to 100, required) for
-  the search and `nested_page_size` for the labels of an issue; a label list longer
-  than one page is followed to its end, and anything that cannot be followed
-  makes `github_issues` `truncated`. The node budget of the pull request search
-  is validated at load with the closing issue references of 7.3 and the pull request labels of the ignore label included, whether
-  or not a `github` project exists, so the global file is valid or not independently
-  of the project files; the issue search is validated against the same limit. The global `[linear]` table of
+  assigned to `identity.github_login` and carry the configured signal.**
+  `issue_signal` is required: `labels`, `project` or `both`. With `labels` or
+  `both`, `started_labels` (a non-empty list) marks an issue as started (rule 8)
+  and `paused_labels` (a list that may be empty) marks it as paused (rule 12);
+  `project` rejects both keys. With `project` or `both`, a GitHub Project (v2)
+  single-select field marks the issue: `status_project_owner` (a user or
+  organization login), `status_project_number` (a positive integer),
+  `status_field` (the exact, case-sensitive field name),
+  `status_started_options` (non-empty) and `status_paused_options` (may be
+  empty); `labels` rejects all five. Missing keys, wrong types, repeated names
+  and a name in both lists of one signal are errors naming the file and key.
+  Label and option names are compared case-insensitively. A paused label or
+  option outranks a started one across both signals, and with `both` either
+  signal can mark an issue as started or paused. `Issue.state` is the deciding
+  label or option as GitHub spells it (the paused one before the started one; a
+  label before an option when both signals decide the same side). An issue that
+  is not assigned to the owner, or carries no signal, produces no row, exactly like
+  a Linear issue outside a started state: an issue has to be assigned **and**
+  marked before it appears. The project signal reads the item of the issue in
+  the configured Project (number and owner login must both match, so a Project
+  of the same number under another owner is ignored); an issue without that item,
+  an archived item, or an item whose field has no value gives no project signal
+  and is not an error. A field value that is not a single-select value is an
+  `invalid_response`. The issue search, its labels and its Project items are
+  bounded by the global `[github]` page sizes: `issue_page_size` (1 to 100,
+  required) for the search and `nested_page_size` for the labels and for the
+  Project items of an issue. A label or Project item list longer than one page is
+  followed to its end, and anything that cannot be followed makes `github_issues`
+  `truncated`. Before the issue search of a project with the project signal, one
+  validation request checks that the Project exists under the owner, that the
+  field is a single-select field and that every configured option exists in it
+  (case-insensitive); any failure makes `github_issues` fail with a message naming
+  the key, and never yields an empty list. The owner, number and field travel as
+  query variables. The node budget of the pull request search is validated at load
+  with the closing issue references of 7.3 and the pull request labels of the
+  ignore label included, whether or not a `github` project exists, so the global
+  file is valid or not independently of the project files. The issue search is
+  validated against the same limit in its worst case, `issue_page_size * (1 +
+  nested + nested)` nodes (the issue, its label page and its Project item page),
+  whether or not a project uses the project signal. The global `[linear]` table of
   `config.toml` and its keyring entry are required only while at least one
   project uses `issue_source = "linear"`; the table is validated whenever it is
   present, and `pohunek-work doctor` checks the keyring only when a Linear

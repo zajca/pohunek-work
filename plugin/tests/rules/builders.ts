@@ -25,7 +25,7 @@ export const identity: IdentityConfig = {
 export const project = { pohunekLabel: "widgets", ignoredChecks: ["CD / Enqueue E2E"], policyChecks: ["Require label"], aiReviewers: ["ai-helper"], reviews: "session" as const, issueSource: { kind: "linear", team: "ABC", pausedStates: ["On hold"] } satisfies IssueSource, ignoreLabel: null };
 
 /** Issues of the project come from GitHub issues carrying these labels. */
-export const githubIssueSource = { kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] } as const satisfies IssueSource;
+export const githubIssueSource = { kind: "github", signal: "labels", startedLabels: ["in-progress"], pausedLabels: ["on-hold"], projectStatus: null } as const satisfies IssueSource;
 
 export const allOk: SourceStatuses = { github: "ok", github_merged: "ok", linear: "ok", github_issues: "unused", pohunek: "ok" };
 

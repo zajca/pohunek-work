@@ -27,7 +27,17 @@ test("the pull request labels add one nested connection per pull request", () =>
 });
 
 test("an issue search page costs the issue and its label page per issue", () => {
-  expect(estimateIssueSearchNodes({ issuePageSize: 30, nestedPageSize: 50 })).toBe(30 * 51);
+  expect(estimateIssueSearchNodes({ issuePageSize: 30, nestedPageSize: 50 }, { projectItems: false })).toBe(30 * 51);
+});
+
+test("the Project items add one nested connection per issue", () => {
+  const sizes = { issuePageSize: 30, nestedPageSize: 50 };
+  expect(estimateIssueSearchNodes(sizes, { projectItems: true })).toBe(30 * 101);
+  expect(estimateIssueSearchNodes(sizes, { projectItems: true }) - estimateIssueSearchNodes(sizes, { projectItems: false })).toBe(30 * 50);
+});
+
+test("a Project items follow-up page costs one nested page plus the alias overhead", () => {
+  expect(estimateConnectionNodes("issueProjectItems", { nestedPageSize: 100, threadCommentPageSize: 7 })).toBe(100 + CONNECTION_ALIAS_OVERHEAD_NODES);
 });
 
 describe("estimateConnectionNodes", () => {
