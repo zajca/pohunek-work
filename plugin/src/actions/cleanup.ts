@@ -88,7 +88,7 @@ export interface CleanupResult {
 
 /** What the checks read: the pohunek calls that gather evidence and git. */
 export interface EvidenceDeps {
-  readonly pohunek: Pick<PohunekClient, "listWorktrees" | "listNotifications" | "diffSession">;
+  readonly pohunek: Pick<PohunekClient, "listWorktrees" | "listNotifications" | "diffSession" | "listSessions">;
   /** Runs git. */
   readonly exec: Exec;
 }
@@ -473,10 +473,33 @@ async function rereadSessions(pohunek: PohunekClient, stoppedAlready: boolean): 
 }
 
 /**
- * Reads the session list once more right before `session rm`: the target must still be
- * finished in the same worktree, and the sessions sharing it must be exactly those the
+ * Why `evidence`, read for the finished session `sessionId` in `worktreePath` on `branch`, no
+ * longer holds against the latest session list; null when it still does. The target must still
+ * be finished in the same worktree, and the sessions sharing it must be exactly those the
  * evidence was read for, in the same states.
  */
+export function staleEvidenceReason(
+  latest: PohunekSession | undefined,
+  sessions: readonly PohunekSession[],
+  expected: { readonly sessionId: string; readonly worktreePath: string; readonly branch: string; readonly project: string },
+  evidence: Evidence,
+): string | null {
+  if (latest === undefined || !isTerminal(latest.state) || latest.worktreePath !== expected.worktreePath || latest.branch !== expected.branch) {
+    return "the session is gone, running again or points at another worktree";
+  }
+  const target = validTarget(latest, expected.project);
+  const sharers = sharersOf(target, sessions);
+  const shared = worktreeNotShared(sharers);
+  if (!shared.ok) return `worktree_not_shared: ${shared.detail}`;
+  // The evidence was gathered for exactly these sharers in exactly these states; any difference is stale evidence.
+  const known = new Map(evidence.inventory.sharers.map((s) => [s.sessionId, s.state]));
+  if (sharers.length !== known.size || sharers.some((s) => known.get(s.id) !== s.state)) {
+    return "the sessions sharing the worktree changed since the evidence was read; run cleanup again";
+  }
+  return null;
+}
+
+/** Reads the session list once more right before `session rm` and refuses when the evidence went stale. */
 async function recheckBeforeRemoval(plan: CleanupPlan, evidence: Evidence, stopped: boolean, deps: CleanupDeps): Promise<void> {
   const kept = stopped ? "the session stays stopped" : "the session was not touched";
   const refuse = (what: string): ActionError =>
@@ -484,18 +507,8 @@ async function recheckBeforeRemoval(plan: CleanupPlan, evidence: Evidence, stopp
   const listed = await deps.pohunek.listSessions();
   if (!listed.ok) throw refuse(`the session list could not be re-read (${listed.code})`);
   const latest = listed.data.find((s) => s.id === plan.sessionId);
-  if (latest === undefined || !isTerminal(latest.state) || latest.worktreePath !== plan.worktreePath || latest.branch !== plan.branch) {
-    throw refuse("the session is gone, running again or points at another worktree");
-  }
-  const target = validTarget(latest, plan.project);
-  const sharers = sharersOf(target, listed.data);
-  const shared = worktreeNotShared(sharers);
-  if (!shared.ok) throw refuse(`worktree_not_shared: ${shared.detail}`);
-  // The evidence was gathered for exactly these sharers in exactly these states; any difference is stale evidence.
-  const known = new Map(evidence.inventory.sharers.map((s) => [s.sessionId, s.state]));
-  if (sharers.length !== known.size || sharers.some((s) => known.get(s.id) !== s.state)) {
-    throw refuse("the sessions sharing the worktree changed since the evidence was read; run cleanup again");
-  }
+  const stale = staleEvidenceReason(latest, listed.data, { sessionId: plan.sessionId, worktreePath: plan.worktreePath, branch: plan.branch, project: plan.project }, evidence);
+  if (stale !== null) throw refuse(stale);
 }
 
 /**

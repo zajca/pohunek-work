@@ -106,7 +106,7 @@ describe("a finished holder (D1, D3)", () => {
     expect(message).toContain('"stopped"');
     expect(message).toContain(`"${PATH}"`);
     expect(message).toContain(`"${BRANCH}" is already checked out`);
-    expect(message).toContain("safe to release with `pohunek session rm s-held`");
+    expect(message).toContain("can be released with `pohunek session rm s-held`");
     expect(message).toContain("3 ignored entries are lost");
     expect(message).toContain("`do` itself removes nothing");
     expect(message).not.toContain("attach");
@@ -147,7 +147,7 @@ describe("a live holder (D2)", () => {
     const live = session({ id: "s-live", activity: "idle", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear", "work.role": "implement" }, worktreePath: "/wt/owner" });
     const waiting = pr({ headRefName: "alice/ABC-1/x", reviewRequests: [{ kind: "user", login: "someone" }] });
     const { deps } = setup({ issues: ok("linear", [issue()]), prs: ok("github", [waiting]), sessions: [live] });
-    await expectRefusal(runDo(baseConfig, options({ key: "linear:ABC-1", action: "babysit", profile: "profile-a" }), deps), "already_running", "attach with `pohunek-work do linear:ABC-1 attach`");
+    await expectRefusal(runDo(baseConfig, options({ key: "linear:ABC-1", action: "babysit", profile: "profile-a" }), deps), "already_running", "attach with `pohunek-work do linear:ABC-1 attach --project widgets`");
   });
 
   test("already_running names pohunek attach for a live session of someone else in the worktree", async () => {
@@ -308,20 +308,21 @@ describe("linked holders and the release command (D3)", () => {
 
   function context(sessionsOfRow: readonly PohunekSession[], all: readonly PohunekSession[]): Parameters<typeof diagnoseBranchHolder>[1] {
     const built = build({ world: { sessions: all } });
-    return { row: fakeRow(sessionsOfRow), sessions: all, config: baseConfig, deps: { pohunek: built.h.deps.pohunek, exec: built.h.deps.exec } };
+    return { row: fakeRow(sessionsOfRow), scope: { project: null, includeIgnored: false }, sessions: all, config: baseConfig, deps: { pohunek: built.h.deps.pohunek, exec: built.h.deps.exec } };
   }
 
   const holder = { path: PATH, branch: BRANCH, sessionId: "s-held" };
 
   test("the one linked session that owns a worktree is released with do cleanup", async () => {
     const text = await diagnoseBranchHolder(holder, context([HOLDER], [HOLDER]));
-    expect(text).toContain("safe to release with `pohunek-work do linear:ABC-1 cleanup`");
+    expect(text).toContain("can be released with `pohunek-work do linear:ABC-1 cleanup`");
+    expect(text).toContain("`cleanup` checks everything again");
   });
 
   test("several linked sessions that own a worktree make do cleanup ambiguous, so session rm is named", async () => {
     const second = session({ id: "s-second", state: "stopped", activity: null, worktreePath: "/wt/second", metadata: {} });
     const text = await diagnoseBranchHolder(holder, context([HOLDER, second], [HOLDER, second]));
-    expect(text).toContain("safe to release with `pohunek session rm s-held`");
+    expect(text).toContain("can be released with `pohunek session rm s-held`");
   });
 
   test("a live linked holder is offered do attach", async () => {
@@ -335,5 +336,109 @@ describe("linked holders and the release command (D3)", () => {
     const other = session({ id: "s-other", activity: "idle", metadata: {} });
     const text = await diagnoseBranchHolder(holder, context([live, other], [live, other]));
     expect(text).toContain("attach with `pohunek attach s-held`");
+  });
+});
+
+describe("the evidence is re-validated against a fresh session list (offer for an unlinked holder)", () => {
+  /** After git has been read, `session list` answers with `later`. */
+  function changing(later: () => SourceResult<readonly PohunekSession[]>): Built {
+    const built: Built = build({
+      world: { listSessions: () => (built.gitCalls.some((argv) => argv[6] === "rev-list") ? later() : ok("pohunek", [HOLDER])) },
+    });
+    return built;
+  }
+
+  test("an unchanged list keeps the offer and warns that session rm force-removes without a recheck", async () => {
+    const message = await refused(changing(() => ok("pohunek", [HOLDER])));
+    expect(message).toContain("can be released with `pohunek session rm s-held`");
+    expect(message).toContain("when this was read");
+    expect(message).toContain("force-removes the worktree and does not recheck");
+    expect(message).toContain("`pohunek session list` immediately before");
+  });
+
+  test("a writer that started in the worktree meanwhile turns the offer into a refusal", async () => {
+    const writer = session({ id: "s-writer", state: "running", activity: "working", cwd: PATH, worktreePath: PATH, branch: BRANCH, metadata: {} });
+    const message = await refused(changing(() => ok("pohunek", [HOLDER, writer])));
+    expect(message).toContain("evidence_stale");
+    expectNoRemovalCommand(message);
+  });
+
+  test("the holder running again turns the offer into a refusal", async () => {
+    const message = await refused(changing(() => ok("pohunek", [{ ...HOLDER, state: "running", activity: "working" }])));
+    expect(message).toContain("evidence_stale");
+    expect(message).toContain("running again");
+    expectNoRemovalCommand(message);
+  });
+
+  test("the holder gone from the list turns the offer into a refusal", async () => {
+    const message = await refused(changing(() => ok("pohunek", [])));
+    expect(message).toContain("evidence_stale");
+    expectNoRemovalCommand(message);
+  });
+
+  test("a session in another worktree turns the offer into a refusal", async () => {
+    const message = await refused(changing(() => ok("pohunek", [{ ...HOLDER, worktreePath: "/wt/elsewhere" }])));
+    expect(message).toContain("evidence_stale");
+    expectNoRemovalCommand(message);
+  });
+
+  test("an unreadable re-read turns the offer into a refusal", async () => {
+    const message = await refused(changing(() => fail("pohunek", "timeout")));
+    expect(message).toContain("evidence_stale");
+    expect(message).toContain("could not be re-read");
+    expectNoRemovalCommand(message);
+  });
+});
+
+describe("suggested commands carry the options of the launch", () => {
+  const holder = { path: PATH, branch: BRANCH, sessionId: "s-held" };
+  const linkedRow = { listItem: { key: "linear:ABC-1" }, item: { sessions: [HOLDER] }, project: { pohunekLabel: "widgets" } } as unknown as CollectedRow;
+
+  function diagnose(row: CollectedRow, scope: { project: string | null; includeIgnored: boolean }, held: PohunekSession): Promise<string> {
+    const built = build({ world: { sessions: [held] } });
+    return diagnoseBranchHolder(holder, { row, scope, sessions: [held], config: baseConfig, deps: { pohunek: built.h.deps.pohunek, exec: built.h.deps.exec } });
+  }
+
+  test("--project and --include-ignored are repeated on the release command", async () => {
+    const text = await diagnose(linkedRow, { project: "widgets", includeIgnored: true }, HOLDER);
+    expect(text).toContain("`pohunek-work do linear:ABC-1 cleanup --project widgets --include-ignored`");
+  });
+
+  test("no options are added when the launch had none", async () => {
+    const text = await diagnose(linkedRow, { project: null, includeIgnored: false }, HOLDER);
+    expect(text).toContain("`pohunek-work do linear:ABC-1 cleanup`");
+  });
+
+  test("the attach command of a live linked holder repeats the options", async () => {
+    const live = { ...HOLDER, state: "running", activity: "idle" };
+    const row = { ...linkedRow, item: { sessions: [live] } } as unknown as CollectedRow;
+    const text = await diagnose(row, { project: "widgets", includeIgnored: true }, live);
+    expect(text).toContain("`pohunek-work do linear:ABC-1 attach --project widgets --include-ignored`");
+  });
+
+  test("a project label is shell-quoted, and one that cannot be shown falls back to pohunek", async () => {
+    const live = { ...HOLDER, state: "running", activity: "idle" };
+    const row = { ...linkedRow, item: { sessions: [live] } } as unknown as CollectedRow;
+    expect(await diagnose(row, { project: "my project; rm -rf x", includeIgnored: false }, live)).toContain("attach --project 'my project; rm -rf x'`");
+    expect(await diagnose(row, { project: "pro\u010Dekt", includeIgnored: false }, live)).toContain("`pohunek attach s-held`");
+  });
+
+  test("the already_running refusal repeats --include-ignored", async () => {
+    const live = session({ id: "s-live", activity: "idle", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear", "work.role": "implement" }, worktreePath: "/wt/owner" });
+    const waiting = pr({ headRefName: "alice/ABC-1/x", reviewRequests: [{ kind: "user", login: "someone" }] });
+    const { deps } = setup({ issues: ok("linear", [issue()]), prs: ok("github", [waiting]), sessions: [live] });
+    await expectRefusal(
+      runDo(baseConfig, options({ key: "linear:ABC-1", action: "babysit", profile: "profile-a", includeIgnored: true }), deps),
+      "already_running",
+      "`pohunek-work do linear:ABC-1 attach --project widgets --include-ignored`",
+    );
+  });
+});
+
+describe("compatibility characters cannot forge a quoted field", () => {
+  test("a fullwidth quote and backslash stay inside the quoted string", async () => {
+    const message = await refused(build({ git: { status: out("?? a\uFF02, \uFF02forged\uFF3C\0") } }));
+    expect(message).toContain('"a\\", \\"forged\\\\"');
+    expect(message).not.toContain('"a", "forged');
   });
 });

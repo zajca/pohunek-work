@@ -160,7 +160,7 @@ async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Prom
 async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps, action: ActionPlan["action"]): Promise<DoOutput> {
   const { logger } = deps;
   const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, options.includeIgnored, deps);
-  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github, pohunek: deps.pohunek, exec: deps.exec });
+  const plan = await planLaunch(action, row, config, { profile: options.profile, sessions, github: deps.github, pohunek: deps.pohunek, project: options.project, includeIgnored: options.includeIgnored, exec: deps.exec });
   const argv = displayArgv(config.global.pohunek.bin, plan);
   logger.info("do_plan", { key: plan.key, action: plan.action, profile: plan.profile, branch: plan.branch, cwd: plan.cwd, argv });
 

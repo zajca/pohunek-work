@@ -259,10 +259,14 @@ What it offers depends on the holder:
   else `pohunek attach <id>`. The `already_running` refusals name the same
   command.
 - **A finished session whose worktree passes every `cleanup` check** (see
-  [Finished sessions](#finished-sessions)): marked safe to release, with
+  [Finished sessions](#finished-sessions)): the message states that, when it was
+  read, the session was finished and clean and in sync, and offers
   `pohunek-work do <key> cleanup` when it is the one linked session that owns a
-  worktree and `pohunek session rm <id>` otherwise, plus the number of ignored
-  files the release loses. `do` itself removes nothing; the owner decides.
+  worktree (`cleanup` checks everything again before it removes anything) and
+  `pohunek session rm <id>` otherwise, plus the number of ignored files the
+  release loses. `pohunek session rm` force-removes the worktree and does not
+  recheck, so the owner runs `pohunek session list` immediately before. `do`
+  itself removes nothing; the owner decides.
 - **Anything else** (dirty or untracked files, unpushed or unfetched commits,
   a session that is not finished, git or pohunek that cannot be read, output
   that cannot be parsed): refused with the failed check names and their detail
@@ -270,9 +274,13 @@ What it offers depends on the holder:
   holder_entries_listed`, then `and N more`). No removal command is offered;
   commit and push or clean the worktree by hand, then retry.
 
-"Safe to release" is decided by the same fail-closed evidence as `cleanup`, read
-fresh (including one `git fetch` of `[actions] cleanup_remote`), so an offered
-release is one `cleanup` would accept. Paths, session ids and check details
+A release is offered only on the same fail-closed evidence as `cleanup`, read
+fresh (including one `git fetch` of `[actions] cleanup_remote`). The session list
+is then read once more and compared with the evidence (the session is still
+finished in the same worktree and the sessions sharing it are unchanged); a
+change or an unreadable list is refused as `evidence_stale` with no removal
+command. Commands that name the row repeat the launch's `--project` and
+`--include-ignored`. Paths, session ids and check details
 from git or pohunek appear in the message only as JSON-quoted, ASCII-only
 strings cut at `[actions] holder_entry_max_length` characters.
 
