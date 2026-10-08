@@ -5,6 +5,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
 use iced::Size;
@@ -12,6 +13,7 @@ use iced_runtime::{task::into_stream, Action};
 use pohunek_gui_core::{
     load_host_snapshot, stop_session, DomainEvent, HostConfig, Selection, UiState, WindowSize,
 };
+use pohunek_platform::process::{HostInspector, ProcessInspector};
 use pohunek_test_support::env::TestEnv;
 use pohunek_test_support::process_env::ProcessEnv;
 use pohunek_test_support::wait;
@@ -22,6 +24,7 @@ use crate::{command, parse_args, BootState, HostId, PohunekApp};
 
 const STATE_CHILD_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_CHILD";
 const STATE_CHILD_MARKER_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_MARKER";
+const DAEMON_DROP_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[test]
 fn launcher_interactions_preserve_the_main_window_state_file() {
@@ -307,8 +310,36 @@ impl Daemon {
 
     fn stop(&mut self) {
         let mut child = self.0.take().expect("daemon running");
-        child.kill().expect("stop daemon");
-        child.wait().expect("reap daemon");
+        let inspector = HostInspector::new();
+        let hierarchy = inspector.descendants(child.id()).unwrap_or_else(|error| {
+            eprintln!("cannot list the daemon process tree: {error}");
+            Vec::new()
+        });
+        if let Some(pid) = i32::try_from(child.id())
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        }
+        let deadline = Instant::now() + DAEMON_DROP_EXIT_TIMEOUT;
+        while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+            std::thread::sleep(wait::POLL_INTERVAL);
+        }
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        for fact in hierarchy {
+            let identity = fact.identity();
+            if inspector.is_running(identity).unwrap_or(false) {
+                if let Some(pid) = i32::try_from(identity.pid)
+                    .ok()
+                    .and_then(rustix::process::Pid::from_raw)
+                {
+                    let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+                }
+            }
+        }
     }
 }
 
