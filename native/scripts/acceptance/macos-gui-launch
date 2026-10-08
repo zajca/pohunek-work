@@ -482,4 +482,4 @@ state=$("$python_bin" "$helper" states "$work/ev/list-after.json" "$session_id" 
 printf 'worker and child unchanged; session %s still live\n' "$session_id"
 
 printf '\nmacos-gui-launch: all checks passed\n'
-printf 'Not verified here: the attach launchers, a session-row click, and Terminal.app (unit tests, or a person at the Mac with Pohunek.app).\n'
+printf 'Not verified here: a session-row click and Terminal.app (a person at the Mac with Pohunek.app must check them); CI exercises the attach launcher subprocess paths.\n'

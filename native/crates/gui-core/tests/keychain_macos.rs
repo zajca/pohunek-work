@@ -21,14 +21,12 @@
 //! contract. In the second case the blocked read keeps the store's single
 //! lookup permit, so no lookup may follow in this process; the process
 //! refuses further lookups until restart, and the test ends there. The
-//! interactive prompt itself is not driven; the permit and timeout behavior is
-//! covered by the injected-closure tests in `credential_store`.
+//! interactive prompt itself is not driven.
 //!
 //! A deleted keychain is not exercised: the Security framework keeps serving an
 //! already-opened database after `security delete-keychain`, so the state is
 //! not observable from a running process. The `Unavailable` mapping for
-//! `errSecNoSuchKeychain` is covered by the unit tests over keyring's
-//! `decode_error`.
+//! `errSecNoSuchKeychain` follows keyring's `decode_error` behavior.
 #![forbid(unsafe_code)]
 
 // Rust guideline compliant 2026-10-01

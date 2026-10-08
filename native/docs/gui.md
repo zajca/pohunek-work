@@ -452,10 +452,10 @@ directory with `pohunek`, `pohunekd`, `pohunek-sessiond`, and `pohunek-gui`.
 Without a window server (a launchd session other than Aqua, such as SSH) it
 exits 2 and prints the manual steps; it never passes without starting the GUI.
 
-Not verified by the script: the attach launchers (no session-row click can be
-driven headlessly; the pohunek-gui unit tests that CI runs on macOS cover them),
-the Terminal.app window itself, and double-clicking an app icon, which need a
-person at the Mac and the signed `Pohunek.app`. Manual procedure:
+Not verified by the script: a session-row click, the Terminal.app window itself,
+and double-clicking an app icon. CI exercises the attach launcher subprocess
+paths; the remaining window interactions need a person at the Mac and the signed
+`Pohunek.app`. Manual procedure:
 
 1. Run `pohunek service install` and confirm `pohunek service status`.
 2. Write `~/.config/pohunek/gui.toml` with `pohunek_bin = "pohunek"` and
