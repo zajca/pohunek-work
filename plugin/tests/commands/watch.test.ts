@@ -188,6 +188,26 @@ test("an ignored row on the owner's turn never notifies, and losing the label no
   expect((await tick(h, unparked.baseline)).notified).toEqual([]);
 });
 
+test("a row parked during a partial poll leaves the baseline and notifies once when it returns", async () => {
+  const other = pr({ id: "acme/widgets#13", number: 13, url: "https://example.invalid/acme/widgets/pull/13", headRefName: "feature/abc-2" });
+  const h = harness([mine, other]);
+  let state = (await tick(h, null)).baseline;
+  expect(state?.get("widgets github:acme/widgets#12")).toBe("me");
+  expect(state?.get("widgets github:acme/widgets#13")).toBe("me");
+  h.world.prs = githubOk([pr({ headRefName: "feature/abc-1", ignored: true })]);
+  h.world.issues = { ok: false, source: "linear", code: "truncated", message: "failed", durationMs: 1 };
+  const partial = await tick(h, state);
+  state = partial.baseline;
+  expect(partial.notified).toEqual([]);
+  expect(state?.has("widgets github:acme/widgets#12")).toBe(false);
+  expect(state?.get("widgets github:acme/widgets#13")).toBe("me");
+  h.world.prs = githubOk([mine, other]);
+  h.world.issues = linearOk([]);
+  const unparked = await tick(h, state);
+  expect(unparked.notified).toEqual(["widgets github:acme/widgets#12"]);
+  expect(h.argvs).toHaveLength(1);
+});
+
 const guarded = {
   ...config,
   projects: config.projects.map((p) =>

@@ -77,11 +77,17 @@ export async function watchTick(
   const { logger } = deps;
   const collected = await collectRows(config, options.project, deps);
   for (const warning of collected.warnings) logger.error("watch_warning", { warning });
-  // Ignored rows never reach the baseline, so a row that loses the label while it is the owner's turn is new to it and notifies once.
-  const items = collected.rows.map((row) => row.listItem).filter((item) => !item.ignored);
+  // Ignored rows never stay in the baseline, even on a partial poll, so a row that loses the label while it is the owner's turn is new to it and notifies once.
+  const listed = collected.rows.map((row) => row.listItem);
+  const items = listed.filter((item) => !item.ignored);
   const complete = collected.sourceFailures.length === 0;
   const next = transitionsToMe(baseline, items, complete);
-  const nextBaseline: Baseline = baseline === null && !complete ? null : next.baseline;
+  let nextBaseline: Baseline = baseline === null && !complete ? null : next.baseline;
+  if (nextBaseline !== null) {
+    const pruned = new Map(nextBaseline);
+    for (const item of listed) if (item.ignored) pruned.delete(rowId(item));
+    nextBaseline = pruned;
+  }
   const marked = items.filter((item) => next.marked.has(rowId(item)));
   logger.info("watch_tick", { rows: items.length, notify: marked.length, complete, baselined: nextBaseline !== null });
   const notified: string[] = [];
