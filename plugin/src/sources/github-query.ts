@@ -116,7 +116,7 @@ export function buildIssueSearchRequest(
   statusField: string | null,
 ): GraphqlRequest {
   const declaration = statusField === null ? "" : ", $statusField: String!";
-  const items = statusField === null ? "" : ` projectItems(first: $nested) { ${PROJECT_ITEM_FIELDS} }`;
+  const items = statusField === null ? "" : ` projectItems(first: $nested, includeArchived: false) { ${PROJECT_ITEM_FIELDS} }`;
   const query = `query PohunekWorkIssues($q: String!, $top: Int!, $nested: Int!, $after: String${declaration}) {
   rateLimit { remaining }
   issues: search(query: $q, type: ISSUE, first: $top, after: $after) {
@@ -248,11 +248,17 @@ function connectionSelection(spec: ConnectionPageSpec): string {
   const kind = CONNECTION_KINDS[spec.kind];
   const size = spec.kind === "threadComments" ? "$comments" : "$nested";
   const args = `first: ${size}, after: $after_${spec.alias}`;
-  const timelineArgs = spec.kind === "timelineItems" ? `, itemTypes: ${TIMELINE_ITEM_TYPES}` : "";
+  // `Issue.projectItems` includes archived items unless told otherwise; an archived item gives no signal.
+  const kindArgs =
+    spec.kind === "timelineItems"
+      ? `, itemTypes: ${TIMELINE_ITEM_TYPES}`
+      : spec.kind === "issueProjectItems"
+        ? ", includeArchived: false"
+        : "";
   let inner = "";
   kind.path.forEach((segment, index) => {
     const isLast = index === kind.path.length - 1;
-    inner += isLast ? `${segment}(${args}${timelineArgs}) { ${kind.fields} }` : `${segment} { `;
+    inner += isLast ? `${segment}(${args}${kindArgs}) { ${kind.fields} }` : `${segment} { `;
   });
   inner += " }".repeat(kind.path.length - 1);
   return `${spec.alias}: node(id: $id_${spec.alias}) { ... on ${kind.parentType} { ${inner} } }`;

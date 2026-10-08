@@ -69,7 +69,7 @@ test("the issue search selects the Project items only for a status field and pas
   const request = buildIssueSearchRequest("q", null, { issuePageSize: 5, nestedPageSize: 4 }, "Sprint \"status\" { x }");
   expectVariablesConsistent(request);
   expect(request.variables).toEqual({ q: "q", top: 5, nested: 4, after: null, statusField: "Sprint \"status\" { x }" });
-  expect(request.query).toContain("projectItems(first: $nested)");
+  expect(request.query).toContain("projectItems(first: $nested, includeArchived: false)");
   expect(request.query).toContain("fieldValueByName(name: $statusField)");
   expect(request.query).not.toContain("Sprint");
 });
@@ -88,7 +88,7 @@ test("a Project items follow-up page declares the status field variable and omit
   const request = buildConnectionRequest([page], sizes, "Status");
   expectVariablesConsistent(request);
   expect(request.variables["statusField"]).toBe("Status");
-  expect(request.query).toContain("... on Issue { projectItems(first: $nested, after: $after_c0)");
+  expect(request.query).toContain("... on Issue { projectItems(first: $nested, after: $after_c0, includeArchived: false)");
   expect(() => buildConnectionRequest([page], sizes)).toThrow();
   const labels = buildConnectionRequest([{ alias: "c0", kind: "issueLabels", nodeId: "N", after: "A" }], sizes, "Status");
   expect(labels.variables).not.toHaveProperty("statusField");

@@ -820,7 +820,7 @@ const SINGLE_SELECT_VALUE = "ProjectV2ItemFieldSingleSelectValue";
 
 /**
  * Option names the configured Project's items of the issue carry in the status field, as GitHub
- * spells them. Items of other Projects (another number or owner) and an unset field yield nothing;
+ * spells them. Items of other Projects (another number or owner) and an unset field yield nothing, archived items are excluded by the query;
  * a value that is not a single-select value is a schema mismatch.
  */
 function projectOptionNames(raw: JsonObject, status: GithubProjectStatus): string[] {

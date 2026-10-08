@@ -314,7 +314,7 @@ describe("project status signal", () => {
       after: null,
       statusField: "Status",
     });
-    expect(requests[1]?.query).toContain("projectItems(first: $nested)");
+    expect(requests[1]?.query).toContain("projectItems(first: $nested, includeArchived: false)");
     expect(requests[1]?.query).not.toContain("Status");
   });
 
@@ -408,7 +408,7 @@ describe("project status signal", () => {
       const issues = expectIssues(await source.fetchIssues(projectOnly));
       expect(requests).toHaveLength(3);
       expect(requests[2]?.variables).toEqual({ nested: 5, statusField: "Status", id_c0: "I_node_7", after_c0: "P1" });
-      expect(requests[2]?.query).toContain("... on Issue { projectItems(first: $nested, after: $after_c0)");
+      expect(requests[2]?.query).toContain("... on Issue { projectItems(first: $nested, after: $after_c0, includeArchived: false)");
       expect(issues).toMatchObject([{ id: "acme/widgets#7", state: "In Progress", started: true }]);
     });
 
