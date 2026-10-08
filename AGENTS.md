@@ -137,6 +137,12 @@ with `gh attestation verify <archive> --repo zajca/pohunek-work`.
   behavior or the reason, never history ("previously", "moved from").
 - No hardcoded tuning values; no silent defaults for required configuration.
 - Secrets never enter code, logs, errors or agent context.
+- New behavior is verified by integration or end-to-end tests that exercise
+  collaborating production components through a public interface (process,
+  network, CLI, or real build and packaging checks). Unit tests that isolate a
+  function or class, including tests built primarily from mocks or injected
+  fakes, are prohibited. A test's category is decided by the boundary it
+  exercises, not by its framework or file name.
 - Commits are unsigned, concise, with no `Co-Authored-By` or generated-by footer.
 - Work is tracked in GitHub Issues (this repository and `zajca/pohunek`); pull
   requests are small, sequential and each passes its surface's gate alone.

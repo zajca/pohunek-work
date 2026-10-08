@@ -56,9 +56,13 @@ gate of every touched surface green before hand-off. The issue is the spec.
    criteria and the files it owns; two workers never own one file. A change to
    a path used by more than one surface must be covered by the CI filter of
    every surface that uses it (AGENTS.md, layout rule).
-6. **Write tests for all new logic** in the surface's own suite (`bun test`,
-   `cargo nextest`). No hardcoded tuning values and no silent defaults for
-   required configuration.
+6. **Verify all new behavior with tests** in the surface's own suite (`bun test`,
+   `cargo nextest`): integration or end-to-end tests that exercise
+   collaborating production components through a public interface. Unit tests
+   that isolate a function or class (including tests built primarily from mocks
+   or injected fakes) are prohibited; a test's category is decided by the
+   boundary it exercises, not by its framework or file name. No hardcoded
+   tuning values and no silent defaults for required configuration.
 7. **Run the gates** per the `gates` skill for every touched surface; iterate
    until green. If the surface version, the core pin or a release path changes,
    keep AGENTS.md and the README in step.

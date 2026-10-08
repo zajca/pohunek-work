@@ -27,7 +27,7 @@
   "pullRequests": {
     "shape": "stacked",
     "policy": "Deliver work as a stack of small, sequential PRs, each one coherent concern, landed bottom-up. A single PR is right only when the whole change is already one small concern.",
-    "sliceRules": "Every PR is complete production code for its slice: it builds, passes the gate of every surface it touches on its own, and has tests. No stubs, dead code, or placeholders a later PR fills in. A slice touches one surface unless the change is a cross-surface contract.",
+    "sliceRules": "Every PR is complete production code for its slice: it builds, passes the gate of every surface it touches on its own, and verifies new behavior with tests. Tests are integration or end-to-end tests that exercise collaborating production components through a public interface; unit tests that isolate a function or class (including tests built primarily from mocks or injected fakes) are prohibited. A test's category is decided by the boundary it exercises, not by its framework or file name. No stubs, dead code, or placeholders a later PR fills in. A slice touches one surface unless the change is a cross-surface contract.",
     "softMaxChangedLines": 400,
     "softMaxNote": "Hand-written changed lines per PR, excluding tests, lockfiles, and generated files. A cue to split, not a hard limit.",
     "issueReferences": "Non-final PRs use 'Refs #N'; only the final PR of the stack uses 'Closes #N'.",

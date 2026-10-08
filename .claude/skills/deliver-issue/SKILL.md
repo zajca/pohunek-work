@@ -73,8 +73,8 @@ Create the sibling worktree per `milestone` step 2 (`<primary>-<slug>` on
 1. Write a **shared context file** (in the session scratchpad) holding: the
    worktree path and HEAD, "no commits, no pushes, no branches", the mandatory
    repo rules (Rust guidelines for `native/`, comment rules below, no
-   hardcoded tuning values, tests for every change, core only through public
-   contracts), the local test
+   hardcoded tuning values, new behavior verified by integration/end-to-end
+   tests, never unit tests, core only through public contracts), the local test
    environment rules (below), and the report format. Brief every worker with
    "read the context file first" plus its own 4-step briefing (known facts,
    `path:line` starts, testable success criteria, owned files).
@@ -82,8 +82,8 @@ Create the sibling worktree per `milestone` step 2 (`<primary>-<slug>` on
    worker must:
    - **verify the task/finding against the code first** and report a false
      premise with `path:line` evidence instead of changing code;
-   - add a regression test and show it fails without the change and passes
-     with it;
+   - add a regression test at an integration or end-to-end boundary and show
+     it fails without the change and passes with it;
    - run its surface's tests and lint per the `gates` skill (for `native/`
      also `cargo fmt` and clippy `-D warnings`);
    - report root cause, changes with `path:line`, test evidence, and open

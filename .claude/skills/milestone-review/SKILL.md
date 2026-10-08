@@ -24,7 +24,9 @@ does not implement scope itself.
 1. **Load the DoD**: live body and comments, every item with its stable ID, and
    the slice plan (slice to DoD items).
 2. **Review read-only, item by item.** Verdict (met / partial / missing) with
-   `path:line` evidence. Check the repository conventions: tests for new logic,
+   `path:line` evidence. Check the repository conventions: new behavior verified
+   by integration or end-to-end tests (that exercise collaborating production
+   components through a public interface; unit tests are prohibited),
    no hardcoded tuning values, no silent defaults, secrets never in code or logs,
    comments that state behavior and never history, and for `native/` the
    `.agents/rust-guidelines/` rules. Check the boundary: no import of core
