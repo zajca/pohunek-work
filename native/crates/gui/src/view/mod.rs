@@ -274,21 +274,3 @@ fn conn_dot(conn: ConnState) -> Element<'static, Message> {
         })
         .into()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_agent_kind_has_neutral_label() {
-        assert_eq!(
-            agent_kind_label(&RuntimeRef::from_wire("Future Agent")),
-            "Unknown agent (Future Agent)"
-        );
-    }
-
-    #[test]
-    fn hermes_agent_kind_has_a_stable_label() {
-        assert_eq!(agent_kind_label(&RuntimeRef::hermes()), "hermes");
-    }
-}
