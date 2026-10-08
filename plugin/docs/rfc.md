@@ -727,7 +727,8 @@ mkdir -p "$LOG_DIR" || exit 1
 `wt:setup` attaches the main checkout's shared containers to the worktree network, so removing
 such a worktree has to disconnect them first. Core stops a hook after a fixed 300 s, but `do` waits
 for `session new` only `[actions] launch_timeout_ms`: a setup that takes longer reports
-`launch_timed_out` instead of `setup_failed`, so the setup has to finish within that budget.
+`launch_timed_out` (the session may exist; check `pohunek session list` before retrying) instead
+of `setup_failed`, so the setup has to finish within that budget.
 
 ## 11. Storage and Configuration
 

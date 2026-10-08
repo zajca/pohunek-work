@@ -397,6 +397,10 @@ function mapErr(err: Json): RunOutcome {
       `pohunek rejected the environment (${code}): set both ${SESSION_ENV} and ${DAEMON_ENV}, or unset both; the plugin did not change them`,
     );
   }
+  // The CLI gave up waiting while the daemon may still finish the request.
+  if (code === "request_timeout") {
+    return fail("timeout", `pohunek error ${code}`);
+  }
   const errClass = typeof err["class"] === "string" ? err["class"] : "unknown";
   return fail("unavailable", `pohunek error ${code} (class ${errClass})`);
 }

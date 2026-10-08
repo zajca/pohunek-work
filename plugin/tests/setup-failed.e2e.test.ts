@@ -253,7 +253,7 @@ ai_reviewers = []
  * come from `warnings.json`.
  */
 const fakePohunek = (dir: string): string => `#!${process.execPath}
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const dir = ${JSON.stringify(dir)};
 const argv = process.argv.slice(2);
@@ -281,6 +281,9 @@ if (sub === "project list") {
   console.log(envelope([]));
 } else if (sub === "notifications list") {
   console.log(envelope({ notifications: [] }));
+} else if (sub === "session new" && existsSync(dir + "/session-new-error")) {
+  console.log(JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 4, maximum: 4 }, err: { class: "transport", code: "request_timeout", msg: "timed out", recover: "" } }));
+  process.exit(2);
 } else if (sub === "session new") {
   const metadata = {};
   argv.forEach((arg, index) => {
@@ -410,6 +413,8 @@ test("warning text from the daemon reaches the human and the JSON error as stric
   expect(Object.keys(err).sort()).toEqual(["class", "code", "msg"]);
   expect(err.code).toBe("setup_failed");
   expect(/^[\x20-\x7e]*$/.test(err.msg)).toBe(true);
+  expect(err.msg).toContain("second line");
+  expect(err.msg).toContain("/work/wid");
 });
 
 test("a hook warning next to a fetch warning still fails the launch", async () => {
@@ -440,6 +445,18 @@ test("a fetch warning alone leaves the launch successful and the session is wait
   const waits = subcommands(calls, "session wait");
   expect(waits).toHaveLength(1);
   expect(waits[0]?.argv[2]).toBe(SESSION_ID);
+});
+
+test("a session new that the CLI gave up waiting for is launch_timed_out and never waited for", async () => {
+  const box = await sandbox([]);
+  await writeFile(join(box.dir, "session-new-error"), "");
+  const result = await box.run(["do", ROW_KEY, "implement", "--yes", "--json"]);
+
+  expect(result.code).toBe(2);
+  const err = parseErrEnvelope(result.out);
+  expect(err.code).toBe("launch_timed_out");
+  expect(err.msg).toContain("pohunek session list");
+  expect(subcommands(await box.calls(), "session wait")).toHaveLength(0);
 });
 
 test("a base_branch_fallback warning alone leaves the launch successful", async () => {
