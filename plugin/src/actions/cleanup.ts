@@ -13,7 +13,7 @@ import { SpawnError, type Exec } from "../util/exec.ts";
 import { ActionError } from "./types.ts";
 
 /** A session id as pohunek prints it; never an option, since it is passed as an argv value. */
-const SESSION_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
+export const SESSION_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 
 /** A branch that is safe inside a refspec and as an argv value: no option, no refspec or glob syntax. */
 const BRANCH = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
@@ -46,6 +46,8 @@ export interface CleanupSharer {
 }
 
 export interface CleanupInventory {
+  /** Uncommitted and untracked paths of the worktree; empty when the status was not read. */
+  readonly dirty: readonly string[];
   /** Ignored files of the worktree; they are lost with it. */
   readonly ignored: readonly string[];
   /** Commits only the worktree has; null when not measured. */
@@ -84,18 +86,23 @@ export interface CleanupResult {
   readonly verifiedAbsent: true;
 }
 
-export interface CleanupDeps {
-  readonly pohunek: PohunekClient;
+/** What the checks read: the pohunek calls that gather evidence and git. */
+export interface EvidenceDeps {
+  readonly pohunek: Pick<PohunekClient, "listWorktrees" | "listNotifications" | "diffSession">;
   /** Runs git. */
   readonly exec: Exec;
 }
 
-interface Evidence {
+export interface CleanupDeps extends EvidenceDeps {
+  readonly pohunek: PohunekClient;
+}
+
+export interface Evidence {
   readonly checks: readonly CleanupCheck[];
   readonly inventory: CleanupInventory;
 }
 
-interface Target {
+export interface Target {
   readonly id: string;
   readonly project: string;
   readonly worktreePath: string;
@@ -119,7 +126,7 @@ function describeFailure(result: { readonly ok: false; readonly code: string }):
 
 type GitOutcome = { readonly ok: true; readonly stdout: string } | { readonly ok: false; readonly reason: string };
 
-async function git(deps: CleanupDeps, config: PluginConfig, worktreePath: string, args: readonly string[], timeoutMs: number): Promise<GitOutcome> {
+async function git(deps: EvidenceDeps, config: PluginConfig, worktreePath: string, args: readonly string[], timeoutMs: number): Promise<GitOutcome> {
   const argv = [config.global.actions.gitBin, "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", worktreePath, ...args];
   try {
     const result = await deps.exec(argv, { timeoutMs });
@@ -133,7 +140,8 @@ async function git(deps: CleanupDeps, config: PluginConfig, worktreePath: string
 }
 
 interface StatusEntries {
-  readonly dirty: number;
+  /** Paths of every record that is not ignored (a renamed file by its new path). */
+  readonly dirty: readonly string[];
   readonly ignored: readonly string[];
 }
 
@@ -143,10 +151,10 @@ interface StatusEntries {
  * output is not exactly that format.
  */
 export function parseStatus(stdout: string): StatusEntries | null {
-  if (stdout === "") return { dirty: 0, ignored: [] };
+  if (stdout === "") return { dirty: [], ignored: [] };
   if (!stdout.endsWith("\0")) return null;
   const fields = stdout.slice(0, -1).split("\0");
-  let dirty = 0;
+  const dirty: string[] = [];
   const ignored: string[] = [];
   for (let index = 0; index < fields.length; index += 1) {
     const field = fields[index] ?? "";
@@ -157,7 +165,7 @@ export function parseStatus(stdout: string): StatusEntries | null {
       ignored.push(path);
       continue;
     }
-    dirty += 1;
+    dirty.push(path);
     if (code.includes("R") || code.includes("C")) {
       index += 1;
       if (index >= fields.length) return null;
@@ -177,7 +185,7 @@ function sessionFinished(session: PohunekSession): CleanupCheck {
   return { name: "session_finished", ok: false, detail: `session state is ${quoted(state)} with activity ${quoted(activity)}; only a finished or idle session is cleaned up` };
 }
 
-async function worktreeOwned(target: Target, deps: CleanupDeps): Promise<CleanupCheck> {
+async function worktreeOwned(target: Target, deps: EvidenceDeps): Promise<CleanupCheck> {
   const name = "worktree_owned";
   const worktrees = await deps.pohunek.listWorktrees(target.project);
   if (!worktrees.ok) return { name, ok: false, detail: describeFailure(worktrees) };
@@ -212,25 +220,33 @@ export function countHiddenTags(stdout: string): number | null {
   return count;
 }
 
-async function worktreeClean(target: Target, config: PluginConfig, deps: CleanupDeps): Promise<{ check: CleanupCheck; ignored: readonly string[] }> {
+async function worktreeClean(
+  target: Target,
+  config: PluginConfig,
+  deps: EvidenceDeps,
+): Promise<{ check: CleanupCheck; dirty: readonly string[]; ignored: readonly string[] }> {
   const name = "worktree_clean";
+  const unread = (detail: string): { check: CleanupCheck; dirty: readonly string[]; ignored: readonly string[] } => ({
+    check: { name, ok: false, detail },
+    dirty: [],
+    ignored: [],
+  });
   // A worktree whose own `.git` is gone would be read through a parent repository.
   const prefix = await git(deps, config, target.worktreePath, ["rev-parse", "--show-prefix"], config.global.actions.gitTimeoutMs);
-  if (!prefix.ok) return { check: { name, ok: false, detail: `git rev-parse failed: ${prefix.reason}` }, ignored: [] };
-  if (prefix.stdout.replace(/\n$/, "") !== "") {
-    return { check: { name, ok: false, detail: "the path is only a subdirectory of another repository, not a worktree root" }, ignored: [] };
-  }
+  if (!prefix.ok) return unread(`git rev-parse failed: ${prefix.reason}`);
+  if (prefix.stdout.replace(/\n$/, "") !== "") return unread("the path is only a subdirectory of another repository, not a worktree root");
   const status = await git(deps, config, target.worktreePath, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none", "--untracked-files=normal", "--ignored"], config.global.actions.gitTimeoutMs);
-  if (!status.ok) return { check: { name, ok: false, detail: `git status failed: ${status.reason}` }, ignored: [] };
+  if (!status.ok) return unread(`git status failed: ${status.reason}`);
   const entries = parseStatus(status.stdout);
-  if (entries === null) return { check: { name, ok: false, detail: "git status output could not be parsed" }, ignored: [] };
-  if (entries.dirty > 0) {
+  if (entries === null) return unread("git status output could not be parsed");
+  if (entries.dirty.length > 0) {
     return {
-      check: { name, ok: false, detail: `${String(entries.dirty)} uncommitted or untracked entries; ${String(entries.ignored.length)} ignored` },
+      check: { name, ok: false, detail: `${String(entries.dirty.length)} uncommitted or untracked entries; ${String(entries.ignored.length)} ignored` },
+      dirty: entries.dirty,
       ignored: entries.ignored,
     };
   }
-  const refuse = (detail: string): { check: CleanupCheck; ignored: readonly string[] } => ({ check: { name, ok: false, detail }, ignored: entries.ignored });
+  const refuse = (detail: string): { check: CleanupCheck; dirty: readonly string[]; ignored: readonly string[] } => ({ check: { name, ok: false, detail }, dirty: [], ignored: entries.ignored });
 
   // A submodule commit that was never pushed is lost with the worktree even when status is clean.
   const staged = await git(deps, config, target.worktreePath, ["ls-files", "-z", "--stage"], config.global.actions.gitTimeoutMs);
@@ -246,13 +262,13 @@ async function worktreeClean(target: Target, config: PluginConfig, deps: Cleanup
   if (hidden === null) return refuse("git ls-files -v output could not be parsed");
   if (hidden > 0) return refuse(`${String(hidden)} tracked entries are marked assume-unchanged or skip-worktree, so status cannot show their edits`);
 
-  return { check: { name, ok: true, detail: `no uncommitted or untracked entries; ${String(entries.ignored.length)} ignored entries are lost with the worktree` }, ignored: entries.ignored };
+  return { check: { name, ok: true, detail: `no uncommitted or untracked entries; ${String(entries.ignored.length)} ignored entries are lost with the worktree` }, dirty: [], ignored: entries.ignored };
 }
 
 async function branchInSync(
   target: Target,
   config: PluginConfig,
-  deps: CleanupDeps,
+  deps: EvidenceDeps,
 ): Promise<{ check: CleanupCheck; ahead: number | null; behind: number | null }> {
   const name = "branch_in_sync";
   const { gitTimeoutMs, cleanupTimeoutMs, cleanupRemote: remote } = config.global.actions;
@@ -306,7 +322,7 @@ function worktreeNotShared(sharers: readonly PohunekSession[]): CleanupCheck {
   return { name, ok: true, detail: "no other session uses the worktree" };
 }
 
-async function notAwaitingOwner(session: PohunekSession, sharers: readonly PohunekSession[], deps: CleanupDeps): Promise<CleanupCheck> {
+async function notAwaitingOwner(session: PohunekSession, sharers: readonly PohunekSession[], deps: EvidenceDeps): Promise<CleanupCheck> {
   const name = "not_awaiting_owner";
   if (session.activity === "blocked") return { name, ok: false, detail: "the session is blocked and waits for the owner" };
   const notifications = await deps.pohunek.listNotifications();
@@ -324,7 +340,7 @@ async function notAwaitingOwner(session: PohunekSession, sharers: readonly Pohun
     : { name, ok: true, detail: "no pending notification names the session" };
 }
 
-async function diffComplete(target: Target, config: PluginConfig, deps: CleanupDeps): Promise<{ check: CleanupCheck; base: string | null; diffBytes: number | null }> {
+async function diffComplete(target: Target, config: PluginConfig, deps: EvidenceDeps): Promise<{ check: CleanupCheck; base: string | null; diffBytes: number | null }> {
   const name = "diff_complete";
   const diff = await deps.pohunek.diffSession(target.id, config.global.actions.cleanupTimeoutMs);
   if (!diff.ok) return { check: { name, ok: false, detail: `session diff failed: ${describeFailure(diff)}` }, base: null, diffBytes: null };
@@ -339,12 +355,12 @@ async function diffComplete(target: Target, config: PluginConfig, deps: CleanupD
 }
 
 /** Runs every check against fresh reads; no check is skipped when another failed. */
-async function gatherEvidence(
+export async function gatherEvidence(
   session: PohunekSession,
   target: Target,
   sessions: readonly PohunekSession[],
   config: PluginConfig,
-  deps: CleanupDeps,
+  deps: EvidenceDeps,
 ): Promise<Evidence> {
   const finished = sessionFinished(session);
   const owned = await worktreeOwned(target, deps);
@@ -357,6 +373,7 @@ async function gatherEvidence(
   return {
     checks: [finished, owned, clean.check, sync.check, notShared, awaiting, diff.check],
     inventory: {
+      dirty: clean.dirty,
       ignored: clean.ignored,
       ahead: sync.ahead,
       behind: sync.behind,
@@ -369,7 +386,7 @@ async function gatherEvidence(
 
 // ------------------------------------------------------------------ plan
 
-function validTarget(session: PohunekSession, project: string): Target {
+export function validTarget(session: PohunekSession, project: string): Target {
   const { worktreePath, branch } = session;
   if (!SESSION_ID.test(session.id)) {
     throw new ActionError("invalid_value", `session id ${JSON.stringify(session.id)} is not a pohunek session id`);

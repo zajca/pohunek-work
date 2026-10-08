@@ -785,22 +785,22 @@ describe("submodule and hidden-entry parsers", () => {
 
 describe("parseStatus", () => {
   test("an empty status is clean", () => {
-    expect(parseStatus("")).toEqual({ dirty: 0, ignored: [] });
+    expect(parseStatus("")).toEqual({ dirty: [], ignored: [] });
   });
 
   test("ignored records are inventory and every other record is dirty", () => {
-    expect(parseStatus("!! a/b\0?? c\0 M d\0A  e\0")).toEqual({ dirty: 3, ignored: ["a/b"] });
+    expect(parseStatus("!! a/b\0?? c\0 M d\0A  e\0")).toEqual({ dirty: ["c", "d", "e"], ignored: ["a/b"] });
   });
 
   test("a rename or copy record consumes its origin field", () => {
-    expect(parseStatus("R  new name\0old name\0!! x\0")).toEqual({ dirty: 1, ignored: ["x"] });
-    expect(parseStatus("C  copy\0orig\0")).toEqual({ dirty: 1, ignored: [] });
+    expect(parseStatus("R  new name\0old name\0!! x\0")).toEqual({ dirty: ["new name"], ignored: ["x"] });
+    expect(parseStatus("C  copy\0orig\0")).toEqual({ dirty: ["copy"], ignored: [] });
     // An origin that looks like an ignored record is not one.
-    expect(parseStatus("R  new\0!! old\0")).toEqual({ dirty: 1, ignored: [] });
+    expect(parseStatus("R  new\0!! old\0")).toEqual({ dirty: ["new"], ignored: [] });
   });
 
   test("a path with spaces or a newline is kept whole", () => {
-    expect(parseStatus("!! a b\nc\0")).toEqual({ dirty: 0, ignored: ["a b\nc"] });
+    expect(parseStatus("!! a b\nc\0")).toEqual({ dirty: [], ignored: ["a b\nc"] });
   });
 
   test("output that is not exactly the format is null", () => {

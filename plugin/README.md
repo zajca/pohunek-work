@@ -88,7 +88,14 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   naming the session (read its screen; the owner decides on removal); `review` starts in a fresh worktree of the pull
   request head and checks the checked-out commit after the launch; `babysit`, `fix-ci` and
   `rebase` start in the worktree of a linked session, or adopt the pull request's own head branch
-  in a fresh worktree when none owns one (RFC 7.5);
+  in a fresh worktree when none owns one (RFC 7.5). When the branch is already
+  checked out, `do` refuses (`precondition_failed`, or `already_running` for a live
+  session) and the message diagnoses the holder without changing anything: attach
+  for a live session, a release command only when every `cleanup` check passes, the
+  failed checks and the dirty or untracked entries (at most `[actions]
+  holder_entries_listed`, each string cut at `holder_entry_max_length`; both
+  required) otherwise, and "switch that checkout yourself" for a holder no pohunek
+  session owns ([docs/watch-and-agents.md](docs/watch-and-agents.md#a-branch-that-is-already-checked-out));
 - `pohunek-work do <key> ready [--dry-run]` runs `gh pr ready` on the owner's
   draft and re-reads the pull request to confirm it is no longer a draft;
 - `pohunek-work do <key> attach` attaches the terminal to the one live linked

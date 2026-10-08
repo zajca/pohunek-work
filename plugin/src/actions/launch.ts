@@ -12,6 +12,8 @@ import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sour
 import type { PluginConfig } from "../types/config.ts";
 import type { Issue, PohunekSession, PullRequest } from "../types/sources.ts";
 import { adoptRefusal, COMMIT_SHA, FETCHABLE_BRANCH } from "./adopt.ts";
+import { attachAdvice, diagnoseBranchHolder, type BranchHolder } from "./branch-holder.ts";
+import type { EvidenceDeps } from "./cleanup.ts";
 import { isIssueKey, slugify } from "./branch.ts";
 import { REPO, requireAuthoredPullRequest, requireGithub, requireTurn } from "./preconditions.ts";
 import { dataBlock, readTemplate, renderTemplate, type PromptName } from "./prompt.ts";
@@ -36,8 +38,10 @@ export interface PlanOptions {
   readonly sessions: readonly PohunekSession[];
   /** Reads the issue body of a GitHub issue row; `implement` is the only action that does. */
   readonly github: GithubSource;
-  /** Reads the worktrees of a project; adopting a pull request's head branch is the only plan that does. */
-  readonly pohunek: Pick<PohunekClient, "listWorktrees">;
+  /** Reads the worktrees of a project and the evidence a branch-holder diagnosis needs. */
+  readonly pohunek: EvidenceDeps["pohunek"];
+  /** Runs git for the branch-holder diagnosis. */
+  readonly exec: EvidenceDeps["exec"];
 }
 
 function profileFor(action: LaunchAction, row: CollectedRow, config: PluginConfig, override: string | null): string {
@@ -56,7 +60,7 @@ function requireNoLiveSession(row: CollectedRow, action: LaunchAction): void {
   if (live.length > 0) {
     throw new ActionError(
       "already_running",
-      `${action} refused: live linked session ${live.map((s) => s.id).join(", ")} already runs for ${row.listItem.key}`,
+      `${action} refused: live linked session ${live.map((s) => s.id).join(", ")} already runs for ${row.listItem.key}; ${attachAdvice(row, live)}`,
     );
   }
 }
@@ -261,10 +265,10 @@ async function planImplement(row: CollectedRow, config: PluginConfig, profile: s
 }
 
 /** The daemon accepts a second live session in a worktree, so the plugin refuses it, whoever started the first. */
-function requireFreeWorktree(action: LaunchAction, cwd: string, sessions: readonly PohunekSession[]): void {
+function requireFreeWorktree(action: LaunchAction, cwd: string, row: CollectedRow, sessions: readonly PohunekSession[]): void {
   const occupant = sessions.find((s) => isLiveSession(s) && (s.cwd === cwd || s.worktreePath === cwd));
   if (occupant !== undefined) {
-    throw new ActionError("already_running", `${action} refused: live session ${occupant.id} already runs in ${cwd}`);
+    throw new ActionError("already_running", `${action} refused: live session ${occupant.id} already runs in ${cwd}; ${attachAdvice(row, [occupant])}`);
   }
 }
 
@@ -314,21 +318,30 @@ const WORKTREE_SPECS: Readonly<Record<Exclude<LaunchAction, "implement" | "revie
   },
 };
 
+function diagnoseHolder(holder: BranchHolder, row: CollectedRow, config: PluginConfig, options: PlanOptions): Promise<string> {
+  return diagnoseBranchHolder(holder, { row, sessions: options.sessions, config, deps: { pohunek: options.pohunek, exec: options.exec } });
+}
+
 /**
  * A pull request's head branch has to be free to check out: core refuses `--branch` for a branch that any
  * worktree holds (spike S2), including the project's primary checkout, which only `project show` lists.
  */
-async function requireHeadBranchFree(action: LaunchAction, pr: PullRequest, project: string, pohunek: PlanOptions["pohunek"]): Promise<void> {
-  const worktrees = await pohunek.listWorktrees(project);
+async function requireHeadBranchFree(
+  action: LaunchAction,
+  pr: PullRequest,
+  row: CollectedRow,
+  config: PluginConfig,
+  options: PlanOptions,
+): Promise<void> {
+  const project = row.project.pohunekLabel;
+  const worktrees = await options.pohunek.listWorktrees(project);
   if (!worktrees.ok) {
     throw new ActionError("source_unavailable", `${action} refused: the worktrees of ${project} could not be read (${worktrees.code}: ${worktrees.message})`);
   }
   const holder = worktrees.data.find((w) => w.branch === pr.headRefName);
   if (holder !== undefined) {
-    throw new ActionError(
-      "precondition_failed",
-      `${action} refused: ${pr.headRefName} is already checked out in ${holder.path}; start there or free the branch`,
-    );
+    const text = await diagnoseHolder({ path: holder.path, branch: pr.headRefName, sessionId: holder.sessionId }, row, config, options);
+    throw new ActionError("precondition_failed", `${action} refused: ${text}`);
   }
 }
 
@@ -354,12 +367,16 @@ async function planInWorktree(
     if (!cwd.startsWith("/")) {
       throw new ActionError("invalid_value", `worktree path ${JSON.stringify(cwd)} is not absolute`);
     }
-    requireFreeWorktree(action, cwd, options.sessions);
+    requireFreeWorktree(action, cwd, row, options.sessions);
   } else {
-    const project = row.project.pohunekLabel;
-    const refusal = adoptRefusal(pr, options.sessions, project);
-    if (refusal !== null) throw new ActionError(refusal.code, `${action} refused: ${refusal.reason}`);
-    await requireHeadBranchFree(action, pr, project, options.pohunek);
+    const refusal = adoptRefusal(pr, options.sessions, row.project.pohunekLabel);
+    if (refusal !== null) {
+      const text = refusal.holder === null
+        ? refusal.reason
+        : await diagnoseHolder({ path: refusal.holder.worktreePath, branch: pr.headRefName, sessionId: refusal.holder.id }, row, config, options);
+      throw new ActionError(refusal.code, `${action} refused: ${text}`);
+    }
+    await requireHeadBranchFree(action, pr, row, config, options);
   }
 
   const link = linkOfRow(row, pr);

@@ -273,8 +273,23 @@ Adoption is refused with a typed code when the head branch cannot be checked out
 | the head lives in a fork (`isCrossRepository`) | `precondition_failed` | yes |
 | the head branch is not a plain ref (option-like, `..`) or the head commit is not a full SHA | `invalid_value` | yes |
 | an unlinked session of the project holds a worktree on the head branch | `precondition_failed` | yes |
-| any other worktree holds the head branch (the primary checkout, a manual worktree) | `precondition_failed` | no, `project show` only |
+| any other worktree holds the head branch (the primary checkout, a manual worktree, a session of another project) | `precondition_failed` | no, `project show` only |
 | the worktrees cannot be read | `source_unavailable` | no |
+
+Every refusal that is caused by a holder of the branch carries a read-only diagnosis (`src/actions/branch-holder.ts`), and
+the `already_running` refusals name the attach command. `do` never stops, removes or frees anything:
+
+- a holder no pohunek session owns (the primary checkout, a hand-made worktree) is refused with the instruction to switch that
+  checkout; it is never offered for release;
+- a live holder session is offered `do <key> attach` (when it is the one live linked session) or `pohunek attach <id>`;
+- a finished holder session whose worktree passes all seven `cleanup` checks on fresh evidence is marked safe to release with
+  `do <key> cleanup` (the one linked session that owns a worktree) or `pohunek session rm <id>`, and the ignored files that
+  would be lost are counted;
+- every other holder (dirty or untracked files, ahead or behind commits, not finished, shared, git or pohunek unreadable or
+  unparsable) is refused with the failed checks and the uncommitted or untracked entries, bounded by `[actions]
+  holder_entries_listed`, and no removal command.
+
+Git and pohunek strings (paths, ids, check details) are JSON-quoted, ASCII-only and cut at `[actions] holder_entry_max_length`.
 
 `list` offers the action exactly when `do` would plan it, except for the last two rows: they need
 `project show`, which `list` does not call for every row, so `list` still offers the action and

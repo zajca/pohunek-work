@@ -67,7 +67,7 @@ describe("loadConfig valid", () => {
       pohunek: { bin: "/usr/local/bin/pohunek", timeoutMs: 10000, notificationsPageSize: 25 },
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
-      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000, promptDeliveryTimeoutMs: 4000, gitBin: "/usr/bin/git", gitTimeoutMs: 15000, cleanupRemote: "origin", cleanupTimeoutMs: 60000 },
+      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000, promptDeliveryTimeoutMs: 4000, gitBin: "/usr/bin/git", gitTimeoutMs: 15000, cleanupRemote: "origin", cleanupTimeoutMs: 60000, holderEntriesListed: 5, holderEntryMaxLength: 80 },
       notify: { command: "/usr/bin/notify-send", timeoutMs: 5000 },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
@@ -163,6 +163,8 @@ describe("loadConfig missing keys", () => {
     ["config.toml", "git_timeout_ms = 15000\n", "actions.git_timeout_ms", "[actions] git_timeout_ms is required"],
     ["config.toml", 'cleanup_remote = "origin"\n', "actions.cleanup_remote", "[actions] cleanup_remote is required"],
     ["config.toml", "cleanup_timeout_ms = 60000\n", "actions.cleanup_timeout_ms", "[actions] cleanup_timeout_ms is required"],
+    ["config.toml", "holder_entries_listed = 5\n", "actions.holder_entries_listed", "[actions] holder_entries_listed is required"],
+    ["config.toml", "holder_entry_max_length = 80\n", "actions.holder_entry_max_length", "[actions] holder_entry_max_length is required"],
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
     ["projects/widgets.toml", 'ignored_checks = ["CI / Flaky"]\n', "project.ignored_checks", "[project] ignored_checks is required"],
     ["projects/widgets.toml", 'policy_checks = ["Policy / Label"]\n', "project.policy_checks", "[project] policy_checks is required"],
@@ -229,7 +231,7 @@ describe("loadConfig missing keys", () => {
   }
 
   for (const bad of ["0", "-5", '"x"', "1.5"]) {
-    for (const key of ["git_timeout_ms", "cleanup_timeout_ms"]) {
+    for (const key of ["git_timeout_ms", "cleanup_timeout_ms", "holder_entries_listed", "holder_entry_max_length"]) {
       test(`actions.${key} ${bad} fails naming the key`, async () => {
         const dir = await copyFixture();
         await editFile(dir, "config.toml", (t) => t.replace(new RegExp(`^${key} = \\d+$`, "m"), `${key} = ${bad}`));

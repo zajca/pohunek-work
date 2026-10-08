@@ -243,35 +243,47 @@ when it lands.
 
 ### A branch that is already checked out
 
-`do` refuses with `precondition_failed` when the branch it needs is held by
-another worktree (`<branch> is already checked out in <path>; start there or
-free the branch`) or by a session that is not linked to the row, and with
-`already_running` when a live session already runs for the row or in that
-worktree. Handle both this way:
+`do` stays read-only on a collision: it refuses and the message carries the
+diagnosis, so there is no manual probing to do. It refuses with
+`precondition_failed` when the branch it needs is held by another worktree or by
+a session that is not linked to the row, and with `already_running` when a live
+session already runs for the row or in that worktree. The message always names
+the branch, the path and, when a session owns the worktree, its id and state.
+What it offers depends on the holder:
 
-1. Report the holder: the path from the message, or `worktree_path` and `state`
-   from `pohunek session inspect` when a session id is named.
-2. Show whether the holder is clean: `do <key> cleanup --dry-run --json` for
-   the holder's key reports the ignored entries that would be lost and every
-   check. Without a key, `git -C <path> status --short --ignored` shows
-   untracked (`??`) and ignored (`!!`) files, which are lost when the
-   worktree is removed.
-3. Offer the options and let the owner choose: **attach** (the owner runs
-   `do <key> attach` in a terminal when a live linked session holds the
-   branch; without a terminal it refuses with `no_terminal`), **release**
-   (remove a finished holder session with `do <key> cleanup`, see
-   [Finished sessions](#finished-sessions); a branch held by the project's
-   primary checkout cannot be removed with `git worktree remove`, the owner
-   switches that checkout to another branch) or **skip** the action.
-4. Never remove a worktree, and never pass `--force` to `git worktree remove`,
-   without the owner's explicit confirmation for that path. A worktree with
-   untracked files needs that confirmation even more.
+- **No pohunek session owns the path** (the project's primary checkout, a
+  worktree made by hand): the owner switches that checkout to another branch;
+  it is never offered for release.
+- **A live session**: attach with `pohunek-work do <key> attach` when it is the
+  one live session linked to the row (needs a terminal, otherwise `no_terminal`),
+  else `pohunek attach <id>`. The `already_running` refusals name the same
+  command.
+- **A finished session whose worktree passes every `cleanup` check** (see
+  [Finished sessions](#finished-sessions)): marked safe to release, with
+  `pohunek-work do <key> cleanup` when it is the one linked session that owns a
+  worktree and `pohunek session rm <id>` otherwise, plus the number of ignored
+  files the release loses. `do` itself removes nothing; the owner decides.
+- **Anything else** (dirty or untracked files, unpushed or unfetched commits,
+  a session that is not finished, git or pohunek that cannot be read, output
+  that cannot be parsed): refused with the failed check names and their detail
+  and the uncommitted or untracked entries (at most `[actions]
+  holder_entries_listed`, then `and N more`). No removal command is offered;
+  commit and push or clean the worktree by hand, then retry.
 
-**Temporary:** `do <key> cleanup` releases a finished holder session, but
-`do` does not yet offer attach or release when a launch hits this branch
-collision; that offer is tracked in
-[#84](https://github.com/zajca/pohunek-work/issues/84). Remove the manual offer
-when `do` provides it.
+"Safe to release" is decided by the same fail-closed evidence as `cleanup`, read
+fresh (including one `git fetch` of `[actions] cleanup_remote`), so an offered
+release is one `cleanup` would accept. Paths, session ids and check details
+from git or pohunek appear in the message only as JSON-quoted, ASCII-only
+strings cut at `[actions] holder_entry_max_length` characters.
+
+Handle a collision this way:
+
+1. Report the diagnosis from the message to the owner.
+2. Offer exactly the option the message names and let the owner choose:
+   attach, release or skip the action.
+3. Never remove a worktree, and never pass `--force` to `git worktree remove`,
+   without the owner's explicit confirmation for that path. A message that
+   offers no removal command means the worktree holds work that would be lost.
 
 ### What the manager may read
 

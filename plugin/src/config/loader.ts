@@ -261,6 +261,8 @@ function parseActions(root: Table, file: string): ActionsConfig {
       "git_timeout_ms",
       "cleanup_remote",
       "cleanup_timeout_ms",
+      "holder_entries_listed",
+      "holder_entry_max_length",
     ],
     file,
     path,
@@ -278,6 +280,8 @@ function parseActions(root: Table, file: string): ActionsConfig {
     gitTimeoutMs: readPositiveInt(table, "git_timeout_ms", file, path),
     cleanupRemote: readRemoteName(table, "cleanup_remote", file, path),
     cleanupTimeoutMs: readPositiveInt(table, "cleanup_timeout_ms", file, path),
+    holderEntriesListed: readPositiveInt(table, "holder_entries_listed", file, path),
+    holderEntryMaxLength: readPositiveInt(table, "holder_entry_max_length", file, path),
   };
 }
 

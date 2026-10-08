@@ -49,6 +49,8 @@ git_bin = "/usr/bin/git"
 git_timeout_ms = 15000
 cleanup_remote = "origin"
 cleanup_timeout_ms = 60000
+holder_entries_listed = 5
+holder_entry_max_length = 80
 
 [policy]
 delegable = ["review"]
