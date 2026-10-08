@@ -133,13 +133,35 @@ export interface LinearIssueSource {
   readonly pausedStates: readonly string[];
 }
 
-/** Issues of a project are the open GitHub issues of `repo` assigned to the owner that carry a started or paused label. */
+/** Which signal marks a GitHub issue as started or paused. */
+export type IssueSignal = "labels" | "project" | "both";
+
+/** A single-select field of a GitHub Project whose option names mark an issue as started or paused. */
+export interface GithubProjectStatus {
+  /** Login of the user or organization that owns the Project; compared case-insensitively. */
+  readonly owner: string;
+  readonly number: number;
+  /** Exact name of the single-select field. */
+  readonly field: string;
+  /** Option names that mark an assigned issue as started; never empty. */
+  readonly startedOptions: readonly string[];
+  /** Option names that pause an assigned issue; may be empty. */
+  readonly pausedOptions: readonly string[];
+}
+
+/**
+ * Issues of a project are the open GitHub issues of `repo` assigned to the owner that the configured
+ * signal marks as started or paused. `startedLabels` is non-empty exactly when `signal` includes
+ * `labels`, and `projectStatus` is non-null exactly when it includes `project`.
+ */
 export interface GithubIssueSource {
   readonly kind: "github";
-  /** Labels that mark an assigned issue as started; never empty. */
+  readonly signal: IssueSignal;
+  /** Labels that mark an assigned issue as started. */
   readonly startedLabels: readonly string[];
   /** Labels that pause an assigned issue; may be empty. */
   readonly pausedLabels: readonly string[];
+  readonly projectStatus: GithubProjectStatus | null;
 }
 
 export type IssueSource = LinearIssueSource | GithubIssueSource;

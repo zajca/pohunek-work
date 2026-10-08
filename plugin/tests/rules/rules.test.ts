@@ -689,10 +689,26 @@ describe("github issue source", () => {
     expect(onTurn(item({ ...joined, issue: ghIssue(), pullRequest: conflicting }), ghOk, ghProject).rule).toBe(5);
   });
 
+  test("rule 12: a paused project option pauses the joined pull request like a paused label", () => {
+    const projectSource = {
+      kind: "github",
+      signal: "project",
+      startedLabels: [],
+      pausedLabels: [],
+      projectStatus: { owner: "acme", number: 7, field: "Status", startedOptions: ["In Progress"], pausedOptions: ["Blocked"] },
+    } as const;
+    const projectProject = { ...project, issueSource: projectSource };
+    const paused = item({ ...joined, issue: ghIssue({ started: false, paused: true, state: "Blocked" }), pullRequest: conflicting });
+    expect(onTurn(paused, ghOk, projectProject)).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+    expect(onTurn(item({ ...joined, issue: ghIssue({ state: "In Progress" }), pullRequest: conflicting }), ghOk, projectProject).rule).toBe(5);
+  });
+
   test("without paused labels no row is paused and a source outage does not stop the github rules", () => {
     const noPause = { ...ghProject, issueSource: { ...githubIssueSource, pausedLabels: [] } };
     const row = item({ ...joined, issue: null, pullRequest: conflicting });
     expect(onTurn(row, { ...ghOk, github_issues: "timeout" }, noPause).rule).toBe(5);
+    const optionPause = { ...noPause, issueSource: { ...noPause.issueSource, signal: "both", projectStatus: { owner: "acme", number: 7, field: "Status", startedOptions: ["a"], pausedOptions: ["b"] } } } as const;
+    expect(onTurn(row, { ...ghOk, github_issues: "timeout" }, optionPause)).toEqual({ actor: "unknown", reason: "github_issues:timeout", rule: null });
   });
 
   test("a row joined to an issue the source did not return is unknown, never the reviewer's, while github_issues is down", () => {

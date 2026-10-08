@@ -41,9 +41,20 @@ export function estimateRequestNodes(sizes: NodeBudgetSizes, searches: number, s
   return searches * estimateSearchNodes(sizes, shape);
 }
 
-/** Upper bound of nodes one issue search page can request: per issue the node itself and its label page. */
-export function estimateIssueSearchNodes(sizes: Pick<NodeBudgetSizes, "nestedPageSize"> & { readonly issuePageSize: number }): number {
-  return sizes.issuePageSize * (1 + sizes.nestedPageSize);
+export interface IssueSearchShape {
+  /** The document also requests the Project items of every issue (projects whose signal includes the Project). */
+  readonly projectItems: boolean;
+}
+
+/**
+ * Upper bound of nodes one issue search page can request: per issue the node itself, its label page
+ * and, where the project needs it, its Project item page. Singular objects add nothing.
+ */
+export function estimateIssueSearchNodes(
+  sizes: Pick<NodeBudgetSizes, "nestedPageSize"> & { readonly issuePageSize: number },
+  shape: IssueSearchShape,
+): number {
+  return sizes.issuePageSize * (1 + sizes.nestedPageSize + (shape.projectItems ? sizes.nestedPageSize : 0));
 }
 
 /** Nodes a follow-up alias spends on the `node(id:)` lookup and the parents above its connection. */
@@ -71,6 +82,7 @@ export function estimateConnectionNodes(kind: ConnectionKind, sizes: ConnectionN
     case "checkContexts":
     case "closingIssues":
     case "issueLabels":
+    case "issueProjectItems":
     case "pullRequestLabels":
       items = sizes.nestedPageSize;
       break;

@@ -586,7 +586,7 @@ describe("loadConfig [tui]", () => {
 describe("loadConfig issue_source", () => {
   const githubProject = (text: string): string =>
     text
-      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', 'issue_source = "github"\nstarted_labels = ["in-progress"]\npaused_labels = ["on-hold"]\n')
+      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', 'issue_source = "github"\nissue_signal = "labels"\nstarted_labels = ["in-progress"]\npaused_labels = ["on-hold"]\n')
       .replace(/paused_states = .*\n/, "");
   const withoutLinearTable = (text: string): string => text.replace(/\[linear\]\n(?:.+\n)+\n/, "");
 
@@ -594,7 +594,7 @@ describe("loadConfig issue_source", () => {
     const dir = await copyFixture();
     await editFile(dir, "projects/gadgets.toml", githubProject);
     const config = await loadConfig(dir);
-    expect(config.projects.find((p) => p.name === "gadgets")?.issueSource).toEqual({ kind: "github", startedLabels: ["in-progress"], pausedLabels: ["on-hold"] });
+    expect(config.projects.find((p) => p.name === "gadgets")?.issueSource).toEqual({ kind: "github", signal: "labels", startedLabels: ["in-progress"], pausedLabels: ["on-hold"], projectStatus: null });
     expect(config.projects.find((p) => p.name === "widgets")?.issueSource.kind).toBe("linear");
   });
 
@@ -748,16 +748,16 @@ describe("loadConfig github issue labels", () => {
 
   test("started_labels and paused_labels are read as written", async () => {
     const dir = await copyFixture();
-    await editFile(dir, "projects/gadgets.toml", githubProject('started_labels = ["In Progress", "wip"]\npaused_labels = []\n'));
-    expect(await labelsOf(dir)).toEqual({ kind: "github", startedLabels: ["In Progress", "wip"], pausedLabels: [] });
+    await editFile(dir, "projects/gadgets.toml", githubProject('issue_signal = "labels"\nstarted_labels = ["In Progress", "wip"]\npaused_labels = []\n'));
+    expect(await labelsOf(dir)).toEqual({ kind: "github", signal: "labels", startedLabels: ["In Progress", "wip"], pausedLabels: [], projectStatus: null });
   });
 
   test.each([
-    ["started_labels is missing", 'paused_labels = []\n', "project.started_labels"],
-    ["started_labels is empty", 'started_labels = []\npaused_labels = []\n', "project.started_labels"],
-    ["paused_labels is missing", 'started_labels = ["wip"]\n', "project.paused_labels"],
-    ["started_labels repeats a label by case", 'started_labels = ["wip", "WIP"]\npaused_labels = []\n', "project.started_labels"],
-    ["paused_labels repeats a started label", 'started_labels = ["wip"]\npaused_labels = ["Wip"]\n', "project.paused_labels"],
+    ["started_labels is missing", 'issue_signal = "labels"\npaused_labels = []\n', "project.started_labels"],
+    ["started_labels is empty", 'issue_signal = "labels"\nstarted_labels = []\npaused_labels = []\n', "project.started_labels"],
+    ["paused_labels is missing", 'issue_signal = "labels"\nstarted_labels = ["wip"]\n', "project.paused_labels"],
+    ["started_labels repeats a label by case", 'issue_signal = "labels"\nstarted_labels = ["wip", "WIP"]\npaused_labels = []\n', "project.started_labels"],
+    ["paused_labels repeats a started label", 'issue_signal = "labels"\nstarted_labels = ["wip"]\npaused_labels = ["Wip"]\n', "project.paused_labels"],
   ])("%s", async (_name, extra, key) => {
     const dir = await copyFixture();
     await editFile(dir, "projects/gadgets.toml", githubProject(extra));
@@ -773,4 +773,104 @@ describe("loadConfig github issue labels", () => {
     expect(error.file).toBe("projects/widgets.toml");
     expect(error.key).toBe(`project.${key}`);
   });
+});
+
+describe("loadConfig github issue signal", () => {
+  const LABELS = 'started_labels = ["wip"]\npaused_labels = ["hold"]\n';
+  const STATUS =
+    'status_project_owner = "Acme"\nstatus_project_number = 7\nstatus_field = "Status"\n' +
+    'status_started_options = ["In Progress"]\nstatus_paused_options = ["Blocked"]\n';
+  const githubProject = (extra: string): ((text: string) => string) => (text) =>
+    text
+      .replace('issue_source = "linear"\nlinear_team = "ABC"\n', `issue_source = "github"\n${extra}`)
+      .replace(/paused_states = .*\n/, "");
+  const sourceOf = async (dir: string): Promise<unknown> =>
+    (await loadConfig(dir)).projects.find((p) => p.name === "gadgets")?.issueSource;
+  const load = async (extra: string): Promise<string> => {
+    const dir = await copyFixture();
+    await editFile(dir, "projects/gadgets.toml", githubProject(extra));
+    return dir;
+  };
+
+  test("issue_signal project reads the status keys and leaves the label lists empty", async () => {
+    expect(await sourceOf(await load(`issue_signal = "project"\n${STATUS}`))).toEqual({
+      kind: "github",
+      signal: "project",
+      startedLabels: [],
+      pausedLabels: [],
+      projectStatus: { owner: "Acme", number: 7, field: "Status", startedOptions: ["In Progress"], pausedOptions: ["Blocked"] },
+    });
+  });
+
+  test("issue_signal both reads labels and status keys", async () => {
+    expect(await sourceOf(await load(`issue_signal = "both"\n${LABELS}${STATUS}`))).toEqual({
+      kind: "github",
+      signal: "both",
+      startedLabels: ["wip"],
+      pausedLabels: ["hold"],
+      projectStatus: { owner: "Acme", number: 7, field: "Status", startedOptions: ["In Progress"], pausedOptions: ["Blocked"] },
+    });
+  });
+
+  test("status_paused_options may be empty", async () => {
+    const extra = `issue_signal = "project"\n${STATUS.replace('["Blocked"]', "[]")}`;
+    const source = (await sourceOf(await load(extra))) as { projectStatus: { pausedOptions: string[] } };
+    expect(source.projectStatus.pausedOptions).toEqual([]);
+  });
+
+  test.each([
+    ["issue_signal is missing", LABELS, "project.issue_signal"],
+    ["issue_signal is unknown", `issue_signal = "board"\n${LABELS}`, "project.issue_signal"],
+    ["issue_signal has the wrong type", `issue_signal = 1\n${LABELS}`, "project.issue_signal"],
+    ["project rejects started_labels", `issue_signal = "project"\nstarted_labels = ["wip"]\n${STATUS}`, "project.started_labels"],
+    ["project rejects paused_labels", `issue_signal = "project"\npaused_labels = []\n${STATUS}`, "project.paused_labels"],
+    ["labels rejects status_project_owner", `issue_signal = "labels"\n${LABELS}status_project_owner = "acme"\n`, "project.status_project_owner"],
+    ["labels rejects status_project_number", `issue_signal = "labels"\n${LABELS}status_project_number = 1\n`, "project.status_project_number"],
+    ["labels rejects status_field", `issue_signal = "labels"\n${LABELS}status_field = "Status"\n`, "project.status_field"],
+    ["labels rejects status_started_options", `issue_signal = "labels"\n${LABELS}status_started_options = ["a"]\n`, "project.status_started_options"],
+    ["labels rejects status_paused_options", `issue_signal = "labels"\n${LABELS}status_paused_options = []\n`, "project.status_paused_options"],
+    ["project misses status_project_owner", `issue_signal = "project"\n${STATUS.replace(/status_project_owner.*\n/, "")}`, "project.status_project_owner"],
+    ["project misses status_project_number", `issue_signal = "project"\n${STATUS.replace(/status_project_number.*\n/, "")}`, "project.status_project_number"],
+    ["project misses status_field", `issue_signal = "project"\n${STATUS.replace(/status_field.*\n/, "")}`, "project.status_field"],
+    ["project misses status_started_options", `issue_signal = "project"\n${STATUS.replace(/status_started_options.*\n/, "")}`, "project.status_started_options"],
+    ["project misses status_paused_options", `issue_signal = "project"\n${STATUS.replace(/status_paused_options.*\n/, "")}`, "project.status_paused_options"],
+    ["both misses started_labels", `issue_signal = "both"\npaused_labels = []\n${STATUS}`, "project.started_labels"],
+    ["both misses paused_labels", `issue_signal = "both"\nstarted_labels = ["wip"]\n${STATUS}`, "project.paused_labels"],
+    ["both misses status_field", `issue_signal = "both"\n${LABELS}${STATUS.replace(/status_field.*\n/, "")}`, "project.status_field"],
+    ["owner is not a login", `issue_signal = "project"\n${STATUS.replace('"Acme"', '"a/b"')}`, "project.status_project_owner"],
+    ["owner is empty", `issue_signal = "project"\n${STATUS.replace('"Acme"', '""')}`, "project.status_project_owner"],
+    ["owner has the wrong type", `issue_signal = "project"\n${STATUS.replace('"Acme"', "5")}`, "project.status_project_owner"],
+    ["number is zero", `issue_signal = "project"\n${STATUS.replace("= 7", "= 0")}`, "project.status_project_number"],
+    ["number is fractional", `issue_signal = "project"\n${STATUS.replace("= 7", "= 1.5")}`, "project.status_project_number"],
+    ["number is a string", `issue_signal = "project"\n${STATUS.replace("= 7", '= "7"')}`, "project.status_project_number"],
+    ["field is empty", `issue_signal = "project"\n${STATUS.replace('"Status"', '""')}`, "project.status_field"],
+    ["field has the wrong type", `issue_signal = "project"\n${STATUS.replace('"Status"', "3")}`, "project.status_field"],
+    ["started options are empty", `issue_signal = "project"\n${STATUS.replace('["In Progress"]', "[]")}`, "project.status_started_options"],
+    ["started options have the wrong type", `issue_signal = "project"\n${STATUS.replace('["In Progress"]', '"x"')}`, "project.status_started_options"],
+    ["paused options have the wrong type", `issue_signal = "project"\n${STATUS.replace('["Blocked"]', "[1]")}`, "project.status_paused_options"],
+    ["started options repeat by case", `issue_signal = "project"\n${STATUS.replace('["In Progress"]', '["a", "A"]')}`, "project.status_started_options"],
+    ["paused options repeat by case", `issue_signal = "project"\n${STATUS.replace('["Blocked"]', '["b", "B"]')}`, "project.status_paused_options"],
+    ["paused option repeats a started option", `issue_signal = "project"\n${STATUS.replace('["Blocked"]', '["in progress"]')}`, "project.status_paused_options"],
+    ["both: label overlap", `issue_signal = "both"\nstarted_labels = ["wip"]\npaused_labels = ["WIP"]\n${STATUS}`, "project.paused_labels"],
+  ])("%s", async (_name, extra, key) => {
+    const error = await loadError(await load(extra));
+    expect(error.file).toBe("projects/gadgets.toml");
+    expect(error.key).toBe(key);
+  });
+
+  test("a started label may equal a paused option because they are different signals", async () => {
+    const extra = `issue_signal = "both"\nstarted_labels = ["blocked"]\npaused_labels = []\n${STATUS}`;
+    expect(await sourceOf(await load(extra))).toMatchObject({ signal: "both", startedLabels: ["blocked"] });
+  });
+
+  test.each(["issue_signal", "status_project_owner", "status_project_number", "status_field", "status_started_options", "status_paused_options"])(
+    "%s on a linear project is rejected",
+    async (key) => {
+      const dir = await copyFixture();
+      await editFile(dir, "projects/widgets.toml", (t) => t.replace('issue_source = "linear"\n', `issue_source = "linear"\n${key} = "x"\n`));
+      const error = await loadError(dir);
+      expect(error.file).toBe("projects/widgets.toml");
+      expect(error.key).toBe(`project.${key}`);
+    },
+  );
 });

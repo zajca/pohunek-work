@@ -13,6 +13,7 @@ export type ConnectionKind =
   | "threadComments"
   | "closingIssues"
   | "issueLabels"
+  | "issueProjectItems"
   | "pullRequestLabels";
 
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
@@ -27,6 +28,9 @@ const CONTEXT_FIELDS = `nodes { __typename ... on CheckRun { name status conclus
 
 const CLOSING_FIELDS = `nodes { number repository { nameWithOwner } } ${PAGE_INFO}`;
 const LABEL_FIELDS = `nodes { name } ${PAGE_INFO}`;
+// The owner login is read through both owner types of a Project; the field value is selected by the
+// name in `$statusField`, so the variable must be declared by every document that uses these fields.
+const PROJECT_ITEM_FIELDS = `nodes { project { number owner { __typename ... on User { login } ... on Organization { login } } } fieldValueByName(name: $statusField) { __typename ... on ProjectV2ItemFieldSingleSelectValue { name } } } ${PAGE_INFO}`;
 
 const TIMELINE_ITEM_TYPES = "[PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]";
 
@@ -100,20 +104,52 @@ export function buildSearchRequest(
   return { query, variables };
 }
 
-/** One page of the open issues of a repository assigned to the owner, with the first page of their labels. */
+/**
+ * One page of the open issues of a repository assigned to the owner, with the first page of their
+ * labels. A non-null `statusField` adds the first page of the Project items of every issue, each
+ * with the value of that single-select field; the name travels as the variable `$statusField`.
+ */
 export function buildIssueSearchRequest(
   queryString: string,
   after: string | null,
   sizes: { readonly issuePageSize: number; readonly nestedPageSize: number },
+  statusField: string | null,
 ): GraphqlRequest {
-  const query = `query PohunekWorkIssues($q: String!, $top: Int!, $nested: Int!, $after: String) {
+  const declaration = statusField === null ? "" : ", $statusField: String!";
+  const items = statusField === null ? "" : ` projectItems(first: $nested, includeArchived: false) { ${PROJECT_ITEM_FIELDS} }`;
+  const query = `query PohunekWorkIssues($q: String!, $top: Int!, $nested: Int!, $after: String${declaration}) {
   rateLimit { remaining }
   issues: search(query: $q, type: ISSUE, first: $top, after: $after) {
     issueCount ${PAGE_INFO}
-    nodes { ... on Issue { id number url title labels(first: $nested) { ${LABEL_FIELDS} } } }
+    nodes { ... on Issue { id number url title labels(first: $nested) { ${LABEL_FIELDS} }${items} } }
   }
 }`;
-  return { query, variables: { q: queryString, top: sizes.issuePageSize, nested: sizes.nestedPageSize, after } };
+  const variables: GraphqlVariables = {
+    q: queryString,
+    top: sizes.issuePageSize,
+    nested: sizes.nestedPageSize,
+    after,
+  };
+  if (statusField !== null) {
+    variables["statusField"] = statusField;
+  }
+  return { query, variables };
+}
+
+/** The single-select field of a Project by owner login, Project number and field name, with its option names. */
+export function buildProjectStatusValidationRequest(owner: string, number: number, field: string): GraphqlRequest {
+  const query = `query PohunekWorkProjectStatus($o: String!, $n: Int!, $f: String!) {
+  rateLimit { remaining }
+  repositoryOwner(login: $o) {
+    ... on ProjectV2Owner {
+      projectV2(number: $n) {
+        number
+        field(name: $f) { __typename ... on ProjectV2SingleSelectField { name options { name } } }
+      }
+    }
+  }
+}`;
+  return { query, variables: { o: owner, n: number, f: field } };
 }
 
 /**
@@ -197,6 +233,7 @@ export const CONNECTION_KINDS: Readonly<Record<ConnectionKind, KindSpec>> = {
   },
   closingIssues: { parentType: "PullRequest", path: ["closingIssuesReferences"], fields: CLOSING_FIELDS },
   issueLabels: { parentType: "Issue", path: ["labels"], fields: LABEL_FIELDS },
+  issueProjectItems: { parentType: "Issue", path: ["projectItems"], fields: PROJECT_ITEM_FIELDS },
   pullRequestLabels: { parentType: "PullRequest", path: ["labels"], fields: LABEL_FIELDS },
 };
 
@@ -211,20 +248,30 @@ function connectionSelection(spec: ConnectionPageSpec): string {
   const kind = CONNECTION_KINDS[spec.kind];
   const size = spec.kind === "threadComments" ? "$comments" : "$nested";
   const args = `first: ${size}, after: $after_${spec.alias}`;
-  const timelineArgs = spec.kind === "timelineItems" ? `, itemTypes: ${TIMELINE_ITEM_TYPES}` : "";
+  // `Issue.projectItems` includes archived items unless told otherwise; an archived item gives no signal.
+  const kindArgs =
+    spec.kind === "timelineItems"
+      ? `, itemTypes: ${TIMELINE_ITEM_TYPES}`
+      : spec.kind === "issueProjectItems"
+        ? ", includeArchived: false"
+        : "";
   let inner = "";
   kind.path.forEach((segment, index) => {
     const isLast = index === kind.path.length - 1;
-    inner += isLast ? `${segment}(${args}${timelineArgs}) { ${kind.fields} }` : `${segment} { `;
+    inner += isLast ? `${segment}(${args}${kindArgs}) { ${kind.fields} }` : `${segment} { `;
   });
   inner += " }".repeat(kind.path.length - 1);
   return `${spec.alias}: node(id: $id_${spec.alias}) { ... on ${kind.parentType} { ${inner} } }`;
 }
 
-/** One request that fetches the next page of several nested connections by node id. */
+/**
+ * One request that fetches the next page of several nested connections by node id. Pages of kind
+ * `issueProjectItems` need `statusField`, the field name the first page was selected with.
+ */
 export function buildConnectionRequest(
   pages: readonly ConnectionPageSpec[],
   sizes: Pick<SearchRequestSizes, "nestedPageSize" | "threadCommentPageSize">,
+  statusField: string | null = null,
 ): GraphqlRequest {
   const variables: GraphqlVariables = {};
   const declarations: string[] = [];
@@ -237,6 +284,13 @@ export function buildConnectionRequest(
   if (pages.some((page) => page.kind === "reviewThreads" || page.kind === "threadComments")) {
     variables["comments"] = sizes.threadCommentPageSize;
     declarations.push("$comments: Int!");
+  }
+  if (pages.some((page) => page.kind === "issueProjectItems")) {
+    if (statusField === null) {
+      throw new Error("a project items page needs the status field name");
+    }
+    variables["statusField"] = statusField;
+    declarations.push("$statusField: String!");
   }
   for (const page of pages) {
     variables[`id_${page.alias}`] = page.nodeId;

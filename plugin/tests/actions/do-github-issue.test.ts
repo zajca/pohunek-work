@@ -23,6 +23,24 @@ const config: PluginConfig = {
   ),
 };
 
+const projectSignalConfig: PluginConfig = {
+  ...config,
+  projects: config.projects.map((project) =>
+    project.pohunekLabel === "widgets"
+      ? {
+          ...project,
+          issueSource: {
+            kind: "github",
+            signal: "project",
+            startedLabels: [],
+            pausedLabels: [],
+            projectStatus: { owner: "acme", number: 7, field: "Status", startedOptions: ["In Progress"], pausedOptions: ["Blocked"] },
+          },
+        }
+      : project,
+  ),
+};
+
 const githubIssue = (overrides: Partial<Issue> = {}): Issue => issue({ id: ISSUE_KEY, state: "in-progress", url: "https://example.invalid/acme/widgets/issues/7", ...overrides });
 const closing = (overrides: Partial<PullRequest> = {}): PullRequest => pr({ headRefName: BRANCH, headSha: SHA, closingIssueNumbers: [7], ...overrides });
 
@@ -38,8 +56,8 @@ function ownerSession(overrides: Partial<PohunekSession> = {}): PohunekSession {
   });
 }
 
-async function listed(world: World): Promise<ListItem[]> {
-  const out = await runList(config, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
+async function listed(world: World, listConfig: PluginConfig = config): Promise<ListItem[]> {
+  const out = await runList(listConfig, { mine: false, staleDays: null, finishedHours: null, json: true, project: "widgets", includeIgnored: false }, setup(world).deps);
   return [...out.items];
 }
 
@@ -131,6 +149,24 @@ test("a paused issue lists no action and do refuses every action", async () => {
   expect(row.actions).toEqual([]);
   for (const action of ["implement", "babysit", "fix-ci", "rebase", "ready", "attach"] as const) {
     await expectRefusal(runDo(config, options({ key: ROW, action, profile: "profile-a", dryRun: true, yes: false }), setup(world).deps), "precondition_failed", `${action} refused`);
+  }
+});
+
+test("an issue paused by a project option lists no action and do refuses every action, like a paused label", async () => {
+  const world: World = {
+    githubIssues: ok("github_issues", [githubIssue({ started: false, paused: true, state: "Blocked" })]),
+    prs: ok("github", [closing({ isDraft: true, mergeable: "CONFLICTING", checks: [check("build", "failure")] })]),
+    sessions: [ownerSession()],
+  };
+  const row = rowOf(await listed(world, projectSignalConfig));
+  expect(row.on_turn).toEqual({ actor: "paused", reason: "paused", rule: 12 });
+  expect(row.actions).toEqual([]);
+  for (const action of ["implement", "babysit", "fix-ci", "rebase", "ready", "attach"] as const) {
+    await expectRefusal(
+      runDo(projectSignalConfig, options({ key: ROW, action, profile: "profile-a", dryRun: true, yes: false }), setup(world).deps),
+      "precondition_failed",
+      `${action} refused`,
+    );
   }
 });
 

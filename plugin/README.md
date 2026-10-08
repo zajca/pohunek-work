@@ -15,9 +15,12 @@ Each project file selects its issue source with the required key
 `issue_source` (`linear` or `github`). `linear_team` and `paused_states` belong
 to `linear` only, and the global `[linear]` table and keyring entry are needed
 only while a Linear project is configured. A `github` project takes its issues
-from the open GitHub issues of `repo` that are assigned to the owner and carry
-one of its `started_labels` or `paused_labels`; an issue shows up only when it is
-assigned **and** labelled, so an unassigned or unlabelled issue produces no row.
+from the open GitHub issues of `repo` that are assigned to the owner and that
+the required key `issue_signal` marks as started or paused: `labels` (the
+`started_labels` and `paused_labels` lists), `project` (the option names of a
+single-select field of a GitHub Project, for example `Status`, set with the
+`status_*` keys) or `both`. An issue shows up only when it is assigned **and**
+carries the configured signal, so an unassigned or unmarked issue produces no row.
 See RFC 11.3.
 
 Each project file also names who reviews its pull requests with the required key

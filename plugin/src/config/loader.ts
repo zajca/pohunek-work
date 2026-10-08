@@ -4,6 +4,8 @@ import type {
   ActionsConfig,
   GlobalConfig,
   GithubConfig,
+  GithubProjectStatus,
+  IssueSignal,
   IdentityConfig,
   IssueSource,
   LinearConfig,
@@ -118,11 +120,13 @@ function parseGithub(root: Table, file: string): GithubConfig {
       `with nested_page_size and thread_comment_page_size exceeds the GitHub limit of ${GITHUB_MAX_NODES.toString()} nodes per request; lower the page sizes`,
     );
   }
-  if (estimateIssueSearchNodes(config) > GITHUB_MAX_NODES) {
+  // The project items page is requested only by projects with a project signal; the worst case is
+  // validated here for the same reason as above.
+  if (estimateIssueSearchNodes(config, { projectItems: true }) > GITHUB_MAX_NODES) {
     throw fail(
       file,
       [...path, "issue_page_size"],
-      `with nested_page_size exceeds the GitHub limit of ${GITHUB_MAX_NODES.toString()} nodes per request; lower the page sizes`,
+      `with nested_page_size (labels and project items) exceeds the GitHub limit of ${GITHUB_MAX_NODES.toString()} nodes per request; lower the page sizes`,
     );
   }
   return config;
@@ -372,16 +376,63 @@ function compileBranchPattern(source: string, file: string): RegExp {
 
 /** Keys that only an issue source of the given kind accepts. */
 const LINEAR_ONLY_KEYS = ["linear_team", "paused_states"] as const;
-const GITHUB_ONLY_KEYS = ["started_labels", "paused_labels"] as const;
+const LABEL_KEYS = ["started_labels", "paused_labels"] as const;
+const PROJECT_STATUS_KEYS = [
+  "status_project_owner",
+  "status_project_number",
+  "status_field",
+  "status_started_options",
+  "status_paused_options",
+] as const;
+const GITHUB_ONLY_KEYS = ["issue_signal", ...LABEL_KEYS, ...PROJECT_STATUS_KEYS] as const;
+const ISSUE_SIGNALS: readonly IssueSignal[] = ["labels", "project", "both"];
 
-/** Label names are compared case-insensitively, so two spellings of one label are a duplicate. */
-function rejectDuplicateLabels(labels: readonly string[], file: string, path: readonly string[], key: string): void {
+/** Same shape as the login check of the identity (a GitHub user or organization login). */
+const PROJECT_OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+/** Names are compared case-insensitively, so two spellings of one name are a duplicate. */
+function rejectDuplicateNames(names: readonly string[], file: string, path: readonly string[], key: string): void {
   const seen = new Set<string>();
-  for (const label of labels) {
-    const folded = label.toLowerCase();
-    if (seen.has(folded)) throw fail(file, [...path, key], `must not list ${JSON.stringify(label)} twice`);
+  for (const name of names) {
+    const folded = name.toLowerCase();
+    if (seen.has(folded)) throw fail(file, [...path, key], `must not list ${JSON.stringify(name)} twice`);
     seen.add(folded);
   }
+}
+
+function rejectOverlap(
+  started: readonly string[],
+  paused: readonly string[],
+  file: string,
+  path: readonly string[],
+  startedKey: string,
+  pausedKey: string,
+): void {
+  const both = paused.find((name) => started.some((other) => other.toLowerCase() === name.toLowerCase()));
+  if (both !== undefined) {
+    throw fail(file, [...path, pausedKey], `must not repeat ${JSON.stringify(both)} from ${startedKey}`);
+  }
+}
+
+function rejectKeys(table: Table, keys: readonly string[], file: string, path: readonly string[], condition: string): void {
+  for (const key of keys) {
+    if (key in table) throw fail(file, [...path, key], `is only valid ${condition}`);
+  }
+}
+
+function parseGithubProjectStatus(table: Table, file: string, path: readonly string[]): GithubProjectStatus {
+  const owner = readString(table, "status_project_owner", file, path);
+  if (!PROJECT_OWNER_PATTERN.test(owner)) {
+    throw fail(file, [...path, "status_project_owner"], "must be a GitHub user or organization login");
+  }
+  const number = readPositiveInt(table, "status_project_number", file, path);
+  const field = readString(table, "status_field", file, path);
+  const startedOptions = readNonEmptyStringArray(table, "status_started_options", file, path);
+  const pausedOptions = readStringArray(table, "status_paused_options", file, path);
+  rejectDuplicateNames(startedOptions, file, path, "status_started_options");
+  rejectDuplicateNames(pausedOptions, file, path, "status_paused_options");
+  rejectOverlap(startedOptions, pausedOptions, file, path, "status_started_options", "status_paused_options");
+  return { owner, number, field, startedOptions, pausedOptions };
 }
 
 function parseIssueSource(table: Table, file: string, path: readonly string[]): IssueSource {
@@ -390,19 +441,24 @@ function parseIssueSource(table: Table, file: string, path: readonly string[]): 
     for (const key of LINEAR_ONLY_KEYS) {
       if (key in table) throw fail(file, [...path, key], 'is only valid with issue_source = "linear"');
     }
-    const startedLabels = readNonEmptyStringArray(table, "started_labels", file, path);
-    const pausedLabels = readStringArray(table, "paused_labels", file, path);
-    rejectDuplicateLabels(startedLabels, file, path, "started_labels");
-    rejectDuplicateLabels(pausedLabels, file, path, "paused_labels");
-    const both = pausedLabels.find((label) => startedLabels.some((started) => started.toLowerCase() === label.toLowerCase()));
-    if (both !== undefined) {
-      throw fail(file, [...path, "paused_labels"], `must not repeat ${JSON.stringify(both)} from started_labels`);
+    const signal = readEnum(table, "issue_signal", ISSUE_SIGNALS, file, path);
+    const usesLabels = signal !== "project";
+    const usesProject = signal !== "labels";
+    if (!usesLabels) rejectKeys(table, LABEL_KEYS, file, path, 'with issue_signal = "labels" or "both"');
+    if (!usesProject) rejectKeys(table, PROJECT_STATUS_KEYS, file, path, 'with issue_signal = "project" or "both"');
+    let startedLabels: readonly string[] = [];
+    let pausedLabels: readonly string[] = [];
+    if (usesLabels) {
+      startedLabels = readNonEmptyStringArray(table, "started_labels", file, path);
+      pausedLabels = readStringArray(table, "paused_labels", file, path);
+      rejectDuplicateNames(startedLabels, file, path, "started_labels");
+      rejectDuplicateNames(pausedLabels, file, path, "paused_labels");
+      rejectOverlap(startedLabels, pausedLabels, file, path, "started_labels", "paused_labels");
     }
-    return { kind, startedLabels, pausedLabels };
+    const projectStatus = usesProject ? parseGithubProjectStatus(table, file, path) : null;
+    return { kind, signal, startedLabels, pausedLabels, projectStatus };
   }
-  for (const key of GITHUB_ONLY_KEYS) {
-    if (key in table) throw fail(file, [...path, key], 'is only valid with issue_source = "github"');
-  }
+  rejectKeys(table, GITHUB_ONLY_KEYS, file, path, 'with issue_source = "github"');
   return {
     kind,
     team: readString(table, "linear_team", file, path),
@@ -417,7 +473,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "started_labels", "paused_labels", "ignore_label"],
+    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "issue_signal", "started_labels", "paused_labels", "status_project_owner", "status_project_number", "status_field", "status_started_options", "status_paused_options", "ignore_label"],
     file,
     path,
   );

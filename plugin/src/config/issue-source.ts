@@ -14,8 +14,9 @@ export function issueSourceStatusKey(project: Pick<ProjectConfig, "issueSource">
   return project.issueSource.kind === "linear" ? "linear" : "github_issues";
 }
 
-/** Whether the project's issue source can mark an issue as paused: it has paused states or paused labels. */
+/** Whether the project's issue source can mark an issue as paused: it has paused states, paused labels or paused project options. */
 export function canPauseIssues(project: Pick<ProjectConfig, "issueSource">): boolean {
   const { issueSource } = project;
-  return (issueSource.kind === "linear" ? issueSource.pausedStates : issueSource.pausedLabels).length > 0;
+  if (issueSource.kind === "linear") return issueSource.pausedStates.length > 0;
+  return issueSource.pausedLabels.length > 0 || (issueSource.projectStatus?.pausedOptions.length ?? 0) > 0;
 }

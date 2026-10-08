@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   buildConnectionRequest,
   buildIssueSearchRequest,
+  buildProjectStatusValidationRequest,
   buildSearchRequest,
   type ConnectionKind,
   type GraphqlRequest,
@@ -17,6 +18,7 @@ const KINDS: readonly ConnectionKind[] = [
   "threadComments",
   "closingIssues",
   "issueLabels",
+  "issueProjectItems",
   "pullRequestLabels",
 ];
 
@@ -55,16 +57,47 @@ test("the pull request labels are selected only when the shape asks for them", (
 });
 
 test("the issue search request declares exactly the variables it uses and carries the search string as a variable", () => {
-  const request = buildIssueSearchRequest("repo:acme/widgets is:issue", null, { issuePageSize: 5, nestedPageSize: 4 });
+  const request = buildIssueSearchRequest("repo:acme/widgets is:issue", null, { issuePageSize: 5, nestedPageSize: 4 }, null);
   expectVariablesConsistent(request);
   expect(request.variables).toEqual({ q: "repo:acme/widgets is:issue", top: 5, nested: 4, after: null });
   expect(request.query).not.toContain("acme/widgets");
+  expect(request.query).not.toContain("projectItems");
+  expect(request.query).not.toContain("statusField");
+});
+
+test("the issue search selects the Project items only for a status field and passes its name as a variable", () => {
+  const request = buildIssueSearchRequest("q", null, { issuePageSize: 5, nestedPageSize: 4 }, "Sprint \"status\" { x }");
+  expectVariablesConsistent(request);
+  expect(request.variables).toEqual({ q: "q", top: 5, nested: 4, after: null, statusField: "Sprint \"status\" { x }" });
+  expect(request.query).toContain("projectItems(first: $nested, includeArchived: false)");
+  expect(request.query).toContain("fieldValueByName(name: $statusField)");
+  expect(request.query).not.toContain("Sprint");
+});
+
+test("the Project validation request carries owner, number and field as variables only", () => {
+  const request = buildProjectStatusValidationRequest("acme-org", 3, "Sprint-field");
+  expectVariablesConsistent(request);
+  expect(request.variables).toEqual({ o: "acme-org", n: 3, f: "Sprint-field" });
+  expect(request.query).not.toContain("acme-org");
+  expect(request.query).not.toContain("Sprint-field");
+  expect(request.query).not.toContain("mutation");
+});
+
+test("a Project items follow-up page declares the status field variable and omits it for other kinds", () => {
+  const page = { alias: "c0", kind: "issueProjectItems", nodeId: "N", after: "A" } as const;
+  const request = buildConnectionRequest([page], sizes, "Status");
+  expectVariablesConsistent(request);
+  expect(request.variables["statusField"]).toBe("Status");
+  expect(request.query).toContain("... on Issue { projectItems(first: $nested, after: $after_c0, includeArchived: false)");
+  expect(() => buildConnectionRequest([page], sizes)).toThrow();
+  const labels = buildConnectionRequest([{ alias: "c0", kind: "issueLabels", nodeId: "N", after: "A" }], sizes, "Status");
+  expect(labels.variables).not.toHaveProperty("statusField");
 });
 
 test("every single-kind connection request declares exactly the variables it uses", () => {
   for (const kind of KINDS) {
     expectVariablesConsistent(
-      buildConnectionRequest([{ alias: "c0", kind, nodeId: "N", after: "A" }], sizes),
+      buildConnectionRequest([{ alias: "c0", kind, nodeId: "N", after: "A" }], sizes, "Status"),
     );
   }
 });
@@ -79,6 +112,7 @@ test("mixed connection requests declare exactly the variables they use", () => {
             { alias: "c1", kind: second, nodeId: "N1", after: "A1" },
           ],
           sizes,
+          "Status",
         ),
       );
     }
