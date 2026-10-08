@@ -8,6 +8,8 @@ mod bin_resolver;
 mod command;
 mod config;
 mod keyboard;
+#[cfg(test)]
+mod launcher_integration;
 mod message;
 mod notify;
 mod open;
