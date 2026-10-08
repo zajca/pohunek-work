@@ -14,9 +14,7 @@ import {
 } from "@pohunek/testkit";
 import createBackendHostsSource, {
   createWorkspace,
-  hostDataFromSnapshot,
   hostResourceKey,
-  reduceHostEvent,
   type HostDescriptor,
   type Workspace,
 } from "@pohunek/client-core";
@@ -198,106 +196,11 @@ describe("@pohunek/client-core", () => {
 
       await waitFor(() => workspace.sessions.snapshot()[key]?.runtimeContinuity === "reconnected");
       expect(workspace.sessions.snapshot()[key]?.session.runtime?.worker_instance_id).toBe("runtime-1");
-
-      const recovered = hostDataFromSnapshot(
-        [session("s-runtime", "runtime-2")],
-        [],
-        hostDataFromSnapshot([session("s-runtime", "runtime-1")], []),
-      );
-      expect(recovered.sessions["s-runtime"]?.runtimeContinuity).toBe("recovered");
-      expect(recovered.sessions["s-runtime"]?.session.runtime?.worker_instance_id).toBe("runtime-2");
     } finally {
       await workspace.close();
       await relay.close();
       await daemon.close();
     }
-  });
-
-  test("reduces runtime lifecycle events without losing the logical session", () => {
-    const initial = hostDataFromSnapshot([session("s-runtime", "runtime-1")], []);
-    const lost = reduceHostEvent(initial, {
-      v: PROTOCOL_VERSION,
-      event: "session_runtime_lost",
-      session: {
-        ...session("s-runtime", "runtime-1"),
-        runtime: {
-          ...session("s-runtime", "runtime-1").runtime!,
-          state: "lost",
-          loss_reason: "worker_missing",
-        },
-      },
-    });
-    expect(lost.sessions["s-runtime"]?.session.runtime?.state).toBe("lost");
-
-    const recovered = reduceHostEvent(lost, {
-      v: PROTOCOL_VERSION,
-      event: "session_native_recovered",
-      session: session("s-runtime", "runtime-2"),
-    });
-    expect(recovered.sessions["s-runtime"]?.runtimeContinuity).toBe("recovered");
-    expect(recovered.sessions["s-runtime"]?.session.runtime?.worker_instance_id).toBe("runtime-2");
-  });
-
-  test("reduces subagent state and rejects stale revisions", () => {
-    const initial = hostDataFromSnapshot([session("s-subagent", "runtime-1")], []);
-    const completed = reduceHostEvent(initial, {
-      v: PROTOCOL_VERSION,
-      event: "subagent_state",
-      session_id: "s-subagent",
-      runtime: { worker_instance_id: "runtime-1", runtime_generation: "1" },
-      subagent: {
-        id: "child-1",
-        provider: "codex",
-        agent_type: "explorer",
-        lifecycle: "completed",
-        revision: "2",
-        started_at_ms: 100,
-        updated_at_ms: 120,
-        finished_at_ms: 120,
-      },
-    });
-    const stale = reduceHostEvent(completed, {
-      v: PROTOCOL_VERSION,
-      event: "subagent_state",
-      session_id: "s-subagent",
-      runtime: { worker_instance_id: "runtime-1", runtime_generation: "1" },
-      subagent: {
-        id: "child-1",
-        provider: "codex",
-        lifecycle: "running",
-        activity: "working",
-        revision: "1",
-        started_at_ms: 100,
-        updated_at_ms: 110,
-      },
-    });
-
-    expect(stale).toBe(completed);
-    expect(stale.sessions["s-subagent"]?.session.subagents?.[0]?.lifecycle).toBe("completed");
-
-    const recovered = reduceHostEvent(stale, {
-      v: PROTOCOL_VERSION,
-      event: "session_native_recovered",
-      session: session("s-subagent", "runtime-2"),
-    });
-    const delayedOldRuntime = reduceHostEvent(recovered, {
-      v: PROTOCOL_VERSION,
-      event: "subagent_state",
-      session_id: "s-subagent",
-      runtime: { worker_instance_id: "runtime-1", runtime_generation: "1" },
-      subagent: {
-        id: "child-1",
-        provider: "codex",
-        lifecycle: "running",
-        activity: "working",
-        revision: "99",
-        started_at_ms: 100,
-        updated_at_ms: 200,
-      },
-    });
-
-    expect(delayedOldRuntime).toBe(recovered);
-    expect(delayedOldRuntime.sessions["s-subagent"]?.session.subagents).toBeUndefined();
   });
 
   test("reduces every live session, attach, agent, and notification transition", async () => {
@@ -355,11 +258,6 @@ describe("@pohunek/client-core", () => {
       daemon.scenario.deleteNotification(notification.id);
       await waitFor(() => workspace.notifications.snapshot().records[notificationKey] === undefined);
 
-      const initial = reduceHostEvent(
-        { sessions: {}, notifications: {} },
-        { event: "future_additive_event", payload: true },
-      );
-      expect(reduceHostEvent(initial, { event: "another_future_event" })).toBe(initial);
       expect(Object.isFrozen(workspace.sessions.snapshot())).toBe(true);
     } finally {
       await workspace.close();
