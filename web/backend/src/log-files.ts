@@ -9,14 +9,19 @@ import {
   openSync,
   readdirSync,
   renameSync,
+  type Stats,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { FdLockError, tryLockExclusive, type FdLockOutcome } from "./fd-lock";
 import { errorClass, stdoutLogger, type BackendLogEvent, type BackendLogger } from "./log";
 
 /** Active log file; rotated files carry a numeric suffix (`.1` newest). */
 export const LOG_FILE_NAME = "pohunek-backend.jsonl";
+
+/** Lock file of the family; never rotated, never removed. */
+export const LOG_LOCK_FILE_NAME = `${LOG_FILE_NAME}.lock`;
 
 /** Owner-only modes, like the Rust log family (`crates/logging`). */
 const DIRECTORY_MODE = 0o700;
@@ -73,12 +78,17 @@ const ROTATED_SUFFIX = /^[1-9][0-9]*$/;
  * truncated away; when that fails too, the next event starts a new active file
  * so no event is appended to a torn line.
  *
- * One process owns a log directory: the bound holds for a single writer, and
- * the service manager (one launchd job or systemd unit) keeps the backend to a
- * single instance. Two loggers on the same directory do not coordinate.
+ * One logger owns a log directory for its whole lifetime: it holds an
+ * exclusive `flock` on `pohunek-backend.jsonl.lock` until `close`, so the bound
+ * and the rotation hold for a single writer. A second logger on the directory,
+ * in this or another process, fails to open with a `LogFileError`. The kernel
+ * releases the lock when the holder exits or is killed, so a crash never blocks
+ * the next start. The lock file itself stays in the directory; removing it
+ * would let two writers lock different files.
  *
- * Setup failures, including file-system errors, surface as `LogFileError`
- * naming the directory and the underlying cause.
+ * Setup failures, including file-system errors and a lock that cannot be taken
+ * (held elsewhere, or no libc `flock` binding on the platform), surface as
+ * `LogFileError` naming the directory and the underlying cause.
  */
 export function rotatingFileLogger(options: RotatingLogOptions): ClosableBackendLogger {
   return createRotatingFileLogger(options, NODE_LOG_FILE_IO);
@@ -103,16 +113,23 @@ export function createRotatingFileLogger(options: RotatingLogOptions, io: LogFil
   const active = join(dir, LOG_FILE_NAME);
   const opened = withSetupContext(dir, () => {
     prepareDirectory(dir);
-    sanitizeRotated(dir, maxFiles, maxFileBytes);
-    const initial = openActive(active, maxFileBytes);
+    const lock = acquireFamilyLock(dir);
     try {
-      return { descriptor: initial, size: fstatSync(initial).size };
+      sanitizeRotated(dir, maxFiles, maxFileBytes);
+      const initial = openActive(active, maxFileBytes);
+      try {
+        return { descriptor: initial, size: fstatSync(initial).size, lock };
+      } catch (error: unknown) {
+        closeSync(initial);
+        throw error;
+      }
     } catch (error: unknown) {
-      closeSync(initial);
+      closeSync(lock);
       throw error;
     }
   });
   let descriptor = opened.descriptor;
+  let lockDescriptor = opened.lock;
   let size = opened.size;
   let closed = false;
   let failing = false;
@@ -214,8 +231,16 @@ export function createRotatingFileLogger(options: RotatingLogOptions, io: LogFil
         return;
       }
       closed = true;
-      if (descriptor !== NO_DESCRIPTOR) {
-        releaseDescriptor();
+      try {
+        if (descriptor !== NO_DESCRIPTOR) {
+          releaseDescriptor();
+        }
+      } finally {
+        // The lock goes last so no other logger rotates while this one still
+        // holds a descriptor into the family.
+        const held = lockDescriptor;
+        lockDescriptor = NO_DESCRIPTOR;
+        closeSync(held);
       }
     },
   };
@@ -274,6 +299,54 @@ function requireCurrentOwner(uid: number, path: string): void {
 }
 
 /**
+ * Takes the lifetime lock of the family and returns its descriptor. The lock
+ * file is opened like the active file: no symlink followed, a regular file
+ * owned by the current user, mode forced to 0600. It is opened read-write
+ * because over NFS Linux emulates flock(2) with byte-range locks, and an
+ * exclusive byte-range lock requires a descriptor open for writing.
+ */
+function acquireFamilyLock(dir: string): number {
+  const path = join(dir, LOG_LOCK_FILE_NAME);
+  const descriptor = openSync(
+    path,
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    FILE_MODE,
+  );
+  try {
+    requireOwnerPrivateFile(descriptor, path, "log lock file");
+    let outcome: FdLockOutcome;
+    try {
+      outcome = tryLockExclusive(descriptor);
+    } catch (error: unknown) {
+      if (error instanceof FdLockError) {
+        throw new LogFileError(`cannot lock the backend log files in ${dir}: ${error.message}`, { cause: error });
+      }
+      throw error;
+    }
+    if (outcome === "held") {
+      throw new LogFileError(`another process holds the backend log files in ${dir}`);
+    }
+  } catch (error: unknown) {
+    closeSync(descriptor);
+    throw error;
+  }
+  return descriptor;
+}
+
+/** Requires a regular file owned by the current user and forces mode 0600; returns its status. */
+function requireOwnerPrivateFile(descriptor: number, path: string, label: string): Stats {
+  const info = fstatSync(descriptor);
+  if (!info.isFile()) {
+    throw new LogFileError(`${label} is not a regular file: ${path}`);
+  }
+  requireCurrentOwner(info.uid, path);
+  if ((info.mode & GROUP_AND_OTHER_BITS) !== 0) {
+    fchmodSync(descriptor, FILE_MODE);
+  }
+  return info;
+}
+
+/**
  * Opens the active file without following a symlink, requires a regular file
  * owned by the current user, forces mode 0600 through the descriptor, and
  * empties a file left above the size bound. `O_NONBLOCK` keeps a FIFO in the
@@ -286,14 +359,7 @@ function openActive(path: string, maxFileBytes: number): number {
     FILE_MODE,
   );
   try {
-    const info = fstatSync(descriptor);
-    if (!info.isFile()) {
-      throw new LogFileError(`log file is not a regular file: ${path}`);
-    }
-    requireCurrentOwner(info.uid, path);
-    if ((info.mode & GROUP_AND_OTHER_BITS) !== 0) {
-      fchmodSync(descriptor, FILE_MODE);
-    }
+    const info = requireOwnerPrivateFile(descriptor, path, "log file");
     if (info.size > maxFileBytes) {
       ftruncateSync(descriptor, 0);
     }

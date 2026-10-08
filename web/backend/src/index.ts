@@ -16,7 +16,7 @@ export {
   loadBackendConfig,
 } from "./config";
 export type { BackendConfig, BackendLogFileConfig, DerivedRuntime } from "./config";
-export { LOG_FILE_NAME, LogFileError, rotatingFileLogger } from "./log-files";
+export { LOG_FILE_NAME, LOG_LOCK_FILE_NAME, LogFileError, rotatingFileLogger } from "./log-files";
 export type { ClosableBackendLogger, RotatingLogOptions } from "./log-files";
 export { externalFqdnSelector, externalPeerSelector } from "./identity";
 export { BackendStartupError, startHostsPipeline } from "./hosts";

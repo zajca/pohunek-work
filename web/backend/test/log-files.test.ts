@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { ftruncateSync, writeSync } from "node:fs";
+import { existsSync, ftruncateSync, readdirSync, readFileSync, readlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   LOG_FILE_NAME,
+  LOG_LOCK_FILE_NAME,
   LogFileError,
   rotatingFileLogger,
   startBackendFromEnv,
@@ -20,6 +21,9 @@ const SMALL_FILE_BYTES = 400;
 const FIFO_PEER_DELAY_MS = 2_000;
 /** Rotating twenty small events in a fresh process takes well under this; below the per-test timeout. */
 const HUGE_COUNT_ROTATION_BUDGET_MS = 4_000;
+const LOG_HOLDER_SCRIPT = fileURLToPath(new URL("./support/log-holder.ts", import.meta.url));
+/** Exit status `log-holder.ts` uses when the directory is refused. */
+const HOLDER_REFUSED_EXIT_CODE = 3;
 const LOG_FILES_MODULE = fileURLToPath(new URL("../src/log-files.ts", import.meta.url));
 
 describe("rotating backend log files", () => {
@@ -49,8 +53,8 @@ describe("rotating backend log files", () => {
         logger.log({ level: "info", event: `event_${String(index).padStart(2, "0")}` });
       }
       const names = (await readdir(dir)).sort();
-      expect(names).toEqual([LOG_FILE_NAME, `${LOG_FILE_NAME}.1`, `${LOG_FILE_NAME}.2`]);
-      for (const name of names) {
+      expect(names).toEqual([LOG_FILE_NAME, `${LOG_FILE_NAME}.1`, `${LOG_FILE_NAME}.2`, LOG_LOCK_FILE_NAME]);
+      for (const name of names.filter((entry) => entry !== LOG_LOCK_FILE_NAME)) {
         expect((await stat(join(dir, name))).size <= SMALL_FILE_BYTES).toBe(true);
         expect((await stat(join(dir, name))).mode & 0o777).toBe(0o600);
       }
@@ -72,7 +76,7 @@ describe("rotating backend log files", () => {
       for (let index = 0; index < 30; index += 1) {
         logger.log({ level: "info", event: `event_${String(index)}` });
       }
-      expect(await readdir(dir)).toEqual([LOG_FILE_NAME]);
+      expect((await readdir(dir)).sort()).toEqual([LOG_FILE_NAME, LOG_LOCK_FILE_NAME]);
       expect((await stat(join(dir, LOG_FILE_NAME))).size <= SMALL_FILE_BYTES).toBe(true);
     });
   });
@@ -98,7 +102,7 @@ describe("rotating backend log files", () => {
       const logger = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
       logger.log({ level: "info", event: "after_restart" });
       const names = (await readdir(dir)).sort();
-      expect(names).toEqual([LOG_FILE_NAME, "unrelated.txt"]);
+      expect(names).toEqual([LOG_FILE_NAME, LOG_LOCK_FILE_NAME, "unrelated.txt"]);
       const content = await readFile(join(dir, LOG_FILE_NAME), "utf8");
       expect(content.startsWith('{"previous":true}\n')).toBe(true);
       expect(content.includes("after_restart")).toBe(true);
@@ -224,7 +228,7 @@ describe("non-regular files in log slots", () => {
       const logger = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 3 });
       logger.close();
 
-      expect(await readdir(dir)).toEqual([LOG_FILE_NAME]);
+      expect((await readdir(dir)).sort()).toEqual([LOG_FILE_NAME, LOG_LOCK_FILE_NAME]);
       expect(await readFile(target, "utf8")).toBe("keep\n");
       expect((await stat(target)).mode & 0o777).toBe(0o644);
     });
@@ -282,7 +286,7 @@ describe("rotating log file failure handling", () => {
       logger.close();
 
       expect(received.map((event) => event.event)).toEqual(["log_file_failed", "torn"]);
-      expect(await readdir(dir)).toEqual([LOG_FILE_NAME]);
+      expect((await readdir(dir)).sort()).toEqual([LOG_FILE_NAME, LOG_LOCK_FILE_NAME]);
       expect(await jsonEvents(join(dir, LOG_FILE_NAME))).toEqual(["before", "after"]);
     });
   });
@@ -342,8 +346,219 @@ describe("rotating log file failure handling", () => {
 
       expect((await stat(join(dir, LOG_FILE_NAME))).size).toBe(0);
       expect((await stat(join(dir, LOG_FILE_NAME))).mode & 0o777).toBe(0o600);
-      expect((await readdir(dir)).sort()).toEqual([LOG_FILE_NAME, `${LOG_FILE_NAME}.2`]);
+      expect((await readdir(dir)).sort()).toEqual([LOG_FILE_NAME, `${LOG_FILE_NAME}.2`, LOG_LOCK_FILE_NAME]);
       expect((await stat(join(dir, `${LOG_FILE_NAME}.2`))).mode & 0o777).toBe(0o600);
+    });
+  });
+});
+
+describe("log directory lock", () => {
+  test("the lock descriptor is open for reading and writing", async () => {
+    // NFS emulates flock with byte-range locks that need a writable descriptor.
+    // Descriptor flags are only inspectable through procfs; skip where it is absent (macOS).
+    if (!existsSync("/proc/self/fdinfo")) {
+      return;
+    }
+    await withRoot((root) => {
+      const dir = join(root, "logs");
+      const logger = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      try {
+        const lockPath = join(dir, LOG_LOCK_FILE_NAME);
+        const lockFds = readdirSync("/proc/self/fd").filter((fd) => {
+          try {
+            return readlinkSync(`/proc/self/fd/${fd}`) === lockPath;
+          } catch {
+            return false;
+          }
+        });
+        expect(lockFds.length).toBe(1);
+        const info = readFileSync(`/proc/self/fdinfo/${lockFds[0]}`, "utf8");
+        const flags = /^flags:\s*([0-7]+)/m.exec(info)?.[1];
+        expect(flags === undefined).toBe(false);
+        const O_ACCMODE = 0o3;
+        const O_RDWR = 0o2;
+        expect(parseInt(flags ?? "0", 8) & O_ACCMODE).toBe(O_RDWR);
+      } finally {
+        logger.close();
+      }
+      return Promise.resolve();
+    });
+  });
+
+  test("a second logger in this process is refused until the first closes", async () => {
+    await withRoot((root) => {
+      const dir = join(root, "logs");
+      const first = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+      expect(refused.message.includes(dir)).toBe(true);
+      expect(refused.message.includes("another process holds")).toBe(true);
+
+      first.close();
+      const second = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      second.close();
+      return Promise.resolve();
+    });
+  });
+
+  test("a repeated close releases the lock once and never frees a later holder", async () => {
+    await withRoot((root) => {
+      const dir = join(root, "logs");
+      const first = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      first.close();
+      const second = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      // A second close of `first` must not close a descriptor number now owned by `second`.
+      first.close();
+      expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+      second.close();
+      return Promise.resolve();
+    });
+  });
+
+  test("a logger in another process blocks this one until that process closes it", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      const holder = startHolder(dir);
+      try {
+        expect(await holder.firstLine).toBe("ready");
+        const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+        expect(refused.message.includes(dir)).toBe(true);
+
+        holder.child.stdin?.end();
+        expect(await holder.exited).toEqual({ code: 0, signal: null });
+        rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }).close();
+      } finally {
+        await stopPeer(holder.child);
+      }
+    });
+  });
+
+  test("a killed holder never blocks the next logger", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      const holder = startHolder(dir);
+      try {
+        expect(await holder.firstLine).toBe("ready");
+        expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+
+        holder.child.kill("SIGKILL");
+        expect((await holder.exited).signal).toBe("SIGKILL");
+        rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }).close();
+      } finally {
+        await stopPeer(holder.child);
+      }
+    });
+  });
+
+  test("a logger in another process is refused while this one holds the directory", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      const parent = rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 });
+      const refusedHolder = startHolder(dir);
+      try {
+        const line = await refusedHolder.firstLine;
+        expect(line.startsWith("refused ")).toBe(true);
+        expect(line.includes(dir)).toBe(true);
+        expect((await refusedHolder.exited).code).toBe(HOLDER_REFUSED_EXIT_CODE);
+
+        parent.close();
+        const accepted = startHolder(dir);
+        try {
+          expect(await accepted.firstLine).toBe("ready");
+          accepted.child.stdin?.end();
+          expect(await accepted.exited).toEqual({ code: 0, signal: null });
+        } finally {
+          await stopPeer(accepted.child);
+        }
+      } finally {
+        parent.close();
+        await stopPeer(refusedHolder.child);
+      }
+    });
+  });
+
+  test("the lock file is created owner-private and an existing loose one is tightened", async () => {
+    await withRoot(async (root) => {
+      const fresh = join(root, "fresh");
+      rotatingFileLogger({ dir: fresh, maxFileBytes: 4096, maxFiles: 2 }).close();
+      expect((await stat(join(fresh, LOG_LOCK_FILE_NAME))).mode & 0o777).toBe(0o600);
+
+      const loose = join(root, "loose");
+      await mkdir(loose, { mode: 0o700 });
+      await writeFile(join(loose, LOG_LOCK_FILE_NAME), "", { mode: 0o644 });
+      await chmod(join(loose, LOG_LOCK_FILE_NAME), 0o644);
+      rotatingFileLogger({ dir: loose, maxFileBytes: 4096, maxFiles: 2 }).close();
+      expect((await stat(join(loose, LOG_LOCK_FILE_NAME))).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  test("the lock file stays in the directory after close", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }).close();
+      expect((await readdir(dir)).includes(LOG_LOCK_FILE_NAME)).toBe(true);
+    });
+  });
+
+  test("a symlink in the lock slot is refused and its target is untouched", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      await mkdir(dir, { mode: 0o700 });
+      const target = join(root, "target");
+      await writeFile(target, "keep\n", { mode: 0o644 });
+      await chmod(target, 0o644);
+      await symlink(target, join(dir, LOG_LOCK_FILE_NAME));
+
+      const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+      expect(refused.message.includes(dir)).toBe(true);
+      expect(await readFile(target, "utf8")).toBe("keep\n");
+      expect((await stat(target)).mode & 0o777).toBe(0o644);
+      expect((await readdir(dir)).includes(LOG_FILE_NAME)).toBe(false);
+    });
+  });
+
+  test("a directory in the lock slot is refused", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      await mkdir(join(dir, LOG_LOCK_FILE_NAME), { recursive: true, mode: 0o700 });
+      const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+      // Opening a directory read-write is refused by the open itself (EISDIR); the
+      // later type check ("not a regular file") remains as a second line of defence.
+      expect(/EISDIR|not a regular file/.test(refused.message)).toBe(true);
+      expect(refused.message.includes(dir)).toBe(true);
+      expect((await readdir(dir)).includes(LOG_FILE_NAME)).toBe(false);
+      expect((await stat(join(dir, LOG_LOCK_FILE_NAME))).isDirectory()).toBe(true);
+    });
+  });
+
+  test("a FIFO in the lock slot is refused without blocking", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      await mkdir(dir, { mode: 0o700 });
+      const peer = makeFifoWithLatePeer(join(dir, LOG_LOCK_FILE_NAME));
+      try {
+        const started = performance.now();
+        const refused = expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 2 }));
+        expect(performance.now() - started < FIFO_PEER_DELAY_MS).toBe(true);
+        expect(refused.message.includes("not a regular file")).toBe(true);
+      } finally {
+        await stopPeer(peer);
+      }
+    });
+  });
+
+  test("a setup failure after the lock is taken releases the lock", async () => {
+    await withRoot(async (root) => {
+      const dir = join(root, "logs");
+      await mkdir(dir, { mode: 0o700 });
+      const rotated = join(dir, `${LOG_FILE_NAME}.1`);
+      const peer = makeFifoWithLatePeer(rotated);
+      try {
+        expectLogFileError(() => rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 3 }));
+      } finally {
+        await stopPeer(peer);
+      }
+      await rm(rotated);
+      rotatingFileLogger({ dir, maxFileBytes: 4096, maxFiles: 3 }).close();
     });
   });
 });
@@ -460,6 +675,37 @@ function makeFifoWithLatePeer(path: string): ChildProcess {
   }
   const delaySeconds = String(FIFO_PEER_DELAY_MS / 1000);
   return spawn("sh", ["-c", 'sleep "$1"; exec 3<>"$0"; sleep "$1"', path, delaySeconds], { stdio: "ignore" });
+}
+
+interface Holder {
+  readonly child: ChildProcess;
+  /** First stdout line of the holder; rejects when it exits without printing one. */
+  readonly firstLine: Promise<string>;
+  readonly exited: Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>;
+}
+
+/** Starts `support/log-holder.ts` on `dir`; it holds the directory until its stdin ends. */
+function startHolder(dir: string): Holder {
+  const child = spawn(process.execPath, [LOG_HOLDER_SCRIPT, dir], { stdio: ["pipe", "pipe", "inherit"] });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const firstLine = new Promise<string>((resolve, reject) => {
+    let buffered = "";
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      buffered += chunk;
+      const end = buffered.indexOf("\n");
+      if (end >= 0) {
+        resolve(buffered.slice(0, end));
+      }
+    });
+    child.once("error", reject);
+    void exited.then(() => reject(new Error("holder exited without a first line")));
+  });
+  // A holder that is killed on purpose must not leave an unhandled rejection.
+  firstLine.catch(() => undefined);
+  return { child, firstLine, exited };
 }
 
 async function stopPeer(peer: ChildProcess): Promise<void> {
