@@ -38,7 +38,7 @@ Deferred to the pohunek release (RFC stages D, F, G):
 | Read sessions and links | `session list --json` | `metadata` is serialized when non-empty (`SessionInfo`, `skip_serializing_if = "BTreeMap::is_empty"`); filtering by metadata is client-side |
 | Agent profile and prompt for an action | `project action <project> <name> --json`, `project actions` | `provider = "none"` actions are host configuration in `~/.config/pohunek/actions.toml` |
 | Blocked agents | `notifications list --json`, `notifications watch --json` | `agent_blocked`, `approval_required` |
-| Attach, remove | `attach`, `session rm` | |
+| Attach, remove | `attach`, `session stop`, `session rm`, `session diff` | `do <key> cleanup` runs stop and rm only after its checks hold, never with `--accept-unconfirmed-cleanup` |
 | Projects | `project list --json`, `project show` | label, `origin_url`, `default_base_branch` |
 | Create notification | not in CLI | the plugin calls `notify-send` itself |
 
@@ -74,7 +74,7 @@ pohunek-work (Bun, single binary via `bun build --compile`)
       pohunek.ts   CLI wrapper: session list/new/metadata, project list/action, notifications
     join.ts        item keys, join precedence (RFC 7.3)
     rules.ts       ten on_turn rules as pure functions (RFC 8)
-    actions/       implement, babysit, fix-ci, rebase, review, ready, merge, attach
+    actions/       implement, babysit, fix-ci, rebase, review, ready, merge, attach, cleanup
     output/        table renderer, JSON contract (RFC 9.1)
     watch.ts       event + polling loop, transition detection, notify-send
     log.ts         structured JSON logs and action log
@@ -145,6 +145,10 @@ issue_body_max_length = 8000
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
 prompt_delivery_timeout_ms = 5000
+git_bin = "/usr/bin/git"         # absolute path; cleanup runs git through it
+git_timeout_ms = 15000           # per git call of cleanup except the fetch
+cleanup_remote = "origin"        # remote fetched before the branch_in_sync check; one safe ref segment
+cleanup_timeout_ms = 60000       # per pohunek call of cleanup (stop, rm, diff) and the git fetch
 
 [notify]
 command = "/usr/bin/notify-send"

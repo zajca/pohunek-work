@@ -9,9 +9,9 @@ export type LaunchAction = "implement" | "babysit" | "fix-ci" | "rebase" | "revi
 export const LAUNCH_ACTIONS: readonly LaunchAction[] = ["implement", "babysit", "fix-ci", "rebase", "review"];
 
 /** Every action `do` accepts; `merge` is only accepted to refuse it (merging stays manual). */
-export type DoAction = LaunchAction | "ready" | "attach" | "merge";
+export type DoAction = LaunchAction | "ready" | "attach" | "cleanup" | "merge";
 
-export const DO_ACTIONS: readonly DoAction[] = [...LAUNCH_ACTIONS, "ready", "attach", "merge"];
+export const DO_ACTIONS: readonly DoAction[] = [...LAUNCH_ACTIONS, "ready", "attach", "cleanup", "merge"];
 
 export function isLaunchAction(action: DoAction): action is LaunchAction {
   return LAUNCH_ACTIONS.some((name) => name === action);

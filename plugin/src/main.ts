@@ -31,6 +31,7 @@ const USAGE = `usage:
   pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
+  pohunek-work do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work doctor
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]

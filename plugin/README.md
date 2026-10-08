@@ -93,6 +93,23 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   draft and re-reads the pull request to confirm it is no longer a draft;
 - `pohunek-work do <key> attach` attaches the terminal to the one live linked
   session;
+- `pohunek-work do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]`
+  removes a finished session and its worktree; a row marked ignored (`ignore_label`) is refused without `--include-ignored`. `--dry-run` reads only, except for a `git fetch` of the configured remote into the remote-tracking ref of the session's repository (no work files; git may also run auto-maintenance in the repository); it prints the inventory
+  (ignored entries that would be lost, ahead/behind, diff base and size, sessions
+  sharing the worktree, the `session stop` and `session rm` argv) and the result
+  of every check, and exits 0 even when a check fails. A real run needs `--yes`
+  (no interactive prompt), refuses with `precondition_failed` naming every failed
+  check and removes nothing; otherwise it re-reads the session first (a `working`
+  or `blocked` session is refused with `precondition_failed`, nothing stopped),
+  stops it, re-runs the checks, refuses when the sessions sharing the worktree
+  changed since the evidence, runs `session rm` (never
+  `--accept-unconfirmed-cleanup`) and re-reads `session list`. An `rm` result
+  with `removed=false` or failed worktrees is `command_unverified`: the session
+  may be gone, check `pohunek session list` and the disk. It needs the `[actions]` keys `git_bin` (absolute path),
+  `git_timeout_ms`, `cleanup_remote` (one safe ref segment) and
+  `cleanup_timeout_ms`; `list` does not advertise it. Checks, JSON shape and
+  refusal codes: [docs/watch-and-agents.md](docs/watch-and-agents.md#finished-sessions)
+  and [docs/rfc.md](docs/rfc.md);
 - `pohunek-work setup [scripts|config|sway] [--force] [--json]` installs the
   rofi/sway launcher scripts, the starter `launcher.conf` and prompt templates,
   and the sway drop-in from `launchers/` into the per-user XDG locations (the

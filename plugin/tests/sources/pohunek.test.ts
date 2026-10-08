@@ -435,3 +435,88 @@ test("waitSession maps an unknown reason, a missing session, a core error and a 
   expect(missing.message).toContain("session_not_found");
   expect(failureOf(await run(() => ({ exitCode: null, stdout: "", stderr: "", timedOut: true }))).code).toBe("timeout");
 });
+
+function okEnvelope(payload: unknown): string {
+  return JSON.stringify({ cli_version: "0.33.1", protocol: { minimum: 4, maximum: 4 }, ok: payload });
+}
+
+const REMOVED = { removed: true, stopped: true, worktrees_removed: 1, worktrees_failed: 0, accepted_unconfirmed_processes: [] };
+
+test("stopSession runs session stop with the given timeout and reads stopped", async () => {
+  const { exec, calls } = fakeExec(() => reply(okEnvelope({ stopped: true })));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).stopSession("s-1", 4321);
+  if (!result.ok) throw new Error("expected ok");
+  expect(result.data).toEqual({ stopped: true });
+  expect(calls[0]?.argv).toEqual(["/fake/pohunek", "session", "stop", "s-1", "--json"]);
+  expect(calls[0]?.timeoutMs).toBe(4321);
+});
+
+test("stopSession rejects a payload without a boolean stopped", async () => {
+  const { exec } = fakeExec(() => reply(okEnvelope({ stopped: "yes" })));
+  expect(failureOf(await createPohunekClient(CONFIG, { exec, env: {} }).stopSession("s-1", 1)).code).toBe("invalid_response");
+});
+
+test("removeSession runs session rm without --accept-unconfirmed-cleanup and parses the result", async () => {
+  const { exec, calls } = fakeExec(() => reply(okEnvelope({ ...REMOVED, accepted_unconfirmed_processes: [{ pid: 1 }] })));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).removeSession("s-1", 777);
+  if (!result.ok) throw new Error("expected ok");
+  expect(calls[0]?.argv).toEqual(["/fake/pohunek", "session", "rm", "s-1", "--json"]);
+  expect(calls[0]?.argv).not.toContain("--accept-unconfirmed-cleanup");
+  expect(calls[0]?.timeoutMs).toBe(777);
+  expect(result.data).toEqual({ removed: true, stopped: true, worktreesRemoved: 1, worktreesFailed: 0, acceptedUnconfirmedProcesses: 1 });
+});
+
+test("removeSession reads an omitted or null accepted_unconfirmed_processes as none, the shape core really prints", async () => {
+  const real: Record<string, unknown> = { ...REMOVED };
+  delete real["accepted_unconfirmed_processes"];
+  for (const payload of [real, { ...real, accepted_unconfirmed_processes: null }]) {
+    const { exec } = fakeExec(() => reply(okEnvelope(payload)));
+    const result = await createPohunekClient(CONFIG, { exec, env: {} }).removeSession("s-1", 1);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.data.acceptedUnconfirmedProcesses).toBe(0);
+  }
+});
+
+test("removeSession fails on every invalid shape", async () => {
+  const bad: Record<string, unknown>[] = [
+    { ...REMOVED, removed: "true" },
+    { ...REMOVED, stopped: undefined },
+    { ...REMOVED, worktrees_removed: -1 },
+    { ...REMOVED, worktrees_failed: 1.5 },
+    { ...REMOVED, worktrees_failed: "0" },
+    { ...REMOVED, accepted_unconfirmed_processes: "none" },
+  ];
+  for (const payload of bad) {
+    const { exec } = fakeExec(() => reply(okEnvelope(payload)));
+    expect(failureOf(await createPohunekClient(CONFIG, { exec, env: {} }).removeSession("s-1", 1)).code).toBe("invalid_response");
+  }
+});
+
+test("removeSession and stopSession map a pohunek error and a timeout to a failure", async () => {
+  const err = JSON.stringify({ cli_version: "0.33.1", protocol: { minimum: 4, maximum: 4 }, err: { class: "client", code: "session_not_found", msg: "no such session" } });
+  const { exec } = fakeExec(() => reply(err, 1));
+  const client = createPohunekClient(CONFIG, { exec, env: {} });
+  expect(failureOf(await client.removeSession("s-1", 1)).code).toBe("unavailable");
+  expect(failureOf(await client.stopSession("s-1", 1)).code).toBe("unavailable");
+  const slow = createPohunekClient(CONFIG, { exec: () => Promise.resolve({ exitCode: null, stdout: "", stderr: "", timedOut: true }), env: {} });
+  expect(failureOf(await slow.removeSession("s-1", 5)).code).toBe("timeout");
+});
+
+test("diffSession keeps the base, the truncation flag and the byte length, not the diff", async () => {
+  const { exec, calls } = fakeExec(() => reply(okEnvelope({ base: "main", diff: "diff ž\n", truncated: true })));
+  const result = await createPohunekClient(CONFIG, { exec, env: {} }).diffSession("s-1", 888);
+  if (!result.ok) throw new Error("expected ok");
+  expect(result.data).toEqual({ base: "main", truncated: true, diffBytes: 8 });
+  expect(calls[0]?.argv).toEqual(["/fake/pohunek", "session", "diff", "s-1", "--json"]);
+  expect(calls[0]?.timeoutMs).toBe(888);
+});
+
+test("diffSession rejects a missing diff or flag and maps session_no_worktree to a failure", async () => {
+  for (const payload of [{ base: "main", truncated: false }, { base: "main", diff: "", truncated: "no" }, { diff: "", truncated: false }]) {
+    const { exec } = fakeExec(() => reply(okEnvelope(payload)));
+    expect(failureOf(await createPohunekClient(CONFIG, { exec, env: {} }).diffSession("s-1", 1)).code).toBe("invalid_response");
+  }
+  const err = JSON.stringify({ cli_version: "0.33.1", protocol: { minimum: 4, maximum: 4 }, err: { class: "client", code: "session_no_worktree", msg: "x" } });
+  const { exec } = fakeExec(() => reply(err, 1));
+  expect(failureOf(await createPohunekClient(CONFIG, { exec, env: {} }).diffSession("s-1", 1)).code).toBe("unavailable");
+});
