@@ -13,20 +13,25 @@ describe("backend log destination", () => {
     const root = await createFixtureRoot("pk-log-");
     try {
       const logDir = join(root, "logs");
-      let failed = false;
+      const socketPath = join(root, "daemon.sock");
+      const daemon = await startFixtureDaemon({ listen: { unixSocketPath: socketPath } });
       try {
-        await startBackendFromEnv({
-          POHUNEK_BACKEND_BIND_HOST: "127.0.0.1",
-          POHUNEK_BACKEND_PORT: "0",
-          POHUNEK_BACKEND_ALLOW_LOOPBACK: "1",
-          POHUNEK_BACKEND_DAEMON_SOCKET: join(root, "missing.sock"),
-          POHUNEK_BACKEND_STATIC_DIR: root,
-          POHUNEK_BACKEND_LOG_DIR: logDir,
-        });
-      } catch {
-        failed = true;
+        let failed = false;
+        try {
+          await startBackendFromEnv({
+            POHUNEK_BACKEND_BIND_HOST: "0.0.0.0",
+            POHUNEK_BACKEND_PORT: "0",
+            POHUNEK_BACKEND_DAEMON_SOCKET: socketPath,
+            POHUNEK_BACKEND_STATIC_DIR: root,
+            POHUNEK_BACKEND_LOG_DIR: logDir,
+          });
+        } catch {
+          failed = true;
+        }
+        expect(failed).toBe(true);
+      } finally {
+        await daemon.close();
       }
-      expect(failed).toBe(true);
       const lines = (await readFile(join(logDir, LOG_FILE_NAME), "utf8")).trimEnd().split("\n");
       const last = JSON.parse(lines[lines.length - 1] ?? "") as { event?: string; lifecycle?: string };
       expect(last.event).toBe("backend_startup");
