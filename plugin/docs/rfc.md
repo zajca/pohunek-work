@@ -506,8 +506,8 @@ the source `github_issues` (the GitHub issue lookup of a `github` project), the
 list of unavailable sources and never makes `list` exit partial. Version 4 adds the row field `ignored` (a row carrying the project's
 `ignore_label`; it has no actions but keeps its computed `on_turn`) and the
 payload field `omitted_ignored` (the number of ignored rows left out of `items`
-that `--mine`, `--stale-days` and `--project` would have listed; 0 with
-`--include-ignored`). `list` and `list --mine` hide ignored rows unless
+that `--mine`, `--finished-hours`, `--stale-days` and `--project` would have
+listed; 0 with `--include-ignored`). `list` and `list --mine` hide ignored rows unless
 `--include-ignored` is passed (the table marks such a row's key with `(ignored)`); without it the table ends with
 `N ignored row(s) hidden (use --include-ignored)` when N > 0.
 Each `sessions` entry also carries `indicator` and `updated_at`. `indicator` is
@@ -519,8 +519,8 @@ else `running` for a live session, else the session's own state (`stopped`,
 whether a live session is working or waiting for input in its `activity` depends
 on core (`zajca/pohunek#544`). `updated_at` is the session's ISO-8601 time of
 last change from pohunek, or null when pohunek reports none. The table's
-`SESSIONS` cell shows `<role>:<indicator>`, except that a live session shows its
-`activity` (`live` while unknown). `list --mine --finished-hours <n>` (a positive
+`SESSIONS` cell shows `<role>:<indicator>`, except that a session whose indicator
+is `running` shows its `activity` (`live` while unknown). `list --mine --finished-hours <n>` (a positive
 whole number; a usage error without `--mine`) additionally keeps a row that is
 not on the owner's turn when none of its sessions is `running` or
 `waiting_input` and at least one session is `stopped` or `done` with an
