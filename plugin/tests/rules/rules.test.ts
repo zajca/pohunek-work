@@ -806,6 +806,14 @@ describe("rule 12 with an ignore label and an issue the issue source did not lis
     expect(ignoreLabelUnreadable(failedLookup, allOk, withLabel)).toBe("linear:truncated");
   });
 
+  test("a failed lookup makes a row with a listed issue unknown, a successful one leaves it to the rules", () => {
+    const listed = item({ ...unlisted, issue: issue(), resolvedIssue: issue() });
+    expect(ignoreLabelUnreadable(item({ ...listed, issueLookup: { ok: false, reason: "linear:timeout" } }), allOk, withLabel)).toBe("linear:timeout");
+    expect(onTurn(item({ ...listed, issueLookup: { ok: false, reason: "linear:timeout" } }), allOk, withLabel)).toEqual({ actor: "unknown", reason: "linear:timeout", rule: null });
+    expect(ignoreLabelUnreadable(item({ ...listed, issueLookup: { ok: true, ignored: false } }), { ...allOk, linear: "truncated" }, withLabel)).toBeNull();
+    expect(ignoreLabelUnreadable(listed, { ...allOk, linear: "truncated" }, withLabel)).toBeNull();
+  });
+
   test("a lookup that found the issue unlabelled or labelled leaves the verdict to the rules", () => {
     for (const ignored of [false, true]) {
       expect(onTurn(item({ ...unlisted, issueLookup: { ok: true, ignored } }), allOk, withLabel)).toEqual({ actor: "me", reason: "fix CI", rule: 5 });

@@ -144,7 +144,7 @@ describe("an issue the issue source did not list", () => {
         const error = await refusal(runDo(variant.config, options({ key: variant.rowKey, action: "fix-ci", profile: "profile-a", dryRun, yes: !dryRun }), deps));
         expect(error.code).toBe("precondition_failed");
         expect(error.message).toContain("--include-ignored");
-        expect(lookups).toEqual([[variant.key]]);
+        expect(lookups).toEqual([variant.source === "linear" ? [variant.key, `url:${spike.url}`] : [variant.key]]);
         expect(commands).toHaveLength(0);
         expect(launches).toHaveLength(0);
       }

@@ -108,7 +108,7 @@ type Resolvable = Pick<PullRequest, "url" | "headRefName"> & { readonly closingI
 
 const DECIMAL = /^[0-9]+$/;
 
-function githubIssueKey(project: ProjectConfig, number: number): string {
+export function githubIssueKey(project: ProjectConfig, number: number): string {
   return `${project.repo}#${number.toString()}`;
 }
 

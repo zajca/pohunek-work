@@ -1,9 +1,11 @@
-// Targeted ignore-label lookup for the issues a pull request joined to, or for a Linear project is
-// attached to, but the issue source did not list. Linear lists only started issues assigned to the owner and GitHub only open issues
-// assigned to the owner with a started or paused label, so a parked issue (moved to Backlog, or
-// stripped of its started label) is absent from the list while its pull request is still open.
+// Targeted ignore-label lookup for the candidate issues of an authored pull request: the issue it
+// joined to, the issue its branch names, every closing reference (GitHub) and every issue it is
+// attached to (Linear). Linear lists only started issues assigned to the owner and GitHub only open
+// issues assigned to the owner with a started or paused label, so a parked issue (moved to Backlog,
+// or stripped of its started label) is absent from the list while its pull request is still open.
 
 import { isGithubProject, isLinearProject, issueSourceStatusKey } from "./config/issue-source.ts";
+import { githubIssueKey, keyFromBranch } from "./join.ts";
 import type { GithubSource } from "./sources/github.ts";
 import type { LinearSource } from "./sources/linear.ts";
 import type { ProjectConfig } from "./types/config.ts";
@@ -22,23 +24,41 @@ export interface IssueLookupOutcome {
   readonly failure: string | null;
 }
 
-/** An authored pull request that is not ignored itself; only such rows can be parked by their issue. */
-function parkable(item: WorkItem): boolean {
-  const pr = item.pullRequest;
-  return pr !== null && pr.relation === "authored" && !pr.ignored && item.issue === null && item.resolvedIssue === null;
+const DECIMAL = /^[0-9]+$/;
+
+/** What one row asks the issue source: issue keys and, for a Linear row, its pull request URL. */
+interface Candidates {
+  readonly keys: readonly string[];
+  readonly url: string | null;
 }
 
-/** Rows that joined to an issue key the issue source did not list. */
-function needsKeyLookup(item: WorkItem): boolean {
-  return parkable(item) && item.issueKey !== null;
+/** Key of the issue the branch names; a GitHub project accepts only a positive decimal issue number. */
+function branchKey(project: ProjectConfig, headRefName: string): string | null {
+  const captured = keyFromBranch(project.branchPattern, headRefName);
+  if (captured === null || !isGithubProject(project)) return captured;
+  if (!DECIMAL.test(captured)) return null;
+  const number = Number(captured);
+  return Number.isSafeInteger(number) && number > 0 ? githubIssueKey(project, number) : null;
 }
 
 /**
- * Rows of a Linear project that resolved to no key while the issue source answered: the pull
- * request may still carry a Linear attachment of an issue the list did not return.
+ * Candidates of an authored pull request that is not ignored itself and whose listed issue, if
+ * any, is not ignored; null for every other row. A row with a listed issue asks only for the
+ * candidates besides that issue and never for the URL, its attachments are known. A Linear row
+ * without a listed issue also asks for its URL: any issue the pull request is attached to counts.
  */
-function needsUrlLookup(project: ProjectConfig, item: WorkItem): boolean {
-  return isLinearProject(project) && parkable(item) && item.issueKey === null && item.noIssue;
+function candidatesOf(project: ProjectConfig, item: WorkItem): Candidates | null {
+  const pr = item.pullRequest;
+  if (pr === null || pr.relation !== "authored" || pr.ignored) return null;
+  if ((item.issue?.ignored ?? false) || (item.resolvedIssue?.ignored ?? false)) return null;
+  const listed = (item.issue ?? item.resolvedIssue) !== null;
+  const closing = isGithubProject(project) ? pr.closingIssueNumbers.map((number) => githubIssueKey(project, number)) : [];
+  const own = listed ? item.issueKey : null;
+  const keys = [item.issueKey, branchKey(project, pr.headRefName), ...closing].filter(
+    (key): key is string => key !== null && key !== own,
+  );
+  const url = isLinearProject(project) && !listed ? pr.url : null;
+  return keys.length === 0 && url === null ? null : { keys: [...new Set(keys)], url };
 }
 
 async function askSource(
@@ -54,10 +74,11 @@ async function askSource(
 }
 
 /**
- * Sets `issueLookup` on the rows that need it. Nothing is asked unless the project has an ignore
- * label, the issue source and `github` answered and a row joined to an unlisted issue key or, for
- * Linear, may be attached to one;
- * with a failed source those rows are already unknown (rule 12 and the ignore-label check).
+ * Sets `issueLookup` on the rows that need it: the row is ignored when any of its candidates
+ * carries the label. Nothing is asked unless the project has an ignore label, the issue source and
+ * `github` answered and a row has a candidate to ask for; with a failed source those rows are
+ * already unknown (rule 12 and the ignore-label check). A failed lookup marks every asked row,
+ * also one whose issue the list returned.
  */
 export async function lookupUnlistedIssues(
   project: ProjectConfig,
@@ -69,25 +90,24 @@ export async function lookupUnlistedIssues(
   if (isSourceFailure(sources[issueSourceStatusKey(project)]) || isSourceFailure(sources.github)) {
     return { items, failure: null };
   }
-  const keys = [...new Set(items.filter(needsKeyLookup).flatMap((item) => (item.issueKey === null ? [] : [item.issueKey])))];
-  const urls = [...new Set(items.filter((item) => needsUrlLookup(project, item)).flatMap((item) => (item.pullRequest === null ? [] : [item.pullRequest.url])))];
+  const candidates = items.map((item) => candidatesOf(project, item));
+  const keys = [...new Set(candidates.flatMap((candidate) => candidate?.keys ?? []))];
+  const urls = [...new Set(candidates.flatMap((candidate) => (candidate?.url == null ? [] : [candidate.url])))];
   if (keys.length === 0 && urls.length === 0) return { items, failure: null };
   const result = await askSource(project, keys, urls, deps);
-  const subject = (item: WorkItem): string | null => {
-    if (needsKeyLookup(item)) return item.issueKey;
-    return needsUrlLookup(project, item) ? (item.pullRequest?.url ?? null) : null;
-  };
   if (!result.ok) {
     const reason = `${result.source}:${result.code}`;
     return {
-      items: items.map((item) => (subject(item) === null ? item : { ...item, issueLookup: { ok: false, reason } })),
+      items: items.map((item, index) => (candidates[index] === null ? item : { ...item, issueLookup: { ok: false, reason } })),
       failure: reason,
     };
   }
   return {
-    items: items.map((item) => {
-      const asked = subject(item);
-      return asked === null ? item : { ...item, issueLookup: { ok: true, ignored: result.data.has(asked) } };
+    items: items.map((item, index) => {
+      const asked = candidates[index];
+      if (asked == null) return item;
+      const ignored = asked.keys.some((key) => result.data.has(key)) || (asked.url !== null && result.data.has(asked.url));
+      return { ...item, issueLookup: { ok: true, ignored } };
     }),
     failure: null,
   };
