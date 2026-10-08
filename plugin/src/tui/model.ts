@@ -563,6 +563,7 @@ function handoverDone(state: State, event: Extract<Event, { kind: "handoverDone"
  */
 const RAN_UNVERIFIED_CODES: readonly string[] = [
   "launch_unverified",
+  "setup_failed",
   "launch_timed_out",
   "command_timed_out",
   "verification_failed",
