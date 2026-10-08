@@ -395,17 +395,10 @@ test("a missing labels connection under an ignore label is invalid_response", as
 });
 
 // Targeted ignore-label lookup of issues the list did not return.
-const lookupPage = (nodes: { identifier: string; id?: string; labels: string[]; more?: string }[], hasNextPage = false): unknown => ({
+const lookupPage = (nodes: { identifier: string; id?: string }[], hasNextPage = false): unknown => ({
   data: {
     issues: {
-      nodes: nodes.map((node, index) => ({
-        id: node.id ?? `id-${index.toString()}`,
-        identifier: node.identifier,
-        labels: {
-          nodes: node.labels.map((name) => ({ name })),
-          pageInfo: { hasNextPage: node.more !== undefined, endCursor: node.more ?? null },
-        },
-      })),
+      nodes: nodes.map((node, index) => ({ id: node.id ?? `id-${index.toString()}`, identifier: node.identifier })),
       pageInfo: { hasNextPage, endCursor: hasNextPage ? "more" : null },
     },
   },
@@ -416,85 +409,101 @@ async function ignoredKeys(
   keys: readonly string[],
   p: LinearProject = withIgnore,
   urls: readonly string[] = [],
+  pageSize = config.pageSize,
 ): ReturnType<ReturnType<typeof createLinearSource>["fetchIgnoredKeys"]> {
-  return source(f).fetchIgnoredKeys(p, keys, urls);
+  return createLinearSource({ ...config, pageSize }, { exec: goodExec, fetch: f }).fetchIgnoredKeys(p, keys, urls);
 }
 
-test("the lookup asks the team's issues by number, with the first label page, and reports the labelled keys", async () => {
-  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["bug", "pohunek:IGNORE"] }])));
+const labelClause = { labels: { some: { name: { eqIgnoreCase: "Pohunek:Ignore" } } } };
+const teamNumbers = (team: string, numbers: number[]): unknown => ({
+  and: [{ team: { key: { eqIgnoreCase: team } } }, { number: { in: numbers } }],
+});
+
+test("the lookup asks by team and number with the label filter, archived included, and reports the keys", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1" }])));
   const result = await ignoredKeys(run.fetch, ["ABC-1"]);
   expect(result).toMatchObject({ ok: true, source: "linear" });
   if (!result.ok) return;
   expect([...result.data]).toEqual(["ABC-1"]);
   expect(run.calls).toHaveLength(1);
-  expect(run.calls[0]?.body.query).toContain("number: { in: $numbers }");
-  expect(run.calls[0]?.body.query).toContain("team: { key: { eq: $teamKey } }");
-  expect(run.calls[0]?.body.variables).toEqual({ first: 1, teamKey: "ABC", numbers: [1], labelsFirst: 1 });
+  expect(run.calls[0]?.body.query).toContain("includeArchived: true");
+  expect(run.calls[0]?.body.query).toContain("$filter: IssueFilter!");
+  expect(run.calls[0]?.body.query).not.toContain("labels");
+  expect(run.calls[0]?.body.variables).toEqual({
+    first: 1,
+    filter: { and: [{ or: [teamNumbers("ABC", [1])] }, labelClause] },
+  });
 });
 
-test("an issue without the ignore label and a key Linear does not return are not reported", async () => {
-  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["bug"] }])));
-  const result = await ignoredKeys(run.fetch, ["ABC-1"]);
-  expect(result.ok && result.data.size).toBe(0);
+test("a key Linear does not return is not reported", async () => {
   const empty = fetcher(() => json(lookupPage([])));
   const none = await ignoredKeys(empty.fetch, ["ABC-9"]);
   expect(none.ok && none.data.size).toBe(0);
 });
 
-test("keys are batched by page_size and the requested spelling is reported", async () => {
-  const bodies = [lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }]), lookupPage([{ identifier: "ABC-2", labels: [] }])];
+test("a key of another team is asked for and answered", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "XYZ-7" }])));
+  const result = await ignoredKeys(run.fetch, ["xyz-7"]);
+  expect(run.calls[0]?.body.variables["filter"]).toEqual({ and: [{ or: [teamNumbers("XYZ", [7])] }, labelClause] });
+  expect(result.ok && [...result.data]).toEqual(["xyz-7"]);
+});
+
+test("a mixed-team batch is one or-list of team and numbers pairs", async () => {
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1" }, { identifier: "XYZ-2" }, { identifier: "ABC-3" }])));
+  const result = await ignoredKeys(run.fetch, ["ABC-1", "XYZ-2", "ABC-3"], withIgnore, [], 10);
+  expect(run.calls).toHaveLength(1);
+  expect(run.calls[0]?.body.variables).toEqual({
+    first: 3,
+    filter: { and: [{ or: [teamNumbers("ABC", [1, 3]), teamNumbers("XYZ", [2])] }, labelClause] },
+  });
+  expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", "ABC-3", "XYZ-2"]);
+});
+
+test("keys are batched by page_size over all pairs and the requested spelling is reported", async () => {
+  const bodies = [lookupPage([{ identifier: "ABC-1" }]), lookupPage([])];
   const run = fetcher((_c, i) => json(bodies[i]));
-  const result = await ignoredKeys(run.fetch, ["abc-1", "ABC-2"]);
-  expect(run.calls.map((c) => c.body.variables["numbers"])).toEqual([[1], [2]]);
+  const result = await ignoredKeys(run.fetch, ["abc-1", "XYZ-2"]);
+  expect(run.calls.map((c) => c.body.variables["filter"])).toEqual([
+    { and: [{ or: [teamNumbers("ABC", [1])] }, labelClause] },
+    { and: [{ or: [teamNumbers("XYZ", [2])] }, labelClause] },
+  ]);
   expect(result.ok && [...result.data]).toEqual(["abc-1"]);
 });
 
-test("keys of another team or of another shape are never asked for", async () => {
+test("keys of another shape are never asked for", async () => {
   const run = fetcher(() => json(lookupPage([])));
-  const result = await ignoredKeys(run.fetch, ["XYZ-1", "not-a-key", "ABC-0", "ABC-x"]);
+  const result = await ignoredKeys(run.fetch, ["not-a-key", "ABC-0", "ABC-x"]);
   expect(run.calls).toHaveLength(0);
   expect(result.ok && result.data.size).toBe(0);
 });
 
 test("a project without an ignore label asks nothing", async () => {
   const run = fetcher(() => json(lookupPage([])));
-  const result = await ignoredKeys(run.fetch, ["ABC-1"], project);
+  const result = await ignoredKeys(run.fetch, ["ABC-1"], project, [PR_URL]);
   expect(run.calls).toHaveLength(0);
   expect(result.ok && result.data.size).toBe(0);
 });
 
-test("the lookup follows a label page cut short and fails truncated when it cannot", async () => {
-  const first = lookupPage([{ identifier: "ABC-1", labels: ["bug"], more: "lab-1", id: "uuid-1" }]);
-  const second = { data: { issue: { labels: { nodes: [{ name: "Pohunek:Ignore" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
-  const paged = fetcher((_c, i) => json([first, second][i]));
-  const found = await ignoredKeys(paged.fetch, ["ABC-1"]);
-  expect(found.ok && [...found.data]).toEqual(["ABC-1"]);
-  expect(paged.calls[1]?.body.variables).toEqual({ id: "uuid-1", first: 1, after: "lab-1" });
-  const looping = { data: { issue: { labels: { nodes: [{ name: "x" }], pageInfo: { hasNextPage: true, endCursor: "lab-1" } } } } };
-  const stuck = fetcher((_c, i) => json([first, looping][i]));
-  expect(await ignoredKeys(stuck.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "truncated" });
-});
-
 test("more issues than asked for, an error and a bad shape fail the lookup", async () => {
-  const more = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: [] }], true)));
+  const more = fetcher(() => json(lookupPage([{ identifier: "ABC-1" }], true)));
   expect(await ignoredKeys(more.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "truncated" });
   const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
   expect(await ignoredKeys(limited.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "rate_limited" });
-  const broken = fetcher(() => json({ data: { issues: { nodes: [{ id: "i", identifier: "ABC-1" }], pageInfo: { hasNextPage: false, endCursor: null } } } }));
+  const broken = fetcher(() => json({ data: { issues: { nodes: [{ id: "i" }], pageInfo: { hasNextPage: false, endCursor: null } } } }));
   expect(await ignoredKeys(broken.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "invalid_response" });
   const down = fetcher(() => json({}, 503));
   expect(await ignoredKeys(down.fetch, ["ABC-1"])).toMatchObject({ ok: false, code: "unavailable" });
 });
 
 test("every spelling asked for a number is answered", async () => {
-  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }])));
+  const run = fetcher(() => json(lookupPage([{ identifier: "ABC-1" }])));
   const result = await ignoredKeys(run.fetch, ["abc-1", "ABC-1"]);
-  expect(run.calls[0]?.body.variables["numbers"]).toEqual([1]);
+  expect(run.calls[0]?.body.variables["filter"]).toEqual({ and: [{ or: [teamNumbers("ABC", [1])] }, labelClause] });
   expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", "abc-1"]);
 });
 
 const attachmentPage = (
-  nodes: { identifier: string; id?: string; urls: string[]; moreUrls?: string; labels: string[]; moreLabels?: string }[],
+  nodes: { identifier: string; id?: string; urls: string[]; moreUrls?: string }[],
   hasNextPage = false,
   endCursor: string | null = hasNextPage ? "more" : null,
 ): unknown => ({
@@ -507,89 +516,134 @@ const attachmentPage = (
           nodes: node.urls.map((url) => ({ url })),
           pageInfo: { hasNextPage: node.moreUrls !== undefined, endCursor: node.moreUrls ?? null },
         },
-        labels: {
-          nodes: node.labels.map((name) => ({ name })),
-          pageInfo: { hasNextPage: node.moreLabels !== undefined, endCursor: node.moreLabels ?? null },
-        },
       })),
       pageInfo: { hasNextPage, endCursor },
     },
   },
 });
 
-const PR_URL = "https://github.example/acme/widgets/pull/12";
+const PR_URL = "https://github.com/acme/widgets/pull/12";
+const startsWith = (url: string): unknown => ({ url: { startsWithIgnoreCase: url } });
 
-test("pull request URLs are matched against the attachments of the team's issues, and a labelled issue reports the URL", async () => {
-  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: ["https://other.example/x", PR_URL], labels: ["Pohunek:Ignore"] }])));
+test("pull request URLs are looked up by canonical prefix on attachments of labelled issues of any team", async () => {
+  const run = fetcher(() => json(attachmentPage([{ identifier: "XYZ-4", urls: ["https://other.example/x", PR_URL] }])));
   const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
   expect(result.ok && [...result.data]).toEqual([PR_URL]);
   expect(run.calls).toHaveLength(1);
-  expect(run.calls[0]?.body.query).toContain("attachments: { some: { url: { in: $urls } } }");
-  expect(run.calls[0]?.body.query).toContain("team: { key: { eq: $teamKey } }");
-  expect(run.calls[0]?.body.variables).toEqual({ first: 1, teamKey: "ABC", urls: [PR_URL], attachmentsFirst: 1, labelsFirst: 1 });
+  expect(run.calls[0]?.body.query).toContain("includeArchived: true");
+  expect(run.calls[0]?.body.query).toContain("$attachmentFilter: AttachmentFilter!");
+  expect(run.calls[0]?.body.query).not.toContain("labels");
+  expect(run.calls[0]?.body.variables).toEqual({
+    first: 1,
+    filter: { and: [{ attachments: { some: { or: [startsWith(PR_URL)] } } }, labelClause] },
+    attachmentsFirst: 1,
+    attachmentFilter: { or: [startsWith(PR_URL)] },
+  });
 });
 
-test("an attached issue without the label and a URL nothing is attached to are not reported", async () => {
-  const unlabelled = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: ["bug"] }])));
-  const first = await ignoredKeys(unlabelled.fetch, [], withIgnore, [PR_URL]);
-  expect(first.ok && first.data.size).toBe(0);
+test("a URL nothing is attached to is not reported", async () => {
   const none = fetcher(() => json(attachmentPage([])));
-  const second = await ignoredKeys(none.fetch, [], withIgnore, [PR_URL]);
-  expect(second.ok && second.data.size).toBe(0);
+  const result = await ignoredKeys(none.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && result.data.size).toBe(0);
+});
+
+test.each([
+  ["a trailing slash", `${PR_URL}/`],
+  ["a /files suffix", `${PR_URL}/files`],
+  ["another letter case", "https://GitHub.com/Acme/Widgets/pull/12"],
+])("an attachment with %s answers the asked URL", async (_name, attachment) => {
+  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [attachment] }])));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && [...result.data]).toEqual([PR_URL]);
+});
+
+test("an asked URL in another spelling is canonicalized in the filter and answered as asked", async () => {
+  const asked = "https://github.com/Acme/Widgets/pull/12/files";
+  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL] }])));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [asked]);
+  expect(run.calls[0]?.body.variables["attachmentFilter"]).toEqual({ or: [startsWith(PR_URL)] });
+  expect(result.ok && [...result.data]).toEqual([asked]);
+});
+
+test("pull request 123 is not mistaken for pull request 12", async () => {
+  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: ["https://github.com/acme/widgets/pull/123"] }])));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
+  expect(result.ok && result.data.size).toBe(0);
+});
+
+test("a URL without a canonical form is matched exactly", async () => {
+  const odd = "https://github.example/acme/widgets/pull/12";
+  const run = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [odd, `${odd}/files`] }])));
+  const result = await ignoredKeys(run.fetch, [], withIgnore, [odd]);
+  expect(run.calls[0]?.body.variables["attachmentFilter"]).toEqual({ or: [{ url: { eq: odd } }] });
+  expect(result.ok && [...result.data]).toEqual([odd]);
+  const near = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [`${odd}/files`] }])));
+  const miss = await ignoredKeys(near.fetch, [], withIgnore, [odd]);
+  expect(miss.ok && miss.data.size).toBe(0);
 });
 
 test("URLs are batched by page_size, deduplicated, and keys and URLs are answered in one result", async () => {
-  const other = "https://github.example/acme/widgets/pull/13";
+  const other = "https://github.com/acme/widgets/pull/13";
   const bodies = [
-    lookupPage([{ identifier: "ABC-1", labels: ["pohunek:ignore"] }]),
-    attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: ["pohunek:ignore"] }]),
+    lookupPage([{ identifier: "ABC-1" }]),
+    attachmentPage([{ identifier: "ABC-4", urls: [PR_URL] }]),
     attachmentPage([]),
   ];
   const run = fetcher((_c, i) => json(bodies[i]));
   const result = await ignoredKeys(run.fetch, ["ABC-1"], withIgnore, [PR_URL, other, PR_URL]);
-  expect(run.calls.map((c) => c.body.variables["urls"] ?? c.body.variables["numbers"])).toEqual([[1], [PR_URL], [other]]);
+  expect(run.calls.slice(1).map((c) => c.body.variables["attachmentFilter"])).toEqual([
+    { or: [startsWith(PR_URL)] },
+    { or: [startsWith(other)] },
+  ]);
   expect(result.ok && [...result.data].sort()).toEqual(["ABC-1", PR_URL].sort());
 });
 
-test("the attachment and label pages of a matched issue are followed to the end", async () => {
-  const first = attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: ["https://other.example/x"], moreUrls: "att-1", labels: ["bug"], moreLabels: "lab-1" }]);
+test("URLs of one batch share one or-filter", async () => {
+  const other = "https://github.com/acme/widgets/pull/13";
+  const run = fetcher(() => json(attachmentPage([])));
+  await ignoredKeys(run.fetch, [], withIgnore, [PR_URL, other], 10);
+  expect(run.calls).toHaveLength(1);
+  expect(run.calls[0]?.body.variables["attachmentFilter"]).toEqual({ or: [startsWith(PR_URL), startsWith(other)] });
+});
+
+test("the attachment pages of a matched issue are followed with the filter and fail truncated when stuck", async () => {
+  const first = attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: ["https://github.com/acme/widgets/pull/123"], moreUrls: "att-1" }]);
   const attachments = { data: { issue: { attachments: { nodes: [{ url: PR_URL }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
-  const labels = { data: { issue: { labels: { nodes: [{ name: "pohunek:ignore" }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
-  const bodies = [first, attachments, labels];
-  const run = fetcher((_c, i) => json(bodies[i]));
+  const run = fetcher((_c, i) => json([first, attachments][i]));
   const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
   expect(result.ok && [...result.data]).toEqual([PR_URL]);
-  const stuck = fetcher((_c, i) => json([first, { data: { issue: { attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "att-1" } } } } }][i]));
+  expect(run.calls[1]?.body.variables).toEqual({ id: "uuid-4", first: 1, after: "att-1", filter: { or: [startsWith(PR_URL)] } });
+  expect(run.calls[1]?.body.query).toContain("$filter: AttachmentFilter!");
+  const looping = { data: { issue: { attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "att-1" } } } } };
+  const stuck = fetcher((_c, i) => json([first, looping][i]));
   expect(await ignoredKeys(stuck.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
+  const noCursor = { data: { issues: { nodes: [{ id: "u", identifier: "ABC-4", attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } } }], pageInfo: { hasNextPage: false, endCursor: null } } } };
+  expect(await ignoredKeys(fetcher(() => json(noCursor)).fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
 });
 
 test("the issues of one URL batch are followed by cursor and merged across pages", async () => {
   const bodies = [
-    attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: [PR_URL], labels: ["bug"] }], true, "page-2"),
-    attachmentPage([{ identifier: "ABC-5", id: "uuid-5", urls: [PR_URL], labels: ["pohunek:ignore"] }]),
+    attachmentPage([{ identifier: "ABC-4", id: "uuid-4", urls: ["https://other.example/x"] }], true, "page-2"),
+    attachmentPage([{ identifier: "ABC-5", id: "uuid-5", urls: [PR_URL] }]),
   ];
   const run = fetcher((_c, i) => json(bodies[i]));
   const result = await ignoredKeys(run.fetch, [], withIgnore, [PR_URL]);
   expect(result.ok && [...result.data]).toEqual([PR_URL]);
   expect(run.calls).toHaveLength(2);
   expect(run.calls[0]?.body.variables["after"]).toBeUndefined();
-  expect(run.calls[1]?.body.variables).toEqual({ first: 1, teamKey: "ABC", urls: [PR_URL], attachmentsFirst: 1, labelsFirst: 1, after: "page-2" });
+  expect(run.calls[1]?.body.variables["after"]).toBe("page-2");
   expect(run.calls[0]?.body.query).toContain("$after: String");
 });
 
 test("a page of URL issues with more to come but no cursor, or a repeated cursor, is truncated", async () => {
-  const missing = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true, null)));
+  const missing = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL] }], true, null)));
   expect(await ignoredKeys(missing.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
-  const repeated = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL], labels: [] }], true, "same")));
+  const repeated = fetcher(() => json(attachmentPage([{ identifier: "ABC-4", urls: [PR_URL] }], true, "same")));
   expect(await ignoredKeys(repeated.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "truncated" });
   expect(repeated.calls).toHaveLength(2);
 });
 
-test("an error and a project without an ignore label", async () => {
+test("a URL lookup error is reported", async () => {
   const limited = fetcher(() => json({ errors: [{ extensions: { code: "RATELIMITED" } }] }));
   expect(await ignoredKeys(limited.fetch, [], withIgnore, [PR_URL])).toMatchObject({ ok: false, code: "rate_limited" });
-  const plain = fetcher(() => json(attachmentPage([])));
-  const result = await ignoredKeys(plain.fetch, [], project, [PR_URL]);
-  expect(plain.calls).toHaveLength(0);
-  expect(result.ok && result.data.size).toBe(0);
 });
