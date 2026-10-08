@@ -198,6 +198,7 @@ function parseSession(raw: unknown, path: string): PohunekSession {
     state: reqString(obj, "state", path),
     activity: optString(obj, "activity", path),
     runtimeState,
+    updatedAt: optString(obj, "updated_at", path),
     metadata,
   };
 }

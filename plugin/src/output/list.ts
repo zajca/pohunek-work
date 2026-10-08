@@ -1,13 +1,15 @@
 // Row building and rendering for `pohunek-work list`: the list --json contract
 // (RFC 9.1) and the terminal table.
 import { configuredProfile } from "../config/profiles.ts";
-import { evaluateOnTurn, ignoreLabelUnreadable, summarizeChecks } from "../rules.ts";
+import { evaluateOnTurn, ignoreLabelUnreadable, isBlockingNotification, summarizeChecks } from "../rules.ts";
 import { isIssueRowOf } from "../config/row-key.ts";
 import { isLiveSession, worktreeOf } from "../sources/pohunek.ts";
 import { adoptRefusal } from "../actions/adopt.ts";
+import { isRecentlyFinished } from "./finished.ts";
 import { toAscii } from "./sanitize.ts";
+import { sessionLabel } from "./session-label.ts";
 import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
-import type { PohunekSession } from "../types/sources.ts";
+import type { PohunekNotification, PohunekSession } from "../types/sources.ts";
 import {
   LIST_CONTRACT_VERSION,
   type ListAction,
@@ -33,6 +35,17 @@ export interface RowContext {
   readonly profiles: ProfilesConfig;
   /** Every session pohunek knows, linked or not: an unlinked session may hold a pull request's head branch. */
   readonly sessions: readonly PohunekSession[];
+}
+
+/**
+ * What a session is doing for the owner: `waiting_input` when a blocking notification of
+ * it is open, `lost` when it is running without a runtime, `running` when it is live, the
+ * raw session state otherwise.
+ */
+export function sessionIndicator(session: PohunekSession, notifications: readonly PohunekNotification[]): string {
+  if (notifications.some((n) => n.sessionId === session.id && isBlockingNotification(n))) return "waiting_input";
+  if (session.state === "running" && session.runtimeState === "lost") return "lost";
+  return isLiveSession(session) ? "running" : session.state;
 }
 
 /** The `do` action that moves a row on the owner's turn forward; null when the step is manual (7, 9, a rule 5 policy check). */
@@ -125,6 +138,8 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
       role: session.metadata["work.role"] ?? null,
       state: session.state,
       activity: session.activity,
+      indicator: sessionIndicator(session, item.notifications),
+      updated_at: session.updatedAt,
     })),
     on_turn: { actor: onTurn.actor, reason: onTurn.reason, rule: onTurn.rule },
     actions: rowActions(item, onTurn, context),
@@ -133,9 +148,11 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
   };
 }
 
-/** Keeps only rows on the owner's turn. */
-export function filterMine(items: readonly ListItem[]): ListItem[] {
-  return items.filter((item) => item.on_turn.actor === "me");
+/** Keeps the rows on the owner's turn, plus (with a `finishedCutoffMs`) rows whose agent work finished since then. */
+export function filterMine(items: readonly ListItem[], finishedCutoffMs: number | null = null): ListItem[] {
+  return items.filter(
+    (item) => item.on_turn.actor === "me" || (finishedCutoffMs !== null && isRecentlyFinished(item, finishedCutoffMs)),
+  );
 }
 
 export function buildListEnvelope(
@@ -185,19 +202,16 @@ function keyCell(item: ListItem): string {
   return `${item.key}${marker}`;
 }
 
-function sessionsCell(item: ListItem, liveIds: ReadonlySet<string>): string {
+function sessionsCell(item: ListItem): string {
   if (item.sessions.length === 0) return "-";
-  return item.sessions
-    .map((s) => `${s.role ?? "?"}:${liveIds.has(s.id) ? (s.activity ?? "live") : s.state}`)
-    .join(",");
+  return item.sessions.map((s) => `${s.role ?? "?"}:${sessionLabel(s)}`).join(",");
 }
 
-/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; `liveSessionIds` marks sessions that are live right now; a final line counts the hidden ignored rows. */
+/** Plain-text table in strict ASCII (provider text is untrusted), one row per item; a final line counts the hidden ignored rows. */
 export function renderTable(
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
-  liveSessionIds: ReadonlySet<string>,
   omittedIgnored: number,
 ): string {
   const rows = items.map((item) => {
@@ -208,7 +222,7 @@ export function renderTable(
       pr === null ? "-" : pr.id + (pr.draft ? " draft" : ""),
       pr?.review_decision ?? "-",
       pr?.checks ?? "-",
-      sessionsCell(item, liveSessionIds),
+      sessionsCell(item),
       item.issue?.title ?? pr?.title ?? "",
     ].map(toAscii);
   });

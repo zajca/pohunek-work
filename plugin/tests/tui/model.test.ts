@@ -180,7 +180,7 @@ describe("keys and filters", () => {
     const stale = row("linear:DMD-130", { pull_request: { ...base, id: "keboola/connection#9030", updated_at: old } });
     const running = row("linear:DMD-131", {
       pull_request: { ...base, id: "keboola/connection#9031", updated_at: old },
-      sessions: [{ id: "s-31", name: "DMD-131", role: "babysit", state: "running", activity: "idle" }],
+      sessions: [{ id: "s-31", name: "DMD-131", role: "babysit", state: "running", activity: "idle", indicator: "running", updated_at: null }],
       on_turn: { actor: "me", reason: "check agent", rule: 11 },
     });
     const state = loaded(okOutcome(payload([...RULE_ROWS, stale, running])));

@@ -27,7 +27,7 @@ import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
-  pohunek-work list [--mine] [--stale-days <n>] [--include-ignored] [--json] [--project <label>]
+  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--json] [--project <label>]
   pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
@@ -54,13 +54,21 @@ function parseStaleDays(value: string | undefined): number | null {
   return Number(value);
 }
 
-function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; includeIgnored: boolean; json: boolean; project: string | null } {
+function parseFinishedHours(value: string | undefined, mine: boolean): number | null {
+  if (value === undefined) return null;
+  if (!/^[1-9][0-9]{0,5}$/.test(value)) throw new UsageError(`--finished-hours needs a positive whole number of hours, got ${JSON.stringify(value)}`);
+  if (!mine) throw new UsageError("--finished-hours needs --mine");
+  return Number(value);
+}
+
+function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; json: boolean; project: string | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
       options: {
         mine: { type: "boolean", default: false },
         "stale-days": { type: "string" },
+        "finished-hours": { type: "string" },
         "include-ignored": { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         project: { type: "string" },
@@ -69,7 +77,7 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), includeIgnored: values["include-ignored"], json: values.json, project: values.project ?? null };
+    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], json: values.json, project: values.project ?? null };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");

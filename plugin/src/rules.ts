@@ -14,6 +14,7 @@ import {
 import type {
   Actor,
   Check,
+  PohunekNotification,
   PohunekSession,
   PullRequest,
   Review,
@@ -45,6 +46,14 @@ function normalizeLogin(login: string): string {
 /** A session is live when it runs and its runtime is not lost (an absent runtime block counts as not lost). */
 export function isLiveSession(session: PohunekSession): boolean {
   return session.state === "running" && session.runtimeState !== "lost";
+}
+
+/** A notification that blocks its session on the owner: an unanswered agent_blocked or approval_required. */
+export function isBlockingNotification(notification: PohunekNotification): boolean {
+  return (
+    (notification.kind === "agent_blocked" || notification.kind === "approval_required") &&
+    (notification.status === "unread" || notification.status === "read")
+  );
 }
 
 /** Check names in `ignoredChecks` are removed by exact match before summarizing. */
@@ -262,10 +271,7 @@ export function evaluateOnTurn(input: RuleInput): RuleResult {
   const linkedIds = new Set(item.sessions.map((session) => session.id));
   const blocked = item.notifications.some(
     (notification) =>
-      notification.sessionId !== null &&
-      linkedIds.has(notification.sessionId) &&
-      (notification.kind === "agent_blocked" || notification.kind === "approval_required") &&
-      (notification.status === "unread" || notification.status === "read"),
+      notification.sessionId !== null && linkedIds.has(notification.sessionId) && isBlockingNotification(notification),
   );
   if (blocked) return result(me("answer agent", 1));
 

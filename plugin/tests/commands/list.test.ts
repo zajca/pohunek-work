@@ -1,17 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { runList, selectProjects } from "../../src/commands/list.ts";
+import { runList, selectProjects, type ListOptions } from "../../src/commands/list.ts";
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
 import type { PohunekClient } from "../../src/sources/pohunek.ts";
 import type {
   Issue,
   MergedPullRequest,
+  PohunekNotification,
   PohunekProject,
   PohunekSession,
   PullRequest,
   SourceResult,
 } from "../../src/types/sources.ts";
-import { check, githubIssueSource, issue, mergedPr, pr, session } from "../rules/builders.ts";
+import { check, githubIssueSource, issue, mergedPr, notification, pr, session } from "../rules/builders.ts";
 
 const config = await loadConfig(new URL("../fixtures/config", import.meta.url).pathname);
 const widgets = config.projects.find((p) => p.pohunekLabel === "widgets");
@@ -46,6 +47,7 @@ interface World {
   ignoredKeys?: SourceResult<ReadonlySet<string>>;
   lookups?: string[][];
   sessions?: SourceResult<readonly PohunekSession[]>;
+  notifications?: SourceResult<readonly PohunekNotification[]>;
   registry?: SourceResult<readonly PohunekProject[]>;
 }
 
@@ -53,7 +55,7 @@ function deps(world: World): Parameters<typeof runList>[2] {
   const pohunek: PohunekClient = {
     listProjects: () => Promise.resolve(world.registry ?? ok("pohunek", registry)),
     listSessions: () => Promise.resolve(world.sessions ?? ok("pohunek", [])),
-    listNotifications: () => Promise.resolve(ok("pohunek", [])),
+    listNotifications: () => Promise.resolve(world.notifications ?? ok("pohunek", [])),
     launchSession: () => Promise.reject(new Error("not used")),
     waitSession: () => Promise.reject(new Error("not used")),
     listWorktrees: () => Promise.reject(new Error("not used")),
@@ -88,8 +90,8 @@ const quietPr = pr({ id: "acme/widgets#13", number: 13, url: "https://example.in
 
 test("json output lists rows and --mine keeps only the owner's turn", async () => {
   const world = { prs: ok("github", [draftPr, quietPr]) };
-  const all = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
-  const mine = await runList(config, { mine: true, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const all = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const mine = await runList(config, { mine: true, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
   expect(all.items.map((i) => i.on_turn.actor)).toEqual(["me", "reviewer"]);
   expect(mine.items.map((i) => i.key)).toEqual(["github:acme/widgets#12"]);
   const envelope = JSON.parse(mine.stdout) as { ok: { items: unknown[] } };
@@ -99,7 +101,7 @@ test("json output lists rows and --mine keeps only the owner's turn", async () =
 const ignoredMine = pr({ id: "acme/widgets#14", number: 14, url: "https://example.invalid/14", headRefName: "y", isDraft: true, ignored: true, updatedAt: "2026-01-01T00:00:00Z" });
 const ignoredReviewer = { ...quietPr, id: "acme/widgets#15", number: 15, url: "https://example.invalid/15", ignored: true, updatedAt: "2026-06-10T00:00:00Z" };
 const ignoredWorld = { prs: ok("github", [draftPr, quietPr, ignoredMine, ignoredReviewer]) };
-const baseOptions = { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" };
+const baseOptions: ListOptions = { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" };
 
 interface Payload { items: { key: string; ignored: boolean; actions: unknown[] }[]; omitted_ignored: number }
 
@@ -156,7 +158,7 @@ describe("ignored rows", () => {
 
   test("--stale-days drops a stale ignored row before it is counted", async () => {
     const clock = { ...deps(ignoredWorld), now: () => Date.parse("2026-06-15T00:00:00Z") };
-    const out = await runList(config, { ...baseOptions, staleDays: 30 }, clock);
+    const out = await runList(config, { ...baseOptions, staleDays: 30, finishedHours: null }, clock);
     // #14 is stale, #15 is not: only #15 is a hidden row the other filters keep.
     expect(payload(out.stdout).omitted_ignored).toBe(1);
   });
@@ -307,19 +309,86 @@ test("--stale-days leaves out pull requests not updated for that long, unless a 
   const fresh = pr({ id: "acme/widgets#13", number: 13, url: "https://example.invalid/13", headRefName: "x", updatedAt: "2026-06-10T00:00:00Z" });
   const world = { prs: ok("github", [stale, fresh]) };
   const withClock = { ...deps(world), now: () => Date.parse("2026-06-15T00:00:00Z") };
-  const shown = await runList(config, { mine: false, staleDays: 30, includeIgnored: false, json: true, project: "widgets" }, withClock);
+  const shown = await runList(config, { mine: false, staleDays: 30, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, withClock);
   expect(shown.items.map((i) => i.key)).toEqual(["github:acme/widgets#13"]);
-  const all = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, withClock);
+  const all = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, withClock);
   expect(all.items).toHaveLength(2);
   const running = session({ id: "s-d", projectLabel: "widgets", metadata: { "work.link.id": stale.id, "work.link.provider": "github" } });
-  const kept = await runList(config, { mine: false, staleDays: 30, includeIgnored: false, json: true, project: "widgets" }, { ...deps({ ...world, sessions: ok("pohunek", [running]) }), now: withClock.now });
+  const kept = await runList(config, { mine: false, staleDays: 30, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, { ...deps({ ...world, sessions: ok("pohunek", [running]) }), now: withClock.now });
   expect(kept.items.map((i) => i.key)).toContain("github:acme/widgets#12");
+});
+
+describe("--mine --finished-hours", () => {
+  const NOW = Date.parse("2026-06-15T12:00:00Z");
+  const clock = (world: World): Parameters<typeof runList>[2] => ({ ...deps(world), now: () => NOW });
+  const mineOptions: ListOptions = { ...baseOptions, mine: true };
+  // Not on the owner's turn: approved with a pending check.
+  const linked = (overrides: Partial<PohunekSession>): PohunekSession =>
+    session({ id: "s-f", projectLabel: "widgets", metadata: { "work.link.id": quietPr.id, "work.link.provider": "github" }, ...overrides });
+  const keysOf = async (options: ListOptions, world: World): Promise<string[]> =>
+    (await runList(config, options, clock(world))).items.map((i) => i.key);
+
+  test("a row whose only session stopped within the window is kept, one outside it is not", async () => {
+    const prs = ok("github", [quietPr]);
+    const recent = linked({ state: "stopped", activity: null, updatedAt: "2026-06-15T10:00:00Z" });
+    const old = linked({ state: "stopped", activity: null, updatedAt: "2026-06-14T10:00:00Z" });
+    expect(await keysOf(mineOptions, { prs, sessions: ok("pohunek", [recent]) })).toEqual([]);
+    expect(await keysOf({ ...mineOptions, finishedHours: 6 }, { prs, sessions: ok("pohunek", [recent]) })).toEqual(["github:acme/widgets#13"]);
+    expect(await keysOf({ ...mineOptions, finishedHours: 6 }, { prs, sessions: ok("pohunek", [old]) })).toEqual([]);
+    expect(await keysOf({ ...mineOptions, finishedHours: 30 }, { prs, sessions: ok("pohunek", [old]) })).toEqual(["github:acme/widgets#13"]);
+  });
+
+  test("a done session counts; a missing or unparsable updated_at never does", async () => {
+    const prs = ok("github", [quietPr]);
+    const options = { ...mineOptions, finishedHours: 6 };
+    expect(await keysOf(options, { prs, sessions: ok("pohunek", [linked({ state: "done", activity: null, updatedAt: "2026-06-15T11:00:00Z" })]) })).toHaveLength(1);
+    expect(await keysOf(options, { prs, sessions: ok("pohunek", [linked({ state: "done", activity: null, updatedAt: null })]) })).toEqual([]);
+    expect(await keysOf(options, { prs, sessions: ok("pohunek", [linked({ state: "done", activity: null, updatedAt: "not a date" })]) })).toEqual([]);
+  });
+
+  test("a live or input-waiting session on the row keeps it out", async () => {
+    const prs = ok("github", [quietPr]);
+    const options = { ...mineOptions, finishedHours: 6 };
+    const finished = linked({ id: "s-old", state: "stopped", activity: null, updatedAt: "2026-06-15T11:00:00Z", metadata: linked({}).metadata });
+    const live = linked({ id: "s-live", state: "running", activity: "working", updatedAt: "2026-06-15T11:00:00Z" });
+    expect(await keysOf(options, { prs, sessions: ok("pohunek", [finished, live]) })).toEqual([]);
+    const lost = linked({ id: "s-lost", state: "running", runtimeState: "lost", updatedAt: "2026-06-15T11:00:00Z" });
+    expect(await keysOf(options, { prs, sessions: ok("pohunek", [finished, lost]) })).toHaveLength(1);
+  });
+
+  test("rows on the owner's turn stay and the flag changes nothing without --mine data", async () => {
+    const options = { ...mineOptions, finishedHours: 6 };
+    expect(await keysOf(options, { prs: ok("github", [draftPr, quietPr]) })).toEqual(["github:acme/widgets#12"]);
+  });
+
+  test("stale and ignored filters still apply to the kept rows", async () => {
+    const staleQuiet = { ...quietPr, updatedAt: "2026-01-01T00:00:00Z" };
+    const finished = linked({ state: "stopped", activity: null, updatedAt: "2026-06-15T11:00:00Z" });
+    const world = { prs: ok("github", [staleQuiet]), sessions: ok("pohunek", [finished]) };
+    expect(await keysOf({ ...mineOptions, finishedHours: 6 }, world)).toHaveLength(1);
+    expect(await keysOf({ ...mineOptions, finishedHours: 6, staleDays: 30 }, world)).toEqual([]);
+    const ignoredQuiet = { ...quietPr, ignored: true };
+    const hidden = await runList(config, { ...mineOptions, finishedHours: 6 }, clock({ prs: ok("github", [ignoredQuiet]), sessions: ok("pohunek", [finished]) }));
+    expect(hidden.items).toEqual([]);
+    expect(payload(hidden.stdout).omitted_ignored).toBe(1);
+  });
+
+  test("the list session carries the indicator and updated_at", async () => {
+    const blocked = notification({ sessionId: "s-f", kind: "approval_required", status: "read" });
+    const out = await runList(config, baseOptions, clock({
+      prs: ok("github", [quietPr]),
+      sessions: ok("pohunek", [linked({ updatedAt: "2026-06-15T11:00:00Z" })]),
+      notifications: ok("pohunek", [blocked]),
+    }));
+    expect(out.items[0]?.sessions[0]).toMatchObject({ id: "s-f", indicator: "waiting_input", updated_at: "2026-06-15T11:00:00Z" });
+    expect(out.stdout).toContain("waiting_input");
+  });
 });
 
 test("a failed github source turns every row unknown with the source code", async () => {
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ prs: fail("github", "rate_limited"), issues: ok("linear", [issue()]) }),
   );
   expect(result.items).toHaveLength(1);
@@ -330,7 +399,7 @@ test("a failed github source turns every row unknown with the source code", asyn
 test("a failed pohunek call marks pohunek unknown but rules not needing it still decide only after rules 1-2", async () => {
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ prs: ok("github", [draftPr]), sessions: fail("pohunek", "timeout") }),
   );
   expect(result.items[0]?.on_turn.actor).toBe("unknown");
@@ -345,7 +414,7 @@ test("linked live session on the row makes the agent's turn when working", async
   });
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ prs: ok("github", [draftPr]), sessions: ok("pohunek", [linked]) }),
   );
   expect(result.items[0]?.on_turn).toEqual({ actor: "agent", reason: "working", rule: 2 });
@@ -353,7 +422,7 @@ test("linked live session on the row makes the agent's turn when working", async
 });
 
 test("table output is produced without --json", async () => {
-  const result = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: false, project: "widgets" }, deps({ prs: ok("github", [draftPr]) }));
+  const result = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: false, project: "widgets" }, deps({ prs: ok("github", [draftPr]) }));
   expect(result.stdout).toContain("KEY");
   expect(result.stdout).toContain("me: leave draft (r6)");
 });
@@ -377,7 +446,7 @@ test("with the registry unavailable every configured project is listed", () => {
 });
 
 test("unknown --project label warns", async () => {
-  const result = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: false, project: "nope" }, deps({}));
+  const result = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: false, project: "nope" }, deps({}));
   expect(result.warnings).toEqual(["project nope: no configuration file for this label"]);
 });
 
@@ -391,14 +460,14 @@ test("read-only: list never launches a session", async () => {
       return Promise.reject(new Error("list never launches a session"));
     },
   };
-  await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, { ...base, pohunek });
+  await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, { ...base, pohunek });
   expect(launches).toBe(0);
 });
 
 test("failed sources are reported regardless of the --mine filter", async () => {
   const result = await runList(
     config,
-    { mine: true, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: true, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ prs: fail("github", "rate_limited"), issues: ok("linear", [issue()]), sessions: fail("pohunek", "timeout") }),
   );
   expect(result.items).toEqual([]);
@@ -413,21 +482,21 @@ test("failed sources are reported regardless of the --mine filter", async () => 
 test("a registry failure counts as a pohunek failure", async () => {
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ registry: fail("pohunek", "timeout") }),
   );
   expect(result.sourceFailures).toContain("pohunek: timeout");
 });
 
 test("no failures are reported when every source answers", async () => {
-  const result = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps({}));
+  const result = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps({}));
   expect(result.sourceFailures).toEqual([]);
 });
 
 test("a failed linear source marks issue rows unknown with the linear code", async () => {
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ prs: ok("github", [draftPr]), issues: fail("linear", "timeout") }),
   );
   expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
@@ -439,7 +508,7 @@ test("a failed linear source marks issue rows unknown with the linear code", asy
 test("a started issue without a pull request or live session is on my turn (rule 8)", async () => {
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ issues: ok("linear", [issue()]), prs: ok("github", []) }),
   );
   expect(result.items[0]?.on_turn).toEqual({ actor: "me", reason: "nothing runs", rule: 8 });
@@ -447,10 +516,10 @@ test("a started issue without a pull request or live session is on my turn (rule
 
 test("live sessions without a link are listed as unlinked, hidden under --mine", async () => {
   const unlinked = session({ id: "s-77", name: "scratch", projectLabel: "widgets", metadata: {} });
-  const all = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps({ sessions: ok("pohunek", [unlinked]) }));
+  const all = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps({ sessions: ok("pohunek", [unlinked]) }));
   const envelope = JSON.parse(all.stdout) as { ok: { unlinked_sessions: { id: string; project: string }[] } };
   expect(envelope.ok.unlinked_sessions.map((u) => [u.id, u.project])).toEqual([["s-77", "widgets"]]);
-  const mine = await runList(config, { mine: true, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps({ sessions: ok("pohunek", [unlinked]) }));
+  const mine = await runList(config, { mine: true, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps({ sessions: ok("pohunek", [unlinked]) }));
   expect((JSON.parse(mine.stdout) as { ok: { unlinked_sessions: unknown[] } }).ok.unlinked_sessions).toEqual([]);
 });
 
@@ -461,15 +530,15 @@ test("a paused issue with a conflicting draft pull request is paused with no act
   const conflicting = pr({ headRefName: "alice/ABC-1/work", isDraft: true, mergeable: "CONFLICTING" });
   const owner = session({ id: "s-own", activity: "idle", worktreePath: "/wt/abc-1", metadata: { "work.link.id": "ABC-1", "work.link.provider": "linear" } });
   const world = { issues: ok("linear", [onHold]), prs: ok("github", [conflicting]), sessions: ok("pohunek", [owner]) };
-  const all = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const all = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
   expect(all.items.map((i) => [i.key, i.on_turn, i.actions])).toEqual([
     ["linear:ABC-1", { actor: "paused", reason: "paused", rule: 12 }, []],
   ]);
-  const mine = await runList(config, { mine: true, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const mine = await runList(config, { mine: true, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
   expect(mine.items).toEqual([]);
   const resumed = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ ...world, issues: ok("linear", [issue()]) }),
   );
   expect(resumed.items[0]?.on_turn).toEqual({ actor: "me", reason: "rebase", rule: 5 });
@@ -480,7 +549,7 @@ test("a working session linked to a paused issue with a pull request keeps the r
   const conflicting = pr({ headRefName: "alice/ABC-1/work", mergeable: "CONFLICTING" });
   const withPr = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ issues: ok("linear", [onHold]), prs: ok("github", [conflicting]), sessions: ok("pohunek", [working]) }),
   );
   expect(withPr.items.map((i) => [i.key, i.on_turn])).toEqual([["linear:ABC-1", { actor: "agent", reason: "working", rule: 2 }]]);
@@ -489,7 +558,7 @@ test("a working session linked to a paused issue with a pull request keeps the r
 test("a paused issue without a pull request has no row, so its working session is neither listed nor orphaned", async () => {
   const withoutPr = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ issues: ok("linear", [onHold]), sessions: ok("pohunek", [working]) }),
   );
   expect(withoutPr.items).toEqual([]);
@@ -501,7 +570,7 @@ test("a pull request joined by branch is unknown while Linear is down, since its
   const conflicting = pr({ headRefName: "alice/ABC-1/work", mergeable: "CONFLICTING" });
   const result = await runList(
     config,
-    { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" },
+    { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" },
     deps({ issues: fail("linear", "timeout"), prs: ok("github", [conflicting]) }),
   );
   expect(result.items.map((i) => [i.key, i.on_turn, i.actions])).toEqual([
@@ -514,7 +583,7 @@ test("an issue whose pull request is merged is on my turn to close or follow up 
     issues: ok("linear", [issue()]),
     merged: ok("github", [mergedPr({ headRefName: "alice/ABC-1/widget-cache" })]),
   };
-  const out = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const out = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
   expect(out.items).toHaveLength(1);
   expect(out.items[0]?.on_turn).toEqual({ actor: "me", reason: "close or follow up", rule: 13 });
   expect(out.items[0]?.actions).toEqual([]);
@@ -522,7 +591,7 @@ test("an issue whose pull request is merged is on my turn to close or follow up 
 
 test("an issue with no merged pull request still offers implement", async () => {
   const world = { issues: ok("linear", [issue()]) };
-  const out = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const out = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
   expect(out.items[0]?.on_turn.rule).toBe(8);
   expect(out.items[0]?.actions.map((a) => a.name)).toEqual(["implement"]);
 });
@@ -533,7 +602,7 @@ test("a failed merged lookup makes only the issue-only row unknown and PR rows k
     prs: ok("github", [draftPr]),
     merged: fail("github", "rate_limited"),
   };
-  const out = await runList(config, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+  const out = await runList(config, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
   const byKey = new Map(out.items.map((i) => [i.key, i]));
   expect(byKey.get("github:acme/widgets#12")?.on_turn).toEqual({ actor: "me", reason: "leave draft", rule: 6 });
   expect(byKey.get("linear:ABC-2")?.on_turn).toEqual({ actor: "unknown", reason: "github_merged:rate_limited", rule: null });
@@ -568,7 +637,7 @@ function spiedDeps(world: World): { deps: Parameters<typeof runList>[2]; fetched
 
 test("a github-only configuration never touches Linear and reports no source failure", async () => {
   const { deps: spied, fetched } = spiedDeps({ prs: ok("github", [draftPr]) });
-  const output = await runList(githubOnly, { mine: false, staleDays: null, includeIgnored: false, json: true, project: null }, { ...spied, linear: null });
+  const output = await runList(githubOnly, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: null }, { ...spied, linear: null });
   expect(fetched).toEqual([]);
   expect(output.sourceFailures).toEqual([]);
   const envelope = JSON.parse(output.stdout) as {
@@ -581,14 +650,14 @@ test("a github-only configuration never touches Linear and reports no source fai
 
 test("a github-only configuration does not call the Linear source even when one is supplied", async () => {
   const { deps: spied, fetched } = spiedDeps({ prs: ok("github", [draftPr]) });
-  const output = await runList(githubOnly, { mine: false, staleDays: null, includeIgnored: false, json: false, project: null }, spied);
+  const output = await runList(githubOnly, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: false, project: null }, spied);
   expect(fetched).toEqual([]);
   expect(output.sourceFailures).toEqual([]);
 });
 
 test("a mixed configuration queries Linear only for the Linear project", async () => {
   const { deps: spied, fetched } = spiedDeps({ issues: fail("linear", "timeout") });
-  const output = await runList(mixed, { mine: false, staleDays: null, includeIgnored: false, json: true, project: null }, spied);
+  const output = await runList(mixed, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: null }, spied);
   expect(fetched).toEqual(["widgets"]);
   expect(output.sourceFailures).toEqual(["widgets linear: timeout"]);
   const envelope = JSON.parse(output.stdout) as { ok: { projects: { project: string; sources: Record<string, string> }[] } };
@@ -597,7 +666,7 @@ test("a mixed configuration queries Linear only for the Linear project", async (
 });
 
 test("a Linear project without a Linear source is a programming error, not a silent skip", async () => {
-  const run = runList(mixed, { mine: false, staleDays: null, includeIgnored: false, json: true, project: null }, { ...deps({}), linear: null });
+  const run = runList(mixed, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: null }, { ...deps({}), linear: null });
   const error = await run.then(
     () => null,
     (caught: unknown) => caught,
@@ -611,7 +680,7 @@ describe("a project whose issues come from GitHub", () => {
   const githubWidgets = { ...config, projects: [{ ...widgets, ...numeric, issueSource: githubIssueSource }, githubGadgets] };
   const startedIssue = issue({ id: "acme/widgets#7", state: "in-progress", title: "Cache widgets" });
   const run = (world: World): Promise<Awaited<ReturnType<typeof runList>>> =>
-    runList(githubWidgets, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
+    runList(githubWidgets, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, deps(world));
 
   test("a started issue is a github-issue row on rule 8 and the sources name github_issues", async () => {
     const out = await run({ githubIssues: ok("github_issues", [startedIssue]) });
@@ -643,7 +712,7 @@ describe("a project whose issues come from GitHub", () => {
   test("the Linear source is never called and the project reports linear unused", async () => {
     const calls: string[] = [];
     const spied = { ...deps({ githubIssues: ok("github_issues", []) }), linear: { fetchIssues: () => { calls.push("linear"); return Promise.resolve(ok("linear", [])); }, fetchIgnoredKeys: () => Promise.reject(new Error("not used")) } };
-    const out = await runList(githubWidgets, { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" }, spied);
+    const out = await runList(githubWidgets, { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" }, spied);
     expect(calls).toEqual([]);
     expect((JSON.parse(out.stdout) as { ok: { projects: { sources: Record<string, string> }[] } }).ok.projects[0]?.sources["linear"]).toBe("unused");
   });
@@ -652,7 +721,7 @@ describe("a project whose issues come from GitHub", () => {
 test("external reviews give rule 3 to the agent, offer no action and still yield to a working linked session", async () => {
   const external = { ...config, projects: config.projects.map((p) => (p.name === "widgets" ? { ...p, reviews: "external" as const } : p)) };
   const requested = pr({ relation: "review_requested", headRefName: "feature/theirs" });
-  const request = { mine: false, staleDays: null, includeIgnored: false, json: true, project: "widgets" };
+  const request = { mine: false, staleDays: null, finishedHours: null, includeIgnored: false, json: true, project: "widgets" };
   const bare = await runList(external, request, deps({ prs: ok("github", [requested]) }));
   expect(bare.items[0]?.on_turn).toEqual({ actor: "agent", reason: "external review", rule: 3 });
   expect(bare.items[0]?.actions).toEqual([]);

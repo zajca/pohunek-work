@@ -506,11 +506,26 @@ the source `github_issues` (the GitHub issue lookup of a `github` project), the
 list of unavailable sources and never makes `list` exit partial. Version 4 adds the row field `ignored` (a row carrying the project's
 `ignore_label`; it has no actions but keeps its computed `on_turn`) and the
 payload field `omitted_ignored` (the number of ignored rows left out of `items`
-that `--mine`, `--stale-days` and `--project` would have listed; 0 with
-`--include-ignored`). `list` and `list --mine` hide ignored rows unless
+that `--mine`, `--finished-hours`, `--stale-days` and `--project` would have
+listed; 0 with `--include-ignored`). `list` and `list --mine` hide ignored rows unless
 `--include-ignored` is passed (the table marks such a row's key with `(ignored)`); without it the table ends with
 `N ignored row(s) hidden (use --include-ignored)` when N > 0.
-A consumer
+Each `sessions` entry also carries `indicator` and `updated_at`. `indicator` is
+`waiting_input` when a notification of the session has kind `agent_blocked` or
+`approval_required` with status `unread` or `read` (the condition of rule 1),
+else `lost` for a session whose state is `running` and whose runtime is `lost`,
+else `running` for a live session, else the session's own state (`stopped`,
+`done`, ...). `waiting_input` is derived from those blocked notifications only;
+whether a live session is working or waiting for input in its `activity` depends
+on core (`zajca/pohunek#544`). `updated_at` is the session's ISO-8601 time of
+last change from pohunek, or null when pohunek reports none. The table's
+`SESSIONS` cell shows `<role>:<indicator>`, except that a session whose indicator
+is `running` shows its `activity` (`live` while unknown). `list --mine --finished-hours <n>` (a positive
+whole number; a usage error without `--mine`) additionally keeps a row that is
+not on the owner's turn when none of its sessions is `running` or
+`waiting_input` and at least one session is `stopped` or `done` with an
+`updated_at` within the last `n` hours; `on_turn` is not changed. The kept rows
+then pass `--stale-days` and the ignore filter like any other. A consumer
 pinned to an older version gets an `incompatible` outcome instead of a payload
 it cannot decode. `do` and `setup` version their envelopes separately
 (both 1). Illustrative item:
@@ -527,7 +542,7 @@ it cannot decode. `do` and `setup` version their envelopes separately
   },
   "no_issue": false,
   "issue_key": "DMD-2188",
-  "sessions": [{"id": "s-...", "name": "PR-8605", "role": "babysit", "state": "terminal", "activity": null}],
+  "sessions": [{"id": "s-...", "name": "PR-8605", "role": "babysit", "state": "stopped", "activity": null, "indicator": "stopped", "updated_at": "2026-06-15T10:00:00Z"}],
   "on_turn": {"actor": "me", "reason": "respond", "rule": 4},
   "actions": [
     {"name": "babysit", "delegable": false, "profile": "claude-otel"},

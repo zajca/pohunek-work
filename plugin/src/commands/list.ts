@@ -3,6 +3,7 @@
 import { isGithubProject, isLinearProject, issueSourceStatusKey } from "../config/issue-source.ts";
 import { lookupUnlistedIssues } from "../issue-lookup.ts";
 import { joinItems } from "../join.ts";
+import { finishedCutoff } from "../output/finished.ts";
 import { isStalePullRequest, staleCutoff } from "../output/stale.ts";
 import {
   buildListEnvelope,
@@ -31,7 +32,7 @@ import type {
   SourceResult,
 } from "../types/sources.ts";
 import type { Logger } from "../log.ts";
-import { isLiveSession, parseOriginRepo, type PohunekClient } from "../sources/pohunek.ts";
+import { parseOriginRepo, type PohunekClient } from "../sources/pohunek.ts";
 import type { GithubSource } from "../sources/github.ts";
 import type { LinearSource } from "../sources/linear.ts";
 
@@ -39,6 +40,8 @@ export interface ListOptions {
   readonly mine: boolean;
   /** Leaves out pull requests not updated for this many days that nothing runs for; null keeps all. */
   readonly staleDays: number | null;
+  /** With `mine`, also keeps rows whose agent work finished within this many hours; null keeps none. */
+  readonly finishedHours: number | null;
   readonly json: boolean;
   /** Pohunek project label to restrict the listing to; null for every project. */
   readonly project: string | null;
@@ -231,11 +234,13 @@ export async function runList(
 ): Promise<ListOutput> {
   const { logger } = deps;
   const collected = await collectRows(config, options.project, deps);
-  const { orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions } = collected;
+  const { orphans, unlinked, projectStatuses, warnings, sourceFailures } = collected;
   const items = collected.rows.map((row) => row.listItem);
 
-  const mineRows = options.mine ? filterMine(items) : items;
-  const cutoff = options.staleDays === null ? null : staleCutoff((deps.now ?? Date.now)(), options.staleDays);
+  const now = (deps.now ?? Date.now)();
+  const finishedCut = options.mine && options.finishedHours !== null ? finishedCutoff(now, options.finishedHours) : null;
+  const mineRows = options.mine ? filterMine(items, finishedCut) : items;
+  const cutoff = options.staleDays === null ? null : staleCutoff(now, options.staleDays);
   const filtered = cutoff === null ? mineRows : mineRows.filter((item) => !isStalePullRequest(item, cutoff));
   const shown = options.includeIgnored ? filtered : filtered.filter((item) => !item.ignored);
   const omittedIgnored = filtered.length - shown.length;
@@ -244,6 +249,7 @@ export async function runList(
     shown: shown.length,
     mine: options.mine,
     stale_days: options.staleDays,
+    finished_hours: options.finishedHours,
     include_ignored: options.includeIgnored,
     omitted_ignored: omittedIgnored,
   });
@@ -260,7 +266,6 @@ export async function runList(
         shown,
         options.mine ? [] : orphans,
         options.mine ? [] : unlinked,
-        new Set(sessions.filter(isLiveSession).map((s) => s.id)),
         omittedIgnored);
   return { stdout, warnings, items: shown, sourceFailures };
 }

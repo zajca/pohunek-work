@@ -211,7 +211,7 @@ describe("hostile text through toSafe", () => {
   const rows = HOSTILE_TITLES.map((title, index) =>
     row(`linear:EVIL-${index.toString()}`, {
       issue: { id: `EVIL-${index.toString()}`, title, state: `${ESC}[1mstate`, url: `https://linear.app/x/${ESC}[0m` },
-      sessions: [{ id: `s-${ESC}x`, name: title, role: `${ESC}]0;t\u0007`, state: "running", activity: null }],
+      sessions: [{ id: `s-${ESC}x`, name: title, role: `${ESC}]0;t\u0007`, state: "running", activity: null, indicator: "running", updated_at: null }],
     }),
   );
   const hostile = payload(rows);

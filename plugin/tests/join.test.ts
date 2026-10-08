@@ -88,6 +88,7 @@ function session(
     state: "running",
     activity: "idle",
     runtimeState: null,
+    updatedAt: null,
     metadata,
   };
 }

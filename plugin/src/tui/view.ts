@@ -3,6 +3,7 @@
 // contract text goes through toSafe before it is placed.
 import { isSourceFailure, type ListAction, type ListItem, type ListPayload } from "../types/item.ts";
 import { isIssueRowOf } from "../config/row-key.ts";
+import { sessionLabel } from "../output/session-label.ts";
 import { isTuiAction } from "./actions.ts";
 import { columnsFor, overlayHeight, tableWidthOf, COLUMN_GAP, DROP_ORDER, type ColumnId, type ColumnSpec, type Layout } from "./layout.ts";
 import { isStale, layoutOf, selectedRow, staleBefore, visibleRows, MS_PER_MINUTE, type State } from "./model.ts";
@@ -69,7 +70,7 @@ function prCell(item: ListItem): string {
 
 function sessionsCell(item: ListItem): string {
   if (item.sessions.length === 0) return "-";
-  return item.sessions.map((s) => `${s.role ?? "?"}:${s.activity ?? s.state}`).join(",");
+  return item.sessions.map((s) => `${s.role ?? "?"}:${sessionLabel(s)}`).join(",");
 }
 
 function cell(item: ListItem, id: ColumnId, state: State): SafeText {
@@ -252,7 +253,7 @@ export function detailLines(state: State, item: ListItem): SafeText[] {
   }
   lines.push(item.sessions.length === 0 ? "sessions: none" : "sessions:");
   for (const s of item.sessions) {
-    lines.push(`  ${s.id} ${s.name ?? "(unnamed)"} role=${s.role ?? "-"} state=${s.state} activity=${s.activity ?? "-"}`);
+    lines.push(`  ${s.id} ${s.name ?? "(unnamed)"} role=${s.role ?? "-"} state=${s.state} indicator=${s.indicator} activity=${s.activity ?? "-"} updated=${s.updated_at ?? "-"}`);
   }
   const actions = item.actions.map((action, index) => actionLabel(action, index === 0));
   lines.push(`actions: ${actions.length === 0 ? "none (manual)" : actions.join(", ")}`);

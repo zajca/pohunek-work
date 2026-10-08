@@ -48,6 +48,18 @@ test("a usage error under --json is a JSON error envelope on stdout", async () =
   expect(envelope.err.msg).toContain("usage:");
 });
 
+test("--finished-hours needs --mine and a positive whole number", async () => {
+  const dir = await tempDir();
+  for (const args of [["list", "--finished-hours", "6"], ["list", "--mine", "--finished-hours", "0"], ["list", "--mine", "--finished-hours", "x"], ["list", "--mine", "--finished-hours", "1.5"]]) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("--finished-hours");
+    expect(result.err).toContain("usage:");
+  }
+  const accepted = await run(["list", "--mine", "--finished-hours", "6", "--json"], dir);
+  expect((JSON.parse(accepted.out) as { err: { code: string } }).err.code).toBe("config_invalid");
+});
+
 test("an unexpected positional argument is a usage error", async () => {
   const dir = await tempDir();
   expect((await run(["list", "foo"], dir)).code).toBe(2);
