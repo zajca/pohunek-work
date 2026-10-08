@@ -8,6 +8,7 @@
 // Rust guideline compliant 2026-10-03
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -31,8 +32,9 @@ use pohunek_gui_core::{
     DiffFileStatus, DomainEvent, HealthSummary, HostConfig, HostEvent, HostId, HostSnapshot,
     HostView, PromptContext, PromptLaunchParams, PromptPreview, ProviderLaunchItem,
     ProviderLaunchParams, Review, ReviewComment, ReviewDispatchParams, ReviewSide, ReviewSource,
-    ReviewStatus, ReviewStore, Selection, SessionLinkKind, SessionLinkProvider, UiState,
-    WindowSize, Workspace,
+    ReviewStatus, ReviewStore, RuntimeContinuity, Selection, SessionAccess, SessionGroup,
+    SessionLinkKind, SessionLinkProvider, SessionRow, SubagentCounts, UiState, WindowSize,
+    Workspace,
 };
 use pohunek_platform::process::{HostInspector, ProcessInspector};
 use pohunek_test_support::env::TestEnv;
@@ -42,9 +44,11 @@ use protocol::{
     method, AgentActivity, ErrorClass, NotificationPolicyParams, ProcessStartIdentity,
     ProjectActionParams, ProjectActionResult, ProjectActionsParams, ProjectAddParams,
     ProjectPromptParams, ProjectRemoveParams, ProjectRenameParams, ProjectShowParams,
-    ProtocolError, ProviderKind, ReportSequence, Request, Response, RuntimeRef, SessionDiffParams,
-    SessionId, SessionInfo, SessionNewParams, SessionOutputParams, SessionReportNativeIdParams,
-    SessionScreenParams, SessionSetMetadataParams, SessionWaitParams, StateSource,
+    ProtocolError, ProviderKind, ReportSequence, Request, Response, RuntimeGeneration, RuntimeRef,
+    RuntimeState, SessionDiffParams, SessionId, SessionInfo, SessionNewParams, SessionOutputParams,
+    SessionReportNativeIdParams, SessionRuntimeIdentity, SessionScreenParams,
+    SessionSetMetadataParams, SessionWaitParams, StateSource, SubagentInfo, SubagentLifecycle,
+    SubagentRevision, SubagentStateEvent,
 };
 use time::format_description::well_known::Rfc3339;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -516,6 +520,312 @@ async fn session_children_receive_the_fixture_environment_not_the_host_one() {
     );
 
     stop_session(&host, &created.session.id).await;
+    daemon.shutdown().await;
+}
+
+/// Replacement worker for the replaced-worker regression: the real runtime with
+/// a new worker instance id and the next generation.
+fn replaced_runtime(session: &SessionInfo) -> SessionRuntimeIdentity {
+    let runtime = session
+        .runtime
+        .as_ref()
+        .expect("managed session has a runtime");
+    SessionRuntimeIdentity::new(
+        "w-recovered",
+        RuntimeGeneration::new(runtime.runtime_generation.get() + 1),
+    )
+    .expect("valid replacement runtime identity")
+}
+
+/// A subagent hook report shaped like a real worker relays one: running
+/// subagents carry `Working`, finished ones carry no activity.
+fn subagent_state(
+    session: &SessionInfo,
+    identity: &str,
+    generation: RuntimeGeneration,
+    revision: u64,
+    lifecycle: SubagentLifecycle,
+) -> HostEvent {
+    HostEvent::SubagentState(SubagentStateEvent {
+        session_id: session.id.clone(),
+        subagent: SubagentInfo {
+            id: "child-1".to_owned(),
+            parent_id: None,
+            provider: RuntimeRef::codex(),
+            agent_type: Some("Explore".to_owned()),
+            lifecycle,
+            activity: (lifecycle == SubagentLifecycle::Running).then_some(AgentActivity::Working),
+            revision: SubagentRevision::new(revision),
+            started_at_ms: 1_000,
+            updated_at_ms: 1_000 + revision,
+            finished_at_ms: None,
+        },
+        runtime: Some(
+            SessionRuntimeIdentity::new(identity, generation)
+                .expect("valid subagent runtime identity"),
+        ),
+    })
+}
+
+/// Aggregated subagent counts on the public session row of one session.
+fn row_subagents(workspace: &Workspace, session_id: &SessionId) -> SubagentCounts {
+    workspace
+        .session_rows()
+        .into_iter()
+        .find(|row| row.session_id == *session_id)
+        .map(|row| row.subagents)
+        .expect("session row for the real session")
+}
+
+/// The live session view inside one host's workspace state.
+fn session_view<'a>(
+    workspace: &'a Workspace,
+    host_id: &HostId,
+    session_key: &str,
+) -> Option<&'a SessionInfo> {
+    workspace
+        .hosts
+        .get(host_id)
+        .and_then(|view| view.sessions.get(session_key))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "keeps stale-revision and worker-recovery assertions in one daemon-seeded flow"
+)]
+async fn stale_subagent_events_from_replaced_workers_never_revive_the_session_view() {
+    let mut env = ProcessEnv::lock();
+    let bin_dir = temp_dir("gui-core-stale-bin");
+    write_executable(&bin_dir.join("codex"), "#!/bin/sh\nexec /bin/sleep 30\n");
+    prepend_path(&mut env, &bin_dir);
+
+    let daemon = LoopbackDaemon::spawn("gui-stale-subagent").await;
+    let host = daemon.host("host-stale-subagent");
+    let created = no_origin::create_session(
+        &host,
+        SessionNewParams {
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
+            name: None,
+            cwd: Some(temp_dir("gui-core-stale-cwd")),
+            cols: 80,
+            rows: 24,
+            project: None,
+            repo: None,
+            branch: None,
+            base_branch: None,
+            input: None,
+            metadata: std::collections::BTreeMap::new(),
+        },
+    )
+    .await
+    .expect("session.new through gui-core");
+    let session = created.session.clone();
+    let runtime = created.session.runtime.as_ref().expect("managed runtime");
+    let worker_instance_id = runtime
+        .worker_instance_id
+        .clone()
+        .expect("managed session has a worker instance");
+    let generation = runtime.runtime_generation;
+
+    // The GUI seeds its workspace from the real daemon's snapshot before any
+    // event is processed.
+    let snapshot = load_host_snapshot(&host)
+        .await
+        .expect("snapshot through gui-core");
+    assert!(snapshot
+        .sessions
+        .iter()
+        .any(|listed| listed.id == session.id));
+    let mut workspace = Workspace::default();
+    workspace.apply(DomainEvent::HostSnapshotLoaded { snapshot });
+    let host_id = host.id.clone();
+    let session_key = session.id.0.clone();
+
+    // The current worker reports the subagent completed; a late hook report of
+    // the same subagent carries an older revision and must lose to it.
+    workspace.apply(DomainEvent::HostEvent {
+        host_id: host.id.clone(),
+        event: subagent_state(
+            &session,
+            &worker_instance_id,
+            generation,
+            2,
+            SubagentLifecycle::Completed,
+        ),
+    });
+    workspace.apply(DomainEvent::HostEvent {
+        host_id: host.id.clone(),
+        event: subagent_state(
+            &session,
+            &worker_instance_id,
+            generation,
+            1,
+            SubagentLifecycle::Running,
+        ),
+    });
+    let subagent = session_view(&workspace, &host_id, &session_key)
+        .and_then(|view| view.subagents.first())
+        .cloned()
+        .expect("the completed subagent stays in the workspace view");
+    assert_eq!(subagent.lifecycle, SubagentLifecycle::Completed);
+    assert_eq!(subagent.revision, SubagentRevision::new(2));
+    assert_eq!(
+        row_subagents(&workspace, &session.id),
+        SubagentCounts {
+            running: 0,
+            total: 1,
+        }
+    );
+
+    // Explicit recovery replaces the worker: the new generation carries no
+    // subagents, and the prior runtime is recorded as recovered.
+    let mut recovered = session.clone();
+    let replacement = replaced_runtime(&session);
+    let view_runtime = recovered.runtime.as_mut().expect("managed session runtime");
+    view_runtime.worker_instance_id = Some(replacement.worker_instance_id().to_owned());
+    view_runtime.runtime_generation = replacement.runtime_generation();
+    recovered.subagents.clear();
+    workspace.apply(DomainEvent::HostEvent {
+        host_id: host.id.clone(),
+        event: HostEvent::NativeRecovered(recovered),
+    });
+    assert_eq!(
+        workspace.runtime_continuity(&host.id, &session.id),
+        Some(RuntimeContinuity::Recovered),
+        "the replaced worker is recorded as an explicit recovery"
+    );
+    assert!(
+        session_view(&workspace, &host_id, &session_key)
+            .expect("recovered session view")
+            .subagents
+            .is_empty(),
+        "recovery replaces the subagent history with the replacement runtime's"
+    );
+
+    // The replaced worker keeps emitting late hook reports with revisions above
+    // anything the replacement published; none may be accepted.
+    for (revision, lifecycle) in [
+        (99, SubagentLifecycle::Running),
+        (2, SubagentLifecycle::Cancelled),
+    ] {
+        workspace.apply(DomainEvent::HostEvent {
+            host_id: host.id.clone(),
+            event: subagent_state(
+                &session,
+                &worker_instance_id,
+                generation,
+                revision,
+                lifecycle,
+            ),
+        });
+        assert!(
+            session_view(&workspace, &host_id, &session_key)
+                .expect("recovered session view")
+                .subagents
+                .is_empty(),
+            "a late event from the replaced worker must not revive the subagent"
+        );
+    }
+    assert_eq!(
+        row_subagents(&workspace, &session.id),
+        SubagentCounts {
+            running: 0,
+            total: 0,
+        }
+    );
+
+    stop_session(&host, &session.id).await;
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn conflicted_and_incompatible_runtime_sessions_fail_closed_in_session_rows() {
+    let mut env = ProcessEnv::lock();
+    let bin_dir = temp_dir("gui-core-conflict-bin");
+    write_executable(&bin_dir.join("codex"), "#!/bin/sh\nexec /bin/sleep 30\n");
+    prepend_path(&mut env, &bin_dir);
+
+    let daemon = LoopbackDaemon::spawn("gui-runtime-conflict").await;
+    let host = daemon.host("host-runtime-conflict");
+    let created = no_origin::create_session(
+        &host,
+        SessionNewParams {
+            agent: agent_name(&RuntimeRef::codex()).to_owned(),
+            name: None,
+            cwd: Some(temp_dir("gui-core-conflict-cwd")),
+            cols: 80,
+            rows: 24,
+            project: None,
+            repo: None,
+            branch: None,
+            base_branch: None,
+            input: None,
+            metadata: std::collections::BTreeMap::new(),
+        },
+    )
+    .await
+    .expect("session.new through gui-core");
+    let session = created.session;
+    assert_eq!(
+        session.runtime.as_ref().expect("managed runtime").state,
+        RuntimeState::Live,
+        "the real session starts with a live runtime"
+    );
+
+    // The GUI seeds its workspace from the real daemon's snapshot, then derives
+    // the unusable runtime states from it the way a daemon's reconciliation can
+    // report them.
+    let mut snapshot = load_host_snapshot(&host)
+        .await
+        .expect("snapshot through gui-core");
+    let live = snapshot
+        .sessions
+        .iter()
+        .find(|listed| listed.id == session.id)
+        .cloned()
+        .expect("the snapshot lists the real session");
+    let mut conflicted = live.clone();
+    conflicted.id = SessionId("s-conflicted".to_owned());
+    conflicted.runtime.as_mut().expect("managed runtime").state = RuntimeState::Conflict;
+    let mut incompatible = live;
+    incompatible.id = SessionId("s-incompatible".to_owned());
+    incompatible
+        .runtime
+        .as_mut()
+        .expect("managed runtime")
+        .state = RuntimeState::Incompatible;
+    snapshot.sessions.push(conflicted);
+    snapshot.sessions.push(incompatible);
+
+    let mut workspace = Workspace::default();
+    workspace.apply(DomainEvent::HostSnapshotLoaded { snapshot });
+    let rows: BTreeMap<String, SessionRow> = workspace
+        .session_rows()
+        .into_iter()
+        .map(|row| (row.session_id.0.clone(), row))
+        .collect();
+
+    // The untouched real session stays attachable: the deny is driven by the
+    // runtime state, not by the seeding path.
+    let live_row = &rows[&session.id.0];
+    assert_eq!(live_row.access, SessionAccess::Attach);
+    assert!(live_row.can_stop);
+    assert!(live_row.can_remove);
+
+    for unsafe_id in ["s-conflicted", "s-incompatible"] {
+        let row = &rows[unsafe_id];
+        assert_eq!(
+            row.access,
+            SessionAccess::Unavailable,
+            "{unsafe_id} must not be attachable"
+        );
+        assert!(!row.can_stop, "{unsafe_id} must deny a direct stop");
+        assert!(!row.can_remove, "{unsafe_id} must deny a remove");
+        assert_eq!(row.group, SessionGroup::Unavailable, "{unsafe_id} group");
+    }
+
+    stop_session(&host, &session.id).await;
     daemon.shutdown().await;
 }
 
