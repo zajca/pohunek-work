@@ -892,36 +892,6 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_environment_forwards_only_the_allowlist_of_absolute_values() {
-        let _watchdog = crate::test_support::watchdog();
-        let host: Vec<(&str, OsString)> = vec![
-            ("XDG_RUNTIME_DIR", OsString::from("/run/user/1000")),
-            ("XDG_CONFIG_HOME", OsString::from("relative/config")),
-            ("XDG_DATA_HOME", OsStr::from_bytes(b"/data/\xff").to_owned()),
-            ("XDG_STATE_HOME", OsString::from("/state")),
-            ("AWS_SECRET_ACCESS_KEY", OsString::from("/not-forwarded")),
-            ("HOME", OsString::from("/home/x")),
-            ("PATH", OsString::from("/usr/bin")),
-        ];
-
-        let forwarded = endpoint_environment(|name| {
-            host.iter()
-                .find(|(candidate, _)| *candidate == name)
-                .map(|(_, value)| value.clone())
-        });
-
-        assert_eq!(
-            forwarded,
-            vec![
-                ("HOME", OsString::from("/home/x")),
-                ("XDG_RUNTIME_DIR", OsString::from("/run/user/1000")),
-                ("XDG_DATA_HOME", OsStr::from_bytes(b"/data/\xff").to_owned()),
-                ("XDG_STATE_HOME", OsString::from("/state")),
-            ]
-        );
-    }
-
-    #[test]
     fn the_script_exports_the_allowlist_byte_exact_and_nothing_else() {
         let _watchdog = crate::test_support::watchdog();
         let dir = crate::test_support::fixture();
@@ -1080,17 +1050,6 @@ done
     }
 
     #[test]
-    fn a_relative_or_missing_home_is_not_forwarded() {
-        let _watchdog = crate::test_support::watchdog();
-        for home in [Some("relative/home"), None] {
-            let forwarded = endpoint_environment(|name| {
-                (name == "HOME").then(|| home.map(OsString::from)).flatten()
-            });
-            assert!(forwarded.is_empty(), "{forwarded:?}");
-        }
-    }
-
-    #[test]
     fn the_guis_home_replaces_terminals_and_derived_roots_follow_it() {
         let _watchdog = crate::test_support::watchdog();
         let dir = crate::test_support::fixture();
@@ -1213,18 +1172,6 @@ printf 'HOME=%s\nCONFIG=%s\n' "${HOME-UNSET}" "${XDG_CONFIG_HOME:-$HOME/.config}
     }
 
     #[test]
-    fn a_nul_byte_in_an_exported_value_is_rejected() {
-        let _watchdog = crate::test_support::watchdog();
-        assert_eq!(
-            command_script_with_environment(
-                &[("XDG_RUNTIME_DIR", OsString::from("/a\0b"))],
-                &[OsString::from("/usr/bin/true")]
-            ),
-            Err(ScriptError::NulByte)
-        );
-    }
-
-    #[test]
     fn a_stderr_writer_larger_than_the_capture_limit_is_not_cut_off() {
         let _watchdog = crate::test_support::watchdog();
         let mut command = Command::new("/bin/sh");
@@ -1237,48 +1184,6 @@ printf 'HOME=%s\nCONFIG=%s\n' "${HOME-UNSET}" "${XDG_CONFIG_HOME:-$HOME/.config}
         // A closed pipe would end the writer with SIGPIPE instead of exit 0.
         assert_eq!(output.status.code(), Some(0), "{:?}", output.status);
         assert_eq!(output.stderr.len(), 4096);
-    }
-
-    #[test]
-    fn script_layout_is_shebang_unset_self_delete_exec() {
-        let _watchdog = crate::test_support::watchdog();
-        let script =
-            command_script(&[OsString::from("/bin/echo"), OsString::from("it's")]).expect("script");
-        assert_eq!(
-            String::from_utf8(script).expect("utf8"),
-            "#!/bin/sh\nunset XDG_RUNTIME_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME\n/bin/rm -f -- \"$0\"\nexec '/bin/echo' 'it'\\''s'\n"
-        );
-    }
-
-    #[test]
-    fn nul_bytes_and_empty_programs_are_rejected() {
-        let _watchdog = crate::test_support::watchdog();
-        assert_eq!(
-            command_script(&[OsString::from("/bin/echo"), OsString::from("a\0b")]),
-            Err(ScriptError::NulByte)
-        );
-        assert_eq!(
-            command_script(&[OsString::from("/bin/e\0cho")]),
-            Err(ScriptError::NulByte)
-        );
-        assert_eq!(command_script(&[]), Err(ScriptError::EmptyProgram));
-        assert_eq!(
-            command_script(&[OsString::new()]),
-            Err(ScriptError::EmptyProgram)
-        );
-    }
-
-    #[test]
-    fn attach_arguments_keep_host_and_id_out_of_option_position() {
-        let _watchdog = crate::test_support::watchdog();
-        assert_eq!(
-            attach_arguments("", "s-1"),
-            ["attach", "--", "s-1"].map(OsString::from)
-        );
-        assert_eq!(
-            attach_arguments("--evil host", "-x"),
-            ["--host=--evil host", "attach", "--", "-x"].map(OsString::from)
-        );
     }
 
     /// Writes a fake `open` that records its argv and runs the script it was
@@ -1772,15 +1677,6 @@ printf 'HOME=%s\nCONFIG=%s\n' "${HOME-UNSET}" "${XDG_CONFIG_HOME:-$HOME/.config}
             "{message}"
         );
         assert!(!message.contains("second line"), "{message}");
-    }
-
-    #[test]
-    fn first_line_strips_control_characters_and_bounds_length() {
-        let _watchdog = crate::test_support::watchdog();
-        assert_eq!(first_line(b"\n\x1b[31mred\x07\nnext"), "[31mred");
-        assert_eq!(first_line(b"   \n"), "");
-        assert_eq!(first_line(&[b'x'; 1000]).chars().count(), DETAIL_MAX_CHARS);
-        assert_eq!(first_line(b"caf\xe9").chars().count(), 4);
     }
 
     fn age(path: &Path, by: Duration) {

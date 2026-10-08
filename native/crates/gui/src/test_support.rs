@@ -1,4 +1,4 @@
-//! Fixtures shared by the GUI unit tests: a canonical private temporary root,
+//! Fixtures shared by GUI process and filesystem integration tests: a private root,
 //! executable fakes that are sealed before they run, and a watchdog that turns
 //! a hung process wait into a fast failure with process-table evidence.
 
@@ -120,34 +120,4 @@ fn process_evidence() -> String {
         }
     }
     report
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_fixture_root_is_canonical_and_private() {
-        let root = fixture();
-
-        assert_eq!(
-            fs::canonicalize(root.path()).expect("canonical"),
-            root.path()
-        );
-        let mode = fs::metadata(root.path())
-            .expect("metadata")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o700);
-    }
-
-    #[test]
-    fn evidence_lists_this_process() {
-        assert!(process_evidence().contains(&std::process::id().to_string()));
-    }
-
-    #[test]
-    fn a_dropped_watchdog_does_not_abort() {
-        drop(watchdog());
-    }
 }

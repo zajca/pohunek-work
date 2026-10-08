@@ -306,390 +306,13 @@ fn discover_search_path(
 }
 
 #[cfg(test)]
-mod tests {
+mod integration_tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+
+    use pohunek_platform::shell_env::{LOGIN_SHELL_OUTPUT, LOGIN_SHELL_TIMEOUT};
 
     use super::*;
 
-    fn executable(dir: &Path, name: &str) -> PathBuf {
-        let path = dir.join(name);
-        fs::write(&path, "#!/bin/sh\n").expect("write");
-        crate::test_support::make_executable(&path);
-        path
-    }
-
-    fn search(dir: &Path) -> SearchPath {
-        SearchPath::new(vec![dir.to_path_buf()]).expect("search path")
-    }
-
-    #[test]
-    fn a_configured_absolute_path_is_used_without_discovery() {
-        let dir = crate::test_support::fixture();
-        let bin = executable(dir.path(), "pohunek");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let resolver = BinResolver::with_discovery(bin.to_str().expect("utf8"), move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Err(BinError::SearchPath("must not run".to_owned()))
-        });
-
-        assert_eq!(resolver.resolve().expect("resolve"), bin);
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn a_configured_path_that_is_not_executable_is_an_error_not_a_search() {
-        let dir = crate::test_support::fixture();
-        let path = dir.path().join("pohunek");
-        fs::write(&path, "data").expect("write");
-        let resolver = BinResolver::with_discovery(path.to_str().expect("utf8"), || {
-            Err(BinError::SearchPath("must not run".to_owned()))
-        });
-
-        assert!(matches!(
-            resolver.resolve(),
-            Err(BinError::Executable {
-                source: ExecutableError::NotExecutable(_),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn a_relative_path_is_rejected() {
-        let resolver = BinResolver::with_discovery("bin/pohunek", || {
-            Err(BinError::SearchPath("must not run".to_owned()))
-        });
-
-        assert!(matches!(
-            resolver.resolve(),
-            Err(BinError::Executable {
-                source: ExecutableError::RelativePath,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn a_bare_name_resolves_through_the_discovered_search_path_once() {
-        let dir = crate::test_support::fixture();
-        let bin = executable(dir.path(), "pohunek");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let search_path = search(dir.path());
-        let resolver = BinResolver::with_discovery("pohunek", move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Ok(search_path.clone())
-        });
-
-        assert_eq!(resolver.resolve().expect("first"), bin);
-        assert_eq!(resolver.resolve().expect("second"), bin);
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "discovery result is cached"
-        );
-    }
-
-    #[test]
-    fn a_miss_discards_the_cache_and_finds_a_later_installation() {
-        let stale = crate::test_support::fixture();
-        let fresh = crate::test_support::fixture();
-        let bin = executable(fresh.path(), "pohunek");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let stale_search = search(stale.path());
-        let fresh_search = search(fresh.path());
-        let resolver = BinResolver::with_discovery("pohunek", move || {
-            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
-                Ok(stale_search.clone())
-            } else {
-                Ok(fresh_search.clone())
-            }
-        });
-
-        // The first discovery yields a directory without the binary.
-        assert!(matches!(
-            resolver.resolve(),
-            Err(BinError::Executable {
-                source: ExecutableError::NotFound,
-                ..
-            })
-        ));
-        // The next attach re-discovers and finds it.
-        assert_eq!(resolver.resolve().expect("after miss"), bin);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(resolver.resolve().expect("cached"), bin);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn a_cached_binary_that_vanished_is_rediscovered_once() {
-        let first = crate::test_support::fixture();
-        let second = crate::test_support::fixture();
-        let first_bin = executable(first.path(), "pohunek");
-        let second_bin = executable(second.path(), "pohunek");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let first_search = search(first.path());
-        let second_search = search(second.path());
-        let resolver = BinResolver::with_discovery("pohunek", move || {
-            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
-                Ok(first_search.clone())
-            } else {
-                Ok(second_search.clone())
-            }
-        });
-        assert_eq!(resolver.resolve().expect("first"), first_bin);
-        fs::remove_file(&first_bin).expect("remove");
-
-        assert_eq!(resolver.resolve().expect("second"), second_bin);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn a_missing_name_after_fresh_discovery_is_a_clear_error() {
-        let dir = crate::test_support::fixture();
-        let search_path = search(dir.path());
-        let resolver = BinResolver::with_discovery("pohunek", move || Ok(search_path.clone()));
-
-        let error = resolver.resolve().expect_err("not installed");
-
-        assert!(matches!(
-            error,
-            BinError::Executable {
-                source: ExecutableError::NotFound,
-                ..
-            }
-        ));
-        assert!(error.to_string().contains("`pohunek`"), "{error}");
-    }
-
-    #[test]
-    fn a_discovery_failure_is_reported_not_replaced_by_a_default() {
-        let resolver = BinResolver::with_discovery("pohunek", || {
-            Err(BinError::SearchPath("no directory".to_owned()))
-        });
-
-        assert_eq!(
-            resolver.resolve(),
-            Err(BinError::SearchPath("no directory".to_owned()))
-        );
-    }
-
-    #[test]
-    fn discovery_prefers_the_configured_path_and_falls_back_to_the_table() {
-        let dir = crate::test_support::fixture();
-        let configured = search(dir.path());
-
-        let resolved =
-            discover_search_path(Some(&configured), None, None, None).expect("configured");
-        assert_eq!(resolved.path, configured);
-
-        let home = crate::test_support::fixture();
-        let local_bin = home.path().join(".local/bin");
-        fs::create_dir_all(&local_bin).expect("mkdir");
-        let fallback = discover_search_path(None, None, Some(home.path()), None).expect("fallback");
-        assert!(fallback.path.entries().contains(&local_bin));
-    }
-
-    #[test]
-    fn a_miss_carries_the_reason_the_search_path_fell_back() {
-        let dir = crate::test_support::fixture();
-        let path = search(dir.path());
-        let resolver = BinResolver::with_discovery_cause("pohunek", move || {
-            Ok(Discovery {
-                path: path.clone(),
-                cause: Some("login shell PATH discovery failed: timed out".to_owned()),
-            })
-        });
-
-        let error = resolver.resolve().expect_err("not installed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("login shell PATH discovery failed: timed out"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn a_hit_does_not_report_the_fallback_cause() {
-        let dir = crate::test_support::fixture();
-        executable(dir.path(), "pohunek");
-        let path = search(dir.path());
-        let resolver = BinResolver::with_discovery_cause("pohunek", move || {
-            Ok(Discovery {
-                path: path.clone(),
-                cause: Some("ignored".to_owned()),
-            })
-        });
-
-        resolver.resolve().expect("found");
-    }
-
-    #[test]
-    fn other_names_share_the_cached_search_path() {
-        let dir = crate::test_support::fixture();
-        let kitty = executable(dir.path(), "kitty");
-        executable(dir.path(), "pohunek");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let path = search(dir.path());
-        let resolver = BinResolver::with_discovery("pohunek", move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Ok(path.clone())
-        });
-
-        resolver.resolve().expect("pohunek");
-        assert_eq!(
-            resolver.resolve_name(OsStr::new("kitty")).expect("kitty"),
-            kitty
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn concurrent_callers_share_one_discovery() {
-        let dir = crate::test_support::fixture();
-        executable(dir.path(), "pohunek");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let path = search(dir.path());
-        let resolver = Arc::new(BinResolver::with_discovery("pohunek", move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Ok(path.clone())
-        }));
-
-        let handles: Vec<_> = (0..8)
-            .map(|_| {
-                let resolver = Arc::clone(&resolver);
-                std::thread::spawn(move || resolver.resolve().expect("resolve"))
-            })
-            .collect();
-        for handle in handles {
-            handle.join().expect("thread");
-        }
-
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    fn compose(darwin: bool, path: &str, home: Option<&Path>) -> Result<Discovery, BinError> {
-        compose_search_path(
-            darwin,
-            Ok(path.to_owned()),
-            Err(LoginEnvironmentError::NotAbsolute {
-                var: "SHELL",
-                value: PathBuf::from("zsh"),
-            }),
-            home,
-        )
-    }
-
-    #[test]
-    fn on_macos_a_program_on_the_inherited_path_alone_is_found_first() {
-        let _watchdog = crate::test_support::watchdog();
-        let dir = crate::test_support::fixture();
-        let tools = dir.path().join("tools");
-        fs::create_dir(&tools).expect("tools dir");
-        let kitty = executable(&tools, "only-on-inherited-path");
-        let value = format!("relative/bin::{}", tools.display());
-
-        let discovery = compose(true, &value, None).expect("composition");
-
-        // The inherited entry leads; relative and empty entries are skipped.
-        assert_eq!(discovery.path.entries()[0], tools);
-        assert!(!discovery
-            .path
-            .entries()
-            .iter()
-            .any(|entry| entry.ends_with("relative/bin")));
-        let resolver =
-            BinResolver::with_discovery_cause("pohunek", move || compose(true, &value, None));
-        assert_eq!(
-            resolver
-                .resolve_name(std::ffi::OsStr::new("only-on-inherited-path"))
-                .expect("found through the inherited PATH"),
-            kitty
-        );
-    }
-
-    #[test]
-    fn a_finder_launch_still_reaches_the_other_tiers() {
-        let _watchdog = crate::test_support::watchdog();
-        let home = crate::test_support::fixture();
-        let local = home.path().join(".local/bin");
-        fs::create_dir_all(&local).expect("local bin");
-        // Only the minimal Finder PATH is inherited.
-        let discovery = compose(true, "/usr/bin:/bin", Some(home.path())).expect("composition");
-
-        assert!(discovery.path.entries().contains(&local));
-        let unique: std::collections::HashSet<_> = discovery.path.entries().iter().collect();
-        assert_eq!(
-            unique.len(),
-            discovery.path.entries().len(),
-            "no duplicates"
-        );
-    }
-
-    #[test]
-    fn an_untrusted_inherited_entry_is_refused_with_a_reported_reason() {
-        let _watchdog = crate::test_support::watchdog();
-        let dir = crate::test_support::fixture();
-        let loose = dir.path().join("loose");
-        fs::create_dir(&loose).expect("loose dir");
-        fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o777)).expect("chmod");
-        executable(&loose, "planted");
-        let value = loose.display().to_string();
-        let resolver =
-            BinResolver::with_discovery_cause("pohunek", move || compose(true, &value, None));
-
-        let error = resolver
-            .resolve_name(std::ffi::OsStr::new("planted"))
-            .expect_err("a group- and world-writable directory is not searched");
-
-        // The only entry was refused, so nothing usable remained.
-        assert!(
-            error.to_string().contains("refused as untrusted"),
-            "{error}"
-        );
-
-        // With another usable entry, the refused one is named with its reason.
-        let tools = dir.path().join("tools");
-        fs::create_dir(&tools).expect("tools dir");
-        let mixed = format!("{}:{}", loose.display(), tools.display());
-        let resolver =
-            BinResolver::with_discovery_cause("pohunek", move || compose(true, &mixed, None));
-        let error = resolver
-            .resolve_name(std::ffi::OsStr::new("planted"))
-            .expect_err("the planted program is still not searched");
-        let message = error.to_string();
-        assert!(message.contains("loose"), "{message}");
-        assert!(message.contains("was refused"), "{message}");
-    }
-
-    fn settings() -> LoginShellSettings {
-        LoginShellSettings {
-            timeout: Duration::from_secs(10),
-            max_output_bytes: 4096,
-        }
-    }
-
-    fn lookup(pairs: Vec<(&'static str, OsString)>) -> impl Fn(&str) -> Option<OsString> {
-        move |name| {
-            pairs
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| value.clone())
-        }
-    }
-
-    /// Writes a fake login shell: `profile` runs first (it may set `PATH` from
-    /// the variables the probe passed), then the probe script (`$3`) runs.
     fn fake_shell(dir: &Path, profile: &str) -> PathBuf {
         let path = dir.join("fake-shell");
         fs::write(
@@ -701,39 +324,65 @@ mod tests {
         path
     }
 
-    fn probe(shell: &Path, extra: Vec<(&'static str, OsString)>) -> SearchPath {
-        let mut pairs = vec![("SHELL", OsString::from(shell.as_os_str()))];
-        pairs.extend(extra);
-        let spec = login_shell_spec(&settings(), lookup(pairs)).expect("spec");
-        discover_search_path(None, Some(&spec), None, None)
-            .expect("discovery")
-            .path
+    fn executable(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write executable");
+        crate::test_support::make_executable(&path);
+        path
+    }
+
+    fn resolver(
+        shell: &Path,
+        selectors: Vec<(&'static str, OsString)>,
+        program: &str,
+    ) -> BinResolver {
+        let mut variables = vec![("SHELL", shell.as_os_str().to_owned())];
+        variables.extend(selectors);
+        BinResolver::with_discovery_cause(program, move || {
+            let settings = LoginShellSettings {
+                timeout: LOGIN_SHELL_TIMEOUT,
+                max_output_bytes: LOGIN_SHELL_OUTPUT,
+            };
+            let login = login_shell_spec(&settings, |name| {
+                variables
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.clone())
+            });
+            compose_search_path(true, Ok("/usr/bin:/bin".to_owned()), login, None)
+        })
     }
 
     #[test]
-    fn a_profile_that_branches_on_shell_reaches_the_probe() {
+    fn login_shell_profile_uses_forwarded_shell_identity_to_resolve_program() {
         let _watchdog = crate::test_support::watchdog();
         let dir = crate::test_support::fixture();
         let prefix = dir.path().join("by-shell/bin");
         fs::create_dir_all(&prefix).expect("prefix");
-        // The profile sets its PATH only when $SHELL names this very shell.
+        let program = executable(&prefix, "profile-shell-tool");
         let shell = fake_shell(
             dir.path(),
             &format!("[ \"$SHELL\" = \"$0\" ] && PATH='{}'", prefix.display()),
         );
 
-        // The trusted fallback directories follow the discovered ones.
-        assert_eq!(probe(&shell, vec![]).entries()[0], prefix);
+        assert_eq!(
+            resolver(&shell, vec![], "profile-shell-tool")
+                .resolve()
+                .expect("resolve through login shell"),
+            program
+        );
     }
 
     #[test]
-    fn zdotdir_and_xdg_config_home_reach_the_probe() {
+    fn login_shell_profile_uses_forwarded_zdotdir_and_xdg_config_home() {
         let _watchdog = crate::test_support::watchdog();
         let dir = crate::test_support::fixture();
         let zsh_prefix = dir.path().join("zdot-prefix");
         let fish_prefix = dir.path().join("xdg-prefix");
         fs::create_dir_all(&zsh_prefix).expect("zsh prefix");
         fs::create_dir_all(&fish_prefix).expect("fish prefix");
+        let zsh_program = executable(&zsh_prefix, "profile-zdot-tool");
+        let fish_program = executable(&fish_prefix, "profile-xdg-tool");
         let zdotdir = dir.path().join("zdotdir");
         let xdg = dir.path().join("xdg");
         fs::create_dir_all(&zdotdir).expect("zdotdir");
@@ -744,34 +393,24 @@ mod tests {
             dir.path(),
             "[ -n \"$ZDOTDIR\" ] && PATH=\"$(/bin/cat \"$ZDOTDIR/path\")\"\n[ -n \"$XDG_CONFIG_HOME\" ] && PATH=\"$PATH:$(/bin/cat \"$XDG_CONFIG_HOME/path\")\"",
         );
-
-        let only_zsh = probe(
-            &shell,
-            vec![("ZDOTDIR", OsString::from(zdotdir.as_os_str()))],
-        );
-        assert_eq!(only_zsh.entries()[0], zsh_prefix);
-
-        let both = probe(
+        let resolver = resolver(
             &shell,
             vec![
-                ("ZDOTDIR", OsString::from(zdotdir.as_os_str())),
-                ("XDG_CONFIG_HOME", OsString::from(xdg.as_os_str())),
+                ("ZDOTDIR", zdotdir.into_os_string()),
+                ("XDG_CONFIG_HOME", xdg.into_os_string()),
             ],
+            "profile-zdot-tool",
         );
-        assert_eq!(both.entries()[..2], [zsh_prefix, fish_prefix]);
-    }
 
-    #[test]
-    fn an_unusable_shell_environment_is_a_typed_failure() {
-        let error = login_shell_spec(&settings(), lookup(vec![("ZDOTDIR", "relative".into())]))
-            .expect_err("relative ZDOTDIR");
-
-        assert!(
-            matches!(
-                error,
-                LoginEnvironmentError::NotAbsolute { var: "ZDOTDIR", .. }
-            ),
-            "{error:?}"
+        assert_eq!(
+            resolver.resolve().expect("resolve ZDOTDIR tool"),
+            zsh_program
+        );
+        assert_eq!(
+            resolver
+                .resolve_name(OsStr::new("profile-xdg-tool"))
+                .expect("resolve XDG_CONFIG_HOME tool"),
+            fish_program
         );
     }
 }

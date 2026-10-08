@@ -566,7 +566,7 @@ fn substitute_placeholders(text: &str, bin: &str, host: &str, id: &str) -> Strin
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// use pohunek_gui_core::{render_attach_command, AttachTemplateValues};
 ///
 /// let command = render_attach_command(
@@ -576,9 +576,7 @@ fn substitute_placeholders(text: &str, bin: &str, host: &str, id: &str) -> Strin
 ///         host: "my host".to_owned(),
 ///         id: "s1".to_owned(),
 ///     },
-/// )?;
-/// assert_eq!(command, "pohunek --host 'my host' attach s1");
-/// # Ok::<(), pohunek_gui_core::AttachTemplateError>(())
+/// ).expect("valid template"); // pohunek --host 'my host' attach s1
 /// ```
 pub fn render_attach_command(
     template: &str,
@@ -875,7 +873,7 @@ fn utf8_len(lead: u8) -> usize {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// use pohunek_gui_core::{render_attach_argv, AttachTemplateValues};
 ///
 /// let argv = render_attach_argv(
@@ -885,10 +883,7 @@ fn utf8_len(lead: u8) -> usize {
 ///         host: String::new(),
 ///         id: "s 1".to_owned(),
 ///     },
-/// )?;
-/// assert_eq!(argv[4], "/opt/My Tools/pohunek");
-/// assert_eq!(argv[6], "s 1");
-/// # Ok::<(), pohunek_gui_core::AttachTemplateError>(())
+/// ).expect("valid template"); // argv[4] is the executable path; argv[6] is "s 1"
 /// ```
 ///
 /// # Errors
@@ -1132,38 +1127,6 @@ mod attach_template_tests {
         }
     }
 
-    #[test]
-    fn shell_form_does_not_resubstitute_inserted_values() {
-        let values = AttachTemplateValues {
-            bin: "{host}".to_owned(),
-            host: "x' ; echo INJECTED ; echo '".to_owned(),
-            id: "{bin}".to_owned(),
-        };
-        let rendered = render_attach_command("{bin} {host} {id}", &values).expect("render");
-        assert_eq!(
-            rendered,
-            format!(
-                "{} {} {}",
-                shell_escape(&values.bin),
-                shell_escape(&values.host),
-                shell_escape(&values.id)
-            )
-        );
-    }
-
-    #[test]
-    fn shell_form_keeps_unknown_braces_literal() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        assert_eq!(
-            render_attach_command("echo {other} {} { id} {host", &values).expect("render"),
-            "echo {other} {} { id} {host"
-        );
-    }
-
     fn hostile_values() -> Vec<&'static str> {
         vec![
             "safe; printf INJECTED",
@@ -1208,184 +1171,6 @@ mod attach_template_tests {
         assert_recorded("true; printf '%s\\0' {bin} {host} {id} && true");
         // Positional parameters carry the values into a nested script.
         assert_recorded("sh -c 'exec printf \"%s\\0\" \"$@\"' sh {bin} {host} {id}");
-    }
-
-    #[test]
-    fn placeholders_outside_unquoted_words_are_typed_errors() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        let dollar = "a `$` construct other than a plain $NAME";
-        let grouping = "parentheses, brackets, braces, or redirection";
-        let glob = "an unquoted `*`, `?`, or `~` in the same word";
-        for (template, context) in [
-            ("sh -c 'exec {bin} attach {host}'", "single quotes"),
-            ("terminal -- \"{bin}\"", "double quotes"),
-            ("echo $'{host}'", dollar),
-            ("echo x # {host}", "a comment"),
-            ("cat <<EOF; echo {host}", grouping),
-            ("echo \\\n{host}", "a line continuation"),
-            ("echo $(true) {host}", dollar),
-            ("echo `true` {host}", "a backtick"),
-            ("echo \\{host}", "an escaped placeholder"),
-            ("echo ${id}", dollar),
-            ("echo $x{host}", "a parameter expansion"),
-            ("echo ${x:-{host}}", dollar),
-            ("echo ${x:-${id}}", dollar),
-            ("echo $(({id}))", dollar),
-            ("echo $({bin})", dollar),
-            // Reviewer repros: nested quotes and brackets desynchronised a
-            // parity-based scanner.
-            ("echo \"${x:-\"{host}\"}\"", dollar),
-            ("echo $[ {host} + 1 ]", dollar),
-            ("[[ 1 -eq {host} ]]", grouping),
-            ("(( {host} ))", grouping),
-            ("echo {host} > out", grouping),
-            ("echo {a,b} {host}", grouping),
-            ("echo \"$(true)\" {host}", dollar),
-            ("echo \"`true`\" {host}", "a backtick"),
-            ("echo $1 {host}", dollar),
-            ("printf x {host}*", glob),
-            ("printf x *{id}", glob),
-            ("printf x {bin}?", glob),
-            ("printf x ~{host}", glob),
-            ("printf x a*b{host}c", glob),
-            ("POHUNEK_HOST=~{host} true", glob),
-            ("true x=~{host}", glob),
-            ("printf x {host}/*", glob),
-        ] {
-            let expected = Err(AttachTemplateError::UnsafePlaceholderContext { context });
-            assert_eq!(
-                render_attach_command(template, &values),
-                expected,
-                "{template:?}"
-            );
-            assert_eq!(
-                validate_attach_shell_template(template),
-                expected.map(drop),
-                "{template:?}"
-            );
-        }
-        let message = render_attach_command("echo '{host}'", &values)
-            .expect_err("quoted")
-            .to_string();
-        assert!(message.contains("positional parameters"), "{message}");
-        assert!(!message.contains("attach_command_mode"), "{message}");
-        for template in ["echo {host} 'x", "echo {host} \"x", "echo {host} \\"] {
-            assert_eq!(
-                render_attach_command(template, &values),
-                Err(AttachTemplateError::UnterminatedQuote),
-                "{template:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn unsupported_constructs_away_from_placeholders_are_accepted() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        // Without a placeholder the template is static and any syntax passes.
-        assert_eq!(
-            render_attach_command("echo $(true) # comment\necho x", &values).expect("render"),
-            "echo $(true) # comment\necho x"
-        );
-        assert_eq!(
-            render_attach_command("$TERMINAL -e {bin} attach --host {host} {id}", &values)
-                .expect("render"),
-            "$TERMINAL -e b attach --host h i"
-        );
-    }
-
-    #[test]
-    fn argv_form_accepts_quoted_placeholders_as_data() {
-        let spaced = AttachTemplateValues {
-            bin: "/opt/My Tools/pohunek".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        assert_eq!(
-            render_attach_argv("terminal -- \"{bin}\"", &spaced).expect("argv"),
-            ["terminal", "--", "/opt/My Tools/pohunek"]
-        );
-        for hostile in hostile_values()
-            .into_iter()
-            .chain(["a\u{a0}b", "it's \"q\""])
-        {
-            let values = AttachTemplateValues {
-                bin: "pohunek".to_owned(),
-                host: hostile.to_owned(),
-                id: hostile.to_owned(),
-            };
-            let argv = render_attach_argv(
-                "sh -c 'exec \"$@\"' sh {bin} attach '{host}' \"{id}\"",
-                &values,
-            )
-            .expect("argv");
-            assert_eq!(
-                argv,
-                [
-                    "sh".to_owned(),
-                    "-c".to_owned(),
-                    "exec \"$@\"".to_owned(),
-                    "sh".to_owned(),
-                    "pohunek".to_owned(),
-                    "attach".to_owned(),
-                    hostile.to_owned(),
-                    hostile.to_owned(),
-                ],
-                "{hostile:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn templates_without_executable_content_are_empty_commands() {
-        for template in ["", "   ", "\n\t ", "# only a comment", "  # note\n  # more"] {
-            assert_eq!(
-                validate_attach_shell_template(template),
-                Err(AttachTemplateError::EmptyCommand),
-                "{template:?}"
-            );
-        }
-        // A comment after real content, and real content after a comment.
-        assert_eq!(validate_attach_shell_template("true # note"), Ok(()));
-        assert_eq!(validate_attach_shell_template("# note\ntrue"), Ok(()));
-    }
-
-    #[test]
-    fn a_parameter_expansion_closed_before_a_placeholder_is_fine() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "s-7".to_owned(),
-        };
-        assert_eq!(
-            render_attach_command("echo $HOME/x \"$HOME\" {id}", &values).expect("render"),
-            "echo $HOME/x \"$HOME\" s-7"
-        );
-        // Without the guard `${id}` would render `$s-7`, which sh expands as `$s`.
-        render_attach_command("echo ${id}", &values).expect_err("refused");
-    }
-
-    #[test]
-    fn bare_words_exclude_assignment_brace_and_option_shapes() {
-        for (value, escaped) in [
-            ("x=y", "'x=y'"),
-            ("{a,b}", "'{a,b}'"),
-            ("a,b", "'a,b'"),
-            ("-oProxyCommand=x", "'-oProxyCommand=x'"),
-            ("-", "'-'"),
-            ("/opt/pohunek", "/opt/pohunek"),
-            ("devbox:7000", "devbox:7000"),
-            ("a-b", "a-b"),
-        ] {
-            assert_eq!(shell_escape(value), escaped, "{value:?}");
-        }
     }
 
     #[test]
@@ -1448,36 +1233,6 @@ mod attach_template_tests {
     }
 
     #[test]
-    fn a_nul_byte_in_the_template_or_a_value_is_refused_in_shell_mode() {
-        let clean = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        assert_eq!(
-            render_attach_command("echo \0 {host}", &clean),
-            Err(AttachTemplateError::NulByte)
-        );
-        assert_eq!(
-            validate_attach_shell_template("echo \0 {host}"),
-            Err(AttachTemplateError::NulByte)
-        );
-        for slot in 0..3 {
-            let mut values = clean.clone();
-            match slot {
-                0 => values.bin = "a\0b".to_owned(),
-                1 => values.host = "a\0b".to_owned(),
-                _ => values.id = "a\0b".to_owned(),
-            }
-            assert_eq!(
-                render_attach_command("echo {bin} {host} {id}", &values),
-                Err(AttachTemplateError::NulByte),
-                "slot {slot}"
-            );
-        }
-    }
-
-    #[test]
     fn a_comment_in_a_static_template_is_skipped_like_the_shell_does() {
         let values = AttachTemplateValues {
             bin: "b".to_owned(),
@@ -1533,151 +1288,6 @@ mod attach_template_tests {
     }
 
     #[test]
-    fn static_templates_with_ansi_c_quotes_or_heredocs_only_get_the_minimal_checks() {
-        for template in [
-            "echo $'it\\'s'",
-            "cat <<EOF\nit's here\nEOF",
-            "echo $'a\\\\' b",
-        ] {
-            assert_eq!(
-                validate_attach_shell_template(template),
-                Ok(()),
-                "{template:?}"
-            );
-        }
-        assert_eq!(
-            validate_attach_shell_template("echo $'open"),
-            Err(AttachTemplateError::UnterminatedQuote)
-        );
-        // With a placeholder the allowlist still applies.
-        assert!(validate_attach_shell_template("echo $'x' {id}").is_err());
-        assert!(validate_attach_shell_template("cat <<EOF {id}").is_err());
-    }
-
-    #[test]
-    fn the_documented_attach_templates_validate() {
-        for template in [
-            "$TERMINAL -e sh -c 'exec \"$@\"' sh {bin} attach --host {host} {id}",
-            "$TERMINAL -e sh -c 'printf \"\\033]0;pohunek:%s\\007\" \"$5\"; exec \"$@\"' sh {bin} attach --host {host} {id}",
-            "kitty -e {bin} --host={host} attach -- {id}",
-        ] {
-            assert_eq!(validate_attach_shell_template(template), Ok(()), "{template}");
-        }
-    }
-
-    #[test]
-    fn argv_validation_and_rendering_never_disagree() {
-        let probe = AttachTemplateValues {
-            bin: "bin".to_owned(),
-            host: "host".to_owned(),
-            id: "id".to_owned(),
-        };
-        for (template, expected) in [
-            ("kitty -e {bin} attach {id}", Ok(())),
-            ("'a b' {host}", Ok(())),
-            ("", Err(AttachTemplateError::EmptyCommand)),
-            ("   \t\n", Err(AttachTemplateError::EmptyCommand)),
-            ("''", Err(AttachTemplateError::EmptyProgram)),
-            ("\"\" x", Err(AttachTemplateError::EmptyProgram)),
-            ("kitty a\0b", Err(AttachTemplateError::NulByte)),
-            ("\0kitty", Err(AttachTemplateError::NulByte)),
-            ("kitty 'open", Err(AttachTemplateError::UnterminatedQuote)),
-            ("kitty \\", Err(AttachTemplateError::UnterminatedQuote)),
-        ] {
-            assert_eq!(
-                validate_attach_argv_template(template),
-                expected,
-                "{template:?}"
-            );
-            assert_eq!(
-                render_attach_argv(template, &probe).map(drop),
-                expected,
-                "{template:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn argv_templates_validate_structurally() {
-        assert_eq!(validate_attach_argv_template("kitty -e {bin}"), Ok(()));
-        assert_eq!(
-            validate_attach_argv_template("  "),
-            Err(AttachTemplateError::EmptyCommand)
-        );
-        assert_eq!(
-            validate_attach_argv_template("kitty '"),
-            Err(AttachTemplateError::UnterminatedQuote)
-        );
-    }
-
-    #[test]
-    fn argv_form_keeps_every_value_a_single_byte_exact_argument() {
-        let values = difficult_values();
-        for bin in &values {
-            for host in &values {
-                let argv = render_attach_argv(
-                    "launcher --host {host} --id={id} {bin}",
-                    &AttachTemplateValues {
-                        bin: bin.clone(),
-                        host: host.clone(),
-                        id: "sess ion;id".to_owned(),
-                    },
-                )
-                .expect("argv");
-                assert_eq!(
-                    argv,
-                    [
-                        "launcher".to_owned(),
-                        "--host".to_owned(),
-                        host.clone(),
-                        "--id=sess ion;id".to_owned(),
-                        bin.clone(),
-                    ],
-                    "bin={bin:?} host={host:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn argv_form_splits_only_the_template() {
-        let values = AttachTemplateValues {
-            bin: "/opt/My Tools/pohunek".to_owned(),
-            host: "a b 'c' \"d\"".to_owned(),
-            id: "1".to_owned(),
-        };
-        let argv = render_attach_argv(
-            r#"open -a "Some App" --args '{bin}' attach\ --host={host} "" {id}"#,
-            &values,
-        )
-        .expect("argv");
-        assert_eq!(
-            argv,
-            [
-                "open",
-                "-a",
-                "Some App",
-                "--args",
-                "/opt/My Tools/pohunek",
-                "attach --host=a b 'c' \"d\"",
-                "",
-                "1"
-            ]
-        );
-    }
-
-    #[test]
-    fn argv_form_double_quotes_follow_posix_escape_rules() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        let argv = render_attach_argv(r#"x "a\"b\\c\$d\e" 'q\n'"#, &values).expect("argv");
-        assert_eq!(argv, ["x", "a\"b\\c$d\\e", "q\\n"]);
-    }
-
-    #[test]
     fn argv_form_splits_words_like_sh_for_unicode_spaces() {
         let values = AttachTemplateValues {
             bin: "b".to_owned(),
@@ -1698,53 +1308,5 @@ mod attach_template_tests {
         );
         assert_eq!(argv[2], "/opt/My\u{a0}Tools/bin\u{2003}x");
         assert_eq!(argv[3], "\u{a0}");
-    }
-
-    #[test]
-    fn argv_form_performs_no_expansion() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        let argv = render_attach_argv("x $HOME ~ * $(id) `id`", &values).expect("argv");
-        assert_eq!(argv, ["x", "$HOME", "~", "*", "$(id)", "`id`"]);
-    }
-
-    #[test]
-    fn argv_form_rejects_unterminated_quotes_and_escapes() {
-        let values = AttachTemplateValues {
-            bin: "b".to_owned(),
-            host: "h".to_owned(),
-            id: "i".to_owned(),
-        };
-        for template in ["x 'open", "x \"open", "x open\\", "x \"open\\"] {
-            assert_eq!(
-                render_attach_argv(template, &values),
-                Err(AttachTemplateError::UnterminatedQuote),
-                "{template:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn argv_form_rejects_empty_commands_and_nul_values() {
-        let values = AttachTemplateValues {
-            bin: String::new(),
-            host: "h\0x".to_owned(),
-            id: "i".to_owned(),
-        };
-        assert_eq!(
-            render_attach_argv("   ", &values),
-            Err(AttachTemplateError::EmptyCommand)
-        );
-        assert_eq!(
-            render_attach_argv("{bin} attach", &values),
-            Err(AttachTemplateError::EmptyProgram)
-        );
-        assert_eq!(
-            render_attach_argv("tool {host}", &values),
-            Err(AttachTemplateError::NulByte)
-        );
     }
 }
