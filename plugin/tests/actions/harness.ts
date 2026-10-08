@@ -4,12 +4,13 @@ import { ActionError, type RefusalCode } from "../../src/actions/types.ts";
 import type { DoDeps, DoOptions } from "../../src/commands/do.ts";
 import { loadConfig } from "../../src/config/index.ts";
 import type { Logger } from "../../src/log.ts";
-import type { LaunchRequest, PohunekClient, PohunekWorktree, WaitRequest, WaitedSession } from "../../src/sources/pohunek.ts";
+import type { LaunchRequest, PohunekClient, PohunekWorktree, RemovedSession, SessionDiff, StoppedSession, WaitRequest, WaitedSession } from "../../src/sources/pohunek.ts";
 import type { PluginConfig } from "../../src/types/config.ts";
 import type {
   Issue,
   IssueDetail,
   MergedPullRequest,
+  PohunekNotification,
   PohunekSession,
   PullRequest,
   SourceResult,
@@ -67,6 +68,12 @@ export interface World {
   worktrees?: (project: string) => SourceResult<readonly PohunekWorktree[]>;
   worktreeHead?: string;
   attach?: (sessionId: string) => SourceResult<number | null>;
+  /** Answer of `session list`, read on every call; overrides `sessions`. */
+  listSessions?: () => SourceResult<readonly PohunekSession[]>;
+  notifications?: () => SourceResult<readonly PohunekNotification[]>;
+  stop?: (sessionId: string, timeoutMs: number) => SourceResult<StoppedSession>;
+  remove?: (sessionId: string, timeoutMs: number) => SourceResult<RemovedSession>;
+  diff?: (sessionId: string, timeoutMs: number) => SourceResult<SessionDiff>;
   /** Answers for `gh`; by default every command fails. */
   exec?: (argv: readonly string[], options: ExecOptions) => ExecResult;
   confirm?: DoDeps["confirm"];
@@ -104,6 +111,8 @@ export interface Harness {
   waits: WaitRequest[];
   /** Keys of every ignore-label lookup, one entry per call. */
   lookups: string[][];
+  /** Ordered log of the cleanup calls: `stop:<id>`, `rm:<id>`, `diff:<id>`, `list`. */
+  events: string[];
   /** Calls of any source; zero means nothing was read. */
   sourceCalls: () => number;
 }
@@ -116,6 +125,7 @@ export function setup(world: World): Harness {
   const worktreeReads: string[] = [];
   const waits: WaitRequest[] = [];
   const lookups: string[][] = [];
+  const events: string[] = [];
   let calls = 0;
   const count = <T>(value: T): T => {
     calls += 1;
@@ -123,8 +133,11 @@ export function setup(world: World): Harness {
   };
   const pohunek: PohunekClient = {
     listProjects: () => Promise.resolve(count(ok("pohunek", world.registry ?? REGISTRY))),
-    listSessions: () => Promise.resolve(count(ok("pohunek", world.sessions ?? []))),
-    listNotifications: () => Promise.resolve(count(ok("pohunek", []))),
+    listSessions: () => {
+      events.push("list");
+      return Promise.resolve(count(world.listSessions?.() ?? ok("pohunek", world.sessions ?? [])));
+    },
+    listNotifications: () => Promise.resolve(count(world.notifications?.() ?? ok("pohunek", []))),
     launchSession: (request) => {
       launches.push(request);
       const result = (world.launch ?? echoLaunch)(request);
@@ -146,6 +159,21 @@ export function setup(world: World): Harness {
       attached.push(sessionId);
       return Promise.resolve(world.attach?.(sessionId) ?? ok("pohunek", 0));
     },
+    stopSession: (sessionId, timeoutMs) => {
+      events.push(`stop:${sessionId}`);
+      return Promise.resolve(world.stop?.(sessionId, timeoutMs) ?? ok("pohunek", { stopped: true }));
+    },
+    removeSession: (sessionId, timeoutMs) => {
+      events.push(`rm:${sessionId}`);
+      return Promise.resolve(
+        world.remove?.(sessionId, timeoutMs) ??
+          ok("pohunek", { removed: true, stopped: true, worktreesRemoved: 1, worktreesFailed: 0, acceptedUnconfirmedProcesses: 0 }),
+      );
+    },
+    diffSession: (sessionId, timeoutMs) => {
+      events.push(`diff:${sessionId}`);
+      return Promise.resolve(world.diff?.(sessionId, timeoutMs) ?? ok("pohunek", { base: "main", truncated: false, diffBytes: 120 }));
+    },
   };
   return {
     launches,
@@ -155,6 +183,7 @@ export function setup(world: World): Harness {
     worktreeReads,
     waits,
     lookups,
+    events,
     sourceCalls: () => calls,
     deps: {
       pohunek,

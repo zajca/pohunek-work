@@ -601,6 +601,7 @@ same set.
 | `ready` | mark PR ready for review | rule 6 |
 | `merge` | merge or enqueue | rule 7; never delegable by default |
 | `attach` | attach to the linked session | live linked session |
+| `cleanup` | `session stop` (when running), then `session rm`, of a finished session | every cleanup check holds and `--yes` was given (below); not advertised by `list` |
 
 `implement` on a `github-issue:` row reads the issue once at plan time
 (`repository(owner, name).issue(number)`: title, url, state, body) and refuses a
@@ -616,6 +617,30 @@ carries `work.link.provider = github`, `work.link.kind = issue`,
 `work.link.id = <owner/name>#<n>`, `work.link.url` = the issue URL,
 `work.link.branch` and `work.role = implement`; the Linear prompt is separate and
 unchanged. The body never enters `list`, logs or errors.
+
+`cleanup` is an owner decision, not an on-turn rule action, so `list` never
+advertises it. `do <key> cleanup [--project <label>] [--dry-run] [--yes]
+[--json]` reads the linked session and evaluates seven checks, each failing
+closed on uncertain evidence (source error, timeout, unparsable output, missing
+branch or remote, detached head): `session_finished` (stopped, done, failed, or
+running and idle), `worktree_owned` (`project show` lists the path with the
+session id), `worktree_clean` (only ignored files allowed), `branch_in_sync`
+(after a fetch of `[actions] cleanup_remote`, `0 0`), `worktree_not_shared` (no
+other non-terminal session at or under the path), `not_awaiting_owner` (not
+`blocked`, no `unread` or `read` `agent_blocked` or `approval_required`
+notification naming it or a sharer; a read error fails) and `diff_complete`
+(`session diff` not truncated). `--dry-run` exits 0 whatever the checks say. The
+JSON is `plan.checks[]` (`name`, `ok`, `detail`), `plan.eligible`,
+`plan.inventory` (ignored files, ahead/behind, diff base and size, sharing
+sessions, the stop and rm argv) and, after a real run, `result` (what was
+stopped and removed and the `session list` re-read). A real run without `--yes`
+refuses with `confirmation_required` (no interactive prompt); with a failed
+check it refuses with `precondition_failed` naming every failed check and
+removes nothing. It then stops the session, re-runs every check, runs `session
+rm` (never `--accept-unconfirmed-cleanup`) and re-reads `session list`. Other
+codes it returns: `unknown_item`, `ambiguous_item`, `source_unavailable`,
+`no_session`, `ambiguous_session`, `command_failed`, `command_timed_out`,
+`verification_failed` and `command_unverified`.
 
 Each launch action resolves its agent profile and prompt template through a
 per-project pohunek action with `provider = "none"` (for example

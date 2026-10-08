@@ -60,6 +60,9 @@ function deps(world: World): Parameters<typeof runList>[2] {
     waitSession: () => Promise.reject(new Error("not used")),
     listWorktrees: () => Promise.reject(new Error("not used")),
     attach: () => Promise.reject(new Error("not used")),
+    stopSession: () => Promise.reject(new Error("not used")),
+    removeSession: () => Promise.reject(new Error("not used")),
+    diffSession: () => Promise.reject(new Error("not used")),
   };
   return {
     pohunek,

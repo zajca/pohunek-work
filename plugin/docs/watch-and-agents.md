@@ -127,6 +127,7 @@ names the issue and when to remove or update the rule.
 | `pohunek-work list --json` | every row, also those on another actor's turn, with the same fields |
 | `pohunek-work do <key> <action> --dry-run --json` | the plan of an action; changes nothing |
 | `pohunek-work do <key> <action> --yes --json` | runs the plan after the owner confirmed it |
+| `pohunek-work do <key> cleanup --dry-run --json` | the cleanup inventory and every check of a finished session; changes nothing |
 | `pohunek-work doctor` | setup problems; the exit code names the first failed check |
 | `pohunek session inspect <id> --json` | state, activity, branch, `worktree_path` and `metadata` (`work.role`, `work.rev`, `work.link.*`) of one session |
 | `pohunek session screen <id> --json` | the rendered terminal of one session |
@@ -250,13 +251,15 @@ worktree. Handle both this way:
 
 1. Report the holder: the path from the message, or `worktree_path` and `state`
    from `pohunek session inspect` when a session id is named.
-2. Show whether the holder is clean:
-   `git -C <path> status --short --ignored`. Untracked (`??`) and ignored
-   (`!!`) files are lost when the worktree is removed.
+2. Show whether the holder is clean: `do <key> cleanup --dry-run --json` for
+   the holder's key reports the ignored files that would be lost and every
+   check. Without a key, `git -C <path> status --short --ignored` shows
+   untracked (`??`) and ignored (`!!`) files, which are lost when the
+   worktree is removed.
 3. Offer the options and let the owner choose: **attach** (the owner runs
    `do <key> attach` in a terminal when a live linked session holds the
    branch; without a terminal it refuses with `no_terminal`), **release**
-   (remove that session or worktree, see
+   (remove a finished holder session with `do <key> cleanup`, see
    [Finished sessions](#finished-sessions); a branch held by the project's
    primary checkout cannot be removed with `git worktree remove`, the owner
    switches that checkout to another branch) or **skip** the action.
@@ -264,7 +267,9 @@ worktree. Handle both this way:
    without the owner's explicit confirmation for that path. A worktree with
    untracked files needs that confirmation even more.
 
-**Temporary:** offering attach or a safe release from `do` itself is tracked in
+**Temporary:** `do <key> cleanup` releases a finished holder session, but
+`do` does not yet offer attach or release when a launch hits this branch
+collision; that offer is tracked in
 [#84](https://github.com/zajca/pohunek-work/issues/84). Remove the manual offer
 when `do` provides it.
 
@@ -276,7 +281,9 @@ when `do` provides it.
 - Allowed: `pohunek session inspect` of those sessions, of sessions listed in a
   row's `sessions[]`, `unlinked_sessions` or `orphaned_sessions`, of the session
   matching a `do` plan after `launch_timed_out`, and of sessions named in a `do`
-  refusal or error; `pohunek session diff` of the same sessions during cleanup.
+  refusal or error. The `cleanup` action runs the read-only checks itself
+  (`session diff`, `git status`, `git fetch`, notifications); the manager does
+  not repeat them by hand.
 - Not allowed: session transcripts (`session read`, `session output`), `screen`
   of any session the manager did not launch, and any other session, unless the
   owner names the sessions.
@@ -293,55 +300,55 @@ when `do` provides it.
 ### Finished sessions
 
 A session that finished its task sits idle and keeps its worktree until it is
-removed. Removing it with `pohunek session rm <id>` stops the
-session and removes its worktree with `git worktree remove --force`; the branch
-and the pull request stay.
+removed. `pohunek session rm` stops the session and force-removes its worktree
+(uncommitted, untracked and ignored files are lost); the branch and the pull
+request stay. The manager never runs `session stop` or `session rm` itself: it
+uses `pohunek-work do <key> cleanup`, which runs every check below and refuses
+when one fails.
 
 The manager removes a finished session only after the owner confirmed that
 removal for that session; a general permission to clean up is not that
-confirmation. Stopping a session is an owner decision of its own. The manager
-first runs only checks that change no work, then reports the session and proposes the
-stop and the removal with the results of the checks as evidence. The checks that
-must all hold:
+confirmation. The procedure:
 
-1. The session worktree (`worktree_path` from `session inspect`, or `cwd` when
-   `worktree_path` is null) has no
-   uncommitted or untracked files: `git -C <path> status --short` prints
-   nothing. Ignored files do not fail the check, but `--force` deletes them:
-   the proposal shows the output of `git -C <path> status --short --ignored`
-   as the inventory the owner agrees to lose.
-2. The branch is in sync with its remote: after `git -C <path> fetch origin
-   <branch>` (`<branch>` is `work.link.branch` from the session metadata),
-   `git -C <path> rev-list --left-right --count 'HEAD...origin/<branch>'`
-   prints two zeros (`0`, a tab, `0`). A branch with no remote counterpart
-   fails the check and is reported.
-3. No other session in `sessions[]`, `unlinked_sessions` or `orphaned_sessions`
-   has the same path as its `cwd` or `worktree_path`: removing the session that
-   owns a worktree deletes it under the other session. A session with a null
-   `worktree_path` (started with `--cwd` in another session's worktree) owns no
-   worktree, and `session rm` removes none for it.
-4. No follow-up step of the same task needs the worktree. An end-to-end run on
-   a provisioned stack finishes first: removing the session removes the
-   worktree, and a new session on the same branch would collide (the collision
-   is [#84](https://github.com/zajca/pohunek-work/issues/84)).
-5. The session is not waiting on the owner: its activity is not `blocked`, and
-   `pohunek notifications list --session <id> --json` holds no record of kind
-   `agent_blocked` or `approval_required` with status `unread` or `read` (the
-   statuses the `on_turn` rules count). An `err` answer means the check is
-   unmet.
+1. Run `pohunek-work do <key> cleanup --dry-run --json` (add `--project <label>`
+   when the key is ambiguous). It changes nothing, exits 0 even when a check
+   fails, and reports `eligible`, every check in `plan.checks[]` and the
+   inventory in `plan.inventory`.
+2. Report `eligible`, each failed check and the inventory to the owner:
+   the ignored files that would be lost, ahead/behind, the diff base and size,
+   the sessions sharing the worktree, and the `session stop` and `session rm`
+   argv.
+3. Decide whether a later step of the same task needs the worktree. This stays
+   the manager's judgment, since no tool can know it: an end-to-end run on a
+   provisioned stack finishes first, because removing the session removes the
+   worktree and a new session on the same branch would collide (see
+   [A branch that is already checked out](#a-branch-that-is-already-checked-out)).
+4. Only after the owner confirmed THAT removal, run
+   `pohunek-work do <key> cleanup --yes --json`. There is no interactive
+   prompt: without `--yes` a real run refuses with `confirmation_required`.
 
-After the owner confirmed the stop, the order follows core's rules:
-`pohunek session stop <id>`, confirm the terminal state with `session inspect`,
-`pohunek session diff <id> --json` as the inventory (stop when `ok.truncated` is
-`true`), repeat checks 1 and 2 (the agent could write or commit until it stopped), a separate
-owner confirmation for deleting the worktree, then `pohunek session rm <id>`.
-Report each removal. A session with unpushed, untracked or uncommitted work is
-never removed; it is reported to the owner. Never pass
-`--accept-unconfirmed-cleanup`.
+The checks, all of which must hold:
 
-**Temporary:** these manual checks stand in for the cleanup action tracked in
-[#88](https://github.com/zajca/pohunek-work/issues/88) (`do <key> cleanup`).
-Remove them when it lands and point to that action.
+| Check | Holds when |
+| --- | --- |
+| `session_finished` | the session is `stopped`, `done` or `failed`, or `running` and `idle` |
+| `worktree_owned` | `project show` lists the worktree path with this session id; a session started with `--cwd` in another session's worktree owns none |
+| `worktree_clean` | no uncommitted or untracked file; ignored files are allowed and listed in the inventory |
+| `branch_in_sync` | after a fetch of the configured remote the branch is `0 0` ahead/behind; a branch with no remote counterpart or a detached head fails |
+| `worktree_not_shared` | no other non-terminal session has the path as its `cwd` or `worktree_path`, or a path below it |
+| `not_awaiting_owner` | the session is not `blocked` and no `unread` or `read` `agent_blocked` or `approval_required` notification names it or a session sharing the worktree; an error reading notifications fails the check |
+| `diff_complete` | `session diff` is not truncated |
+
+A real run stops the session when it is running, re-runs every check (the agent
+could write or commit until it stopped), runs `session rm` without
+`--accept-unconfirmed-cleanup` and re-reads `session list`. Report the result
+(`result` in the JSON) to the owner.
+
+When a check fails, report it with its detail and stop. The manager never works
+around a failed check: no `git worktree remove --force`, no direct
+`pohunek session rm`, never `--accept-unconfirmed-cleanup`, and no
+`git add`/`commit`/`push`/`clean` to make the check pass. A session with
+unpushed, untracked or uncommitted work is reported to the owner, who decides.
 
 ### Shell notes
 

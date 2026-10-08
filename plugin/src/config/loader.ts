@@ -228,6 +228,17 @@ function readPromptDeliveryTimeout(table: Table, file: string, path: KeyPath): n
   return value;
 }
 
+/** One remote name: a single ref segment that can never be read as an option or a path. */
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+function readRemoteName(table: Table, key: string, file: string, path: readonly string[]): string {
+  const value = readString(table, key, file, path);
+  if (!REMOTE_NAME.test(value)) {
+    throw fail(file, [...path, key], "must be one remote name of letters, digits, - and _");
+  }
+  return value;
+}
+
 function parseActions(root: Table, file: string): ActionsConfig {
   const table = requireTable(root, "actions", file);
   const path = ["actions"];
@@ -242,6 +253,10 @@ function parseActions(root: Table, file: string): ActionsConfig {
       "launch_timeout_ms",
       "launch_kill_margin_ms",
       "prompt_delivery_timeout_ms",
+      "git_bin",
+      "git_timeout_ms",
+      "cleanup_remote",
+      "cleanup_timeout_ms",
     ],
     file,
     path,
@@ -255,6 +270,10 @@ function parseActions(root: Table, file: string): ActionsConfig {
     launchTimeoutMs: readPositiveInt(table, "launch_timeout_ms", file, path),
     launchKillMarginMs: readPositiveInt(table, "launch_kill_margin_ms", file, path),
     promptDeliveryTimeoutMs: readPromptDeliveryTimeout(table, file, path),
+    gitBin: readAbsolutePath(table, "git_bin", file, path),
+    gitTimeoutMs: readPositiveInt(table, "git_timeout_ms", file, path),
+    cleanupRemote: readRemoteName(table, "cleanup_remote", file, path),
+    cleanupTimeoutMs: readPositiveInt(table, "cleanup_timeout_ms", file, path),
   };
 }
 

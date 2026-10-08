@@ -67,7 +67,7 @@ describe("loadConfig valid", () => {
       pohunek: { bin: "/usr/local/bin/pohunek", timeoutMs: 10000, notificationsPageSize: 25 },
       watch: { pollIntervalSecs: 300 },
       log: { maxStringLength: 2000 },
-      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000, promptDeliveryTimeoutMs: 4000 },
+      actions: { branchPrefix: "alice", reviewBranchSegment: "review", slugMaxLength: 40, issueNumberPrefix: "issue-", issueBodyMaxLength: 2000, launchTimeoutMs: 120000, launchKillMarginMs: 10000, promptDeliveryTimeoutMs: 4000, gitBin: "/usr/bin/git", gitTimeoutMs: 15000, cleanupRemote: "origin", cleanupTimeoutMs: 60000 },
       notify: { command: "/usr/bin/notify-send", timeoutMs: 5000 },
       policy: { delegable: ["review"], maxActiveTasks: 2, dailyCostCeilingUsd: 12.5 },
       profiles: { implement: "profile-a", review: "profile-b" },
@@ -159,6 +159,10 @@ describe("loadConfig missing keys", () => {
     ["config.toml", "launch_timeout_ms = 120000\n", "actions.launch_timeout_ms", "[actions] launch_timeout_ms is required"],
     ["config.toml", "launch_kill_margin_ms = 10000\n", "actions.launch_kill_margin_ms", "[actions] launch_kill_margin_ms is required"],
     ["config.toml", "prompt_delivery_timeout_ms = 4000\n", "actions.prompt_delivery_timeout_ms", "[actions] prompt_delivery_timeout_ms is required"],
+    ["config.toml", 'git_bin = "/usr/bin/git"\n', "actions.git_bin", "[actions] git_bin is required"],
+    ["config.toml", "git_timeout_ms = 15000\n", "actions.git_timeout_ms", "[actions] git_timeout_ms is required"],
+    ["config.toml", 'cleanup_remote = "origin"\n', "actions.cleanup_remote", "[actions] cleanup_remote is required"],
+    ["config.toml", "cleanup_timeout_ms = 60000\n", "actions.cleanup_timeout_ms", "[actions] cleanup_timeout_ms is required"],
     ["config.toml", 'review_teams = ["acme/reviewers"]\n', "identity.review_teams", "[identity] review_teams is required"],
     ["projects/widgets.toml", 'ignored_checks = ["CI / Flaky"]\n', "project.ignored_checks", "[project] ignored_checks is required"],
     ["projects/widgets.toml", 'policy_checks = ["Policy / Label"]\n', "project.policy_checks", "[project] policy_checks is required"],
@@ -207,6 +211,38 @@ describe("loadConfig missing keys", () => {
       const dir = await copyFixture();
       await editFile(dir, "config.toml", (t) => t.replace("issue_body_max_length = 2000", `issue_body_max_length = ${bad}`));
       expect((await loadError(dir)).key).toBe("actions.issue_body_max_length");
+    });
+  }
+
+  test("an unknown key in [actions] is rejected", async () => {
+    const dir = await copyFixture();
+    await editFile(dir, "config.toml", (t) => t.replace("[actions]\n", "[actions]\ncleanup_extra = 1\n"));
+    expect((await loadError(dir)).key).toBe("actions.cleanup_extra");
+  });
+
+  for (const bad of ['"git"', '"./git"', '""', "5"]) {
+    test(`actions.git_bin ${bad} fails naming the key`, async () => {
+      const dir = await copyFixture();
+      await editFile(dir, "config.toml", (t) => t.replace('git_bin = "/usr/bin/git"', `git_bin = ${bad}`));
+      expect((await loadError(dir)).key).toBe("actions.git_bin");
+    });
+  }
+
+  for (const bad of ["0", "-5", '"x"', "1.5"]) {
+    for (const key of ["git_timeout_ms", "cleanup_timeout_ms"]) {
+      test(`actions.${key} ${bad} fails naming the key`, async () => {
+        const dir = await copyFixture();
+        await editFile(dir, "config.toml", (t) => t.replace(new RegExp(`^${key} = \\d+$`, "m"), `${key} = ${bad}`));
+        expect((await loadError(dir)).key).toBe(`actions.${key}`);
+      });
+    }
+  }
+
+  for (const bad of ['"-o"', '"a/b"', '"../x"', '"a b"', '""', '"origin;rm"', '"--upload-pack=x"', "3"]) {
+    test(`actions.cleanup_remote ${bad} fails naming the key`, async () => {
+      const dir = await copyFixture();
+      await editFile(dir, "config.toml", (t) => t.replace('cleanup_remote = "origin"', `cleanup_remote = ${bad}`));
+      expect((await loadError(dir)).key).toBe("actions.cleanup_remote");
     });
   }
 

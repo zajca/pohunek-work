@@ -72,6 +72,14 @@ export interface ActionsConfig {
   readonly launchKillMarginMs: number;
   /** Time `do` waits for a new session to start working on its prompt before it reports the launch as unverified; 1 to 8000 (the bound of `pohunek session wait --timeout-ms`). */
   readonly promptDeliveryTimeoutMs: number;
+  /** Absolute path of the git binary `cleanup` reads worktrees with. */
+  readonly gitBin: string;
+  /** Time one git command of `cleanup` may take (status, rev-list, symbolic-ref). */
+  readonly gitTimeoutMs: number;
+  /** Remote whose branch a cleaned-up worktree branch must match (one remote name). */
+  readonly cleanupRemote: string;
+  /** Time `cleanup` allows one pohunek call (stop, rm, diff) and the git fetch. */
+  readonly cleanupTimeoutMs: number;
 }
 
 export interface PolicyConfig {

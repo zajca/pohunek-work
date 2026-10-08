@@ -45,6 +45,10 @@ issue_body_max_length = 2000
 launch_timeout_ms = 120000
 launch_kill_margin_ms = 10000
 prompt_delivery_timeout_ms = 4000
+git_bin = "/usr/bin/git"
+git_timeout_ms = 15000
+cleanup_remote = "origin"
+cleanup_timeout_ms = 60000
 
 [policy]
 delegable = ["review"]

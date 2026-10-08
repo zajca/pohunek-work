@@ -50,6 +50,33 @@ export interface PohunekClient {
   listWorktrees(project: string): Promise<SourceResult<readonly PohunekWorktree[]>>;
   /** Runs `pohunek attach <id>` on the caller's terminal; resolves with its exit code when the owner detaches. */
   attach(sessionId: string): Promise<SourceResult<number | null>>;
+  /** Runs `pohunek session stop <id>`. */
+  stopSession(sessionId: string, timeoutMs: number): Promise<SourceResult<StoppedSession>>;
+  /** Runs `pohunek session rm <id>`; never passes `--accept-unconfirmed-cleanup`. */
+  removeSession(sessionId: string, timeoutMs: number): Promise<SourceResult<RemovedSession>>;
+  /** Runs `pohunek session diff <id>`; only the size of the diff is kept. */
+  diffSession(sessionId: string, timeoutMs: number): Promise<SourceResult<SessionDiff>>;
+}
+
+export interface StoppedSession {
+  readonly stopped: boolean;
+}
+
+export interface RemovedSession {
+  readonly removed: boolean;
+  readonly stopped: boolean;
+  readonly worktreesRemoved: number;
+  readonly worktreesFailed: number;
+  /** Processes pohunek could not confirm as ended; the plugin never accepts them. */
+  readonly acceptedUnconfirmedProcesses: number;
+}
+
+export interface SessionDiff {
+  readonly base: string;
+  /** The daemon cut the diff, so it does not show every change. */
+  readonly truncated: boolean;
+  /** UTF-8 byte length of the diff text; the text itself is not kept. */
+  readonly diffBytes: number;
 }
 
 export interface LaunchedSession {
@@ -170,6 +197,16 @@ function optString(obj: Json, key: string, path: string): string | null {
 function reqNumber(obj: Json, key: string, path: string): number {
   const value = obj[key];
   return typeof value === "number" && Number.isFinite(value) ? value : invalid(`${path}.${key}`, "a number");
+}
+
+function reqBoolean(obj: Json, key: string, path: string): boolean {
+  const value = obj[key];
+  return typeof value === "boolean" ? value : invalid(`${path}.${key}`, "a boolean");
+}
+
+function reqCount(obj: Json, key: string, path: string): number {
+  const value = obj[key];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : invalid(`${path}.${key}`, "a non-negative integer");
 }
 
 function parseSession(raw: unknown, path: string): PohunekSession {
@@ -457,6 +494,48 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
           }
           throw error;
         }
+      }),
+    stopSession: (sessionId, timeoutMs) =>
+      wrap(async () => {
+        const outcome = await call(["session", "stop", sessionId, "--json"], { timeoutMs });
+        if (!outcome.ok) {
+          return outcome;
+        }
+        return { ok: true, data: { stopped: reqBoolean(asObject(outcome.payload, "$.ok"), "stopped", "$.ok") } };
+      }),
+    removeSession: (sessionId, timeoutMs) =>
+      wrap(async () => {
+        const outcome = await call(["session", "rm", sessionId, "--json"], { timeoutMs });
+        if (!outcome.ok) {
+          return outcome;
+        }
+        const payload = asObject(outcome.payload, "$.ok");
+        return {
+          ok: true,
+          data: {
+            removed: reqBoolean(payload, "removed", "$.ok"),
+            stopped: reqBoolean(payload, "stopped", "$.ok"),
+            worktreesRemoved: reqCount(payload, "worktrees_removed", "$.ok"),
+            worktreesFailed: reqCount(payload, "worktrees_failed", "$.ok"),
+            acceptedUnconfirmedProcesses: asArray(payload["accepted_unconfirmed_processes"], "$.ok.accepted_unconfirmed_processes").length,
+          },
+        };
+      }),
+    diffSession: (sessionId, timeoutMs) =>
+      wrap(async () => {
+        const outcome = await call(["session", "diff", sessionId, "--json"], { timeoutMs });
+        if (!outcome.ok) {
+          return outcome;
+        }
+        const payload = asObject(outcome.payload, "$.ok");
+        return {
+          ok: true,
+          data: {
+            base: reqString(payload, "base", "$.ok"),
+            truncated: reqBoolean(payload, "truncated", "$.ok"),
+            diffBytes: new TextEncoder().encode(reqString(payload, "diff", "$.ok")).length,
+          },
+        };
       }),
     listNotifications: () =>
       wrap(async () => {

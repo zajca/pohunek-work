@@ -17,6 +17,7 @@ import {
 import type { Logger } from "../log.ts";
 import { toAsciiLines } from "../output/sanitize.ts";
 import type { Exec } from "../util/exec.ts";
+import { runCleanup } from "./do-cleanup.ts";
 import type { ListDeps } from "./list.ts";
 import type { PluginConfig } from "../types/config.ts";
 
@@ -265,6 +266,7 @@ export async function runDo(config: PluginConfig, options: DoOptions, deps: DoDe
     }
     if (action === "ready") return runReady(config, options, deps);
     if (action === "attach") return runAttach(config, options, deps);
+    if (action === "cleanup") return runCleanup(config, options, deps);
     if (isLaunchAction(action)) return runLaunch(config, options, deps, action);
     throw new ActionError("not_supported", `unknown action ${String(action)}`);
   });

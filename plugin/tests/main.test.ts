@@ -73,6 +73,8 @@ test("do rejects unknown actions and options that do not apply, before reading t
     ["do", "ABC-1", "deploy"],
     ["do", "ABC-1", "ready", "--profile", "x"],
     ["do", "ABC-1", "attach", "--profile", "x"],
+    ["do", "ABC-1", "cleanup", "--profile", "x"],
+    ["do", "ABC-1", "cleanup", "--dry-run", "--yes"],
   ];
   for (const args of cases) {
     const result = await run(args, dir);
@@ -89,7 +91,7 @@ test("do rejects unknown actions and options that do not apply, before reading t
 
 test("do accepts every action name and reaches the config", async () => {
   const dir = await tempDir();
-  for (const action of ["fix-ci", "rebase", "review", "ready", "merge"]) {
+  for (const action of ["fix-ci", "rebase", "review", "ready", "cleanup", "merge"]) {
     const result = await run(["do", "ABC-1", action, "--json"], dir);
     const envelope = JSON.parse(result.out) as { err: { code: string } };
     expect(envelope.err.code).toBe("config_invalid");
