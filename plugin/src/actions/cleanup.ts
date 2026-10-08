@@ -457,8 +457,8 @@ async function rereadSessions(pohunek: PohunekClient, stoppedAlready: boolean): 
 
 /**
  * Reads the session list once more right before `session rm`: the target must still be
- * finished in the same worktree, and no unfinished session may have started sharing it.
- * Notifications are read again when the set of sharers changed.
+ * finished in the same worktree, and the sessions sharing it must be exactly those the
+ * evidence was read for, in the same states.
  */
 async function recheckBeforeRemoval(plan: CleanupPlan, evidence: Evidence, stopped: boolean, deps: CleanupDeps): Promise<void> {
   const kept = stopped ? "the session stays stopped" : "the session was not touched";

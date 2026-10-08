@@ -730,7 +730,7 @@ describe("cleanup real run", () => {
     expect(mutations(built)).toEqual(["stop:s-done"]);
   });
 
-  test("rm results that are not a clean removal are command_failed", async () => {
+  test("rm results that are not a clean removal are reported with their own code", async () => {
     const notRemoved = build({ world: { remove: () => ok("pohunek", { removed: false, stopped: true, worktreesRemoved: 0, worktreesFailed: 0, acceptedUnconfirmedProcesses: 0 }) } });
     await expectRefusal(runDo(baseConfig, cleanup(), notRemoved.h.deps), "command_unverified", "removed=false");
     const worktreeFailed = build({ world: { remove: () => ok("pohunek", { removed: true, stopped: true, worktreesRemoved: 0, worktreesFailed: 1, acceptedUnconfirmedProcesses: 0 }) } });
