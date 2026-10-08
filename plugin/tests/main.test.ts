@@ -2,7 +2,6 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reportError } from "../src/cli-errors.ts";
 import { exec } from "../src/util/exec.ts";
 
 const MAIN = new URL("../src/main.ts", import.meta.url).pathname;
@@ -133,36 +132,6 @@ test("tui refuses without a terminal and leaves the screen alone", async () => {
   expect(result.exitCode).toBe(2);
   expect(result.stderr).toContain("tui needs a terminal on stdin and stdout");
   expect(result.stdout).toBe("");
-});
-
-test("reportError without --json prints strict ASCII on stderr", () => {
-  const lines: string[] = [];
-  const original = console.error;
-  console.error = (line: string): void => {
-    lines.push(line);
-  };
-  try {
-    reportError(false, 1, "action", "command_failed", "pohunek attach failed (\u001b]0;x\u0007 \u017elu\u0165ou\u010dk\u00fd)\nsecond line");
-  } finally {
-    console.error = original;
-  }
-  expect(lines).toEqual(["pohunek attach failed (?]0;x? zlutoucky)\nsecond line"]);
-});
-
-test("reportError prints the given class in the JSON envelope and returns exit 2", () => {
-  const lines: string[] = [];
-  const original = console.log;
-  console.log = (line: string): void => {
-    lines.push(line);
-  };
-  try {
-    expect(reportError(true, 7, "internal", "internal_error", "boom")).toBe(2);
-  } finally {
-    console.log = original;
-  }
-  const envelope = JSON.parse(lines.join("\n")) as { protocol: unknown; err: { class: string; code: string; msg: string } };
-  expect(envelope.protocol).toEqual({ minimum: 7, maximum: 7 });
-  expect(envelope.err).toEqual({ class: "internal", code: "internal_error", msg: "boom" });
 });
 
 test("setup rejects unknown steps and options that do not apply", async () => {

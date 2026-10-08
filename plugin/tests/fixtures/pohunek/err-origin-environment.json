@@ -1,5 +1,0 @@
-{
-  "cli_version": "0.31.6",
-  "protocol": { "minimum": 4, "maximum": 4 },
-  "err": { "class": "configuration", "code": "incomplete_origin_environment", "msg": "incomplete origin environment", "recover": "set both POHUNEK_SESSION_ID and POHUNEK_DAEMON_ID, or unset both" }
-}

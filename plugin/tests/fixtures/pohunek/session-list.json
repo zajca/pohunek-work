@@ -1,9 +1,0 @@
-{
-  "cli_version": "0.31.6",
-  "protocol": { "minimum": 4, "maximum": 4 },
-  "ok": [
-    { "id": "ses_1", "agent": "claude", "cwd": "/work/widgets", "state": "running", "activity": "working", "runtime": { "state": "connected", "runtime_generation": 1 }, "project_id": "prj_1", "project_label": "widgets", "repo": "acme/widgets", "branch": "abc-1-add-widget-cache", "worktree_path": "/work/widgets-wt/abc-1", "name": "ABC-1", "metadata": { "pohunek_work.item": "acme/widgets#12" }, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z", "exit_code": null, "warnings": [] },
-    { "id": "ses_2", "agent": "claude", "cwd": "/work/widgets", "state": "running", "activity": "idle", "runtime": { "state": "lost", "loss_reason": "worker_gone" }, "project_id": "prj_1", "project_label": "widgets", "repo": "acme/widgets", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z", "exit_code": null, "warnings": [] },
-    { "id": "ses_3", "agent": "claude", "cwd": "/work/gadgets", "state": "stopped", "project_label": "gadgets", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z", "exit_code": 0, "warnings": [] }
-  ]
-}

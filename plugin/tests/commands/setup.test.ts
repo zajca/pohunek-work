@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { absent, failure } from "../helpers/failure.ts";
@@ -53,6 +53,22 @@ test("setup scripts --json carries the envelope, the directory and per-file outc
   expect(envelope.ok["step"]).toBe("scripts");
   expect(envelope.ok["dir"]).toBe(join(root, "data", "pohunek", "bin"));
   expect((envelope.ok["files"] as { outcome: string }[]).map((file) => file.outcome)).toEqual(["created", "created", "created", "created", "created"]);
+});
+
+test("setup scripts --force replaces a symlink without changing its target", async () => {
+  const victim = join(root, "victim");
+  await writeFile(victim, "precious");
+  const binDir = join(root, "data", "pohunek", "bin");
+  await mkdir(binDir, { recursive: true });
+  const link = join(binDir, "lib.sh");
+  await symlink(victim, link);
+
+  await runSetup(options("scripts"), { env, ...LINUX });
+  expect((await lstat(link)).isSymbolicLink()).toBe(true);
+  await runSetup(options("scripts", { force: true }), { env, ...LINUX });
+
+  expect(await readFile(victim, "utf8")).toBe("precious");
+  expect((await lstat(link)).isSymbolicLink()).toBe(false);
 });
 
 test("setup config skips a differing file and says how to replace it", async () => {

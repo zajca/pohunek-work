@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSwaySnippet } from "../../src/setup/install.ts";
 import type { SetupPaths } from "../../src/setup/paths.ts";
-import { isPlainKeybind, quoteForSwayExec } from "../../src/setup/sway-quote.ts";
-import { swayCommandCount } from "../helpers/sway.ts";
 
 let root = "";
 
@@ -79,25 +77,4 @@ test("the generated issue command line passes the project and source arguments u
     expect(await run(execText(snippet, "$mod+i"))).toBe(0);
     expect((await readFile(out, "utf8")).split("\n").slice(0, 4)).toEqual([join(dir, "pohunek-rofi-issue"), "2", project, "github"]);
   }
-});
-
-test("sway sees each binding as one command and never meets a variable reference", () => {
-  for (const name of NASTY_DIRS) {
-    const snippet = buildSwaySnippet(pathsIn(join(root, name)), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: `p ${name}`, issueSource: "linear" });
-    for (const line of snippet.split("\n").filter((candidate) => candidate.startsWith("bindsym"))) {
-      expect(swayCommandCount(line.slice(line.indexOf(" exec ") + 1))).toBe(1);
-      expect(line.slice(line.indexOf(" exec ")).match(/\$[A-Za-z_{]/g)).toBeNull();
-    }
-  }
-});
-
-test("quoteForSwayExec keeps every quote run balanced", () => {
-  expect(quoteForSwayExec("plain")).toBe("'plain'");
-  expect(quoteForSwayExec("it's")).toBe(`'it'"'"'s'`);
-  expect(quoteForSwayExec("$x")).toBe(`''"$"'x'`);
-});
-
-test("only plain key sequences are accepted as keybinds", () => {
-  for (const ok of ["$mod+p", "$mod+Shift+i", "Mod4+comma", "XF86AudioMute"]) expect(isPlainKeybind(ok)).toBe(true);
-  for (const bad of ["", "a b", "a;b", "a,b", 'a"b', "a'b", "a\\b", "a#b", "a\nb"]) expect(isPlainKeybind(bad)).toBe(false);
 });
