@@ -236,8 +236,8 @@ describe("an issue the issue source did not list", () => {
     ],
   };
   const variants = [
-    { name: "Linear", config: unreadableConfig(), spike: linearSpike, key: "ABC-1", rowKey: "linear:ABC-1", source: "linear" as const, list: { issues: ok("linear", []) } },
-    { name: "GitHub", config: githubParked, spike: githubSpike, key: "acme/widgets#5", rowKey: "github-issue:acme/widgets#5", source: "github_issues" as const, list: { githubIssues: ok("github_issues", []) } },
+    { name: "Linear", config: unreadableConfig(), spike: linearSpike, key: "ABC-1", rowKey: "linear:ABC-1", asked: ["ABC-1", `url:${linearSpike.url}`], source: "linear" as const, list: { issues: ok("linear", []) } },
+    { name: "GitHub", config: githubParked, spike: githubSpike, key: "acme/widgets#5", rowKey: "github-issue:acme/widgets#5", asked: ["acme/widgets#5"], source: "github_issues" as const, list: { githubIssues: ok("github_issues", []) } },
   ];
 
   for (const variant of variants) {
@@ -252,7 +252,7 @@ describe("an issue the issue source did not list", () => {
       expect(payload(hidden.stdout).omitted_ignored).toBe(1);
       const shown = await run(world, { ...baseOptions, includeIgnored: true });
       expect(shown.items.map((i) => [i.key, i.ignored, i.actions, i.on_turn.rule])).toEqual([[variant.rowKey, true, [], 5]]);
-      expect(lookups).toEqual([[variant.key], [variant.key]]);
+      expect(lookups).toEqual([variant.asked, variant.asked]);
     });
 
     test(`${variant.name}: an issue without the label leaves a normal row`, async () => {

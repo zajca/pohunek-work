@@ -42,8 +42,11 @@ The issue source lists only started issues assigned to the owner (Linear) or
 open issues with a started or paused label (GitHub), so a pull request can join
 an issue it does not return, for example one parked with the label and moved to
 Backlog. For a project with `ignore_label` the plugin then asks the issue source
-for the labels of exactly those issues (batched by `[linear] page_size` or
-`[github] issue_page_size`; nothing is asked otherwise). When that lookup, the
+whether any candidate issue of the pull request carries the label: the issue it
+joined to, the issue its branch names, every closing reference (GitHub) and every
+issue it is attached to (Linear), archived issues and issues of other teams
+included (batched by `[linear] page_size` or `[github] issue_page_size`; nothing
+is asked otherwise). When that lookup, the
 issue source or `github` fails, a row that may be parked is `unknown`, offers no
 action (`attach` included), is refused by `do` and is not notified by `watch`.
 
