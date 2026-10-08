@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LOG_FILE_NAME, LOG_LOCK_FILE_NAME, LogFileError, rotatingFileLogger, startBackendFromEnv } from "@pohunek/backend";
@@ -121,6 +121,32 @@ describe("backend log destination", () => {
       rotatingFileLogger({ dir: logDir, maxFileBytes: 4096, maxFiles: 2 }).close();
     } finally {
       await stopHolder(holder.child);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rotation bounds every file and retains the newest events", async () => {
+    const root = await createFixtureRoot("pk-log-");
+    try {
+      const logDir = join(root, "logs");
+      const maxFileBytes = 400;
+      const logger = rotatingFileLogger({ dir: logDir, maxFileBytes, maxFiles: 3 });
+      try {
+        for (let index = 0; index < 40; index += 1) {
+          logger.log({ level: "info", event: `event_${String(index).padStart(2, "0")}` });
+        }
+      } finally {
+        logger.close();
+      }
+      const names = (await readdir(logDir)).sort();
+      expect(names).toEqual([LOG_FILE_NAME, `${LOG_FILE_NAME}.1`, `${LOG_FILE_NAME}.2`, LOG_LOCK_FILE_NAME]);
+      for (const name of names.filter((entry) => entry !== LOG_LOCK_FILE_NAME)) {
+        expect((await stat(join(logDir, name))).size <= maxFileBytes).toBe(true);
+        expect((await stat(join(logDir, name))).mode & 0o777).toBe(0o600);
+      }
+      expect((await readFile(join(logDir, LOG_FILE_NAME), "utf8")).includes("event_39")).toBe(true);
+      expect((await readFile(join(logDir, `${LOG_FILE_NAME}.2`), "utf8")).includes("event_00")).toBe(false);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
