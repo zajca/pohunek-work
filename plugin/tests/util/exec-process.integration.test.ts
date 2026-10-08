@@ -15,20 +15,24 @@ test("a timeout ends descendants in the process group", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pw-exec-process-"));
   try {
     const pidFile = join(dir, "pid");
-    const script = `sleep 30 & echo $! > ${pidFile}; wait`;
-    const result = await exec(["/bin/sh", "-c", script], { timeoutMs: 400 });
+    const script = 'sleep 30 & echo $! > "$1"; wait';
+    const result = await exec(["/bin/sh", "-c", script, "_", pidFile], { timeoutMs: 400 });
     expect(result.timedOut).toBe(true);
     const grandchild = Number((await readFile(pidFile, "utf8")).trim());
     expect(Number.isInteger(grandchild) && grandchild > 0).toBe(true);
-    await Bun.sleep(200);
-    let alive = false;
-    try {
-      process.kill(grandchild, 0);
-      alive = true;
-    } catch {
-      alive = false;
-    }
-    expect(alive).toBe(false);
+    const deadline = Date.now() + 2000;
+    let state: string;
+    do {
+      const probe = Bun.spawn(["ps", "-o", "stat=", "-p", String(grandchild)], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      state = (await new Response(probe.stdout).text()).trim();
+      await probe.exited;
+      if (state === "" || state.startsWith("Z")) break;
+      await Bun.sleep(50);
+    } while (Date.now() < deadline);
+    expect(state === "" || state.startsWith("Z")).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
