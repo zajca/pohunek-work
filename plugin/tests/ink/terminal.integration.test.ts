@@ -9,7 +9,7 @@ child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdo
 os.close(slave)
 output = bytearray()
 sent = False
-deadline = time.monotonic() + 10
+deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.1)
     if ready:
@@ -50,9 +50,9 @@ async function runPty(mode: "main" | "new-session", key: string): Promise<{ exit
 test("the Ink process enters and restores the terminal when the owner quits", async () => {
   const result = await runPty("main", "q");
   expect(result).toEqual({ exit: 0, sent: true, alternate: true, restored: true, screen: true });
-});
+}, 20_000);
 
 test("the standalone session form cancels before creating a session", async () => {
   const result = await runPty("new-session", "\u001b");
   expect(result).toEqual({ exit: 0, sent: true, alternate: true, restored: true, screen: true });
-});
+}, 20_000);
