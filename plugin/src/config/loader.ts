@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import type {
   ActionsConfig,
   GlobalConfig,
@@ -17,6 +17,7 @@ import type {
   ProfilesConfig,
   ProjectConfig,
   ReviewsMode,
+  TeardownConfig,
   TuiConfig,
   TuiInitialView,
   WatchConfig,
@@ -296,6 +297,19 @@ function parsePolicy(root: Table, file: string): PolicyConfig {
   };
 }
 
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+
+function parseTeardown(root: Table, file: string): TeardownConfig {
+  const table = requireTable(root, "teardown", file);
+  const path = ["teardown"];
+  rejectUnknownKeys(table, ["argv", "timeout_ms"], file, path);
+  const argv = readNonEmptyStringArray(table, "argv", file, path);
+  if (!isAbsolute(argv[0] ?? "")) throw fail(file, [...path, "argv"], "must start with an absolute program path");
+  if (argv.some((arg) => CONTROL_CHARACTER.test(arg))) throw fail(file, [...path, "argv"], "must not contain control characters");
+  return { argv, timeoutMs: readTimerValue(table, "timeout_ms", 1, file, [...path]) };
+}
+
 function parseProfiles(root: Table, file: string): ProfilesConfig {
   return readStringMapTable(requireTable(root, "profiles", file), file, ["profiles"]);
 }
@@ -491,7 +505,7 @@ function parseIssueSource(table: Table, file: string, path: readonly string[]): 
 
 function parseProject(root: Table, name: string): ProjectConfig {
   const file = `${PROJECTS_DIR}/${name}${TOML_SUFFIX}`;
-  rejectUnknownKeys(root, ["project", "policy", "profiles"], file, []);
+  rejectUnknownKeys(root, ["project", "policy", "profiles", "teardown"], file, []);
   const table = requireTable(root, "project", file);
   const path = ["project"];
   rejectUnknownKeys(
@@ -530,6 +544,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     ignoreLabel: "ignore_label" in table ? readString(table, "ignore_label", file, path) : null,
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,
+    teardown: "teardown" in root ? parseTeardown(root, file) : null,
   };
 }
 

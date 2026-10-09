@@ -7,6 +7,8 @@ export interface ExecOptions {
   readonly stdin?: string;
   /** Overrides the inherited environment when given. Never carries secrets. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Working directory of the child; the current directory when omitted. */
+  readonly cwd?: string;
 }
 
 export interface ExecResult {
@@ -76,6 +78,7 @@ export const exec: Exec = async (argv, options) => {
       // Own process group, so a timeout can end grandchildren as well.
       detached: true,
       ...(options.env === undefined ? {} : { env: { ...options.env } }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     });
   } catch (cause) {
     throw new SpawnError(binary, cause);

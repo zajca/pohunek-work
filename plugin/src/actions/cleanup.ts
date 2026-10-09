@@ -75,6 +75,9 @@ export interface CleanupPlan {
   readonly inventory: CleanupInventory;
   readonly stopArgv: readonly string[];
   readonly removeArgv: readonly string[];
+  /** The project's `[teardown]` command, run in the worktree before the removal; null when the project has none. */
+  readonly teardownArgv: readonly string[] | null;
+  readonly teardownTimeoutMs: number | null;
 }
 
 export interface CleanupResult {
@@ -82,6 +85,8 @@ export interface CleanupResult {
   /** `session stop` ran because the session was still running. */
   readonly stopped: boolean;
   readonly removed: true;
+  /** The project's teardown command ran and exited 0. */
+  readonly teardownRan: boolean;
   readonly worktreesRemoved: number;
   readonly verifiedAbsent: true;
 }
@@ -440,6 +445,8 @@ export async function planCleanup(
     inventory: evidence.inventory,
     stopArgv: [bin, "session", "stop", target.id, "--json"],
     removeArgv: [bin, "session", "rm", target.id, "--json"],
+    teardownArgv: row.project.teardown?.argv ?? null,
+    teardownTimeoutMs: row.project.teardown?.timeoutMs ?? null,
   };
 }
 
@@ -512,6 +519,27 @@ async function recheckBeforeRemoval(plan: CleanupPlan, evidence: Evidence, stopp
 }
 
 /**
+ * Runs the project's teardown command in the worktree. Its output is never put into a message
+ * because it is provider text; a failure leaves the session as it is.
+ */
+async function runTeardown(plan: CleanupPlan, stopped: boolean, deps: CleanupDeps): Promise<boolean> {
+  if (plan.teardownArgv === null || plan.teardownTimeoutMs === null) return false;
+  const kept = stopped ? "the session stays stopped" : "the session was not touched";
+  const refuse = (code: "command_failed" | "command_timed_out", what: string): ActionError =>
+    new ActionError(code, `the teardown command ${what}; ${kept} and nothing was removed`);
+  let result;
+  try {
+    result = await deps.exec(plan.teardownArgv, { timeoutMs: plan.teardownTimeoutMs, cwd: plan.worktreePath });
+  } catch (error) {
+    if (error instanceof SpawnError) throw refuse("command_failed", "could not be started");
+    throw error;
+  }
+  if (result.timedOut) throw refuse("command_timed_out", `did not finish within ${String(plan.teardownTimeoutMs)} ms`);
+  if (result.exitCode !== 0) throw refuse("command_failed", `exited with code ${String(result.exitCode)}`);
+  return true;
+}
+
+/**
  * Stops the session when it still runs, re-reads the evidence, and removes it only
  * when every check still holds. Never passes `--accept-unconfirmed-cleanup`.
  */
@@ -563,6 +591,7 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
     throw new ActionError("precondition_failed", `cleanup refused after the stop: failed checks: ${failedNames(evidence.checks)}; ${kept} and nothing was removed`);
   }
 
+  const teardownRan = await runTeardown(plan, stopped, deps);
   await recheckBeforeRemoval(plan, evidence, stopped, deps);
 
   const removal = await deps.pohunek.removeSession(plan.sessionId, timeoutMs);
@@ -597,5 +626,5 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
   if (after.data.some((s) => s.id === plan.sessionId)) {
     throw new ActionError("command_unverified", `session rm succeeded but ${plan.sessionId} is still listed`);
   }
-  return { sessionId: plan.sessionId, stopped, removed: true, worktreesRemoved: removal.data.worktreesRemoved, verifiedAbsent: true };
+  return { sessionId: plan.sessionId, stopped, removed: true, teardownRan, worktreesRemoved: removal.data.worktreesRemoved, verifiedAbsent: true };
 }
