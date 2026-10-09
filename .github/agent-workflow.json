@@ -42,8 +42,7 @@
   "surfaces": {
     "plugin": { "path": "plugin", "tagPrefix": "plugin-v", "versionSource": "plugin/package.json" },
     "launchers": { "path": "launchers", "tagPrefix": "launchers-v", "versionSource": "launchers/package.json" },
-    "web": { "path": "web", "tagPrefix": "web-v", "versionSource": "web/package.json" },
-    "gui": { "path": "native", "tagPrefix": "gui-v", "versionSource": "native/Cargo.toml" }
+    "web": { "path": "web", "tagPrefix": "web-v", "versionSource": "web/package.json" }
   },
   "statusOptions": ["Todo", "In Progress", "Done"],
   "statusSemantics": {

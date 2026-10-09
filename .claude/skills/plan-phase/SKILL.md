@@ -20,7 +20,7 @@ pass with the user. No local plan file is the authority.
    project. Create it when planning starts so decisions land somewhere live.
 2. **Ground yourself in the current state.** Read `README.md`, `AGENTS.md`, the
    docs of the surface involved (`plugin/docs/rfc.md` and the other
-   `plugin/docs/` plans, `web/docs/`, `native/docs/`), the core pin
+   `plugin/docs/` plans, `web/docs/`, `launchers/docs/`), the core pin
    documentation in the README, and the open issues touching the same
    surfaces. Skim the code the work will touch.
 3. **Frame the work**: purpose, key assumptions, which surface owns it, and the

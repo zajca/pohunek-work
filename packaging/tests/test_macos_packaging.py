@@ -18,26 +18,19 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 MACOS = ROOT / "packaging" / "macos"
-NATIVE = ROOT / "native"
-NATIVE_MACOS = NATIVE / "packaging" / "macos"
-DEPLOYMENT_TARGET = NATIVE_MACOS / "DEPLOYMENT_TARGET"
+DEPLOYMENT_TARGET = MACOS / "DEPLOYMENT_TARGET"
 AUDIT = MACOS / "audit-macho"
 SCRIPTS = [
     MACOS / "audit-macho",
     MACOS / "package",
     MACOS / "sign",
     MACOS / "verify-signed",
-    NATIVE_MACOS / "build-release",
-    NATIVE_MACOS / "build-app-bundle",
     ROOT / "packaging" / "verify-archive",
     ROOT / "packaging" / "archive",
     ROOT / "packaging" / "stage-archive",
     ROOT / "packaging" / "write-manifest",
     ROOT / "packaging" / "make-archive",
     ROOT / "web" / "release" / "install.sh",
-    NATIVE / "scripts" / "acceptance" / "macos-gui-launch",
-    NATIVE / "scripts" / "smoke-gui-release",
-    NATIVE / "scripts" / "smoke-gui-release-macos",
 ]
 
 MACHO_MAGIC = bytes.fromhex("cffaedfe")
@@ -247,64 +240,6 @@ class AuditTest(unittest.TestCase):
             self.assertEqual(self.audit(*args).returncode, 2, args)
 
 
-class BuildReleaseTest(unittest.TestCase):
-    def test_a_relative_target_directory_is_reported_below_the_native_workspace(self):
-        tools = Path(tempfile.mkdtemp(prefix="pohunek-build-"))
-        self.addCleanup(shutil.rmtree, tools, ignore_errors=True)
-        for name, text in (
-            ("uname", '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n'),
-            ("rustc", "#!/bin/sh\necho /fake/sysroot\n"),
-            ("cargo", "#!/bin/sh\nexit 0\n"),
-        ):
-            path = tools / name
-            path.write_text(text)
-            path.chmod(0o755)
-        env = dict(os.environ, PATH="%s:%s" % (tools, os.environ["PATH"]), CARGO_TARGET_DIR="out/target")
-        result = subprocess.run(
-            [str(NATIVE_MACOS / "build-release")],
-            cwd=ROOT / "packaging",
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "%s/out/target/aarch64-apple-darwin/release" % NATIVE)
-
-
-class BuildFlagsTest(unittest.TestCase):
-    def test_remap_flags_survive_spaces_and_keep_the_callers_flags(self):
-        root = Path(tempfile.mkdtemp(prefix="pohunek build "))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        tools = root / "tools"
-        tools.mkdir()
-        record = root / "flags"
-        for name, text in (
-            ("uname", '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n'),
-            ("rustc", "#!/bin/sh\necho '/fake sysroot'\n"),
-            ("cargo", '#!/bin/sh\nprintf "%s" "$CARGO_ENCODED_RUSTFLAGS" > "$RECORD"\n[ -z "${RUSTFLAGS:-}" ]\n'),
-        ):
-            path = tools / name
-            path.write_text(text)
-            path.chmod(0o755)
-        env = dict(
-            os.environ,
-            PATH="%s:%s" % (tools, os.environ["PATH"]),
-            RUSTFLAGS="-D warnings",
-            RECORD=str(record),
-            CARGO_HOME="/cargo home",
-        )
-        result = subprocess.run(
-            [str(NATIVE_MACOS / "build-release")], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        flags = record.read_text().split("\x1f")
-        self.assertEqual(flags[:2], ["-D", "warnings"])
-        self.assertIn("--remap-path-prefix=%s=/build/pohunek-native" % NATIVE, flags)
-        self.assertIn("--remap-path-prefix=/cargo home=/build/cargo", flags)
-        self.assertIn("--remap-path-prefix=/fake sysroot=/build/rust-sysroot", flags)
-
-
 class ToolingTest(unittest.TestCase):
     def test_scripts_parse_as_posix_sh_and_are_executable(self):
         for script in SCRIPTS:
@@ -323,7 +258,7 @@ class ToolingTest(unittest.TestCase):
         text = (MACOS / "audit-macho").read_text()
         self.assertIn("--no-string-scan", text)
         package = (MACOS / "package").read_text()
-        self.assertIn('web) require="--require pohunek-web --no-string-scan"', package)
+        self.assertIn('require="--require pohunek-web --no-string-scan"', package)
 
     def test_the_deployment_target_is_one_value_in_one_file(self):
         target = DEPLOYMENT_TARGET.read_text().strip()
@@ -342,11 +277,8 @@ class ToolingTest(unittest.TestCase):
 
     def test_every_reader_of_the_deployment_target_finds_the_file(self):
         readers = {
-            MACOS / "audit-macho": "native/packaging/macos/DEPLOYMENT_TARGET",
-            MACOS / "package": "native/packaging/macos/DEPLOYMENT_TARGET",
-            NATIVE_MACOS / "build-release": "DEPLOYMENT_TARGET",
-            NATIVE_MACOS / "build-app-bundle": "DEPLOYMENT_TARGET",
-            NATIVE / "scripts" / "smoke-gui-release-macos": "packaging/macos/DEPLOYMENT_TARGET",
+            MACOS / "audit-macho": "DEPLOYMENT_TARGET",
+            MACOS / "package": "DEPLOYMENT_TARGET",
         }
         for script, reference in readers.items():
             self.assertIn(reference, script.read_text(), script)

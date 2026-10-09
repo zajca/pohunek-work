@@ -2,7 +2,7 @@
 name: gates
 description: >-
   Run the pohunek-work CI gate of every surface a branch touches (plugin,
-  launchers, native, web, packaging) and report the results honestly. Use
+  launchers, web, packaging) and report the results honestly. Use
   before declaring any change done, when a branch must be verified, or
   whenever a run of the repository gates is requested. This is the shared
   verification block the milestone, pr-handoff, merge-advance and
@@ -24,15 +24,15 @@ the same way the `changes` job does:
 
 | Changed path | Gates to run |
 | --- | --- |
-| `plugin/**` | plugin, launchers, packaging |
+| `plugin/**` | plugin, packaging |
 | `launchers/**` | launchers, plugin, packaging |
-| `native/**` | native, packaging (when `native/packaging/**` or `native/scripts/**`) |
 | `web/**` | web, packaging (when `web/packaging/**` or `web/release/**`) |
-| `packaging/**` | native, web, packaging, macOS packaging (CI-only) |
-| `.github/workflows/**` | every surface and packaging |
+| `packaging/**` | web, packaging, macOS packaging (CI-only) |
+| `.github/workflows/ci.yml` | every surface, packaging, macOS packaging (CI-only) |
+| Other `.github/workflows/**` | packaging |
 
-A change to the core pin (`native/Cargo.toml`, `web/core-sdk.json`, the
-`launchers` job's `POHUNEK_RELEASE`) runs every surface, including the
+A full core pin bump changes `web/core-sdk.json` and the `launchers` job's
+`POHUNEK_RELEASE` in `ci.yml`, so it runs every surface, including the
 real-daemon end-to-end tests.
 
 ## 2. Run the gates
@@ -54,22 +54,12 @@ cd plugin && bun install --frozen-lockfile && bun run check   # lint, typecheck,
 
 **launchers/** — `bun test` needs `POHUNEK_TEST_SHELL` (`sh`, `bash` or
 `dash`) and, for the rendering tests, `POHUNEK_TEST_BIN` (absolute path of a
-core `pohunek` binary, for example the one `eval "$(native/scripts/build-core-binaries)"`
-exports). Set them only for this gate.
+core `pohunek` binary, for example the one
+`eval "$(bun scripts/build-core-binaries.ts)"` exports from `web/`). Set them
+only for this gate.
 
 ```bash
 cd launchers && bun install --frozen-lockfile && bun run check
-```
-
-**native/** — a Cargo workspace; the core binaries are built from the pin.
-
-```bash
-cd native
-cargo fmt --all --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-eval "$(scripts/build-core-binaries)"   # exports the pinned pohunekd, pohunek-sessiond, pohunek
-cargo nextest run --locked --profile ci --workspace --all-features
-cargo build --locked --workspace --release
 ```
 
 **web/** — the core SDK tarballs and binaries come from `web/core-sdk.json`.
@@ -94,7 +84,6 @@ release-archive audit step.
 
 ```bash
 python3 -m unittest discover -s packaging/tests
-python3 -m unittest discover -s native/scripts/tests
 ```
 
 CI also lints the workflows and shellchecks the packaging scripts (the
@@ -102,7 +91,7 @@ CI also lints the workflows and shellchecks the packaging scripts (the
 the files you changed when they are installed. Shell scripts stay POSIX: CI
 runs them under `dash` and macOS `/bin/sh`.
 
-**CI-only**: the macOS jobs (`web-macos`, `native-macos`, `macos-package`) and
+**CI-only**: the macOS jobs (`web-macos`, `macos-package`) and
 anything needing a macOS runner. Name them as CI-only in the evidence.
 
 ## 3. Report

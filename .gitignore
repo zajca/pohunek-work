@@ -6,5 +6,4 @@ logs/
 .env.*
 .claude/*
 !.claude/skills/
-native/target/
 __pycache__/

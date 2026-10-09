@@ -1,11 +1,9 @@
 """Regression checks for the macOS ad-hoc signing tooling (stdlib only).
 
-The tools need a Mac, so these tests run them against shims of `codesign` and
-`plutil` that record their arguments and print canned output. They prove the
-tooling's own behavior: every Mach-O file and app bundle is signed ad-hoc and
-inside-out with the documented identifiers and no certificate, runtime flag,
-timestamp, or entitlement, and the verifier accepts exactly an ad-hoc tree. The
-real `codesign` runs in the macOS CI job.
+The tools need a Mac, so these tests run them against a `codesign` shim that
+records arguments and prints canned output. They prove that each Mach-O file is
+signed ad-hoc with a stable identifier and no certificate, runtime flag,
+timestamp, or entitlement. The real `codesign` runs in the macOS CI job.
 """
 
 import os
@@ -20,7 +18,7 @@ MACOS = ROOT / "packaging" / "macos"
 CORE_REF = "v0.31.6"
 
 MACHO = bytes.fromhex("cffaedfe") + b"\0" * 12
-BUNDLE_ID = "io.github.zajca.pohunek.gui"
+BUNDLE_ID = "org.example.tool"
 
 ADHOC_DETAILS = """Executable=/x/pohunek
 Identifier=io.github.zajca.pohunek.pohunek
@@ -69,7 +67,6 @@ exit 0
 
 PLUTIL = """#!/usr/bin/env python3
 import re, sys
-# plutil -extract KEY raw -o - FILE
 key, file = sys.argv[2], sys.argv[-1]
 match = re.search(r"<key>%s</key>\\s*<string>(.*?)</string>" % re.escape(key), open(file).read(), re.S)
 if not match:
@@ -134,10 +131,11 @@ class Base(unittest.TestCase):
         path.chmod(0o755)
         return path
 
+
     def app(self):
-        self.macho("Pohunek.app/Contents/MacOS/pohunek-gui")
-        (self.staging / "Pohunek.app/Contents/Info.plist").write_text(INFO_PLIST)
-        return self.staging / "Pohunek.app"
+        self.macho("Example.app/Contents/MacOS/example-tool")
+        (self.staging / "Example.app/Contents/Info.plist").write_text(INFO_PLIST)
+        return self.staging / "Example.app"
 
 
 class SignTest(Base):
@@ -159,7 +157,6 @@ class SignTest(Base):
         self.assertEqual(len(verifies), 2)
 
     def test_no_certificate_runtime_timestamp_or_entitlement_is_ever_requested(self):
-        self.app()
         self.macho("pohunek-web")
         result = self.run_tool("sign", self.staging)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -173,28 +170,19 @@ class SignTest(Base):
         for variable in ("MACOS_SIGNING_IDENTITY", "MACOS_SIGNING_KEYCHAIN"):
             self.assertNotIn(variable, text)
 
-    def test_an_app_bundle_signs_its_executable_before_the_bundle_with_the_bundle_identifier(self):
+    def test_generic_bundle_signs_its_executable_before_the_bundle(self):
         app = self.app()
-        self.macho("pohunek")
+        self.macho("pohunek-web")
         result = self.run_tool("sign", self.staging)
         self.assertEqual(result.returncode, 0, result.stderr)
         signs = [c.split(" ")[-1] for c in self.calls("codesign") if "--sign" in c]
-        self.assertEqual(
-            signs,
-            [
-                str(self.staging / "pohunek"),
-                str(app / "Contents/MacOS/pohunek-gui"),
-                str(app),
-            ],
-        )
+        self.assertEqual(signs, [str(self.staging / "pohunek-web"), str(app / "Contents/MacOS/example-tool"), str(app)])
         bundle = next(c for c in self.calls("codesign") if "--sign" in c and c.endswith(str(app)))
         self.assertEqual(bundle, "codesign --force --sign - --identifier %s %s" % (BUNDLE_ID, app))
         self.assertTrue(any("--verify --deep --strict" in c for c in self.calls("codesign")))
-        # The executable inside the bundle is never signed with an identifier
-        # of its own.
-        self.assertFalse(any("--identifier" in c and c.endswith("pohunek-gui") for c in self.calls("codesign")))
+        self.assertFalse(any("--identifier" in c and c.endswith("example-tool") for c in self.calls("codesign")))
 
-    def test_a_bundle_without_a_bundle_identifier_fails(self):
+    def test_a_bundle_without_an_identifier_fails(self):
         app = self.app()
         (app / "Contents/Info.plist").write_text("<plist><dict/></plist>")
         result = self.run_tool("sign", self.staging)
@@ -225,15 +213,15 @@ class VerifySignedTest(Base):
         return self.run_tool("verify-signed", *args, env=env)
 
     def test_an_ad_hoc_signed_tree_passes(self):
-        self.macho("pohunek")
+        self.macho("pohunek-web")
         self.app()
         result = self.verify("--adhoc", self.staging)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("2 ad-hoc signed item(s) verified", result.stdout)
-        # Bundles are verified deeply, bare files are not.
         verifies = self.calls("codesign --verify")
-        self.assertTrue(any("--deep" in c and c.endswith("Pohunek.app") for c in verifies))
-        self.assertFalse(any("--deep" in c and c.endswith("/pohunek") for c in verifies))
+        self.assertEqual(len(verifies), 2)
+        self.assertTrue(any("--deep" in c and c.endswith("Example.app") for c in verifies))
+        self.assertFalse(any("--deep" in c and c.endswith("/pohunek-web") for c in verifies))
         self.assertTrue(all("--strict" in c for c in verifies))
 
     def test_a_certificate_signature_is_rejected(self):
@@ -271,15 +259,14 @@ class VerifySignedTest(Base):
 
     def test_a_broken_bundle_is_rejected(self):
         self.app()
-        result = self.verify("--adhoc", self.staging, SHIM_CODESIGN_VERIFY_FAILS="Pohunek.app")
+        result = self.verify("--adhoc", self.staging, SHIM_CODESIGN_VERIFY_FAILS="Example.app")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("Pohunek.app: code signature does not verify", result.stderr)
+        self.assertIn("Example.app: code signature does not verify", result.stderr)
 
     def test_every_problem_is_reported_before_the_failure(self):
         self.macho("a-bad")
         self.macho("b-cert")
         self.macho("c-good")
-        self.app()
         result = self.verify(
             "--adhoc",
             self.staging,
@@ -332,22 +319,21 @@ class PackageReleaseTest(Base):
             )
         return audit_tools
 
-    def gui_tree(self, name="pohunek-gui-1.2.3-aarch64-apple-darwin"):
+    def web_tree(self, name="pohunek-web-1.2.3-aarch64-apple-darwin"):
         staging = self.root / name
-        program = staging / "Pohunek.app/Contents/MacOS/pohunek-gui"
-        program.parent.mkdir(parents=True)
-        (staging / "Pohunek.app/Contents/Info.plist").write_text(INFO_PLIST)
+        staging.mkdir()
+        program = staging / "pohunek-web"
         program.write_bytes(MACHO)
         program.chmod(0o755)
         (staging / "README.md").write_text("text\n")
         return staging
 
     def test_a_release_without_the_core_pin_fails_before_any_work(self):
-        staging = self.root / "pohunek-gui-1.2.3-aarch64-apple-darwin"
+        staging = self.root / "pohunek-web-1.2.3-aarch64-apple-darwin"
         staging.mkdir()
         for args in (
-            ("--adhoc-release", "gui", "1.2.3", staging),
-            ("--stage-release", "gui", "1.2.3", self.root, self.root),
+            ("--adhoc-release", "web", "1.2.3", staging),
+            ("--stage-release", "web", "1.2.3", self.root, self.root),
         ):
             result = self.run_tool("package", *args)
             self.assertEqual(result.returncode, 1, args)
@@ -356,12 +342,12 @@ class PackageReleaseTest(Base):
 
     def test_a_development_tree_or_a_misnamed_tree_is_never_signed_as_a_release(self):
         for name in (
-            "pohunek-gui-1.2.3-aarch64-apple-darwin-unsigned-development",
-            "pohunek-web-1.2.3-aarch64-apple-darwin",
+            "pohunek-web-1.2.3-aarch64-apple-darwin-unsigned-development",
+            "pohunek-launchers-1.2.3-aarch64-apple-darwin",
         ):
             staging = self.root / name
             staging.mkdir()
-            result = self.run_tool("package", "--adhoc-release", "gui", "1.2.3", staging, env={"POHUNEK_CORE_REF": CORE_REF})
+            result = self.run_tool("package", "--adhoc-release", "web", "1.2.3", staging, env={"POHUNEK_CORE_REF": CORE_REF})
             self.assertEqual(result.returncode, 1, name)
             self.assertIn(
                 "development staging" if name.endswith("development") else "unexpected staging directory name",
@@ -370,22 +356,22 @@ class PackageReleaseTest(Base):
         self.assertEqual(self.calls(), [])
 
     def test_the_old_signing_modes_and_their_options_are_gone(self):
-        staging = self.root / "pohunek-gui-1.2.3-aarch64-apple-darwin"
+        staging = self.root / "pohunek-web-1.2.3-aarch64-apple-darwin"
         staging.mkdir()
-        result = self.run_tool("package", "--sign-release", "gui", "1.2.3", staging, env={"POHUNEK_CORE_REF": CORE_REF})
+        result = self.run_tool("package", "--sign-release", "web", "1.2.3", staging, env={"POHUNEK_CORE_REF": CORE_REF})
         self.assertEqual(result.returncode, 1)
         self.assertIn("unsupported mode", result.stderr)
         self.assertEqual(self.calls(), [])
 
     def test_the_release_step_audits_signs_verifies_and_archives_in_order_without_credentials(self):
-        name = "pohunek-gui-1.2.3-aarch64-apple-darwin"
-        staging = self.gui_tree(name)
+        name = "pohunek-web-1.2.3-aarch64-apple-darwin"
+        staging = self.web_tree(name)
         env = {
             "POHUNEK_CORE_REF": CORE_REF,
             "SOURCE_DATE_EPOCH": "1700000000",
             "PATH": "%s:%s:%s" % (self.audit_tools(), self.tools, os.environ["PATH"]),
         }
-        result = self.run_tool("package", "--adhoc-release", "gui", "1.2.3", staging, env=env)
+        result = self.run_tool("package", "--adhoc-release", "web", "1.2.3", staging, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         archive = Path(result.stdout.strip())
         self.assertEqual(archive, self.root / (name + ".tar.gz"))
@@ -395,47 +381,47 @@ class PackageReleaseTest(Base):
         manifest = (staging / "MANIFEST").read_text()
         self.assertIn("signing adhoc\n", manifest)
         self.assertIn("minimum-macos 14.0\n", manifest)
-        self.assertIn("component gui\n", manifest)
+        self.assertIn("component web\n", manifest)
         self.assertIn("core %s\n" % CORE_REF, manifest)
         calls = self.calls()
         first_sign = next(i for i, c in enumerate(calls) if c.startswith("codesign") and "--sign" in c)
         verify = next(i for i, c in enumerate(calls) if c.startswith("codesign") and "-dvv" in c)
         self.assertLess(first_sign, verify)
         self.assertTrue(
-            any(c.startswith("codesign --force --sign - --identifier %s " % BUNDLE_ID) for c in calls), calls
+            any(c.startswith("codesign --force --sign - --identifier io.github.zajca.pohunek.pohunek-web ") for c in calls), calls
         )
 
     def test_a_release_whose_signature_is_not_ad_hoc_is_not_archived(self):
-        name = "pohunek-gui-1.2.3-aarch64-apple-darwin"
-        staging = self.gui_tree(name)
+        name = "pohunek-web-1.2.3-aarch64-apple-darwin"
+        staging = self.web_tree(name)
         self.details.write_text(CERTIFICATE_DETAILS)
         env = {
             "POHUNEK_CORE_REF": CORE_REF,
             "SOURCE_DATE_EPOCH": "1700000000",
             "PATH": "%s:%s:%s" % (self.audit_tools(), self.tools, os.environ["PATH"]),
         }
-        result = self.run_tool("package", "--adhoc-release", "gui", "1.2.3", staging, env=env)
+        result = self.run_tool("package", "--adhoc-release", "web", "1.2.3", staging, env=env)
         self.assertEqual(result.returncode, 1)
         self.assertIn("signed with a certificate, not ad-hoc", result.stderr)
         self.assertFalse((staging / "MANIFEST").exists())
         self.assertFalse((self.root / (name + ".tar.gz")).exists())
 
     def test_a_staged_tree_with_a_symlink_is_refused_before_anything_is_signed(self):
-        name = "pohunek-gui-1.2.3-aarch64-apple-darwin"
+        name = "pohunek-web-1.2.3-aarch64-apple-darwin"
         staging = self.root / name
         staging.mkdir()
         (staging / "link").symlink_to("/etc/passwd")
-        result = self.run_tool("package", "--adhoc-release", "gui", "1.2.3", staging, env={"POHUNEK_CORE_REF": CORE_REF})
+        result = self.run_tool("package", "--adhoc-release", "web", "1.2.3", staging, env={"POHUNEK_CORE_REF": CORE_REF})
         self.assertEqual(result.returncode, 1)
         self.assertIn("symbolic link or special file", result.stderr)
         self.assertEqual(self.calls(), [])
 
     def test_modes_and_components_are_validated(self):
         for args in (
-            ("--sideload", "gui", "1.2.3", self.root, self.root),
+            ("--sideload", "web", "1.2.3", self.root, self.root),
             ("--development", "daemon", "1.2.3", self.root, self.root),
-            ("--development", "gui"),
-            ("--release", "gui", "1.2.3", self.root, self.root),
+            ("--development", "web"),
+            ("--release", "web", "1.2.3", self.root, self.root),
         ):
             result = self.run_tool("package", *args)
             self.assertEqual(result.returncode, 1, args)

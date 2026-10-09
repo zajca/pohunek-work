@@ -19,8 +19,8 @@ blockers, and handoffs. The Pohunek Project (owner `zajca`, shared with the core
 `zajca/pohunek`) tracks delivery status. Local files are not competitors:
 SiYuan notes are optional pointers.
 
-This repository owns the user surfaces only (plugin, web, native GUI,
-launchers). A defect or missing capability that belongs to core (daemon,
+This repository owns the user surfaces only (plugin, web, launchers). A defect
+or missing capability that belongs to core (daemon,
 session worker, CLI, protocol, SDKs) is filed in `zajca/pohunek`, with a link
 back from the issue here; it is never worked around by importing core
 internals.
@@ -227,5 +227,5 @@ continue without local-only memory.
 Read the issue's current body and comments before resuming any interrupted
 work; rely on the issue, not memory, for state. When a decision revises an
 accepted design constraint in a surface's design docs (`plugin/docs/rfc.md`,
-`web/docs/`, `native/docs/`), the issue must state that revision explicitly —
+`web/docs/`, `launchers/docs/`), the issue must state that revision explicitly —
 accepted docs stay authoritative until deliberately revised.

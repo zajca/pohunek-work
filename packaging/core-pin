@@ -1,33 +1,32 @@
 #!/usr/bin/env python3
 """Resolve the pohunek core version every surface is pinned to.
 
-usage: core-pin [--native PATH] [--web PATH] [--require-web] [--expect-version X.Y.Z]
+usage: core-pin [--web PATH]
 
-Reads the core crates' git pin from native/Cargo.toml (the single source for the
-GUI) and, when web/core-sdk.json exists, checks that the web pin names the same
-core commit. Prints `key=value` lines (usable with `>> "$GITHUB_OUTPUT"`):
+The single source of the pin is web/core-sdk.json. It must exist, be valid, and
+be internally consistent (the same rules as `web/scripts/core-sdk.ts`). Prints
+`key=value` lines (usable with `>> "$GITHUB_OUTPUT"`):
 
-  core_ref        the core release tag `vX.Y.Z` when known, else the 40-digit commit
-  core_rev        the 40-digit core commit, empty when only a tag is known
-  native_version  the GUI version in native/Cargo.toml `[workspace.package]`
+  core_ref        the core release tag `vX.Y.Z` when the pin names one, else
+                  the 40-digit commit
+  core_rev        the 40-digit core commit
+  web_version     the web surface version from web/package.json
 
 web/core-sdk.json (see web/scripts/core-sdk.ts) holds `coreRepository`,
 `coreRev`, `sdkVersion` and `assetBaseUrl`. When `assetBaseUrl` is the core
-repository's GitHub release download URL, the web pin also names the release tag
-`v<sdkVersion>`.
+repository's GitHub release download URL, the pin also names the release tag
+`v<sdkVersion>` and that tag must resolve, with `git ls-remote`, to `coreRev`.
+When `assetBaseUrl` is anything else (the loopback server used before a core
+release), no tag is named and no network step runs.
 
 The pin is refused, with exit status 1, when
-  - the core crates in native/Cargo.toml do not all share one git URL and one
-    `rev` or `tag`;
-  - web/core-sdk.json is malformed, names a different repository than the core
-    crates, or names a release tag that does not point at its `coreRev`;
-  - the two pins disagree: a native commit against the web `coreRev`, a native
-    tag (resolved with `git ls-remote`, the peeled commit of an annotated tag
-    counts) against the web `coreRev`, a native tag against the web release tag;
-  - `--require-web` is given and web/core-sdk.json is absent;
-  - `--expect-version` is given and differs from the native GUI version.
+  - web/core-sdk.json is missing or malformed,
+    names a repository that is not a GitHub `owner/repo`, or names a release
+    tag that does not point at its `coreRev`;
+  - web/package.json is missing or has an invalid web version;
+  - the pinned core repository cannot be listed with `git ls-remote`.
 
-Python 3.11 or newer (tomllib), standard library only.
+Python 3.8 or newer, standard library only.
 """
 
 from __future__ import annotations
@@ -38,65 +37,31 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tomllib
+from urllib.parse import urlsplit
 
 TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
-VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SDK_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")
-CORE_CRATE_PREFIX = "pohunek-"
+VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 WEB_KEYS = ("coreRepository", "coreRev", "sdkVersion", "assetBaseUrl")
-RELEASE_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download$")
+RELEASE_DOWNLOAD_PATH = "/releases/download"
+LOOPBACK_HOST = "127.0.0.1"
 
 
 class PinError(Exception):
-    """The pins are missing, malformed, or inconsistent."""
+    """The pin is missing, malformed, or inconsistent."""
 
 
 def repo_slug(url: str) -> str | None:
     """`owner/name` of a GitHub clone URL, None for any other host."""
-    match = re.match(r"^https://github\.com/([^/]+/[^/]+?)(?:\.git)?/?$", url)
+    match = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)", url)
     return match.group(1) if match else None
 
 
-def read_native(path: Path) -> tuple[str, str | None, str | None, str]:
-    """Returns (git URL, tag, commit, GUI version) of the native workspace."""
-    try:
-        manifest = tomllib.loads(path.read_text())
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        raise PinError(f"cannot read {path}: {error}") from error
-    workspace = manifest.get("workspace", {})
-    pins = set()
-    for name, spec in workspace.get("dependencies", {}).items():
-        if not name.startswith(CORE_CRATE_PREFIX) or not isinstance(spec, dict) or "git" not in spec:
-            continue
-        if "branch" in spec:
-            raise PinError(f"{name} is pinned by `branch`; pin core by `rev` or `tag`")
-        if ("rev" in spec) == ("tag" in spec):
-            raise PinError(f"{name} must be pinned by exactly one of `rev` or `tag`")
-        pins.add((spec["git"], spec.get("tag"), spec.get("rev")))
-    if not pins:
-        raise PinError(f"{path} has no core git dependency in [workspace.dependencies]")
-    if len(pins) != 1:
-        raise PinError(f"the core crates in {path} are not all pinned to one revision: {sorted(map(str, pins))}")
-    git, tag, rev = pins.pop()
-    if tag is not None and not TAG.match(tag):
-        raise PinError(f"core tag must look like vX.Y.Z: {tag}")
-    if rev is not None and not COMMIT.match(rev):
-        raise PinError(f"core rev must be a 40-digit lowercase commit: {rev}")
-    version = workspace.get("package", {}).get("version", "")
-    if not VERSION.match(str(version)):
-        raise PinError(f"{path} [workspace.package] version must be X.Y.Z: {version!r}")
-    return git, tag, rev, version
-
-
-def read_web(path: Path, core_repo: str | None) -> tuple[str, str | None] | None:
-    """Returns (core commit, release tag or None) of the web pin, None when absent.
-
-    The tag is set only when `assetBaseUrl` is the core repository's GitHub
-    release download URL; before a core release it is the loopback server."""
+def read_web(path: Path) -> tuple[str, str | None, str]:
+    """Returns (core commit, release tag or None, git URL for tag resolution)."""
     if not path.is_file():
-        return None
+        raise PinError(f"{path} does not exist")
     try:
         pin = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
@@ -109,32 +74,46 @@ def read_web(path: Path, core_repo: str | None) -> tuple[str, str | None] | None
     web_repo = repo_slug(pin["coreRepository"])
     if web_repo is None:
         raise PinError(f"{path}: coreRepository must be https://github.com/<owner>/<repo>")
-    if core_repo is not None and web_repo != core_repo:
-        raise PinError(f"{path} names core repository {web_repo}, not {core_repo}")
     if not COMMIT.match(pin["coreRev"]):
         raise PinError(f"{path}: coreRev must be a 40-digit lowercase commit: {pin['coreRev']}")
     if not SDK_VERSION.match(pin["sdkVersion"]):
         raise PinError(f"{path}: sdkVersion must be a semantic version: {pin['sdkVersion']}")
-    release = RELEASE_URL.match(pin["assetBaseUrl"])
-    if release is None:
-        return pin["coreRev"], None
-    if release.group(1) != web_repo:
-        raise PinError(f"{path}: assetBaseUrl comes from {release.group(1)}, not the core repository {web_repo}")
+    try:
+        base = urlsplit(pin["assetBaseUrl"])
+    except ValueError as error:
+        raise PinError(f"{path}: invalid assetBaseUrl: {error}") from error
+    if not base.scheme or not base.netloc:
+        raise PinError(f"{path}: assetBaseUrl is not an absolute URL: {pin['assetBaseUrl']}")
+    if base.username or base.password or base.query or base.fragment:
+        raise PinError(f"{path}: assetBaseUrl must not carry credentials, a query or a fragment")
+    try:
+        port = base.port
+    except ValueError as error:
+        raise PinError(f"{path}: invalid assetBaseUrl port: {error}") from error
+    if base.scheme == "http":
+        if base.hostname != LOOPBACK_HOST or port is None or base.path != RELEASE_DOWNLOAD_PATH:
+            raise PinError(f"{path}: an http assetBaseUrl must be http://{LOOPBACK_HOST}:<port>{RELEASE_DOWNLOAD_PATH}")
+        return pin["coreRev"], None, pin["coreRepository"]
+    if base.scheme != "https" or base.netloc != "github.com" or base.path != f"/{web_repo}{RELEASE_DOWNLOAD_PATH}":
+        raise PinError(f"{path}: an https assetBaseUrl must be the release download URL of {pin['coreRepository']}")
     tag = f"v{pin['sdkVersion']}"
     if not TAG.match(tag):
         raise PinError(f"{path}: a release assetBaseUrl needs a plain X.Y.Z sdkVersion: {pin['sdkVersion']}")
-    return pin["coreRev"], tag
+    return pin["coreRev"], tag, pin["coreRepository"]
 
 
 def resolve_tag(git: str, tag: str) -> str:
-    """The commit a core tag points at (the peeled commit for an annotated tag)."""
-    result = subprocess.run(
-        ["git", "ls-remote", "--", git, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    """The commit a tag points at (the peeled commit for an annotated tag)."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--", git, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise PinError(f"cannot run git ls-remote: {error}") from error
     if result.returncode != 0:
         raise PinError(f"cannot list tags of {git}: {result.stderr.strip()}")
     commits = {}
@@ -147,38 +126,33 @@ def resolve_tag(git: str, tag: str) -> str:
     return commit
 
 
-def resolve(native: Path, web: Path, require_web: bool, expect_version: str | None) -> dict[str, str]:
-    git, native_tag, native_rev, version = read_native(native)
-    if expect_version is not None and expect_version != version:
-        raise PinError(f"the GUI version in {native} is {version}, but the release is {expect_version}")
-    pin = read_web(web, repo_slug(git))
-    if pin is None and require_web:
-        raise PinError(f"{web} does not exist")
-    ref, rev = native_tag or native_rev, native_rev
-    if pin is not None:
-        web_rev, web_tag = pin
-        if web_tag is not None:
-            if native_tag is not None and native_tag != web_tag:
-                raise PinError(f"native pins core {native_tag}, web pins core {web_tag}")
-            resolved = resolve_tag(git, web_tag)
-            if resolved != web_rev:
-                raise PinError(f"web pins core {web_tag} = {resolved}, but its coreRev is {web_rev}")
-            ref = web_tag
-        native_commit = native_rev if native_rev is not None else resolve_tag(git, native_tag or "")
-        if native_commit != web_rev:
-            raise PinError(f"native pins core {native_tag or native_rev} = {native_commit}, but web pins core commit {web_rev}")
-    return {"core_ref": ref, "core_rev": rev or "", "native_version": version}
+def read_web_version(path: Path) -> str:
+    try:
+        package = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise PinError(f"cannot read {path}: {error}") from error
+    version = package.get("version") if isinstance(package, dict) else None
+    if not isinstance(version, str) or not VERSION.fullmatch(version):
+        raise PinError(f"{path} must declare a version X.Y.Z, got: {version!r}")
+    return version
+
+
+def resolve(web: Path) -> dict[str, str]:
+    rev, tag, repository = read_web(web)
+    version = read_web_version(web.parent / "package.json")
+    if tag is not None:
+        resolved = resolve_tag(repository, tag)
+        if resolved != rev:
+            raise PinError(f"web pins core {tag} = {resolved}, but its coreRev is {rev}")
+    return {"core_ref": tag or rev, "core_rev": rev, "web_version": version}
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--native", type=Path, default=Path("native/Cargo.toml"))
     parser.add_argument("--web", type=Path, default=Path("web/core-sdk.json"))
-    parser.add_argument("--require-web", action="store_true")
-    parser.add_argument("--expect-version")
     args = parser.parse_args(argv)
     try:
-        pin = resolve(args.native, args.web, args.require_web, args.expect_version)
+        pin = resolve(args.web)
     except PinError as error:
         print(f"core-pin: {error}", file=sys.stderr)
         return 1
