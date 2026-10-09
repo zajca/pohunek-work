@@ -125,12 +125,9 @@ function subagentRows(agents: readonly ControlSubagent[]): { agent: ControlSubag
   return rows;
 }
 
-export function SessionDetail({ session, screen, offset, height, onWheel }: {
-  readonly session: ControlSession; readonly screen: ControlScreen | null; readonly offset: number; readonly height: number;
-  readonly onWheel: (direction: -1 | 1) => void;
-}): ReactNode {
+function sessionDetailLines(session: ControlSession, screen: ControlScreen | null): { text: string; heading?: boolean }[] {
   const metadata = Object.entries(session.metadata);
-  const lines: { text: string; heading?: boolean }[] = [
+  return [
     { text: "SESSION", heading: true },
     { text: `${session.name ?? session.id} · ${session.host} · ${session.agent}` },
     { text: `State  ${session.state} / ${session.activity ?? "unknown"} / ${session.runtimeState ?? "unknown"}` },
@@ -143,6 +140,17 @@ export function SessionDetail({ session, screen, offset, height, onWheel }: {
     { text: "TERMINAL SCREEN", heading: true },
     ...(screen === null ? [{ text: "Press p or click Screen to load" }] : screen.visibleLines.map((line) => ({ text: line }))),
   ];
+}
+
+export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number): number {
+  return Math.max(0, sessionDetailLines(session, screen).length - height);
+}
+
+export function SessionDetail({ session, screen, offset, height, onWheel }: {
+  readonly session: ControlSession; readonly screen: ControlScreen | null; readonly offset: number; readonly height: number;
+  readonly onWheel: (direction: -1 | 1) => void;
+}): ReactNode {
+  const lines = sessionDetailLines(session, screen);
   const start = Math.max(0, Math.min(offset, Math.max(0, lines.length - height)));
   return <MouseZone flexDirection="column" width="100%" onWheel={onWheel}>
     {lines.slice(start, start + height).map((line, index) => <Text key={start + index} bold={line.heading === true} color={line.heading ? "cyan" : "white"} wrap="truncate-end">{safeText(line.text)}</Text>)}

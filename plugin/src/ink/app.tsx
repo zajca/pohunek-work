@@ -13,7 +13,7 @@ import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { layout } from "./config.ts";
 import { decodeDoEnvelope } from "../tui/decode.ts";
-import { ActivityView, HostsView, orderedSessions, SessionsView, SessionDetail, WorkView, activityRecords, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, orderedSessions, SessionsView, SessionDetail, WorkView, activityRecords, sessionDetailMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -228,6 +228,19 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const selectedHost = selectedAt(snapshot?.hosts ?? [], cursor.Hosts);
   const selectedRecord = selectedAt(records, cursor.Activity);
   const visibleRows = Math.max(2, Math.floor((stdout.rows - layout.listReservedRows) / 2));
+  const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
+  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight);
+
+  const loadScreen = useCallback(async (): Promise<void> => {
+    if (sessionDetail === null) return;
+    try {
+      const result = await control.screen(sessionDetail.host, sessionDetail.id);
+      if (result.ok) {
+        setScreen(result.data);
+        setDetailOffset(sessionDetailMaxOffset(sessionDetail, result.data, detailHeight));
+      } else setStatus(result.error.message);
+    } catch (error) { setStatus(defaultStatus(error)); }
+  }, [control, detailHeight, sessionDetail]);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (refreshBusy.current) return;
@@ -671,17 +684,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (overlay === "session") {
       if (key.escape) { setOverlay("none"); return; }
       if (sessionDetail === null) return;
-      if (key.pageDown || key.downArrow) { setDetailOffset((old) => old + layout.detailScrollStep); return; }
+      if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + layout.detailScrollStep)); return; }
       if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - layout.detailScrollStep)); return; }
       if (input === "o") void openSelected();
       else if (input === "r") void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id });
       else if (input === "f") void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id });
       else if (input === "x" || input === "D") { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
       else if (input === "e" || input === "m") { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
-      else if (input === "p") void control.screen(sessionDetail.host, sessionDetail.id).then((result) => {
-        if (result.ok) { setScreen(result.data); setDetailOffset(Number.MAX_SAFE_INTEGER); }
-        else setStatus(result.error.message);
-      }).catch((error: unknown) => { setStatus(defaultStatus(error)); });
+      else if (input === "p") void loadScreen();
       else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
       else if (input === "u") void openFolder(sessionDetail);
       else if (input === "c") void copyValue(sessionDetail.branch ?? "");
@@ -763,7 +773,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen}
-    offset={detailOffset} height={Math.max(4, stdout.rows - layout.detailReservedRows)} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, old + direction * layout.detailScrollStep)); }} />;
+    offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * layout.detailScrollStep))); }} />;
   else if (overlay === "confirm") content = <Message color="red" text={`Confirm ${confirm ?? "action"} of ${sessionDetail?.name ?? sessionDetail?.id ?? "session"}? y/N. Removal may delete its worktree.`} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
   else if (overlay === "host") content = <Box flexDirection="column">
@@ -821,7 +831,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   } else if (overlay === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
     <ActionButton label="Attach" onClick={() => void openSelected()} primary />
     <ActionButton label="Resume" onClick={() => void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id })} />
-    <ActionButton label="Screen" onClick={() => { void control.screen(sessionDetail.host, sessionDetail.id).then((result) => { if (result.ok) { setScreen(result.data); setDetailOffset(Number.MAX_SAFE_INTEGER); } else setStatus(result.error.message); }).catch((error: unknown) => { setStatus(defaultStatus(error)); }); }} />
+    <ActionButton label="Screen" onClick={() => void loadScreen()} />
     <ActionButton label="Fork" onClick={() => void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id })} />
     <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay("rename"); }} />
     <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />
