@@ -36,6 +36,7 @@ const POLL_TIMEOUT_MILLISECONDS = 2_000;
 const DAEMON_RETRY_INTERVAL_SECONDS = 0.02;
 const BOUNDED_WAIT_SECONDS = 0.5;
 const LONG_WAIT_SECONDS = 120;
+const SHORT_WAIT_SECONDS = 0.3;
 const INCOMPATIBLE_PROTOCOL_VERSION = PROTOCOL_VERSION + 1;
 const BINARY_PAYLOAD = Uint8Array.of(0x00, 0xff, 0x80, 0x61, 0xc3, 0x28);
 const INDEX_CONTENT = "<!doctype html><title>Pohunek backend test</title>";
@@ -352,6 +353,65 @@ describe("backend startup before the local daemon", () => {
     }
   });
 
+  test("a wait shorter than the retry interval still ends with a final attempt", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const events: BackendLogEvent[] = [];
+    try {
+      const failure = await startFailure(
+        { ...backendConfig(root, join(root, "missing.sock"), SHORT_WAIT_SECONDS), daemonRetryIntervalSeconds: LONG_WAIT_SECONDS },
+        eventLogger((event) => events.push(event)),
+      );
+
+      expect(failure).toBeInstanceOf(BackendStartupError);
+      // The interval is far longer than the wait, so finishing at all means the sleep was capped.
+      expect(events.filter(isConnectingEvent).length >= 2).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a wait equal to the retry interval ends with a final attempt", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const events: BackendLogEvent[] = [];
+    try {
+      const failure = await startFailure(
+        { ...backendConfig(root, join(root, "missing.sock"), SHORT_WAIT_SECONDS), daemonRetryIntervalSeconds: SHORT_WAIT_SECONDS },
+        eventLogger((event) => events.push(event)),
+      );
+
+      expect(failure).toBeInstanceOf(BackendStartupError);
+      expect(events.filter(isConnectingEvent).length >= 2).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a daemon that appears within a wait shorter than the interval is reached", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const socketPath = join(root, "daemon.sock");
+    const waiting = deferred();
+    let daemon: FixtureDaemonHandle | undefined;
+    let backend: BackendHandle | undefined;
+    try {
+      const starting = startBackend(
+        { ...backendConfig(root, socketPath, SHORT_WAIT_SECONDS), daemonRetryIntervalSeconds: LONG_WAIT_SECONDS },
+        eventLogger((event) => {
+          if (isWaitingEvent(event)) {
+            waiting.resolve();
+          }
+        }),
+      );
+      await Promise.race([waiting.promise, starting]);
+      daemon = await startFixtureDaemon({ listen: { unixSocketPath: socketPath } });
+      backend = await starting;
+      expect(backend.hosts.snapshot()[0]?.reachability).toBe("reachable_daemon");
+    } finally {
+      await backend?.close();
+      await daemon?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("a zero wait fails on the first attempt without retrying", async () => {
     const root = await createFixtureRoot("pk-bw-");
     const events: BackendLogEvent[] = [];
@@ -409,6 +469,10 @@ function backendConfig(root: string, socketPath: string, daemonWaitSeconds: numb
 
 function eventLogger(onEvent: (event: BackendLogEvent) => void): BackendLogger {
   return { log: onEvent };
+}
+
+function isConnectingEvent(event: BackendLogEvent): boolean {
+  return event.event === "daemon_connection" && event.lifecycle === "connecting";
 }
 
 function isWaitingEvent(event: BackendLogEvent): boolean {

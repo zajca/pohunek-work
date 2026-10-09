@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 const RELEASE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = join(RELEASE_DIR, "..", "..");
 const SERVICE_TEMPLATE = join(RELEASE_DIR, "..", "backend", "systemd", "pohunek-backend.service.in");
+const SOURCE_UNIT = join(RELEASE_DIR, "..", "backend", "systemd", "pohunek-backend.service");
 const WRITE_MANIFEST = join(REPOSITORY_ROOT, "packaging", "write-manifest");
 const VERIFY_ARCHIVE = join(REPOSITORY_ROOT, "packaging", "verify-archive");
 
@@ -101,6 +102,7 @@ describe("web release installer on Linux", () => {
       expect(unit).toContain(`ExecStart="${installDir}/pohunek-web"`);
       expect(unit).toContain(`EnvironmentFile=${configFile.replaceAll(" ", "\\x20")}`);
       expectBoundedRestartLoop(unit);
+      expectBoundedRestartLoop(await readFile(SOURCE_UNIT, "utf8"));
 
       await writeFile(configFile, "POHUNEK_BACKEND_BIND_HOST=100.64.0.1\n", { mode: 0o644 });
       await writeFile(join(installDir, "frontend", "stale.js"), "stale");

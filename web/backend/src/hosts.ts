@@ -115,7 +115,8 @@ class HostsPipeline implements HostsPipelineHandle {
           pending = new BackendStartupError(this.options.daemonSocketPath, error);
         }
       }
-      if (performance.now() + retryMilliseconds > deadline) {
+      const remainingMilliseconds = deadline - performance.now();
+      if (remainingMilliseconds <= 0) {
         throw pending;
       }
       this.logger.log({
@@ -126,7 +127,8 @@ class HostsPipeline implements HostsPipelineHandle {
         status: "retrying",
         error_class: errorClass(pending instanceof BackendStartupError ? pending.cause : pending),
       });
-      await delay(retryMilliseconds);
+      // A wait shorter than the interval still gets a final attempt at its deadline.
+      await delay(Math.min(retryMilliseconds, remainingMilliseconds));
     }
   }
 
