@@ -134,9 +134,14 @@ test("renders and launches Hermes with resume-only lifecycle capabilities", asyn
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await page.getByRole("dialog", { name: "Stop this session?" }).getByRole("button", { name: "Stop session" }).click();
   await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  const confirmation = page.getByRole("dialog", { name: "Resume session?" });
+  await expect(confirmation).toContainText("browser-hermes-native");
+  await expect(confirmation.locator("dd").nth(1)).toHaveText("Unknown");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
 });
 
-test("does not offer resume for fresh Hermes without a native reference", async ({ page, stack }) => {
+test("refuses recovery when fresh inspection has no native reference", async ({ page, stack }) => {
   await page.goto(stack.backend.url);
   await page.getByRole("button", { name: "New session", exact: true }).first().click();
 
@@ -148,8 +153,10 @@ test("does not offer resume for fresh Hermes without a native reference", async 
 
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await page.getByRole("dialog", { name: "Stop this session?" }).getByRole("button", { name: "Stop session" }).click();
-  await expect(page.getByRole("button", { name: "Resume unavailable", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Resume session?" })).toHaveCount(0);
+  await expect(page.getByText("Recovery target unavailable: session.inspect returned no native reference")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
 });
 
 test("keeps a known session with an unknown active agent presentation-only", async ({ page, stack }) => {

@@ -23,6 +23,8 @@ export const FIXTURE_LOCAL_HOST = "local";
 const FIXTURE_PEER_NAME = "fixture-peer";
 export const FIXTURE_PEER_HOST = `netbird:${externalPeerSelector(FIXTURE_PEER_NAME)}`;
 export const FIXTURE_LOCAL_SESSION_ID = "s-local-seed";
+export const FIXTURE_LOCAL_RECOVERY_ID = "fixture-local-conversation";
+export const FIXTURE_LOCAL_NATIVE_ACTIVITY = "2026-07-22T11:15:00Z";
 export const FIXTURE_PEER_SESSION_ID = "s-peer-seed";
 export const FIXTURE_NOTIFICATION_ID = "n-local-seed";
 export const FIXTURE_EXTERNAL_SESSION_ID = "s-external-seed";
@@ -142,6 +144,14 @@ function peerHostRecord(port: number): HostRecord {
 
 function localSession(): SessionInfo {
   return {
+    ...baseLocalSession(),
+    native_session_id: FIXTURE_LOCAL_RECOVERY_ID,
+    native_last_activity_at: FIXTURE_LOCAL_NATIVE_ACTIVITY,
+  };
+}
+
+function baseLocalSession(): SessionInfo {
+  return {
     id: FIXTURE_LOCAL_SESSION_ID,
     capabilities: { resume: true, fork: true },
     name: "Local coding session",
@@ -190,7 +200,7 @@ function peerSession(): SessionInfo {
 
 function externalSession(): SessionInfo {
   return {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_EXTERNAL_SESSION_ID,
     name: "Observed external session",
     external: true,
@@ -200,7 +210,7 @@ function externalSession(): SessionInfo {
 
 function unknownActiveSession(): SessionInfo {
   return {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_UNKNOWN_ACTIVE_SESSION_ID,
     name: "Unknown active agent session",
     active_agent: "future-profile",
@@ -212,7 +222,7 @@ function unknownActiveSession(): SessionInfo {
 
 function unknownPersistedSession(): SessionInfo {
   return {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_UNKNOWN_PERSISTED_SESSION_ID,
     name: "Unknown persisted agent session",
     agent: "future-profile",
@@ -224,7 +234,7 @@ function unknownPersistedSession(): SessionInfo {
 
 function legacyBaselessSession(): SessionInfo {
   const session = {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_LEGACY_BASELESS_SESSION_ID,
     name: "Legacy baseless profile session",
     agent: "legacy-profile",

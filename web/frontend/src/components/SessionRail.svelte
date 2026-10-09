@@ -288,6 +288,9 @@
                     <span class="session-item-main">
                       <strong>{sessionLabel(entry)}</strong>
                       <span>{entry.session.branch ?? agentProfileLabel(entry.session.agent, entry.session.agent_base)} · {entry.host}</span>
+                      {#if entry.session.native_session_id !== undefined || entry.session.native_session_path !== undefined}
+                        <span>Recovery target {entry.session.native_session_id ?? entry.session.native_session_path} · native activity {entry.session.native_last_activity_at ?? "Unknown"}</span>
+                      {/if}
                     </span>
                     <span class="session-item-state">
                       <span

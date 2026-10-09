@@ -527,13 +527,12 @@
               {/if}
             {/if}
             <div><dt>Created</dt><dd>{detail.created_at}</dd></div>
-            <div><dt>Updated</dt><dd>{detail.updated_at}</dd></div>
+            <div><dt>Session updated</dt><dd>{detail.updated_at}</dd></div>
+            <div><dt>Recovery target</dt><dd>{detail.native_session_id ?? detail.native_session_path ?? "Unknown"}</dd></div>
+            <div><dt>Last native activity</dt><dd>{detail.native_last_activity_at ?? "Unknown"}</dd></div>
           {#if detail.exit_code !== undefined}
             <div><dt>Exit code</dt><dd>{detail.exit_code}</dd></div>
           {/if}
-            {#if detail.native_session_id !== undefined}
-              <div><dt>Native session ID</dt><dd>{detail.native_session_id}</dd></div>
-            {/if}
           </dl>
         </details>
       </section>
