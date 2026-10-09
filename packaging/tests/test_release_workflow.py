@@ -518,6 +518,7 @@ class CiFilterTest(unittest.TestCase):
         for path in (
             "packaging/**",
             "web/core-sdk.json",
+            "web/package.json",
             "web/packaging/**",
             "web/release/**",
             ".github/workflows/**",
@@ -530,7 +531,7 @@ class CiFilterTest(unittest.TestCase):
     def test_the_macos_package_job_signs_for_real_and_verifies_adhoc(self):
         job = jobs(CI)["macos-package"]
         block = CI.split("            macos_package:\n", 1)[1].split("\n\n", 1)[0]
-        for path in ("packaging/**", "web/core-sdk.json", "web/packaging/**", "web/release/**"):
+        for path in ("packaging/**", "web/core-sdk.json", "web/package.json", "web/packaging/**", "web/release/**"):
             self.assertIn("- '%s'" % path, block)
         self.assertIn("macos_package: ${{ steps.filter.outputs.macos_package }}", CI)
         self.assertIn("needs.changes.outputs.macos_package == 'true'", job)
@@ -594,6 +595,11 @@ class CiFilterTest(unittest.TestCase):
             self.assertIsNotNone(block, surface)
             self.assertIn("- 'web/core-sdk.json'", block.group(1), surface)
         self.assertIn("- 'web/**'", CI.split("            web:\n", 1)[1].split("            packaging:\n", 1)[0])
+
+    def test_the_launcher_filter_covers_inputs_to_its_core_pin_check(self):
+        block = CI.split("            launchers:\n", 1)[1].split("            web:\n", 1)[0]
+        for path in ("launchers/**", "packaging/core-pin", "web/core-sdk.json", "web/package.json"):
+            self.assertIn("- '%s'" % path, block)
 
     def test_the_launcher_pin_check_preserves_development_pins(self):
         job = jobs(CI)["launchers"]

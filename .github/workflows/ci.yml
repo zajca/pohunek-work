@@ -59,7 +59,9 @@ jobs:
               - '.github/workflows/ci.yml'
             launchers:
               - 'launchers/**'
+              - 'packaging/core-pin'
               - 'web/core-sdk.json'
+              - 'web/package.json'
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
@@ -70,12 +72,14 @@ jobs:
               - 'plugin/**'
               - 'launchers/**'
               - 'web/core-sdk.json'
+              - 'web/package.json'
               - 'web/packaging/**'
               - 'web/release/**'
               - '.github/workflows/**'
             macos_package:
               - 'packaging/**'
               - 'web/core-sdk.json'
+              - 'web/package.json'
               - 'web/packaging/**'
               - 'web/release/**'
               - '.github/workflows/ci.yml'
