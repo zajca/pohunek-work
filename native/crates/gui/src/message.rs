@@ -28,9 +28,25 @@ pub(crate) enum ModalView {
     Assistant,
     Session,
     ConfirmDeleteSession,
+    ConfirmRecovery,
     Keymap,
     Inbox,
     Hosts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecoveryAction {
+    Resume,
+    Fork,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecoveryConfirmation {
+    pub(crate) host_id: HostId,
+    pub(crate) session_id: SessionId,
+    pub(crate) action: RecoveryAction,
+    pub(crate) target: String,
+    pub(crate) native_last_activity_at: Option<String>,
 }
 
 /// Which layer of the inbox modal is showing.
@@ -237,6 +253,19 @@ pub(crate) enum Message {
         session_id: SessionId,
     },
     ConfirmDeleteSession,
+    RecoveryInspected {
+        generation: u64,
+        host_id: HostId,
+        session_id: SessionId,
+        action: RecoveryAction,
+        result: Result<protocol::SessionInfo, String>,
+    },
+    RecoveryReinspected {
+        generation: u64,
+        expected: RecoveryConfirmation,
+        result: Result<protocol::SessionInfo, String>,
+    },
+    ConfirmRecovery,
     OpenStartModal,
     OpenAssistantModal,
     OpenKeymapModal,

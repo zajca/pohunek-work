@@ -20,7 +20,7 @@ use pohunek_test_support::wait;
 use protocol::SessionId;
 
 use crate::config::{AppConfig, ConfigError};
-use crate::message::{AppMode, LaunchPhase, Message};
+use crate::message::{AppMode, LaunchPhase, Message, ModalView, RecoveryAction};
 use crate::{command, parse_args, BootState, HostId, PohunekApp};
 
 const STATE_CHILD_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_CHILD";
@@ -296,6 +296,226 @@ async fn launcher_retries_daemon_failure_once_and_locks_after_attach_failure() {
     stop_session(&host, &created.sessions[0].id)
         .await
         .expect("stop fixture session");
+    let stopped = load_host_snapshot(&host)
+        .await
+        .expect("stopped session snapshot");
+    assert!(stopped.sessions[0].state.is_terminal());
+    assert!(stopped.sessions[0].capabilities.resume);
+    assert!(stopped.sessions[0].native_session_id.is_none());
+    let session_id = stopped.sessions[0].id.clone();
+    let _ = command::update(
+        &mut app,
+        Message::Core(DomainEvent::HostSnapshotLoaded { snapshot: stopped }),
+    );
+    app.workspace
+        .hosts
+        .get_mut(&host.id)
+        .expect("host view")
+        .sessions
+        .get_mut(&session_id.0)
+        .expect("stopped session")
+        .native_session_id = Some("stale-native-id".to_owned());
+    let opening = command::update(
+        &mut app,
+        Message::OpenSession {
+            host_id: host.id.clone(),
+            session_id: session_id.clone(),
+        },
+    );
+    assert_eq!(app.recovery_pending, Some(app.recovery_generation));
+    assert!(app.recovery_confirmation.is_none());
+    let inspected = outputs(opening).await;
+    assert!(inspected
+        .iter()
+        .all(|message| matches!(message, Message::RecoveryInspected { .. })));
+    for message in inspected {
+        let _ = command::update(&mut app, message);
+    }
+    assert!(app.recovery_confirmation.is_none());
+    assert!(app
+        .status
+        .as_deref()
+        .is_some_and(|status| status.contains("native recovery target")));
+    assert!(load_host_snapshot(&host)
+        .await
+        .expect("session remained stopped")
+        .sessions[0]
+        .state
+        .is_terminal());
+    app.workspace
+        .select_session(host.id.clone(), session_id.clone());
+    app.ui_state.selection = Some(Selection::Session {
+        host_id: host.id.clone(),
+        session_id: session_id.clone(),
+    });
+    let fork = command::update(&mut app, Message::ForkSelectedSession);
+    assert_eq!(app.recovery_pending, Some(app.recovery_generation));
+    let fork_inspected = outputs(fork).await;
+    assert!(fork_inspected.iter().all(|message| matches!(
+        message,
+        Message::RecoveryInspected {
+            action: RecoveryAction::Fork,
+            ..
+        }
+    )));
+    for message in fork_inspected {
+        let _ = command::update(&mut app, message);
+    }
+    assert!(app.recovery_confirmation.is_none());
+    let mut confirmed_session = load_host_snapshot(&host)
+        .await
+        .expect("fresh confirmation fixture")
+        .sessions
+        .remove(0);
+    confirmed_session.native_session_id = Some("exact-native-id".to_owned());
+    confirmed_session.native_last_activity_at = Some("2026-10-10T12:34:56Z".to_owned());
+    let _pending = command::update(
+        &mut app,
+        Message::OpenSession {
+            host_id: host.id.clone(),
+            session_id: session_id.clone(),
+        },
+    );
+    let generation = app.recovery_generation;
+    let _ = command::update(
+        &mut app,
+        Message::RecoveryInspected {
+            generation,
+            host_id: host.id.clone(),
+            session_id: session_id.clone(),
+            action: RecoveryAction::Resume,
+            result: Ok(confirmed_session.clone()),
+        },
+    );
+    assert_eq!(app.modal, ModalView::ConfirmRecovery);
+    let confirmation = app.recovery_confirmation.as_ref().expect("confirmation");
+    assert_eq!(confirmation.target, "native_session_id: exact-native-id");
+    assert_eq!(
+        confirmation.native_last_activity_at.as_deref(),
+        Some("2026-10-10T12:34:56Z")
+    );
+    let expected = confirmation.clone();
+    let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    assert_eq!(
+        verifying.units(),
+        1,
+        "confirm must schedule a second inspect"
+    );
+    assert!(app.recovery_confirmation.is_none());
+    assert_eq!(app.modal, ModalView::ConfirmRecovery);
+    confirmed_session.native_session_id = None;
+    confirmed_session.native_session_path = Some("/private/conversations/exact.jsonl".to_owned());
+    confirmed_session.native_last_activity_at = None;
+    let reinspection_generation = app.recovery_generation;
+    let changed = command::update(
+        &mut app,
+        Message::RecoveryReinspected {
+            generation: reinspection_generation,
+            expected,
+            result: Ok(confirmed_session.clone()),
+        },
+    );
+    assert_eq!(
+        changed.units(),
+        0,
+        "changed target must not dispatch recovery"
+    );
+    let confirmation = app
+        .recovery_confirmation
+        .as_ref()
+        .expect("updated confirmation");
+    assert_eq!(
+        confirmation.target,
+        "native_session_path: /private/conversations/exact.jsonl"
+    );
+    assert!(confirmation.native_last_activity_at.is_none());
+    assert!(app
+        .status
+        .as_deref()
+        .is_some_and(|status| status.contains("confirm the updated details again")));
+    assert!(load_host_snapshot(&host)
+        .await
+        .expect("no recovery before reconfirmation")
+        .sessions[0]
+        .state
+        .is_terminal());
+    let _ = command::update(&mut app, Message::CloseModal);
+    assert!(app.recovery_confirmation.is_none());
+    assert_eq!(
+        command::update(&mut app, Message::ConfirmRecovery).units(),
+        0
+    );
+    let _pending_path = command::update(
+        &mut app,
+        Message::OpenSession {
+            host_id: host.id.clone(),
+            session_id: session_id.clone(),
+        },
+    );
+    let path_generation = app.recovery_generation;
+    let _ = command::update(
+        &mut app,
+        Message::RecoveryInspected {
+            generation: path_generation,
+            host_id: host.id.clone(),
+            session_id,
+            action: RecoveryAction::Resume,
+            result: Ok(confirmed_session.clone()),
+        },
+    );
+    let confirmation = app
+        .recovery_confirmation
+        .as_ref()
+        .expect("path confirmation");
+    assert_eq!(
+        confirmation.target,
+        "native_session_path: /private/conversations/exact.jsonl"
+    );
+    assert!(confirmation.native_last_activity_at.is_none());
+    let expected_path = confirmation.clone();
+    let verifying_path = command::update(&mut app, Message::ConfirmRecovery);
+    assert_eq!(verifying_path.units(), 1);
+    confirmed_session.native_last_activity_at = Some("2026-10-10T12:35:01Z".to_owned());
+    let verification_generation = app.recovery_generation;
+    let activity_changed = command::update(
+        &mut app,
+        Message::RecoveryReinspected {
+            generation: verification_generation,
+            expected: expected_path,
+            result: Ok(confirmed_session.clone()),
+        },
+    );
+    assert_eq!(
+        activity_changed.units(),
+        0,
+        "changed activity must not dispatch recovery"
+    );
+    let refreshed = app
+        .recovery_confirmation
+        .as_ref()
+        .expect("updated activity");
+    assert_eq!(
+        refreshed.native_last_activity_at.as_deref(),
+        Some("2026-10-10T12:35:01Z")
+    );
+    let expected_activity = refreshed.clone();
+    let verifying_activity = command::update(&mut app, Message::ConfirmRecovery);
+    assert_eq!(verifying_activity.units(), 1);
+    let activity_generation = app.recovery_generation;
+    let verified = command::update(
+        &mut app,
+        Message::RecoveryReinspected {
+            generation: activity_generation,
+            expected: expected_activity,
+            result: Ok(confirmed_session),
+        },
+    );
+    assert_eq!(
+        verified.units(),
+        1,
+        "matching second inspect may dispatch recovery"
+    );
+    assert!(app.recovery_confirmation.is_none());
     daemon.stop();
 }
 

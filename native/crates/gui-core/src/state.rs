@@ -2197,6 +2197,9 @@ impl Workspace {
                     branch: session.branch.clone(),
                     worktree_path: session.worktree_path.clone(),
                     updated_at: session.updated_at.clone(),
+                    native_session_id: session.native_session_id.clone(),
+                    native_session_path: session.native_session_path.clone(),
+                    native_last_activity_at: session.native_last_activity_at.clone(),
                     group: session_group(session, access, attention.is_some()),
                     attention,
                     access,
@@ -2772,6 +2775,12 @@ pub struct SessionRow {
     pub worktree_path: Option<PathBuf>,
     /// Last update timestamp in the daemon's wire timestamp format.
     pub updated_at: String,
+    /// Exact native recovery id, when this agent resumes by id.
+    pub native_session_id: Option<String>,
+    /// Exact native recovery path, when this agent resumes by path.
+    pub native_session_path: Option<String>,
+    /// Last verified native conversation activity, independent of `updated_at`.
+    pub native_last_activity_at: Option<String>,
     pub group: SessionGroup,
     /// Current live owner-attention signal, distinct from unread history.
     pub attention: Option<SessionAttention>,

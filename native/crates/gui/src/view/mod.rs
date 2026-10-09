@@ -25,7 +25,9 @@ use hosts::{conn_color, hosts_modal_content};
 use inbox::inbox_modal_content;
 use modals::{assistant_modal_content, keymap_modal_content, start_modal_content};
 use selectable_text::selectable_text;
-use session::{confirm_delete_modal_content, session_modal_content};
+use session::{
+    confirm_delete_modal_content, confirm_recovery_modal_content, session_modal_content,
+};
 
 /// Returns a provider-neutral label for a runtime reference received from the wire.
 fn agent_kind_label(kind: &RuntimeRef) -> String {
@@ -118,6 +120,11 @@ pub(crate) fn view(app: &PohunekApp) -> Element<'_, Message> {
         ModalView::ConfirmDeleteSession => modal(
             base.into(),
             confirm_delete_modal_content(app),
+            Message::CloseModal,
+        ),
+        ModalView::ConfirmRecovery => modal(
+            base.into(),
+            confirm_recovery_modal_content(app),
             Message::CloseModal,
         ),
         ModalView::Keymap => modal(base.into(), keymap_modal_content(app), Message::CloseModal),

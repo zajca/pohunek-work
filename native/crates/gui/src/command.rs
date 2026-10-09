@@ -24,13 +24,13 @@ use protocol::{
     SessionScreenParams, SessionSetMetadataParams, SessionWaitParams, MAX_SESSION_WAIT_MS,
 };
 
-use crate::attach::{attach_task, window_dimension_to_u32};
+use crate::attach::{attach_task, session_is_in_resumable_state, window_dimension_to_u32};
 use crate::config::AppConfig;
 use crate::keyboard;
 use crate::message::{
     AppMode, AssistantForm, DiscoveryResult, FormField, FormSelect, InboxView, LaunchPhase,
-    ListDirection, Message, ModalView, NotificationAction, ResolvedTemplate, StartForm,
-    TemplateRecipe, ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
+    ListDirection, Message, ModalView, NotificationAction, RecoveryAction, RecoveryConfirmation,
+    ResolvedTemplate, StartForm, TemplateRecipe, ASSISTANT_AUTO_AGENT_LABEL, BLANK_TEMPLATE_LABEL,
 };
 use crate::notify::{apply_outcome, NotificationOutcome};
 use crate::open::OpenTarget;
@@ -195,10 +195,26 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
         Message::OpenSession {
             host_id,
             session_id,
-        } => match attach_task(app, &host_id, &session_id) {
-            Ok(task) => tasks.push(task),
-            Err(err) => app.status = Some(err),
-        },
+        } => {
+            app.recovery_generation += 1;
+            app.recovery_pending = None;
+            app.recovery_confirmation = None;
+            let needs_inspect = app
+                .workspace
+                .hosts
+                .get(&host_id)
+                .and_then(|host| host.sessions.get(&session_id.0))
+                .is_some_and(session_is_in_resumable_state);
+            match attach_task(app, &host_id, &session_id, app.recovery_generation) {
+                Ok(task) => {
+                    if needs_inspect {
+                        app.recovery_pending = Some(app.recovery_generation);
+                    }
+                    tasks.push(task);
+                }
+                Err(err) => app.status = Some(err),
+            }
+        }
         Message::StopSession {
             host_id,
             session_id,
@@ -248,6 +264,8 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             if app.mode == AppMode::NewSession && app.launcher.phase == LaunchPhase::Launching => {}
         Message::CloseModal => {
             app.modal = ModalView::None;
+            app.recovery_pending = None;
+            app.recovery_confirmation = None;
             app.form_select = None;
             if app.mode == AppMode::NewSession {
                 tasks.push(iced::exit());
@@ -468,10 +486,97 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             Ok(task) => tasks.push(task),
             Err(err) => app.status = Some(err),
         },
-        Message::ForkSelectedSession => match fork_selected_session_task(app) {
-            Ok(task) => tasks.push(task),
-            Err(err) => app.status = Some(err),
-        },
+        Message::ForkSelectedSession => {
+            app.recovery_generation += 1;
+            app.recovery_pending = None;
+            app.recovery_confirmation = None;
+            match fork_selected_session_task(app) {
+                Ok(task) => {
+                    app.recovery_pending = Some(app.recovery_generation);
+                    tasks.push(task);
+                }
+                Err(err) => app.status = Some(err),
+            }
+        }
+        Message::RecoveryInspected {
+            generation,
+            host_id,
+            session_id,
+            action,
+            result,
+        } => {
+            if app.recovery_pending == Some(generation) {
+                app.recovery_pending = None;
+                match result
+                    .and_then(|session| recovery_confirmation(host_id, session_id, action, session))
+                {
+                    Ok(confirmation) => {
+                        app.recovery_confirmation = Some(confirmation);
+                        app.modal = ModalView::ConfirmRecovery;
+                    }
+                    Err(err) => app.status = Some(err),
+                }
+            }
+        }
+        Message::ConfirmRecovery => {
+            if let Some(confirmation) = app.recovery_confirmation.take() {
+                app.recovery_generation += 1;
+                match recovery_reinspect_task(app, confirmation, app.recovery_generation) {
+                    Ok(task) => {
+                        app.recovery_pending = Some(app.recovery_generation);
+                        tasks.push(task);
+                    }
+                    Err(err) => {
+                        app.modal = ModalView::None;
+                        app.status = Some(err);
+                    }
+                }
+            }
+        }
+        Message::RecoveryReinspected {
+            generation,
+            expected,
+            result,
+        } => {
+            if app.recovery_pending == Some(generation) {
+                app.recovery_pending = None;
+                match result.and_then(|session| {
+                    recovery_confirmation(
+                        expected.host_id.clone(),
+                        expected.session_id.clone(),
+                        expected.action,
+                        session,
+                    )
+                }) {
+                    Ok(refreshed) if refreshed == expected => {
+                        app.modal = ModalView::None;
+                        let task = match refreshed.action {
+                            RecoveryAction::Resume => {
+                                resume_session_task(app, &refreshed.host_id, &refreshed.session_id)
+                            }
+                            RecoveryAction::Fork => {
+                                fork_session_task(app, &refreshed.host_id, &refreshed.session_id)
+                            }
+                        };
+                        match task {
+                            Ok(task) => tasks.push(task),
+                            Err(err) => app.status = Some(err),
+                        }
+                    }
+                    Ok(refreshed) => {
+                        app.recovery_confirmation = Some(refreshed);
+                        app.status = Some(
+                            "Native recovery target or last activity changed; confirm the updated details again."
+                                .to_owned(),
+                        );
+                    }
+                    Err(err) => {
+                        app.modal = ModalView::None;
+                        app.status = Some(err);
+                    }
+                }
+            }
+        }
         Message::MetadataKeyChanged(value) => app.metadata_edit.key = value,
         Message::MetadataValueChanged(value) => app.metadata_edit.value = value,
         Message::SetMetadata => match metadata_task(app, MetadataAction::Set) {
@@ -582,8 +687,22 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                     }
                 }
                 if let Some((host_id, session_id)) = opened_session {
-                    match attach_task(app, &host_id, &session_id) {
-                        Ok(task) => tasks.push(task),
+                    let needs_inspect = app
+                        .workspace
+                        .hosts
+                        .get(&host_id)
+                        .and_then(|host| host.sessions.get(&session_id.0))
+                        .is_some_and(session_is_in_resumable_state);
+                    if needs_inspect {
+                        app.recovery_generation += 1;
+                    }
+                    match attach_task(app, &host_id, &session_id, app.recovery_generation) {
+                        Ok(task) => {
+                            if needs_inspect {
+                                app.recovery_pending = Some(app.recovery_generation);
+                            }
+                            tasks.push(task);
+                        }
                         Err(err) => {
                             let message = launcher_attach_failed(app, err);
                             app.status = Some(message);
@@ -1289,7 +1408,127 @@ fn save_notification_policy_task(
 
 fn fork_selected_session_task(app: &PohunekApp) -> Result<Task<Message>, String> {
     let (host, session_id) = selected_session_target(app)?;
-    fork_session_task(app, &host.id, &session_id)
+    recovery_inspect_task(
+        app,
+        &host.id,
+        &session_id,
+        RecoveryAction::Fork,
+        app.recovery_generation,
+    )
+}
+
+pub(crate) fn recovery_inspect_task(
+    app: &PohunekApp,
+    host_id: &HostId,
+    session_id: &SessionId,
+    action: RecoveryAction,
+    generation: u64,
+) -> Result<Task<Message>, String> {
+    let host = host_config(app, host_id)?;
+    let host_id = host_id.clone();
+    let session_id = session_id.clone();
+    let inspect_session_id = session_id.clone();
+    let options = connection_options(app)?;
+    Ok(Task::perform(
+        runtime::perform(async move {
+            inspect_session_with_options(&host, &inspect_session_id, options)
+                .await
+                .map_err(|error| core_error_label(&error))
+        }),
+        move |result| Message::RecoveryInspected {
+            generation,
+            host_id: host_id.clone(),
+            session_id: session_id.clone(),
+            action,
+            result,
+        },
+    ))
+}
+
+fn recovery_reinspect_task(
+    app: &PohunekApp,
+    expected: RecoveryConfirmation,
+    generation: u64,
+) -> Result<Task<Message>, String> {
+    let host = host_config(app, &expected.host_id)?;
+    let session_id = expected.session_id.clone();
+    let options = connection_options(app)?;
+    Ok(Task::perform(
+        runtime::perform(async move {
+            inspect_session_with_options(&host, &session_id, options)
+                .await
+                .map_err(|error| core_error_label(&error))
+        }),
+        move |result| Message::RecoveryReinspected {
+            generation,
+            expected: expected.clone(),
+            result,
+        },
+    ))
+}
+
+fn recovery_confirmation(
+    host_id: HostId,
+    session_id: SessionId,
+    action: RecoveryAction,
+    session: protocol::SessionInfo,
+) -> Result<RecoveryConfirmation, String> {
+    if session.id != session_id {
+        return Err("session.inspect returned a different session".to_owned());
+    }
+    let allowed = match action {
+        RecoveryAction::Resume => {
+            session.capabilities.resume
+                && (session.state.is_terminal()
+                    || session
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.state == protocol::RuntimeState::Lost))
+        }
+        RecoveryAction::Fork => session.capabilities.fork,
+    };
+    if !allowed {
+        return Err(format!(
+            "session no longer supports {}",
+            match action {
+                RecoveryAction::Resume => "resume",
+                RecoveryAction::Fork => "fork",
+            }
+        ));
+    }
+    let target = match (
+        session
+            .native_session_id
+            .as_deref()
+            .filter(|s| !s.is_empty()),
+        session
+            .native_session_path
+            .as_deref()
+            .filter(|s| !s.is_empty()),
+    ) {
+        (Some(id), None) => format!("native_session_id: {id}"),
+        (None, Some(path)) => format!("native_session_path: {path}"),
+        _ => {
+            return Err(
+                "session.inspect did not return exactly one native recovery target".to_owned(),
+            )
+        }
+    };
+    Ok(RecoveryConfirmation {
+        host_id,
+        session_id,
+        action,
+        target,
+        native_last_activity_at: session.native_last_activity_at,
+    })
+}
+
+fn core_error_label(error: &CoreError) -> String {
+    match &error {
+        CoreError::Client(source) => format!("{}: {error}", source.to_protocol_error().code),
+        CoreError::Protocol(source) => format!("{}: {error}", source.code),
+        _ => error.to_string(),
+    }
 }
 
 /// Resolves a selected template (a `None`-provider action), renders its static
@@ -1504,7 +1743,7 @@ pub(crate) fn resume_session_task(
             resume_session_with_options(&host, &session_id, options)
                 .await
                 .map(|result| CoreEvent::SessionResumed { host_id, result })
-                .map_err(|err| err.to_string())
+                .map_err(|error| core_error_label(&error))
         }),
         Message::CoreCommandCompleted,
     ))
@@ -1515,15 +1754,6 @@ pub(crate) fn fork_session_task(
     host_id: &HostId,
     session_id: &SessionId,
 ) -> Result<Task<Message>, String> {
-    let can_fork = app
-        .workspace
-        .hosts
-        .get(host_id)
-        .and_then(|host| host.sessions.get(&session_id.0))
-        .is_some_and(|session| session.capabilities.fork);
-    if !can_fork {
-        return Err("session does not support fork".to_owned());
-    }
     let host = host_config(app, host_id)?;
     let host_id = host_id.clone();
     let session_id = session_id.clone();
@@ -1542,7 +1772,7 @@ pub(crate) fn fork_session_task(
             fork_session_with_options(&host, params, options)
                 .await
                 .map(|result| CoreEvent::SessionForked { host_id, result })
-                .map_err(|err| err.to_string())
+                .map_err(|error| core_error_label(&error))
         }),
         Message::CoreCommandCompleted,
     ))

@@ -269,6 +269,9 @@ struct PohunekApp {
     template_recipe: Option<TemplateRecipe>,
     /// Which modal, if any, is currently open over the workspace.
     modal: ModalView,
+    recovery_generation: u64,
+    recovery_pending: Option<u64>,
+    recovery_confirmation: Option<message::RecoveryConfirmation>,
     /// Active inbox host filter; `None` fields do not constrain the notification list.
     notification_filter: NotificationFilter,
     /// `Recent | Unread | Archived` scope picked in the activity modal.
@@ -325,6 +328,9 @@ impl PohunekApp {
             assistant_editor: text_editor::Content::new(),
             template_recipe: None,
             modal: ModalView::None,
+            recovery_generation: 0,
+            recovery_pending: None,
+            recovery_confirmation: None,
             notification_filter: NotificationFilter::default(),
             inbox_scope: NotificationScope::default(),
             inbox_view: InboxView::default(),
