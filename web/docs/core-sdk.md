@@ -21,9 +21,8 @@ records their integrity.
 
 - `coreRev` is the core commit everything is built against: the SDK tarballs,
   and the `pohunekd`, `pohunek-sessiond` and `pohunek` binaries the real-daemon
-  tests drive. It must be the commit of the core tag (or the revision) pinned in
-  `native/Cargo.toml`; `packaging/core-pin` fails the release (and the packaging
-  tests) when the two differ.
+  tests drive. `packaging/core-pin` resolves the release tag (or revision)
+  from this pin and verifies that its commit matches `coreRev`.
 - `assetBaseUrl` is `https://github.com/zajca/pohunek/releases/download` for a
   core release, or `http://127.0.0.1:<port>/releases/download` to develop against
   an unreleased core commit (see below).
@@ -67,8 +66,8 @@ before dialing cached address`, so this workspace stays on 1.3.11 while
 2. Run `bun run core-sdk:sync`, then `bun install` (no packing, no server) to
    refresh `bun.lock`. The integrity of the release tarballs comes from core's
    release workflow, so it can differ from the locally packed bytes.
-3. Bump `native/Cargo.toml` to the same commit or tag. `packaging/core-pin` also
-   resolves the tag `vX.Y.Z` and fails unless it points at `coreRev`.
+3. Set the launchers CI binary release to the same core release and run
+   `packaging/core-pin` to verify that `vX.Y.Z` points at `coreRev`.
 
 `web/scripts/build-core-binaries.ts` keeps building the test binaries from
 `coreRev` with `cargo install --locked --git ... --rev` after the cutover.

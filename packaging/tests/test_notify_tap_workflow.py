@@ -60,7 +60,7 @@ class NotifyTapWorkflowTest(unittest.TestCase):
         run = NOTIFY.split("run: |")[1].split("- name: Dispatch")[0]
         self.assertNotIn("${{", run)
         self.assertIn("TAG: ${{ github.event.workflow_run.head_branch }}", NOTIFY)
-        self.assertIn("gui-v[0-9]*) formula=pohunek-gui", run)
+        self.assertNotIn("gui-v", run)
         self.assertIn("web-v[0-9]*) formula=pohunek-web", run)
         self.assertIn("'^[0-9]+\\.[0-9]+\\.[0-9]+$'", run)
 

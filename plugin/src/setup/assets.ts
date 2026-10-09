@@ -10,7 +10,6 @@ import pohunekRofiIssue from "../../../launchers/pohunek-rofi-issue" with { type
 import launcherConf from "../../../launchers/templates/launcher.conf" with { type: "text" };
 import issueTemplate from "../../../launchers/templates/prompts/issue.tmpl" with { type: "text" };
 import prTemplate from "../../../launchers/templates/prompts/pr.tmpl" with { type: "text" };
-import reviewTemplate from "../../../launchers/templates/prompts/review.tmpl" with { type: "text" };
 import swayIssueBindingTemplate from "../../../launchers/templates/sway-issue-binding.conf.tmpl" with { type: "text" };
 import swayDropinTemplate from "../../../launchers/templates/sway-dropin.conf.tmpl" with { type: "text" };
 
@@ -34,7 +33,6 @@ export const CONFIG_ASSETS: readonly Asset[] = [
   { name: "launcher.conf", body: launcherConf },
   { name: "prompts/issue.tmpl", body: issueTemplate },
   { name: "prompts/pr.tmpl", body: prTemplate },
-  { name: "prompts/review.tmpl", body: reviewTemplate },
 ];
 
 export interface SwayDropinValues {

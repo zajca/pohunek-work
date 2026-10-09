@@ -6,7 +6,7 @@
 - **Scope:** `pohunek-work`, an out-of-process pohunek workflow plugin that
   joins Linear issues, GitHub pull requests and pohunek agent sessions into
   one table, derives who is on turn for each work item, and exposes the same
-  data and actions to the owner (CLI, rofi, notifications, agent skill) and to
+  data and actions to the owner (CLI, TUI, rofi, notifications, agent skill) and to
   a managing agent. Includes the step-by-step roadmap from today's manual
   workflow to an agent that runs the workflow on the owner's behalf across
   several projects.
@@ -34,8 +34,7 @@ worktrees, projects, tasks, events, notifications and opaque metadata. It
 does not know Linear, GitHub, Jira or work items. Everything specific lives
 in a workflow plugin as defined by #148: an external executable that calls
 pohunek only through the typed CLI or SDK, receives its own config and state
-directories from core, and cannot extend the daemon, the protocol, overlays or
-the native GUI.
+directories from core, and cannot extend the daemon, the protocol or overlays.
 
 The plugin adds:
 
@@ -96,7 +95,7 @@ side covers most of the need. Two things are missing:
   hosts, and other workflows, without core changes.
 - #148 already defines the extension model: out-of-process, owner trust
   boundary, typed CLI/SDK, core-injected config and state directories, no
-  daemon, protocol, overlay or native GUI extensions.
+  daemon, protocol or overlay extensions.
 - Provider credentials already stay caller-side (per-project actions design,
   A.4); a plugin fetching its own provider data is the same rule.
 
@@ -112,10 +111,9 @@ side covers most of the need. Two things are missing:
   and prompt template a launch uses. The plugin uses actions with
   `provider = "none"`, supplies the branch itself and renders the prompt
   itself, so it does not depend on core's provider kinds.
-- **Existing provider coupling in core** (`ProviderKind { LinearIssue,
-  GithubPr }` in `crates/protocol/src/project.rs`, providers in
-  `crates/gui-core/src/providers/`, launcher scripts, `[providers.*]` in
-  `gui.toml`) is moved into the plugin in step 16 of the roadmap.
+- **Existing provider coupling** (`ProviderKind { LinearIssue, GithubPr }` in
+  core's `crates/protocol/src/project.rs`, provider-specific configuration and
+  launcher scripts) is moved into the plugin in step 16 of the roadmap.
 - **Delegated task runs (#182)** become the execution layer in stage F.
   **Dark factory (#185)** is the target of autonomy level 3.
 - **Hermes and SiYuan** stay the asynchronous summary and history.
@@ -142,8 +140,8 @@ side covers most of the need. Two things are missing:
 ## 5. Non-goals
 
 - New workflow states in Linear or GitHub, or a database of work item state.
-- Any plugin code inside the daemon or worker, new protocol methods defined by
-  the plugin, or native GUI widgets (excluded by #148 for v1).
+- Any plugin code inside the daemon or worker, or new protocol methods defined
+  by the plugin (excluded by #148 for v1).
 - An in-repository configuration layer for the plugin in v1 (section 11.3).
 - Automatic merge, and automatic answers to agent questions or approvals.
 - Estimating agent cost when the provider does not report it.
@@ -502,11 +500,12 @@ All interfaces use the same plugin library and the same actions.
 | Interface | Form | Stage |
 | --- | --- | --- |
 | CLI | `pohunek-work list/do/attach/gc`; `pohunek work ...` once core can invoke plugin actions from the CLI (#325) | B |
+| TUI | `pohunek-work tui`: full-screen work-item overview over the plugin CLI contract | B |
 | rofi | `pohunek-rofi-work`, shipped with the plugin: rows on my turn, Enter runs the row action | C |
 | rofi issue picker | `pohunek-rofi-issue <project> <linear\|github>`: for `github` the `github-issue:` rows of `list --json` that offer `implement`, Enter runs `pohunek-work do <key> implement` in a terminal | C |
 | Notifications | `pohunek-work watch` posts through `notification.create` on transition to `me` | C |
 | Agent skill `/work` | reads `list --json`, runs `do` | C |
-| GUI or web panel | the native GUI (`native/`) and the web control center (`web/`) of this repository; showing plugin data in them is a separate design (question 1) | — |
+| Web panel | the web control center (`web/`); showing plugin work-item data in it is a separate design (question 1) | — |
 
 ### 9.1 `list --json`
 
@@ -1042,7 +1041,7 @@ the plugin as an ordinary owner process, which is what #148 formalizes.
 ### B. List
 
 4. **Provider adapters in the plugin.** Linear and GitHub adapters in
-   `plugins/work`, ported from `crates/gui-core/src/providers/`, extended with
+   `plugins/work`, covering
    review threads, `reviewRequests`, timeline commits, `mergeable`, started
    issues and attachments. Done: adapter tests against recorded responses.
 5. **Rules.** The ten rules as pure functions. Done: fixture tests for each
@@ -1090,14 +1089,14 @@ the plugin as an ordinary owner process, which is what #148 formalizes.
     3. [#327](https://github.com/zajca/pohunek/issues/327) `session.list`
        filter by metadata key and value;
     4. [#328](https://github.com/zajca/pohunek/issues/328) displaying plugin
-       data in the GUI or web UI (a decision of this repository's own UIs; core
+       data in the web UI (a decision of this repository's own UIs; core
    ships no UI).
     Done: each implemented issue removes the matching workaround in the
     plugin.
 16. **Provider extraction from core.** `ProviderKind` becomes an opaque,
-    name-guarded string; `gui-core/src/providers/`, the provider launchers
-    (`pohunek-launch-issue`, `pohunek-launch-pr`) and `[providers.*]` in
-    `gui.toml` move into the plugin. Done: core contains no Linear or GitHub
+    name-guarded string; provider-specific core configuration and the provider
+    launchers (`pohunek-launch-issue`, `pohunek-launch-pr`) move into the plugin.
+    Done: core contains no Linear or GitHub
     code and all core tests pass.
 
 ### E. Agent proposes
@@ -1197,9 +1196,8 @@ the plugin as an ordinary owner process, which is what #148 formalizes.
 
 ## 18. Open Questions
 
-1. How should plugin data reach the GUI or web UI after v1? Both UIs now live
-   in this repository, so the plugin's `list --json` is the natural source and
-   no core-rendered table contract is needed; the surface design is open.
+1. How should plugin data reach the web UI after v1? The plugin's `list --json`
+   is the natural source; the web surface design is open.
 2. Resolved: the plugin lives in its own repository, `zajca/pohunek-work`,
    and talks to pohunek only through public contracts (the CLI with `--json`; the UIs in this repository also use the public protocol through pinned SDKs); see
    [`implementation-plan.md`](implementation-plan.md) decision D1.
