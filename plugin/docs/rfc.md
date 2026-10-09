@@ -298,7 +298,7 @@ Git and pohunek strings (paths, ids, check details) are JSON-quoted, ASCII-only 
 
 Core checks an existing local branch out as it is (spike S9), so a stale local branch of the
 same name yields a worktree at another commit without a warning. After the launch the plugin
-reports `launch_unverified` on any daemon warning or when no worktree of the session is listed;
+reports `setup_failed` on a failed setup hook (10.1), `launch_unverified` on any other daemon warning or when no worktree of the session is listed;
 the advice then is to remove the session and bring the branch to the pull request head, never to
 delete it. Core reports no head commit at creation (`session new`, `session show` and `session list`
 carry none), so the guard against a wrong start is the prompt: the agent runs `git rev-parse HEAD`
@@ -670,6 +670,66 @@ plugin's own provider data. Every action is idempotent per key, action and
 source revision, refuses with a typed error when its precondition no longer
 holds, and is written to the action log (section 11).
 
+### 10.1 Project setup before the agent starts
+
+A launched session runs in a fresh pohunek worktree, so whatever the project needs to run its
+checks (a container stack, dependencies, an environment file) has to be created after
+`git worktree add` and before the agent starts. Core provides this as the `post-create` hook
+(core RFC `docs/design/per-project-actions-and-worktree-hooks.md`, zajca/pohunek#13); the plugin
+adds no setup mechanism and no configuration key for it.
+
+- **Where the hook lives.** Host-global: the file
+  `hooks/post-create` in the host config directory (`~/.config/pohunek/hooks/post-create`);
+  it needs no change to the shared repository, and core reads the file when a worktree is created. In-repo: `.pohunek/hooks/post-create` (legacy alias
+  `.pohunek/setup`), which needs the repository maintainers' agreement. Both run, the
+  host-global one first. Core runs the file as `sh <file>` (its shebang and executable bit are ignored, so it is a POSIX
+  `sh` script) inside `session new`, in the new worktree, with a
+  cleared environment (only `PATH`, `HOME` and `POHUNEK_*` context variables), a timeout and its
+  output discarded, so a hook sets its own `PATH`, acts only on the worktrees it is meant for
+  (exit 0 elsewhere) and writes its own log.
+- **Enabling it.** Put the file in place; there is nothing to configure in the plugin. A
+  worktree that already exists (`babysit`, `fix-ci` and `rebase` with `--cwd`) does not run the
+  hook again.
+- **Failure.** Core treats a failing, timed-out or unstartable hook as a non-fatal warning and
+  starts the session anyway. `do` reads the `session new` warnings and, for kind `hook` (which also
+  reports the `.pohunek/setup` fallback) or `setup_script` (a reserved kind core defines but does not
+  emit today), fails as `setup_failed` (exit 2; human and `--json` error
+  envelope) naming the session, the warning's message and its detail (script path and exit
+  status, in strict ASCII). It does so before every other launch check, including the prompt delivery wait. The session keeps
+  running, because the agent already received the prompt and removing a session is the
+  owner's decision; the message gives the `pohunek session rm <id>` command. Other warning
+  kinds keep their behavior. Core discards the hook's stdout and stderr, so the output tail is
+  not part of the report (zajca/pohunek#669); aborting before the agent starts needs a required
+  hook in core (zajca/pohunek#670).
+
+Recommended host-global hook for `keboola/connection`, which provisions the Docker stack with
+`./bin/kbc wt:setup` (no arguments; it works from the worktree directory the hook runs in):
+
+```sh
+#!/bin/sh
+set -u
+# Only keboola/connection worktrees carry these files; every other project is a no-op.
+[ -x ./bin/kbc ] && [ -f worktree.conf ] && [ -d connection/src ] || exit 0
+HOME="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}"
+PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export HOME PATH
+LOG_DIR="$HOME/.local/state/pohunek/hooks"
+mkdir -p "$LOG_DIR" || exit 1
+{
+  printf '=== %s post-create %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(pwd)"
+  ./bin/kbc wt:setup
+  status=$?
+  printf '=== exit %s\n' "$status"
+  exit "$status"
+} >>"$LOG_DIR/post-create-connection.log" 2>&1
+```
+
+`wt:setup` attaches the main checkout's shared containers to the worktree network, so removing
+such a worktree has to disconnect them first. Core stops a hook after a fixed 300 s, but `do` waits
+for `session new` only `[actions] launch_timeout_ms`: a setup that takes longer reports
+`launch_timed_out` (the session may exist; check `pohunek session list` before retrying) instead
+of `setup_failed`, so the setup has to finish within that budget.
+
 ## 11. Storage and Configuration
 
 ### 11.1 Directories
@@ -705,7 +765,7 @@ provider-reported usage, never prompt text, results or terminal content.
 ### 11.3 Configuration layout and per-project settings
 
 The source of truth is `machine-management/clients/zajca/pohunek-work/`,
-installed into the plugin config directory. Every key is required; a missing
+installed into the plugin config directory. Project setup (10.1) is core's `post-create` hook and has no key here. Every key is required; a missing
 or invalid key stops every plugin command at startup with an error naming the
 file and key. There are no built-in defaults.
 

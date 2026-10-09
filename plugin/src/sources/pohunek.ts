@@ -86,7 +86,23 @@ export interface LaunchedSession {
    * `base_branch_fallback`): the session was created, but not as requested.
    */
   readonly warnings: readonly string[];
+  /**
+   * Warnings of a lifecycle hook (`hook`, which also covers the `.pohunek/setup` fallback) or of the
+   * reserved `setup_script` kind: the project's setup did not run to completion, so the session starts in
+   * an unprovisioned worktree.
+   */
+  readonly setupFailures: readonly SetupFailure[];
 }
+
+/** Daemon-written text of one failed setup hook; core discards the hook's own output, so none of it is here. */
+export interface SetupFailure {
+  readonly kind: string;
+  readonly message: string;
+  readonly detail: string | null;
+}
+
+/** Warning kinds that mean the project's setup failed. */
+export const SETUP_WARNING_KINDS: readonly string[] = ["hook", "setup_script"];
 
 export interface WaitRequest {
   readonly sessionId: string;
@@ -256,6 +272,22 @@ function parseLaunchWarnings(obj: Json, path: string): string[] {
   );
 }
 
+function parseSetupFailures(obj: Json, path: string): SetupFailure[] {
+  const raw = obj["warnings"];
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  return asArray(raw, `${path}.warnings`).flatMap((entry, index) => {
+    const warningPath = `${path}.warnings[${String(index)}]`;
+    const warning = asObject(entry, warningPath);
+    const kind = reqString(warning, "kind", warningPath);
+    if (!SETUP_WARNING_KINDS.includes(kind)) {
+      return [];
+    }
+    return [{ kind, message: reqString(warning, "message", warningPath), detail: optString(warning, "detail", warningPath) }];
+  });
+}
+
 function parseWorktree(raw: unknown, path: string): PohunekWorktree {
   const obj = asObject(raw, path);
   return {
@@ -365,6 +397,10 @@ function mapErr(err: Json): RunOutcome {
       `pohunek rejected the environment (${code}): set both ${SESSION_ENV} and ${DAEMON_ENV}, or unset both; the plugin did not change them`,
     );
   }
+  // The CLI gave up waiting while the daemon may still finish the request.
+  if (code === "request_timeout") {
+    return fail("timeout", `pohunek error ${code}`);
+  }
   const errClass = typeof err["class"] === "string" ? err["class"] : "unknown";
   return fail("unavailable", `pohunek error ${code} (class ${errClass})`);
 }
@@ -459,7 +495,8 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
           return outcome;
         }
         const session = parseSession(outcome.payload, "$.ok");
-        return { ok: true, data: { session, warnings: parseLaunchWarnings(asObject(outcome.payload, "$.ok"), "$.ok") } };
+        const payload = asObject(outcome.payload, "$.ok");
+        return { ok: true, data: { session, warnings: parseLaunchWarnings(payload, "$.ok"), setupFailures: parseSetupFailures(payload, "$.ok") } };
       }),
     waitSession: (request) =>
       wrap(async () => {

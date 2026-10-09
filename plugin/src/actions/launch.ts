@@ -8,7 +8,8 @@ import { isGithubProject } from "../config/issue-source.ts";
 import { isGithubIssueRowKey } from "../config/row-key.ts";
 import { failingChecks } from "../rules.ts";
 import type { GithubSource } from "../sources/github.ts";
-import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient } from "../sources/pohunek.ts";
+import { isLiveSession, ROLE_KEY, worktreeOf, type PohunekClient, type SetupFailure } from "../sources/pohunek.ts";
+import { toAscii } from "../output/sanitize.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { Issue, PohunekSession, PullRequest } from "../types/sources.ts";
 import { adoptRefusal, COMMIT_SHA, FETCHABLE_BRANCH } from "./adopt.ts";
@@ -620,6 +621,27 @@ async function verifyPromptDelivery(sessionId: string, pohunek: PohunekClient, c
   throw new ActionError("launch_unverified", `session ${sessionId} was created but did not start working: ${why}; ${advice}; ${owner}`);
 }
 
+/** One failed setup hook as a single ASCII line; the text comes from core and quotes paths and branch names. */
+function describeSetupFailure(failure: SetupFailure): string {
+  const text = failure.detail === null ? failure.message : `${failure.message} (${failure.detail})`;
+  return toAscii(text);
+}
+
+/**
+ * The daemon runs the project's setup hooks while it creates the worktree and starts the agent regardless
+ * of their outcome, so a failed setup is reported as a failure instead of a started session. The session is
+ * left running: removing it is the owner's decision.
+ */
+function requireSetupSucceeded(sessionId: string, failures: readonly SetupFailure[]): void {
+  if (failures.length === 0) return;
+  throw new ActionError(
+    "setup_failed",
+    `session ${sessionId} was created but its project setup failed: ${failures.map(describeSetupFailure).join("; ")}; ` +
+      "the agent runs without the setup and may not be able to run the project's checks: fix the hook, then remove the session with " +
+      `\`pohunek session rm ${sessionId}\` and launch again`,
+  );
+}
+
 /**
  * Runs the plan once. The process gets `launchKillMarginMs` more than the
  * daemon so the daemon's own timeout answer arrives first. A timeout is not
@@ -645,7 +667,9 @@ export async function executePlan(
     }
     throw new ActionError("launch_failed", `${launched.code}: ${launched.message}`);
   }
-  const { session, warnings } = launched.data;
+  const { session, warnings, setupFailures } = launched.data;
+  // First, so that a failed setup is never hidden behind another launch finding.
+  requireSetupSucceeded(session.id, setupFailures);
   // The daemon's own record has to carry exactly the link that was planned.
   const mismatched = Object.entries(plan.metadata).filter(([key, value]) => session.metadata[key] !== value);
   if (mismatched.length > 0) {
