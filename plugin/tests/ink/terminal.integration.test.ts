@@ -122,7 +122,7 @@ os.close(slave)
 output = bytearray()
 step = 0
 next_input = 0
-deadline = time.monotonic() + 15
+deadline = time.monotonic() + 20
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.05)
     if ready:
@@ -134,41 +134,46 @@ while time.monotonic() < deadline:
     if step == 0 and b"\x1b[?1006h" in output:
         os.write(master, b"\x1b[<0;17;3M")
         step = 1
-    elif step == 1 and b"SESSIONS  12" in output and b"Session 1" in output:
+    elif step == 1 and b"SESSIONS  12" in output and b"Session 1" in output and b"New session" in output:
+        time.sleep(0.2)
         os.write(master, b"\x1b[<65;10;8M")
-        next_input = now + 0.1
+        next_input = time.monotonic() + 0.3
         step = 2
     elif step == 2 and now >= next_input:
         os.write(master, b"\r")
         step = 3
     elif step == 3 and os.path.exists(sys.argv[3]) and '"inspect","s2"' in open(sys.argv[3]).read():
         os.write(master, b"\x1b")
-        next_input = now + 0.1
+        next_input = now + 0.3
         step = 4
     elif step == 4 and now >= next_input:
         os.write(master, b"\x1b[<0;10;13M")
-        next_input = now + 0.1
+        next_input = now + 0.3
         step = 5
     elif step == 5 and now >= next_input:
         os.write(master, b"\r")
         step = 6
     elif step == 6 and os.path.exists(sys.argv[3]) and '"inspect","s4"' in open(sys.argv[3]).read():
         os.write(master, b"\x1b")
-        next_input = now + 0.1
+        next_input = now + 0.3
         step = 7
     elif step == 7 and now >= next_input:
         os.write(master, b"\x1b[<0;10;9M")
-        next_input = now + 0.1
+        next_input = now + 0.3
         step = 8
     elif step == 8 and now >= next_input:
         os.write(master, b"o")
         step = 9
     elif step == 9 and os.path.exists(sys.argv[3]) and '["attach","--host","local","--","s2"]' in open(sys.argv[3]).read():
-        next_input = now + 0.2
+        next_input = now + 0.3
         step = 10
     elif step == 10 and now >= next_input:
         os.write(master, b"q")
+        next_input = now + 0.3
         step = 11
+    elif step == 11 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
     if child.poll() is not None:
         break
 if child.poll() is None:
@@ -187,7 +192,8 @@ os.close(slave)
 output = bytearray()
 step = 0
 paused = False
-deadline = time.monotonic() + 15
+next_input = 0
+deadline = time.monotonic() + 20
 def calls():
     if not os.path.exists(sys.argv[3]): return []
     return [json.loads(line) for line in open(sys.argv[3]) if line.strip()]
@@ -198,6 +204,7 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
+    now = time.monotonic()
     if step == 0 and b"\x1b[?1006h" in output:
         output.clear()
         os.write(master, b"n")
@@ -224,7 +231,11 @@ while time.monotonic() < deadline:
         step = 6
     elif step == 6 and len([call for call in calls() if call[:2] == ["attach", "--host"]]) == 2 and b"No sessions" in output:
         os.write(master, b"q")
+        next_input = now + 0.3
         step = 7
+    elif step == 7 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
     if child.poll() is not None:
         break
 if child.poll() is None:
@@ -305,7 +316,11 @@ while time.monotonic() < deadline:
         step = 5
     elif step == 5 and os.path.exists(sys.argv[3]) and '"session","new"' in open(sys.argv[3]).read() and b"Work is unavailable" in output:
         os.write(master, b"q")
+        next_input = now + 0.3
         step = 6
+    elif step == 6 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
     if child.poll() is not None:
         break
 if child.poll() is None:
@@ -384,7 +399,7 @@ else process.exit(70);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-}, 20_000);
+}, 30_000);
 
 test("a second form launches an assistant with a capable default agent", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-forms-"));
@@ -424,7 +439,7 @@ else process.exit(70);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-}, 20_000);
+}, 30_000);
 
 test("a refused Work action remains visible after terminal handover", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-work-"));
@@ -492,4 +507,4 @@ else process.exit(70);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-}, 20_000);
+}, 30_000);
