@@ -33,10 +33,10 @@ test("the TUI announces only new actionable notification IDs through a notifier 
   const logger = createLogger({ logDir: join(root, "logs"), command: "tui", maxStringLength: 1024 });
   try {
     const announcer = new NotificationAnnouncer({ command: binary, timeoutMs: 2000 }, logger);
-    await announcer.announce(snapshot([record("old", "action_required", "warning")]));
+    await announcer.announce(snapshot([record("old", "approval_required", "action_required")]));
     expect(await Bun.file(calls).exists()).toBe(false);
-    await announcer.announce(snapshot([record("old", "action_required", "warning"), record("quiet", "information", "info"), record("new", "action_required", "warning")]));
-    await announcer.announce(snapshot([record("new", "action_required", "warning")]));
+    await announcer.announce(snapshot([record("old", "approval_required", "action_required"), record("quiet", "information", "info"), record("new", "agent_blocked", "warning")]));
+    await announcer.announce(snapshot([record("new", "agent_blocked", "warning")]));
     await announcer.announce(snapshot([record("missed", "error", "error")], true));
     await announcer.announce(snapshot([record("missed", "error", "error")]));
     const lines = (await readFile(calls, "utf8")).trimEnd().split("\n");

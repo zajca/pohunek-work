@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createControlClient } from "../../src/control/index.ts";
+import { sessionGroup } from "../../src/ink/views.tsx";
 
 interface Rule { readonly args: readonly string[]; readonly ok?: unknown; readonly err?: unknown; readonly stdout?: string; readonly exit?: number; readonly delayMs?: number }
 const tempDirs: string[] = [];
@@ -42,7 +43,7 @@ const session = {
     started_at_ms: 1, updated_at_ms: 2 }],
 };
 const project = { id: "p1", label: "repo", repo_root: "/repo", git_common_dir: "/repo/.git" };
-const notification = { id: "n1", kind: "agent_turn", severity: "info", status: "unread", title: "Ready",
+const notification = { id: "n1", kind: "approval_required", severity: "action_required", status: "unread", title: "Ready",
   body: "Review needed", created_at: "2026-10-09T10:00:00Z", session_id: "s1", project_id: "p1" };
 
 describe("control CLI process boundary", () => {
@@ -64,6 +65,10 @@ describe("control CLI process boundary", () => {
         ok: { notifications: [], next_cursor: null } });
       rules.push({ args: ["--host", host, "notifications", "list", "--limit", "2", "--status", "read", "--json"],
         ok: { notifications: [], next_cursor: null } });
+      rules.push({ args: ["--host", host, "notifications", "list", "--limit", "2", "--status", "acknowledged", "--json"],
+        ok: { notifications: [{ ...notification, id: "n-ack", status: "acknowledged" }], next_cursor: null } });
+      rules.push({ args: ["--host", host, "notifications", "list", "--limit", "2", "--status", "archived", "--json"],
+        ok: { notifications: [{ ...notification, id: "n-archived", status: "archived" }], next_cursor: null } });
     }
     const stub = await cli(rules);
     const snapshot = await createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2 }).refresh();
@@ -76,7 +81,11 @@ describe("control CLI process boundary", () => {
     expect(snapshot.sessions[0]?.metadata["work.url"]).toBe("https://example.test/issue/1");
     expect(snapshot.sessions[0]?.subagents[0]?.id).toBe("sub1");
     expect(snapshot.projects).toHaveLength(2);
-    expect(snapshot.notifications).toHaveLength(2);
+    expect(snapshot.notifications).toHaveLength(6);
+    expect(snapshot.notifications.filter((entry) => entry.status === "archived")).toHaveLength(2);
+    const firstSession = snapshot.sessions[0];
+    if (firstSession === undefined) throw new Error("expected a local session");
+    expect(sessionGroup(firstSession, snapshot.notifications)).toBe("Needs you");
     expect((await stub.calls()).every(args => args.includes("--json"))).toBe(true);
   });
 
@@ -87,6 +96,8 @@ describe("control CLI process boundary", () => {
       { args: ["--host", "local", "project", "list", "--json"], ok: [project] },
       { args: ["--host", "local", "notifications", "list", "--limit", "2", "--status", "unread", "--json"], ok: { notifications: [], next_cursor: null } },
       { args: ["--host", "local", "notifications", "list", "--limit", "2", "--status", "read", "--json"], ok: { notifications: [], next_cursor: null } },
+      { args: ["--host", "local", "notifications", "list", "--limit", "2", "--status", "acknowledged", "--json"], ok: { notifications: [], next_cursor: null } },
+      { args: ["--host", "local", "notifications", "list", "--limit", "2", "--status", "archived", "--json"], ok: { notifications: [], next_cursor: null } },
     ];
     const stub = await cli(rules);
     const snapshot = await createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2 }).refresh();

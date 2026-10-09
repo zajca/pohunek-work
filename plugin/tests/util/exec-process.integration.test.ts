@@ -1,8 +1,21 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exec } from "../../src/util/exec.ts";
+import { exec, execInteractiveCapture } from "../../src/util/exec.ts";
+
+test("an interactive child keeps its exit code and bounded stdout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pw-interactive-capture-"));
+  try {
+    const binary = join(dir, "child");
+    await writeFile(binary, '#!/usr/bin/env bun\nprocess.stdout.write("{\\"ok\\":true}\\n"); process.exit(7);\n');
+    await chmod(binary, 0o700);
+    expect(await execInteractiveCapture([binary], 100)).toEqual({ exitCode: 7, stdout: '{"ok":true}\n' });
+    expect(await execInteractiveCapture([binary], 1)).toEqual({ exitCode: 7, stdout: null });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("a timeout stays bounded when a grandchild keeps the pipes open", async () => {
   const started = Date.now();

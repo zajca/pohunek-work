@@ -307,6 +307,13 @@ function sessionId(payload: unknown, kind: LaunchRequest["kind"]): string {
   return id;
 }
 
+function launchWarnings(payload: unknown): string[] {
+  const result = object(payload, "$.ok");
+  if (result["warnings"] === undefined || result["warnings"] === null) return [];
+  return array(result["warnings"], "$.ok.warnings").map((entry, index) =>
+    requiredString(object(entry, `$.ok.warnings[${String(index)}]`)["kind"], `$.ok.warnings[${String(index)}].kind`));
+}
+
 export function createSessionLauncher(config: SessionLaunchConfig, deps: SessionLauncherDeps = {}): SessionLauncher {
   const run = deps.exec ?? exec;
   const runInteractive = deps.execInteractive ?? execInteractive;
@@ -408,7 +415,13 @@ export function createSessionLauncher(config: SessionLaunchConfig, deps: Session
         current = { phase: "unknown", error: `creation outcome unknown (${detail}); inspect pohunek session list before trying again` };
         throw new LaunchError("creation_unknown", current.error);
       }
-      const session: CreatedSession = { sessionId: id, host: request.host, kind: request.kind, warnings: [] };
+      let warnings: string[];
+      try { warnings = launchWarnings(payload); }
+      catch (error) {
+        if (!(error instanceof LaunchError)) throw error;
+        warnings = ["Launch warnings could not be read; inspect the created session before attaching"];
+      }
+      const session: CreatedSession = { sessionId: id, host: request.host, kind: request.kind, warnings };
       current = { phase: "created", session };
       return session;
     })().finally(() => { creating = null; });

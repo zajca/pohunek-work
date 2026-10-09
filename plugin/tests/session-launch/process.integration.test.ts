@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionLauncher, LaunchError, type LaunchRequest, type SessionLauncher } from "../../src/session-launch/index.ts";
 
-type Scenario = "success" | "assistant" | "explicit-error" | "timeout" | "malformed";
+type Scenario = "success" | "assistant" | "warnings" | "explicit-error" | "timeout" | "malformed";
 type Trace = { readonly argv: readonly string[]; readonly stdin: string };
 
 const directories: string[] = [];
@@ -54,7 +54,7 @@ else if (argv[0] === "session" && argv[1] === "new") {
   if (scenario === "timeout") await Bun.sleep(500);
   if (scenario === "malformed") console.log("not-json");
   else if (scenario === "explicit-error" && !prior.some((entry) => entry.argv[0] === "session")) fail("project_not_found");
-  else ok({ id: "s-session" });
+  else ok({ id: "s-session", ...(scenario === "warnings" ? { warnings: [{ kind: "base_branch_fallback", message: "private branch detail" }] } : {}) });
 }
 else if (argv[0] === "assistant") ok({ session: { id: "s-assistant" }, assistant: { intent: "debug" } });
 else if (argv[0] === "attach") process.exit(prior.filter((entry) => entry.argv[0] === "attach").length === 0 ? 7 : 0);
@@ -128,6 +128,14 @@ test("creates a blank local session once and retries attach on the same terminal
   const create = traceLines.find((call) => call.argv[0] === "session");
   expect(create?.argv).toContain("--json");
   expect(create?.argv).not.toContain("--input-stdin");
+});
+
+test("retains launch warning kinds with the created identity", async () => {
+  const { bin } = await cli("warnings");
+  const service = launcher(bin);
+  const result = await service.createSession(sessionRequest());
+  expect(result).toEqual({ sessionId: "s-session", host: "local", kind: "session", warnings: ["base_branch_fallback"] });
+  expect(service.status()).toEqual({ phase: "created", session: result });
 });
 
 test("creates a remote session with prompt on stdin and confirms the target", async () => {
