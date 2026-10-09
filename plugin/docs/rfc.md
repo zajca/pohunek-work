@@ -664,8 +664,9 @@ the disk.
 A project file may set the optional table `[teardown]` (`argv`, `timeout_ms`; both required inside
 it). `argv` is a non-empty array of non-empty strings without control characters whose first element is
 an absolute path; it is run without a shell and without placeholders, with the session worktree as its
-working directory, after the post-stop checks and immediately before the last `session list` read and
-`session rm`. It is meant for host resources the worktree owns that `session rm` does not remove (for
+working directory, after the post-stop checks and a `session list` recheck, and before the last `session list` read and
+`session rm`. Every check is read again after it, so a teardown that leaves the worktree dirty or its
+branch out of sync refuses the removal (`precondition_failed`). It is meant for host resources the worktree owns that `session rm` does not remove (for
 example Docker networks): it must be idempotent and exit 0 only after it verified its own result. A
 start failure, a nonzero exit (`command_failed`) or a run longer than `timeout_ms`
 (`command_timed_out`) refuses the cleanup: the session stays stopped (if it was stopped) and nothing is

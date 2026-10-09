@@ -274,11 +274,12 @@ printf '{"teardown":{"cwd":"%s","args":"%s"}}\\n' "$(pwd -P)" "$*" >> ${dir}/cal
 case "$(cat ${dir}/teardown-mode)" in
   fail) exit 3 ;;
   sleep) sleep 30 ;;
+  dirty) echo leftover > teardown-leftover.txt ;;
 esac
 exit 0
 `;
 
-type TeardownMode = "ok" | "fail" | "sleep";
+type TeardownMode = "ok" | "fail" | "sleep" | "dirty";
 
 interface SandboxOptions {
   /** Content of the project's `[teardown]` table; omitted for a project without one. */
@@ -436,6 +437,22 @@ test("a teardown that exits nonzero refuses the cleanup and removes nothing", as
   expect(calls.filter(isTeardown)).toHaveLength(1);
   expect(pohunekSubcommands(calls, "session rm")).toHaveLength(0);
   expect(await exists(join(box.worktree, ".git"))).toBe(true);
+});
+
+test("a teardown that succeeds but leaves an untracked file refuses the removal", async () => {
+  const box = await sandbox({ teardown: teardownTable(TEARDOWN_TIMEOUT_MS), teardownMode: "dirty" });
+  const result = await box.run(["do", ROW_KEY, "cleanup", "--yes", "--json"]);
+
+  expect(result.code).not.toBe(0);
+  const err = parseErr(result.out);
+  expect(err.code).toBe("precondition_failed");
+  expect(err.msg).toContain("cleanup refused after the teardown");
+  expect(err.msg).toContain("worktree_clean");
+
+  const calls = await box.calls();
+  expect(calls.filter(isTeardown)).toHaveLength(1);
+  expect(pohunekSubcommands(calls, "session rm")).toHaveLength(0);
+  expect(await exists(join(box.worktree, "teardown-leftover.txt"))).toBe(true);
 });
 
 test("a teardown that outlives its timeout is command_timed_out and removes nothing", async () => {

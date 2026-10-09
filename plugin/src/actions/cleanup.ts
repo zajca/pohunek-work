@@ -591,8 +591,25 @@ export async function executeCleanup(plan: CleanupPlan, deps: CleanupDeps, confi
     throw new ActionError("precondition_failed", `cleanup refused after the stop: failed checks: ${failedNames(evidence.checks)}; ${kept} and nothing was removed`);
   }
 
-  const teardownRan = await runTeardown(plan, stopped, deps);
-  await recheckBeforeRemoval(plan, evidence, stopped, deps);
+  let finalEvidence = evidence;
+  let teardownRan = false;
+  if (plan.teardownArgv !== null) {
+    // The teardown is destructive, so the session list is checked right before it, and every check
+    // is read again after it because the command may have changed the worktree or its branch.
+    await recheckBeforeRemoval(plan, evidence, stopped, deps);
+    teardownRan = await runTeardown(plan, stopped, deps);
+    const afterSessions = await rereadSessions(deps.pohunek, stopped);
+    const afterTarget = afterSessions.find((s) => s.id === plan.sessionId);
+    if (afterTarget === undefined) {
+      throw new ActionError("verification_failed", `session ${plan.sessionId} is no longer listed after the teardown; nothing was removed`);
+    }
+    finalEvidence = await gatherEvidence(afterTarget, validTarget(afterTarget, plan.project), afterSessions, config, deps);
+    if (finalEvidence.checks.some((c) => !c.ok)) {
+      const kept = stopped ? "the session stays stopped" : "the session was not touched";
+      throw new ActionError("precondition_failed", `cleanup refused after the teardown: failed checks: ${failedNames(finalEvidence.checks)}; ${kept} and nothing was removed`);
+    }
+  }
+  await recheckBeforeRemoval(plan, finalEvidence, stopped, deps);
 
   const removal = await deps.pohunek.removeSession(plan.sessionId, timeoutMs);
   if (!removal.ok) {

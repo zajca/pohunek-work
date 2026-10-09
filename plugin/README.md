@@ -119,7 +119,7 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   or `blocked` session is refused with `precondition_failed`, nothing stopped),
   stops it, re-runs the checks, refuses when the sessions sharing the worktree
   changed since the evidence, runs the project's `[teardown]` command in the worktree
-  (a nonzero exit, a start failure or `timeout_ms` exceeded refuses with `command_failed`
+  (after a session-list recheck, and followed by every check again;a nonzero exit, a start failure or `timeout_ms` exceeded refuses with `command_failed`
   or `command_timed_out`; the session stays stopped and nothing is removed; `--dry-run`
   only shows it, `plan.teardown_argv`; `result.teardown_ran` reports the run), runs `session rm` (never
   `--accept-unconfirmed-cleanup`) and re-reads `session list`. An `rm` result
