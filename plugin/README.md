@@ -85,7 +85,9 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 - `pohunek-work tui` opens the full-screen Ink interface. Work lists items from
   the plugin's public CLI output and hands actions to `pohunek-work do`.
   Sessions, Hosts and Activity use public `pohunek --json` commands. Press
-  `1`–`4` to switch views and `?` for the available keys. The Work view supports
+  `1`–`4` or click a tab to switch views; click a row to select it, use the wheel
+  to move through lists, and click the visible actions for the selected item.
+  Press `?` for the available keys. The Work view supports
   `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
   pull requests). Session detail exposes attach, resume, fork, stop, remove,
   rename, metadata, screen, work link, folder and copy actions. Activity has
@@ -93,9 +95,10 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   interface and block writes on affected hosts;
 - `pohunek-work new-session` opens the session form alone, then attaches in the
   same terminal. In the main TUI, `n` opens that form and `a` in Sessions opens
-  the Assistant form. Use Tab to change fields, arrows to choose a host,
-  project, agent or action template, then focus Create and attach and press
-  Enter. The Assistant
+  the Assistant form. Click a field or use Tab to change focus; click a choice,
+  use the wheel to browse longer choice lists, or use arrows to choose a host,
+  project, agent or action template. Click Create and attach or focus it and
+  press Enter. The Assistant
   currently supports intent-only launch: the core CLI exposes a free-form
   request only as a process argument, so the form does not send private request
   text through it. Esc cancels before creation; after creation, Enter retries

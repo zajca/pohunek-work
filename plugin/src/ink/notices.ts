@@ -4,9 +4,10 @@ import { toAscii } from "../output/sanitize.ts";
 import type { NotifyConfig } from "../types/config.ts";
 import { noticeArgv } from "../notify-command.ts";
 import { exec, SpawnError } from "../util/exec.ts";
+import { isUnresolvedAction } from "./attention.ts";
 
 function qualifies(record: ControlNotification): boolean {
-  return record.kind === "action_required" || record.severity === "error";
+  return isUnresolvedAction(record);
 }
 
 export class NotificationAnnouncer {

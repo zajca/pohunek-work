@@ -11,7 +11,7 @@ import type {
 export type * from "./types.ts";
 
 const PROTOCOL_VERSION = 4;
-const ACTIVE_NOTIFICATION_STATUSES = ["unread", "read"] as const;
+const VISIBLE_NOTIFICATION_STATUSES = ["unread", "read", "acknowledged", "archived"] as const;
 const LOCAL_HOST: ControlHost = { route: "local", dialable: true, name: "Local", classification: "local", daemonVersion: null, address: null };
 
 function failure(code: ControlError["code"], message: string, extra: Partial<ControlError> = {}): ControlResult<never> {
@@ -106,32 +106,37 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   const projectList = (host: string): Promise<ControlResult<readonly ControlProject[]>> => read(onHost(host, ["project", "list"]), raw =>
     array(raw, "$.ok").map((item, index) => project(item, `$.ok[${String(index)}]`, host)));
 
-  async function notificationList(host: string): Promise<ControlResult<readonly ControlNotification[]>> {
+  async function notificationStatusList(host: string, status: (typeof VISIBLE_NOTIFICATION_STATUSES)[number]): Promise<ControlResult<readonly ControlNotification[]>> {
     const records: ControlNotification[] = [];
-    for (const status of ACTIVE_NOTIFICATION_STATUSES) {
-      const seen = new Set<string>();
-      let cursor: string | null = null;
-      do {
-        const args = onHost(host, ["notifications", "list", "--limit", String(options.notificationsPageSize), "--status", status,
-          ...(cursor === null ? [] : ["--cursor", cursor])]);
-        const page = await read(args, raw => {
-          const obj = object(raw, "$.ok");
-          const items = array(obj["notifications"], "$.ok.notifications")
-            .map((item, index) => notification(item, `$.ok.notifications[${String(index)}]`, host));
-          const next = obj["next_cursor"];
-          if (next !== undefined && next !== null && (typeof next !== "string" || next === "")) {
-            throw new InvalidControlResponse("$.ok.next_cursor: expected a non-empty string");
-          }
-          return { items, next };
-        });
-        if (!page.ok) { return page; }
-        records.push(...page.data.items);
-        cursor = page.data.next ?? null;
-        if (cursor !== null && seen.has(cursor)) { return failure("invalid_response", "pohunek returned a repeated notifications cursor"); }
-        if (cursor !== null) { seen.add(cursor); }
-      } while (cursor !== null);
-    }
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const args = onHost(host, ["notifications", "list", "--limit", String(options.notificationsPageSize), "--status", status,
+        ...(cursor === null ? [] : ["--cursor", cursor])]);
+      const page = await read(args, raw => {
+        const obj = object(raw, "$.ok");
+        const items = array(obj["notifications"], "$.ok.notifications")
+          .map((item, index) => notification(item, `$.ok.notifications[${String(index)}]`, host));
+        const next = obj["next_cursor"];
+        if (next !== undefined && next !== null && (typeof next !== "string" || next === "")) {
+          throw new InvalidControlResponse("$.ok.next_cursor: expected a non-empty string");
+        }
+        return { items, next };
+      });
+      if (!page.ok) { return page; }
+      records.push(...page.data.items);
+      cursor = page.data.next ?? null;
+      if (cursor !== null && seen.has(cursor)) { return failure("invalid_response", "pohunek returned a repeated notifications cursor"); }
+      if (cursor !== null) { seen.add(cursor); }
+    } while (cursor !== null);
     return { ok: true, data: records };
+  }
+
+  async function notificationList(host: string): Promise<ControlResult<readonly ControlNotification[]>> {
+    const results = await Promise.all(VISIBLE_NOTIFICATION_STATUSES.map((status) => notificationStatusList(host, status)));
+    const failed = results.find((result) => !result.ok);
+    if (failed !== undefined) return failed;
+    return { ok: true, data: results.flatMap((result) => result.ok ? result.data : []) };
   }
 
   async function refresh(): Promise<ControlSnapshot> {

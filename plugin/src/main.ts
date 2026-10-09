@@ -329,6 +329,7 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       selfBin: config.global.tui.selfBin,
       pohunekBin: config.global.pohunek.bin,
       timeoutMs: config.global.pohunek.timeoutMs,
+      listTimeoutMs: config.global.tui.listTimeoutMs,
       launchTimeoutMs: config.global.actions.launchTimeoutMs,
       launchKillMarginMs: config.global.actions.launchKillMarginMs,
       notificationsPageSize: config.global.pohunek.notificationsPageSize,

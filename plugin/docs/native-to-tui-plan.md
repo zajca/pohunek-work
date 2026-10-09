@@ -40,6 +40,16 @@ Use **Ink 7.1.1** with **React 19.2.4**, pinned in `plugin/package.json` and `bu
 
 Keep the plugin's current data and action contracts behind a view-model boundary. The renderer should own layout, focus and keys; public CLI/SDK adapters own data, errors and lifecycle. Reuse the current `do` confirmation handover and URL validation. Avoid a second confirmation policy in React components.
 
+### UX research and interaction rules
+
+[Lazygit](https://github.com/jesseduffield/lazygit/blob/master/docs/Config.md) demonstrates mouse-enabled navigation alongside a keyboard-first workflow. [K9s](https://k9scli.io/topics/commands/) makes navigation and available commands discoverable. [Terminal Kit's document model](https://github.com/cronvel/terminal-kit/blob/master/doc/document-model.md) offers mouse-aware widgets, but moving the whole application to a second renderer would replace the current Ink integration. [OpenTUI's runtime support](https://opentui.com/docs/getting-started/runtime-support/) includes native platform packages and would restore the packaging complexity this migration removes. Keep Ink and add a small SGR mouse layer over its input and measured elements.
+
+- Show one active top-level view, a count or empty state, the current filter, a selected row, and visible actions. Rows use two lines so state and context do not compete with the title. Long external text is sanitized and truncated to the terminal width.
+- Tabs, rows, actions, form fields and form choices respond to a click. Wheel movement selects adjacent rows or scrolls long choice and detail lists. Keyboard shortcuts remain available for every action.
+- The standalone form shows its editable fields and choice options directly. Choice lists have a visible range and can be scrolled; project search narrows the list. Creation is explicit and remains locked after a successful create until attach succeeds or the user closes the dialog.
+- Use a focused empty state and its next action when a list is empty or unavailable. A failed Work query must show its error rather than an endless loading message.
+- Enable SGR mouse reporting only while the Ink application owns the terminal. Disable it before `pohunek attach` and on exit so the child and shell receive their normal mouse input.
+
 ## 3. Parity checklist
 
 | Native GUI behavior at removal | TUI destination and acceptance |
