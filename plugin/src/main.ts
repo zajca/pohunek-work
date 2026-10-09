@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Command line entry point: `pohunek-work list`, `do`, `doctor`, `setup`, `tui` and `watch`.
+// Command line entry point for the workflow and experimental Beads queue.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAction } from "./actions/types.ts";
@@ -12,6 +12,7 @@ import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
 import { runWatch, unknownProject } from "./commands/watch.ts";
+import { BEADS_CONTRACT_VERSION, BeadsError, BeadsUsageError, parseBeadsArgs, renderBeads, runBeads } from "./commands/beads.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
@@ -39,6 +40,8 @@ const USAGE = `usage:
   pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project> --issue-source <linear|github>] [--issue-keybind <key>] [--json]
   pohunek-work tui
   pohunek-work watch [--project <label>]
+  pohunek-work beads ready --workspace <abs> --bd-bin <abs> --repo-url <url> --project <label> --actor <id> --timeout-ms <n> [--json]
+  pohunek-work beads claim <id> --workspace <abs> --bd-bin <abs> --repo-url <url> --project <label> --actor <id> --timeout-ms <n> <--dry-run|--yes> [--json]
 
 merge is not an action: merging stays manual.
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
@@ -412,10 +415,30 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
   }
 }
 
+async function beadsCommand(argv: readonly string[]): Promise<number> {
+  let options;
+  try {
+    options = parseBeadsArgs(argv);
+  } catch (error) {
+    if (error instanceof BeadsUsageError) throw new UsageError(error.message);
+    throw error;
+  }
+  try {
+    const payload = await runBeads(options, exec);
+    console.log(options.json
+      ? JSON.stringify({ cli_version: pkg.version, protocol: { minimum: BEADS_CONTRACT_VERSION, maximum: BEADS_CONTRACT_VERSION }, ok: payload }, null, 2)
+      : renderBeads(payload));
+    return 0;
+  } catch (error) {
+    if (error instanceof BeadsError) return reportError(options.json, BEADS_CONTRACT_VERSION, "action", error.code, error.message);
+    throw error;
+  }
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv;
   const json = argv.includes("--json");
-  const contract = command === "do" ? DO_CONTRACT_VERSION : command === "setup" ? SETUP_CONTRACT_VERSION : LIST_CONTRACT_VERSION;
+  const contract = command === "do" ? DO_CONTRACT_VERSION : command === "setup" ? SETUP_CONTRACT_VERSION : command === "beads" ? BEADS_CONTRACT_VERSION : LIST_CONTRACT_VERSION;
   try {
     switch (command) {
       case "list":
@@ -430,6 +453,8 @@ async function main(argv: readonly string[]): Promise<number> {
         return await tuiCommand(rest);
       case "watch":
         return await watchCommand(rest);
+      case "beads":
+        return await beadsCommand(rest);
       default:
         throw new UsageError(command === undefined ? "missing command" : `unknown command: ${command}`);
     }
