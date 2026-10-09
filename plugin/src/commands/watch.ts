@@ -2,6 +2,7 @@
 // notification for every row that becomes the owner's turn. The previous turn
 // of each row is kept in memory only; a restart starts from a fresh baseline.
 import { toAscii } from "../output/sanitize.ts";
+import { noticeArgv } from "../notify-command.ts";
 import { rowId, transitionsToMe } from "../tui/rows.ts";
 import type { NotifyConfig, PluginConfig } from "../types/config.ts";
 import type { ListItem, TurnActor } from "../types/item.ts";
@@ -28,8 +29,6 @@ export interface TickResult {
   readonly notified: readonly string[];
 }
 
-const APP_NAME = "pohunek-work";
-
 /**
  * Key and reason only: issue and pull request titles are provider text and a
  * notification daemon may interpret markup in them.
@@ -37,7 +36,7 @@ const APP_NAME = "pohunek-work";
 export function notificationArgv(notify: NotifyConfig, item: ListItem): readonly string[] {
   const summary = toAscii(`your turn: ${item.key}`);
   const body = toAscii(`${item.project}: ${item.on_turn.reason}`);
-  return [notify.command, `--app-name=${APP_NAME}`, "--", summary, body];
+  return noticeArgv(notify, summary, body);
 }
 
 /** Label of a project the watch is restricted to that no project file defines; null when it is known. */

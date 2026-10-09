@@ -1,5 +1,10 @@
 # pohunek-work TUI: Plan
 
+Historical design record for the first Work-only terminal implementation from
+2026-10-02. Its driver paths and terminal architecture are superseded by the
+Ink implementation described in [native-to-tui-plan.md](native-to-tui-plan.md)
+and the current behavior in [the plugin README](../README.md).
+
 - **Status:** T0 to T4 implemented (2026-10-02); T5 waits for M2c. Open questions decided (section 11). **Builds on:** [`rfc.md`](rfc.md) sections 9, 10, 14; [`m2-implementation-plan.md`](m2-implementation-plan.md)
   sections 2a (D8-D15), 4 (rules of every write action), 5 (M2b, M2c).
 - **Constraints:** no change in `zajca/pohunek`, installed pohunek CLI only; no new state (memory only).

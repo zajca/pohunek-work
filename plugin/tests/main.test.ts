@@ -142,6 +142,7 @@ test("setup rejects unknown steps and options that do not apply", async () => {
     ["setup", "scripts", "extra"],
     ["setup", "scripts", "--print"],
     ["setup", "config", "--keybind", "$mod+x"],
+    ["setup", "config", "--new-session-keybind", "$mod+x"],
     ["setup", "sway", "--print", "--force"],
     ["setup", "scripts", "--issue-project", "ui"],
     ["setup", "sway", "--issue-keybind", "$mod+g"],
@@ -156,6 +157,14 @@ test("setup rejects unknown steps and options that do not apply", async () => {
     expect(result.code).toBe(2);
     expect(result.err).toContain("usage:");
   }
+});
+
+test("setup sway prints a custom standalone session binding", async () => {
+  const dir = await tempDir();
+  const result = await run(["setup", "sway", "--print", "--new-session-keybind", "$mod+Shift+n"], dir);
+  expect(result.code).toBe(0);
+  expect(result.out).toContain("bindsym $mod+Shift+n exec exec ");
+  expect(result.out).toContain("pohunek-new-session");
 });
 
 test("setup installs into the XDG locations and reports JSON on stdout", async () => {

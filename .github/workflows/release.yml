@@ -226,9 +226,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The plugin is Bun source that runs unbundled, so the archive holds the
-  # sources and `plugin/` imports the launcher files it embeds from the sibling
-  # `launchers/` directory.
+  # Bundle the locked Bun dependencies into a portable JavaScript entry point.
+  # The archive also keeps sources and launcher assets for inspection.
   package-plugin:
     name: Package the plugin
     needs: [prepare, ci]
@@ -246,6 +245,13 @@ jobs:
         with:
           bun-version-file: plugin/package.json
 
+      - name: Build the plugin bundle
+        working-directory: plugin
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun build src/main.ts --target bun --outfile pohunek-work.js
+
       - name: Package
         id: package
         run: |
@@ -257,9 +263,8 @@ jobs:
           packaging/check-archive "$archive" --component plugin --version "$VERSION" \
             --target noarch --core "$POHUNEK_CORE_REF"
 
-      # The extracted sources must load every module, including the launcher
-      # files they import as text; with no arguments the CLI prints its usage
-      # and exits 2 without reading any configuration or contacting a service.
+      # The extracted bundle must run without node_modules or source imports.
+      # Exercise both CLI loading and Ink rendering in a terminal.
       - name: Check the packaged CLI loads
         env:
           ARCHIVE: ${{ steps.package.outputs.archive }}
@@ -270,10 +275,19 @@ jobs:
           tar -xzf "$ARCHIVE" -C "$extract_dir"
           root="$extract_dir/pohunek-work-plugin-${VERSION}-noarch"
           status=0
-          output="$(cd "$root" && bun plugin/src/main.ts 2>&1)" || status=$?
+          output="$(cd "$root" && bun plugin/pohunek-work.js 2>&1)" || status=$?
           if [ "$status" -ne 2 ] || ! printf '%s\n' "$output" | grep -q '^usage:'; then
             echo "::error::the packaged CLI did not print its usage (exit status $status)"
             printf '%s\n' "$output"
+            exit 1
+          fi
+          pty_log="$(mktemp)"
+          trap 'rm -rf "$extract_dir" "$pty_log"' EXIT
+          (sleep 2; printf q) | timeout 15s script -e -q -c \
+            "env POHUNEK_WORK_CONFIG_DIR='$GITHUB_WORKSPACE/plugin/tests/fixtures/config' bun '$root/plugin/pohunek-work.js' tui" \
+            "$pty_log" >/dev/null
+          if ! grep -a -q 'Sessions' "$pty_log" || ! grep -a -q 'Hosts' "$pty_log"; then
+            echo "::error::the packaged TUI did not render its navigation"
             exit 1
           fi
 

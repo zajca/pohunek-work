@@ -42,7 +42,11 @@ Use the split setup commands when diagnosing or applying changes:
    without an in-repo copy.
 3. `pohunek-work setup sway` writes the sway drop-in, or
    `pohunek-work setup sway --print` prints the snippet for manual review.
-   `--keybind` chooses the session switcher key (default `$mod+p`). The issue
+   `--keybind` chooses the session switcher key (default `$mod+p`).
+   `--new-session-keybind` chooses the standalone new-session form key (default
+   `$mod+n`). This binding runs `pohunek-new-session`, which opens
+   `pohunek-work new-session` in the configured `terminal` and uses
+   `pohunek_work_bin` from `launcher.conf`. The issue
    picker needs a project and an issue source
    (`pohunek-rofi-issue <project> <linear|github> [action]`; there is no
    default source), so its binding is generated only with

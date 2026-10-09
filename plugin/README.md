@@ -82,10 +82,33 @@ an explicit policy.
 M0 and M1 are merged: `pohunek-work list` and `doctor`. M2a and M2b are in
 progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 
-- `pohunek-work tui` opens the current full-screen work-item view in a terminal.
-  It lists items from the plugin's public CLI output and hands actions to
-  `pohunek-work do`. Session, host and activity views and a standalone new-session
-  dialog are not available yet;
+- `pohunek-work tui` opens the full-screen Ink interface. Work lists items from
+  the plugin's public CLI output and hands actions to `pohunek-work do`.
+  Sessions, Hosts and Activity use public `pohunek --json` commands. Press
+  `1`–`4`, left/right arrows, or click a tab to switch views. Up/down arrows select a row; Enter or a
+  click opens its detail in every view, and Esc returns to the list. Opening a
+  Work item shows its next action and available choices before anything runs;
+  click an action or select it with arrows and press Enter to preview its plan,
+  then choose Run to execute it. Opening a notification keeps
+  its message visible and offers an explicit Open session action. Use the wheel
+  to move through lists and click labeled actions in each detail. Press `?` for
+  the available keys. The Work view supports
+  `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
+  pull requests). Session detail exposes attach, resume, fork, stop, remove,
+  rename, metadata, screen, work link, folder and copy actions. Activity has
+  Recent, Unread and Archived scopes. Partial host failures are shown in the
+  interface and block writes on affected hosts;
+- `pohunek-work new-session` opens the session form alone, then attaches in the
+  same terminal. In the main TUI, `n` opens that form and `a` in Sessions opens
+  the Assistant form. Click a field or use Tab to change focus; click a visible
+  choice to select it, use the wheel to browse longer choice lists, or use
+  arrows to change a host, project, agent or action template. Clicking the
+  focused field again leaves its value intact. Click Create and attach or focus it and
+  press Enter. The Assistant
+  currently supports intent-only launch: the core CLI exposes a free-form
+  request only as a process argument, so the form does not send private request
+  text through it. Esc cancels before creation; after creation, Enter retries
+  attach without creating another session;
 - `pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--dry-run]`
   launches a linked session; `implement` also launches a `github-issue:` row: the
   branch is `<branch_prefix>/<issue_number_prefix><n>/<slug>` (the project's
@@ -156,6 +179,23 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 Every action plans from fresh data and refuses with a typed code when its rule
 no longer holds; every write action asks for confirmation unless `--yes` is
 given.
+
+## Terminal setup
+
+The required `[tui]` table in `config.toml` controls `self_bin`, refresh and
+list timeouts, initial Work view, stale pull-request days, URL opener and allowed
+hosts. `clipboard_command` is optional and must be an absolute executable
+path; without it, the TUI displays branch and path text for manual selection.
+The new session form calls the public core CLI with prompt text on stdin. Core
+and the plugin binary must be installed separately. The plugin release archive
+starts with `bun plugin/pohunek-work.js`.
+
+On Sway, `pohunek-work setup sway` installs `$mod+n` for the standalone form
+through `pohunek-new-session`, using `terminal` and `pohunek_work_bin` from
+`launcher.conf`. Change the binding with `--new-session-keybind`. Run
+`pohunek-work setup scripts --force` after an upgrade to install the launcher.
+See [the launcher guide](../launchers/docs/launcher.md) and
+[the native-to-TUI plan](docs/native-to-tui-plan.md) for the interaction model.
 
 ## Design principles
 

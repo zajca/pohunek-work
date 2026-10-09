@@ -35,6 +35,11 @@ export type Exec = (argv: readonly string[], options: ExecOptions) => Promise<Ex
 /** Runs a child on the caller's terminal and resolves with its exit code (null when a signal ended it). */
 export type InteractiveExec = (argv: readonly string[]) => Promise<number | null>;
 
+export interface InteractiveCaptureResult {
+  readonly exitCode: number | null;
+  readonly stdout: string | null;
+}
+
 /**
  * The child shares the terminal and the foreground process group: a child in
  * its own group would be stopped by SIGTTIN when it reads the terminal. There
@@ -54,6 +59,30 @@ export const execInteractive: InteractiveExec = async (argv) => {
   await child.exited;
   return child.exitCode;
 };
+
+/** Keeps stdin on the terminal while forwarding and retaining bounded stdout. */
+export async function execInteractiveCapture(argv: readonly string[], maxOutputBytes: number): Promise<InteractiveCaptureResult> {
+  const [binary, ...args] = argv;
+  if (binary === undefined || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) {
+    throw new TypeError("execInteractiveCapture requires argv and a positive output limit");
+  }
+  let child: Bun.Subprocess<"inherit", "pipe", "inherit">;
+  try {
+    child = Bun.spawn([binary, ...args], { stdin: "inherit", stdout: "pipe", stderr: "inherit" });
+  } catch (cause) {
+    throw new SpawnError(binary, cause);
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of child.stdout) {
+    const data = Buffer.from(chunk);
+    process.stdout.write(data);
+    size += data.length;
+    if (size <= maxOutputBytes) chunks.push(data);
+  }
+  await child.exited;
+  return { exitCode: child.exitCode, stdout: size <= maxOutputBytes ? Buffer.concat(chunks).toString("utf8") : null };
+}
 
 /** Ends the child's whole process group; falls back to the child alone when the group is gone. */
 function killGroup(child: Bun.Subprocess): void {

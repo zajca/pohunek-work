@@ -16,6 +16,9 @@ export const SWAY_DROPIN_DIR = "config.d";
 /** Keybind of the session switcher (`pohunek-rofi`). */
 export const DEFAULT_SWAY_KEYBIND = "$mod+p";
 
+/** Keybind of the standalone session form. */
+export const DEFAULT_SWAY_NEW_SESSION_KEYBIND = "$mod+n";
+
 /** Issue sources the picker (`pohunek-rofi-issue`) accepts as its source argument. */
 export const ISSUE_PICKER_SOURCES = ["linear", "github"] as const;
 export type IssuePickerSource = (typeof ISSUE_PICKER_SOURCES)[number];
