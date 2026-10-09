@@ -675,7 +675,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
 export async function runInkTui(options: InkTuiOptions): Promise<number> {
   let exitCode = 0;
-  const instance = render(<InkApplication options={options} setExitCode={(code) => { exitCode = code; }} />, { alternateScreen: true, exitOnCtrlC: false, patchConsole: false });
+  const instance = render(<InkApplication options={options} setExitCode={(code) => { exitCode = code; }} />, { alternateScreen: true, interactive: true, exitOnCtrlC: false, patchConsole: false });
   try {
     await instance.waitUntilExit();
     return exitCode;
