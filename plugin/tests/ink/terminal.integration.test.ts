@@ -49,6 +49,8 @@ os.close(slave)
 output = bytearray()
 clicked = False
 switched = False
+right_switched = False
+left_switched = False
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.1)
@@ -62,6 +64,14 @@ while time.monotonic() < deadline:
         clicked = True
     if clicked and not switched and b"No sessions" in output:
         switched = True
+        output.clear()
+        os.write(master, b"\x1b[C")
+    elif switched and not right_switched and b"HOSTS" in output:
+        right_switched = True
+        output.clear()
+        os.write(master, b"\x1b[D")
+    elif right_switched and not left_switched and b"No sessions" in output:
+        left_switched = True
         os.write(master, b"q")
     if child.poll() is not None:
         break
@@ -77,7 +87,7 @@ try:
 except OSError:
     pass
 os.close(master)
-print(json.dumps({"exit": child.returncode, "clicked": clicked, "switched": switched, "mouse_off": b"\x1b[?1006l" in output}))
+print(json.dumps({"exit": child.returncode, "clicked": clicked, "switched": switched, "right_switched": right_switched, "left_switched": left_switched, "mouse_off": b"\x1b[?1006l" in output}))
 `;
 
 const PYTHON_FORM_MOUSE_PTY = String.raw`
@@ -124,6 +134,7 @@ step = 0
 next_input = 0
 mouse_scrolled = False
 keyboard_scrolled = False
+unavailable_actions_hidden = False
 screen_start = 0
 deadline = time.monotonic() + 20
 while time.monotonic() < deadline:
@@ -145,7 +156,8 @@ while time.monotonic() < deadline:
     elif step == 2 and now >= next_input:
         os.write(master, b"\r")
         step = 3
-    elif step == 3 and os.path.exists(sys.argv[3]) and '"inspect","s2"' in open(sys.argv[3]).read():
+    elif step == 3 and os.path.exists(sys.argv[3]) and '"inspect","s2"' in open(sys.argv[3]).read() and b"TERMINAL SCREEN" in output:
+        unavailable_actions_hidden = b"Resume" not in output and b"Fork" not in output
         output.clear()
         os.write(master, b"p")
         step = 4
@@ -173,29 +185,34 @@ while time.monotonic() < deadline:
             step = 7
     elif step == 7 and now >= next_input:
         os.write(master, b"\x1b[<0;10;13M")
-        next_input = now + 0.3
         step = 8
-    elif step == 8 and now >= next_input:
-        os.write(master, b"\r")
-        step = 9
-    elif step == 9 and os.path.exists(sys.argv[3]) and '"inspect","s4"' in open(sys.argv[3]).read():
+    elif step == 8 and os.path.exists(sys.argv[3]) and '"inspect","s4"' in open(sys.argv[3]).read():
         os.write(master, b"\x1b")
         next_input = now + 0.3
-        step = 10
-    elif step == 10 and now >= next_input:
+        step = 9
+    elif step == 9 and now >= next_input:
+        output.clear()
         os.write(master, b"\x1b[<0;10;9M")
-        next_input = now + 0.3
-        step = 11
-    elif step == 11 and now >= next_input:
+        step = 10
+    elif step == 10 and os.path.exists(sys.argv[3]) and open(sys.argv[3]).read().count('"inspect","s2"') >= 2 and b"TERMINAL SCREEN" in output:
+        time.sleep(0.2)
         os.write(master, b"o")
+        step = 11
+    elif step == 11 and os.path.exists(sys.argv[3]) and '["attach","--host","local","--","s2"]' in open(sys.argv[3]).read():
+        output.clear()
+        next_input = now + 0.3
         step = 12
-    elif step == 12 and os.path.exists(sys.argv[3]) and '["attach","--host","local","--","s2"]' in open(sys.argv[3]).read():
+    elif step == 12 and now >= next_input:
+        os.write(master, b"\x1b")
         next_input = now + 0.3
         step = 13
-    elif step == 13 and now >= next_input:
+    elif step == 13 and b"SESSIONS  12" in output:
         os.write(master, b"q")
         next_input = now + 0.3
         step = 14
+    elif step == 13 and now >= next_input:
+        os.write(master, b"\x1b")
+        next_input = now + 0.3
     elif step == 14 and now >= next_input:
         os.write(master, b"q")
         next_input = now + 0.3
@@ -205,7 +222,7 @@ if child.poll() is None:
     child.kill()
 child.wait()
 os.close(master)
-print(json.dumps({"exit": child.returncode, "step": step, "mouse_scrolled": mouse_scrolled, "keyboard_scrolled": keyboard_scrolled}))
+print(json.dumps({"exit": child.returncode, "step": step, "mouse_scrolled": mouse_scrolled, "keyboard_scrolled": keyboard_scrolled, "unavailable_actions_hidden": unavailable_actions_hidden, **({"trace": open(sys.argv[3]).read()} if child.returncode != 0 and os.path.exists(sys.argv[3]) else {})}))
 `;
 
 const PYTHON_TWO_FORMS_PTY = String.raw`
@@ -278,7 +295,15 @@ child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdo
 os.close(slave)
 output = bytearray()
 step = 0
+next_input = 0
+mouse_opened = False
+keyboard_opened = False
+no_automatic_action = True
+previewed = False
+mouse_action_previewed = False
 deadline = time.monotonic() + 15
+def trace():
+    return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.05)
     if ready:
@@ -286,19 +311,118 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
-    if step == 0 and b"WORK  1 items" in output:
-        os.write(master, b"\r")
+    now = time.monotonic()
+    if step == 0 and b"WORK  1 items" in output and b"\x1b[?1006h" in output:
+        time.sleep(0.2)
+        output.clear()
+        os.write(master, b"\x1b[<0;10;7M")
         step = 1
-    elif step == 1 and b"confirmation_required: owner declined" in output:
-        os.write(master, b"q")
+    elif step == 1 and b"WORK ITEM" in output and b"Run review" in output:
+        mouse_opened = True
+        no_automatic_action = no_automatic_action and '"do"' not in trace()
+        output.clear()
+        os.write(master, b"\x1b")
         step = 2
+    elif step == 2 and b"WORK  1 items" in output:
+        output.clear()
+        os.write(master, b"\r")
+        step = 3
+    elif step == 3 and b"WORK ITEM" in output and b"Run review" in output:
+        keyboard_opened = True
+        no_automatic_action = no_automatic_action and '"do"' not in trace()
+        output.clear()
+        os.write(master, b"\r")
+        step = 4
+    elif step == 4 and b"PLAN PREVIEW" in output and b"name: Review this" in output:
+        previewed = True
+        output.clear()
+        os.write(master, b"\x1b")
+        step = 5
+    elif step == 5 and b"WORK ITEM" in output and b"Run review" in output:
+        time.sleep(0.2)
+        output.clear()
+        os.write(master, b"\x1b[<0;10;11M")
+        step = 6
+    elif step == 6 and b"PLAN PREVIEW" in output:
+        mouse_action_previewed = True
+        output.clear()
+        os.write(master, b"\x1b")
+        step = 7
+    elif step == 7 and b"WORK ITEM" in output and b"Run review" in output:
+        output.clear()
+        os.write(master, b"r")
+        step = 8
+    elif step == 8 and b"confirmation_required: owner declined" in output:
+        os.write(master, b"q")
+        next_input = now + 0.3
+        step = 9
+    elif step == 9 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
     if child.poll() is not None:
         break
 if child.poll() is None:
     child.kill()
 child.wait()
 os.close(master)
-print(json.dumps({"exit": child.returncode, "step": step}))
+print(json.dumps({"exit": child.returncode, "step": step, "mouse_opened": mouse_opened, "keyboard_opened": keyboard_opened, "no_automatic_action": no_automatic_action, "previewed": previewed, "mouse_action_previewed": mouse_action_previewed, **({"trace": trace()} if child.returncode != 0 else {})}))
+`;
+
+const PYTHON_NOTIFICATION_PTY = String.raw`
+import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
+os.close(slave)
+output = bytearray()
+step = 0
+next_input = 0
+details_visible = False
+opened_without_inspect = False
+deadline = time.monotonic() + 15
+def trace():
+    return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([master], [], [], 0.05)
+    if ready:
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError:
+            break
+    now = time.monotonic()
+    if step == 0 and b"\x1b[?1006h" in output:
+        output.clear()
+        os.write(master, b"4")
+        step = 1
+    elif step == 1 and b"ACTIVITY  1" in output and b"Approval required" in output:
+        output.clear()
+        os.write(master, b"\x1b[<0;10;7M")
+        step = 2
+    elif step == 2 and b"Approve the agent request" in output and b"Open session" in output:
+        details_visible = True
+        opened_without_inspect = '"inspect","s1"' not in trace()
+        output.clear()
+        os.write(master, b"o")
+        step = 3
+    elif step == 3 and '"inspect","s1"' in trace() and b"TERMINAL SCREEN" in output:
+        output.clear()
+        os.write(master, b"\x1b")
+        next_input = now + 0.3
+        step = 4
+    elif step == 4 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
+        step = 5
+    elif step == 5 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
+    if child.poll() is not None:
+        break
+if child.poll() is None:
+    child.kill()
+child.wait()
+os.close(master)
+print(json.dumps({"exit": child.returncode, "step": step, "details_visible": details_visible, "opened_without_inspect": opened_without_inspect, **({"trace": trace()} if child.returncode != 0 else {})}))
 `;
 
 const PYTHON_TEMPLATE_PTY = String.raw`
@@ -355,6 +479,62 @@ os.close(master)
 print(json.dumps({"exit": child.returncode, "step": step}))
 `;
 
+const PYTHON_FOCUSED_CHOICE_PTY = String.raw`
+import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
+os.close(slave)
+output = bytearray()
+step = 0
+next_input = 0
+deadline = time.monotonic() + 15
+def trace():
+    return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([master], [], [], 0.05)
+    if ready:
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError:
+            break
+    now = time.monotonic()
+    if step == 0 and b"\x1b[?1006h" in output:
+        output.clear()
+        os.write(master, b"n")
+        step = 1
+    elif step == 1 and b"NEW SESSION" in output and b"repo" in output:
+        output.clear()
+        os.write(master, b"\x1b[<0;10;9M")
+        step = 2
+    elif step == 2 and b"Choose action/template" in output and b"review" in output:
+        output.clear()
+        os.write(master, b"\x1b[<0;10;16M")
+        step = 3
+    elif step == 3 and b"Review template prompt" in output:
+        output.clear()
+        os.write(master, b"\x1b[<0;10;9M")
+        next_input = now + 0.3
+        step = 4
+    elif step == 4 and now >= next_input:
+        os.write(master, b"\x1b[<0;10;17M")
+        step = 5
+    elif step == 5 and '"session","new"' in trace() and b"Work is unavailable" in output:
+        os.write(master, b"q")
+        next_input = now + 0.3
+        step = 6
+    elif step == 6 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
+    if child.poll() is not None:
+        break
+if child.poll() is None:
+    child.kill()
+child.wait()
+os.close(master)
+print(json.dumps({"exit": child.returncode, "step": step, **({"trace": trace()} if child.returncode != 0 else {})}))
+`;
+
 async function runPty(mode: "main" | "new-session", key: string): Promise<{ exit: number; sent: boolean; alternate: boolean; restored: boolean; screen: boolean }> {
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
   const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
@@ -374,13 +554,13 @@ test("the standalone session form cancels before creating a session", async () =
   expect(result).toEqual({ exit: 0, sent: true, alternate: true, restored: true, screen: true });
 }, 20_000);
 
-test("a mouse click switches tabs and mouse tracking is restored on exit", async () => {
+test("click and horizontal arrows switch tabs and mouse tracking is restored on exit", async () => {
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
   const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
-  expect(JSON.parse(stdout)).toEqual({ exit: 0, clicked: true, switched: true, mouse_off: true });
+  expect(JSON.parse(stdout)).toEqual({ exit: 0, clicked: true, switched: true, right_switched: true, left_switched: true, mouse_off: true });
 }, 20_000);
 
 test("the standalone session form focuses a text field by click", async () => {
@@ -392,7 +572,7 @@ test("the standalone session form focuses a text field by click", async () => {
   expect(JSON.parse(stdout)).toEqual({ exit: 0, clicked: true, edited: true });
 }, 20_000);
 
-test("mouse selection and attach target the current session", async () => {
+test("wheel selection and row clicks open and attach the intended session", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-mouse-"));
   try {
     const binary = join(directory, "pohunek");
@@ -418,7 +598,7 @@ else process.exit(70);
     const process = Bun.spawn(["python3", "-c", PYTHON_LIST_MOUSE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 14, mouse_scrolled: true, keyboard_scrolled: true });
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 14, mouse_scrolled: true, keyboard_scrolled: true, unavailable_actions_hidden: true });
     expect(await readFile(trace, "utf8")).toContain('["--host","local","session","inspect","s2","--json"]');
     expect(await readFile(trace, "utf8")).toContain('["--host","local","session","inspect","s4","--json"]');
     expect(await readFile(trace, "utf8")).toContain('["attach","--host","local","--","s2"]');
@@ -467,10 +647,11 @@ else process.exit(70);
   }
 }, 30_000);
 
-test("a refused Work action remains visible after terminal handover", async () => {
+test("a Work item shows its plan before an explicit action is run", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-work-"));
   try {
     const binary = join(directory, "pohunek-work");
+    const core = join(directory, "pohunek");
     const trace = join(directory, "trace.jsonl");
     await writeFile(binary, `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
@@ -478,17 +659,61 @@ const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
 const envelope = (version, payload) => console.log(JSON.stringify({cli_version:"0.5.0",protocol:{minimum:version,maximum:version},...payload}));
 if (args[0] === "list") envelope(4, {ok:{items:[{key:"github-issue:acme/repo#1",project:"repo",issue:{id:"1",title:"Review this",state:"open",url:"https://github.com/acme/repo/issues/1"},pull_request:null,no_issue:false,issue_key:null,sessions:[],on_turn:{actor:"me",reason:"review",rule:1},actions:[{name:"review",delegable:true}],ignored:false,sources:{github:"ok",github_merged:"ok",linear:"unused",github_issues:"ok",pohunek:"ok"}}],orphaned_sessions:[],unlinked_sessions:[],projects:[],omitted_ignored:0}});
+else if (args[0] === "do" && args.includes("--dry-run")) envelope(1, {ok:{dry_run:true,plan:{action:"review",key:"github-issue:acme/repo#1",name:"Review this"}}});
 else if (args[0] === "do") { envelope(1, {err:{class:"action",code:"confirmation_required",msg:"owner declined"}}); process.exit(2); }
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    await writeFile(core, `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+if (args[0] === "host" && args[1] === "discover") ok([]);
+else if (args[2] === "session" && args[3] === "list") ok([]);
+else if (args[2] === "project" && args[3] === "list") ok([]);
+else if (args[2] === "notifications" && args[3] === "list") ok({notifications:[],next_cursor:null});
+else process.exit(70);
+`);
+    await chmod(core, 0o700);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
-    const process = Bun.spawn(["python3", "-c", PYTHON_WORK_RESULT_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
+    const process = Bun.spawn(["python3", "-c", PYTHON_WORK_RESULT_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 2 });
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 9, mouse_opened: true, keyboard_opened: true, no_automatic_action: true, previewed: true, mouse_action_previewed: true });
+    expect(await readFile(trace, "utf8")).toContain('["do","github-issue:acme/repo#1","review","--project","repo","--dry-run","--json"]');
     expect(await readFile(trace, "utf8")).toContain('["do","github-issue:acme/repo#1","review","--project","repo","--json"]');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("clicking a notification keeps its message visible until Open session is chosen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-notification-"));
+  try {
+    const binary = join(directory, "pohunek");
+    const trace = join(directory, "trace.jsonl");
+    await writeFile(binary, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const session = {id:"s1",name:"Agent review",agent:"codex",cwd:"/repo",state:"running",activity:"blocked",updated_at:"2026-10-09T10:00:00Z",project_id:"p1",project_label:"repo",branch:"main",metadata:{},subagents:[]};
+const notification = {id:"n1",kind:"approval_required",severity:"action_required",status:"read",title:"Approval required",body:"Approve the agent request",created_at:"2026-10-09T10:00:00Z",session_id:"s1",project_id:"p1"};
+if (args[0] === "host" && args[1] === "discover") ok([]);
+else if (args[2] === "session" && args[3] === "list") ok([session]);
+else if (args[2] === "session" && args[3] === "inspect") ok(session);
+else if (args[2] === "project" && args[3] === "list") ok([]);
+else if (args[2] === "notifications" && args[3] === "list") ok({notifications:args[args.indexOf("--status")+1] === "read" ? [notification] : [],next_cursor:null});
+else process.exit(70);
+`);
+    await chmod(binary, 0o700);
+    const app = join(import.meta.dir, "../../src/ink/app.tsx");
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
+    const process = Bun.spawn(["python3", "-c", PYTHON_NOTIFICATION_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 5, details_visible: true, opened_without_inspect: true });
+    expect(await readFile(trace, "utf8")).toContain('["--host","local","session","inspect","s1","--json"]');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -534,3 +759,39 @@ else process.exit(70);
     await rm(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("clicking the focused template field does not change the selected template", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-focused-choice-"));
+  try {
+    const binary = join(directory, "pohunek");
+    const trace = join(directory, "trace.jsonl");
+    await writeFile(binary, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+if (args[0] === "host" && (args[1] === "discover" || args[1] === "list")) ok([]);
+else if (args[0] === "host" && args[1] === "inspect") ok({runtimes:[{agent:"codex",agent_base:"codex",available:true,supported:true}]});
+else if (args[0] === "project" && args[1] === "list") ok([{id:"p1",label:"repo",repo_root:"/repo",git_common_dir:"/repo/.git"}]);
+else if (args[0] === "project" && args[1] === "actions") ok({actions:[{name:"review",provider:"none",template:"review-prompt",layer:"in_repo"}]});
+else if (args[0] === "project" && args[1] === "action") ok({provider:"none",agent:"codex",branch:"review/topic",base_branch:"main",prompt_name:"review-prompt",prompt_content:"Review template prompt"});
+else if (args[2] === "session" && args[3] === "list") ok([]);
+else if (args[2] === "project" && args[3] === "list") ok([{id:"p1",label:"repo",repo_root:"/repo",git_common_dir:"/repo/.git"}]);
+else if (args[2] === "notifications" && args[3] === "list") ok({notifications:[],next_cursor:null});
+else if (args[0] === "session" && args[1] === "new") { if (args.includes("--input-stdin")) appendFileSync(${JSON.stringify(trace)}, JSON.stringify(["prompt", await Bun.stdin.text()]) + "\\n"); ok({id:"template-created"}); }
+else if (args[0] === "attach") process.exit(0);
+else process.exit(70);
+`);
+    await chmod(binary, 0o700);
+    const app = join(import.meta.dir, "../../src/ink/app.tsx");
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
+    const process = Bun.spawn(["python3", "-c", PYTHON_FOCUSED_CHOICE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 6 });
+    const calls = (await readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    expect(calls).toContainEqual(["prompt", "Review template prompt"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);

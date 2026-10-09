@@ -39,9 +39,9 @@ export function ScreenFrame({ title, tabs, activeTab, onTab, subtitle, footer, s
         <Text bold color="cyan">{safeText(title)}</Text>
         {stdout.columns >= layout.compactColumns && <Text dimColor>{"CONTROL CENTER"}</Text>}
       </Box>
-      {tabs !== undefined && <Box gap={1} marginTop={1}>{tabs.map((tab, index) =>
+      {tabs !== undefined && <Box gap={1} marginTop={stdout.rows < layout.compactRows || stdout.columns < layout.compactColumns ? 0 : 1}>{tabs.map((tab, index) =>
         <MouseZone key={tab} onClick={onTab === undefined ? undefined : () => { onTab(index); }}>
-          <Text bold={activeTab === index} color={activeTab === index ? "cyan" : "white"} inverse={activeTab === index}>{` ${index + 1} ${safeText(stdout.columns < layout.compactColumns ? tab.slice(0, 3) : tab)} `}</Text>
+          <Text bold={activeTab === index} color={activeTab === index ? "cyan" : "white"} inverse={activeTab === index}>{` ${index + 1} ${safeText(stdout.columns < layout.fullTabsColumns ? tab.slice(0, 3) : tab)} `}</Text>
         </MouseZone>)}</Box>}
       <Text dimColor>{"─".repeat(Math.max(1, stdout.columns - 2))}</Text>
       {subtitle !== undefined && subtitle !== null && <Text color="yellow">{safeText(subtitle)}</Text>}
