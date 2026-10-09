@@ -3,6 +3,12 @@
 Description=Pohunek web control center backend
 Wants=network-online.target
 After=network-online.target
+# The backend waits for the local daemon socket itself (POHUNEK_BACKEND_DAEMON_WAIT);
+# the daemon's unit name carries a per-installation namespace, so it cannot be
+# ordered after here. The start limit allows several full wait cycles before
+# systemd gives up, and bounds the loop for a daemon that never becomes usable.
+StartLimitIntervalSec=10min
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,6 +16,7 @@ EnvironmentFile=@CONFIG_FILE@
 Environment="POHUNEK_BACKEND_STATIC_DIR=@INSTALL_DIR@/frontend"
 ExecStart="@INSTALL_DIR@/pohunek-web"
 Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=default.target

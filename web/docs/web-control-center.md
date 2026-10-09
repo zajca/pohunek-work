@@ -135,8 +135,20 @@ provide. The orchestrator finds Node itself (see "Runtime paths, logs and macOS"
 set `POHUNEK_NODE_BIN` to an absolute path to override.
 Structured output is also written under the gitignored `web/logs/` directory.
 
-A deployed backend requires its local `pohunekd` for health and host discovery
-and fails startup when that daemon is unreachable. It binds only to a NetBird
+A deployed backend requires its local `pohunekd` for health and host discovery.
+A daemon that is not there yet is waited for: while the daemon's runtime
+directory or socket is missing, startup retries every
+`POHUNEK_BACKEND_DAEMON_RETRY_INTERVAL` seconds (default 1) for up to
+`POHUNEK_BACKEND_DAEMON_WAIT` seconds (default 60, the start timeout of the
+daemon's user service; `0` tries once). The runtime directory is verified
+before every attempt. Startup fails with the typed error once the wait elapses,
+and at once, without waiting, for a failure waiting cannot fix: an incompatible
+protocol version or an untrusted runtime directory. The user unit restarts a
+failed backend after `RestartSec=5s` and stops after five failed starts within
+ten minutes (`StartLimitBurst`, `StartLimitIntervalSec`), so a daemon that never
+becomes usable leaves a stopped unit with the diagnostic in the journal instead of
+a restart loop. The unit is not ordered after the daemon's unit because that
+unit's name carries a per-installation namespace. The backend binds only to a NetBird
 CGNAT address; loopback is allowed only by the explicit development flag, and
 wildcard binds are rejected. Use the supplied
 `web/backend/systemd/pohunek-backend.service` user unit and keep

@@ -51,6 +51,7 @@ const E2E_TEST_TIMEOUT_MS = 60_000;
 // Bun remains a backstop so the scenario-specific timeout reports the useful diagnostic first.
 const BUN_TEST_TIMEOUT_BACKSTOP_MARGIN_MS = 5_000;
 const BACKEND_DISCOVER_INTERVAL_SECONDS = "60";
+const BACKEND_DAEMON_RETRY_INTERVAL_SECONDS = "0.05";
 const MARKER = "pohunek-backend-real-daemon-e2e-marker";
 const SAFE_AGENT_PREFERENCE = ["shell"] as const;
 const NETBIRD_FIXTURE_SCRIPT = `#!/bin/sh
@@ -94,6 +95,49 @@ realDaemonTest(
       }),
       E2E_TEST_TIMEOUT_MS,
       `backend real-daemon e2e did not finish within ${E2E_TEST_TIMEOUT_MS}ms`,
+    );
+  },
+  E2E_TEST_TIMEOUT_MS + BUN_TEST_TIMEOUT_BACKSTOP_MARGIN_MS,
+);
+
+realDaemonTest(
+  "a backend started before the real pohunekd connects once the daemon is ready",
+  async () => {
+    let starting: Promise<BackendHandle> | undefined;
+    const waiting = deferred();
+    const logger: BackendLogger = {
+      log(event): void {
+        if (event.event === "daemon_connection" && event.lifecycle === "waiting") {
+          waiting.resolve();
+        }
+      },
+    };
+    await withTimeout(
+      withDaemon(
+        async () => {
+          if (starting === undefined) {
+            throw new Error("the backend was not started before the daemon");
+          }
+          const hosts = await withResource(
+            await starting,
+            (backend) => Promise.resolve(backend.hosts.snapshot()),
+            (backend) => backend.close(),
+            "e2e scenario and backend teardown both failed",
+          );
+          const local = hosts.find((entry) => entry.host === LOCAL_HOST);
+          expect(local?.reachability).toBe("reachable_daemon");
+          expect(local?.protocol_version).toBe(PROTOCOL_VERSION);
+        },
+        {
+          beforeSpawn: async (env, tempRoot): Promise<void> => {
+            starting = startBackendFromEnv(backendEnvironment(env, tempRoot), logger);
+            // A failed start settles the race, so the scenario reports it instead of hanging.
+            await Promise.race([waiting.promise, starting]);
+          },
+        },
+      ),
+      E2E_TEST_TIMEOUT_MS,
+      `late-daemon real-daemon e2e did not finish within ${E2E_TEST_TIMEOUT_MS}ms`,
     );
   },
   E2E_TEST_TIMEOUT_MS + BUN_TEST_TIMEOUT_BACKSTOP_MARGIN_MS,
@@ -245,18 +289,7 @@ async function withBackend<T>(
   daemon: DaemonHarness,
   run: (backend: BackendHandle) => Promise<T>,
 ): Promise<T> {
-  // No socket override: the backend must resolve the socket the daemon bound
-  // from the same environment, with the production resolver.
-  const backendEnv: NodeJS.ProcessEnv = {
-    POHUNEK_BACKEND_BIND_HOST: LOOPBACK_HOST,
-    POHUNEK_BACKEND_PORT: "0",
-    POHUNEK_BACKEND_ALLOW_LOOPBACK: "1",
-    POHUNEK_BACKEND_DISCOVER_INTERVAL: BACKEND_DISCOVER_INTERVAL_SECONDS,
-    POHUNEK_BACKEND_STATIC_DIR: daemon.tempRoot,
-    ...(daemon.env["XDG_RUNTIME_DIR"] === undefined
-      ? {}
-      : { XDG_RUNTIME_DIR: daemon.env["XDG_RUNTIME_DIR"] }),
-  };
+  const backendEnv = backendEnvironment(daemon.env, daemon.tempRoot);
   expect(loadBackendConfig(backendEnv).daemonSocketPath).toBe(daemon.socketPath);
   const backend = await startBackendFromEnv(backendEnv, silentLogger);
   return withResource(
@@ -267,7 +300,35 @@ async function withBackend<T>(
   );
 }
 
+/**
+ * No socket override: the backend must resolve the socket the daemon binds
+ * from the same environment, with the production resolver.
+ */
+function backendEnvironment(daemonEnv: NodeJS.ProcessEnv, staticDir: string): NodeJS.ProcessEnv {
+  return {
+    POHUNEK_BACKEND_BIND_HOST: LOOPBACK_HOST,
+    POHUNEK_BACKEND_PORT: "0",
+    POHUNEK_BACKEND_ALLOW_LOOPBACK: "1",
+    POHUNEK_BACKEND_DISCOVER_INTERVAL: BACKEND_DISCOVER_INTERVAL_SECONDS,
+    POHUNEK_BACKEND_DAEMON_RETRY_INTERVAL: BACKEND_DAEMON_RETRY_INTERVAL_SECONDS,
+    POHUNEK_BACKEND_STATIC_DIR: staticDir,
+    ...(daemonEnv["XDG_RUNTIME_DIR"] === undefined
+      ? {}
+      : { XDG_RUNTIME_DIR: daemonEnv["XDG_RUNTIME_DIR"] }),
+  };
+}
+
+function deferred(): { readonly promise: Promise<void>; resolve(): void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((settle): void => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 interface DaemonOptions {
+  /** Runs after the daemon's directories exist and before the daemon process is spawned. */
+  readonly beforeSpawn?: (env: NodeJS.ProcessEnv, tempRoot: string) => Promise<void>;
   /** Leave `XDG_RUNTIME_DIR` unset so the daemon picks its platform default runtime directory. */
   readonly defaultRuntime?: boolean;
 }
@@ -328,6 +389,12 @@ async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHarness> 
     }
   };
 
+  try {
+    await options.beforeSpawn?.(env, tempRoot);
+  } catch (error: unknown) {
+    await removeRoots();
+    throw error;
+  }
   const daemon = await startDaemonProcess({ daemonBin, cwd: tempRoot, env, socketPath, removeRoots });
   return {
     tempRoot,

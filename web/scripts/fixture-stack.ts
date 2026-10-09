@@ -1,6 +1,8 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS,
+  DEFAULT_DAEMON_WAIT_SECONDS,
   DEFAULT_DISCOVER_INTERVAL_SECONDS,
   DEFAULT_STATIC_ASSETS_DIR,
   externalPeerSelector,
@@ -101,6 +103,8 @@ export async function startFixtureStack(options: FixtureStackOptions = {}): Prom
         derivedRuntime: undefined,
         logFiles: undefined,
         discoverIntervalSeconds: DEFAULT_DISCOVER_INTERVAL_SECONDS,
+        daemonWaitSeconds: DEFAULT_DAEMON_WAIT_SECONDS,
+        daemonRetryIntervalSeconds: DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS,
         staticAssetsDir: options.staticAssetsDir ?? DEFAULT_STATIC_ASSETS_DIR,
       },
       options.logger ?? silentLogger,

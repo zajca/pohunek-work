@@ -10,6 +10,14 @@ import {
 } from "@pohunek/sdk";
 
 export const DEFAULT_DISCOVER_INTERVAL_SECONDS = 30;
+/**
+ * Time a starting backend keeps waiting for the local daemon socket; matches the
+ * 60 s start timeout of the daemon's user service, so a daemon that is still
+ * starting is waited for rather than reported as missing.
+ */
+export const DEFAULT_DAEMON_WAIT_SECONDS = 60;
+/** Pause between two connection attempts while waiting for the local daemon. */
+export const DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS = 1;
 /** Size of one backend log file; matches the daemon's log family (`crates/logging`). */
 export const DEFAULT_LOG_MAX_FILE_BYTES = 32 * 1024 * 1024;
 /** Backend log files kept including the active one; matches the daemon's log family. */
@@ -23,6 +31,8 @@ export const ENV_PORT = "POHUNEK_BACKEND_PORT";
 export const ENV_ALLOW_LOOPBACK = "POHUNEK_BACKEND_ALLOW_LOOPBACK";
 export const ENV_DAEMON_SOCKET = "POHUNEK_BACKEND_DAEMON_SOCKET";
 export const ENV_DISCOVER_INTERVAL = "POHUNEK_BACKEND_DISCOVER_INTERVAL";
+export const ENV_DAEMON_WAIT = "POHUNEK_BACKEND_DAEMON_WAIT";
+export const ENV_DAEMON_RETRY_INTERVAL = "POHUNEK_BACKEND_DAEMON_RETRY_INTERVAL";
 export const ENV_STATIC_ASSETS_DIR = "POHUNEK_BACKEND_STATIC_DIR";
 
 const MIN_PORT = 0;
@@ -53,6 +63,9 @@ export interface BackendConfig {
   /** Set when the socket is derived from the runtime directory; checked before connecting. */
   readonly derivedRuntime: DerivedRuntime | undefined;
   readonly discoverIntervalSeconds: number;
+  /** Seconds startup keeps retrying an unreachable daemon socket; 0 fails on the first attempt. */
+  readonly daemonWaitSeconds: number;
+  readonly daemonRetryIntervalSeconds: number;
   readonly staticAssetsDir: string;
   /** Rotating file logging; without it events go to standard output. */
   readonly logFiles: BackendLogFileConfig | undefined;
@@ -81,6 +94,8 @@ export function loadBackendConfig(
       ? { dir: resolveRuntimeDirChecked(env, runtime), effectiveUid: runtime.effectiveUid }
       : undefined,
     discoverIntervalSeconds: parseDiscoverInterval(env[ENV_DISCOVER_INTERVAL]),
+    daemonWaitSeconds: parseDaemonWait(env[ENV_DAEMON_WAIT]),
+    daemonRetryIntervalSeconds: parseDaemonRetryInterval(env[ENV_DAEMON_RETRY_INTERVAL]),
     staticAssetsDir: resolveStaticAssetsDir(env[ENV_STATIC_ASSETS_DIR]),
     logFiles: resolveLogFiles(env),
   };
@@ -160,6 +175,28 @@ function parseDiscoverInterval(raw: string | undefined): number {
   const value = Number(raw.trim());
   if (!Number.isFinite(value) || value <= 0) {
     throw new BackendConfigError(ENV_DISCOVER_INTERVAL, "must be a positive number of seconds");
+  }
+  return value;
+}
+
+function parseDaemonWait(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_DAEMON_WAIT_SECONDS;
+  }
+  const value = Number(raw.trim());
+  if (raw.trim().length === 0 || !Number.isFinite(value) || value < 0) {
+    throw new BackendConfigError(ENV_DAEMON_WAIT, "must be a non-negative number of seconds");
+  }
+  return value;
+}
+
+function parseDaemonRetryInterval(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS;
+  }
+  const value = Number(raw.trim());
+  if (raw.trim().length === 0 || !Number.isFinite(value) || value <= 0) {
+    throw new BackendConfigError(ENV_DAEMON_RETRY_INTERVAL, "must be a positive number of seconds");
   }
   return value;
 }

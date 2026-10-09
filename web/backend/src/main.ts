@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import { ENV_XDG_RUNTIME_DIR, RuntimePathError, verifyDaemonRuntime } from "@pohunek/sdk";
 import { BackendConfigError, loadBackendConfig, type BackendConfig } from "./config";
 import { BackendStartupError, startHostsPipeline, type HostsPipelineHandle } from "./hosts";
@@ -16,10 +17,12 @@ export async function startBackend(
   config: BackendConfig,
   logger: BackendLogger = stdoutLogger,
 ): Promise<BackendHandle> {
-  verifyDerivedRuntime(config);
   const hosts = await startHostsPipeline({
     daemonSocketPath: config.daemonSocketPath,
     discoverIntervalSeconds: config.discoverIntervalSeconds,
+    daemonWaitSeconds: config.daemonWaitSeconds,
+    daemonRetryIntervalSeconds: config.daemonRetryIntervalSeconds,
+    preflight: (): Error | undefined => verifyDerivedRuntime(config),
     logger,
   });
 
@@ -71,21 +74,37 @@ export async function startBackend(
 }
 
 /**
- * Checks the runtime directory a derived socket lives in before any connection
- * is made, so a socket planted in a shared directory is never dialed.
+ * Checks the runtime directory a derived socket lives in before every connection
+ * attempt, so a socket planted in a shared directory is never dialed. A directory
+ * the daemon has not created yet is returned as a retryable reason; anything else
+ * wrong with it is thrown.
  */
-function verifyDerivedRuntime(config: BackendConfig): void {
+function verifyDerivedRuntime(config: BackendConfig): Error | undefined {
   const runtime = config.derivedRuntime;
   if (runtime === undefined) {
-    return;
+    return undefined;
   }
   try {
     verifyDaemonRuntime(runtime.dir, config.daemonSocketPath, runtime.effectiveUid, ENV_XDG_RUNTIME_DIR);
+    return undefined;
   } catch (error: unknown) {
     if (error instanceof RuntimePathError) {
-      throw new BackendConfigError(error.variable, error.message);
+      const refusal = new BackendConfigError(error.variable, error.message);
+      if (isAbsent(runtime.dir)) {
+        return refusal;
+      }
+      throw refusal;
     }
     throw error;
+  }
+}
+
+function isAbsent(path: string): boolean {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error: unknown) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
   }
 }
 
