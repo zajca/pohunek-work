@@ -198,6 +198,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [hostDetail, setHostDetail] = useState<ControlHostCapabilities | null>(null);
   const [governance, setGovernance] = useState<ControlGovernance | null>(null);
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
+  const notificationSelectionGeneration = useRef(0);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [edit, setEdit] = useState("");
   const [form, setForm] = useState<LaunchForm>(EMPTY_FORM);
@@ -244,8 +245,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
   const previewWidth = Math.max(20, stdout.columns - 4);
   const previewMaxOffset = workPreview === null ? 0 : workPreviewMaxOffset(workPreview, previewWidth, previewHeight);
-  const sessionMutable = sessionDetail !== null && !sessionDetail.external && !["conflicting", "incompatible", "lost"].includes(sessionDetail.runtimeState ?? "");
+  const sessionWritable = sessionDetail !== null && !sessionDetail.external && !["conflicting", "incompatible"].includes(sessionDetail.runtimeState ?? "");
+  const sessionMutable = sessionWritable && sessionDetail.runtimeState !== "lost";
   const sessionActive = sessionDetail !== null && ["running", "working", "starting", "reconnecting", "blocked"].includes(sessionDetail.state);
+  const sessionAttachable = sessionMutable && (sessionActive || sessionDetail.canResume);
+  const sessionRecoverable = sessionWritable && sessionDetail.canResume && (!sessionActive || sessionDetail.runtimeState === "lost");
 
   const loadScreen = useCallback(async (): Promise<void> => {
     if (sessionDetail === null) return;
@@ -431,6 +435,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [control]);
 
   const openNotification = useCallback(async (record: ControlNotification): Promise<void> => {
+    const generation = ++notificationSelectionGeneration.current;
     setNotificationDetail(record);
     setOverlay("notification");
     if (record.status === "unread") {
@@ -439,9 +444,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       } else {
         try {
           const result = await control.act({ kind: "read", host: record.host, notificationId: record.id });
-          if (!result.ok) setStatus(`Mark read failed: ${result.error.message}`);
-          else { if (result.data.kind === "read") setNotificationDetail(result.data.notification); await refresh(); }
-        } catch (error) { setStatus(`Mark read failed: ${defaultStatus(error)}`); }
+          if (!result.ok) {
+            if (notificationSelectionGeneration.current === generation) setStatus(`Mark read failed: ${result.error.message}`);
+          } else {
+            if (result.data.kind === "read" && notificationSelectionGeneration.current === generation) {
+              const updated = result.data.notification;
+              setNotificationDetail((current) => current?.host === record.host && current.id === record.id ? updated : current);
+            }
+            await refresh();
+          }
+        } catch (error) { if (notificationSelectionGeneration.current === generation) setStatus(`Mark read failed: ${defaultStatus(error)}`); }
       }
     }
   }, [control, refresh, snapshot, stale]);
@@ -754,10 +766,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (sessionDetail === null) return;
       if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + layout.detailScrollStep)); return; }
       if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - layout.detailScrollStep)); return; }
-      if (input === "o" && sessionMutable && (sessionActive || sessionDetail.canResume)) void openSelected();
-      else if (input === "r" && sessionMutable && !sessionActive && sessionDetail.canResume) void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id });
+      if (input === "o" && sessionAttachable) void openSelected();
+      else if (input === "r" && sessionRecoverable) void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id });
       else if (input === "f" && sessionMutable && sessionDetail.canFork) void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id });
-      else if ((input === "x" && sessionMutable && sessionActive) || (input === "D" && sessionMutable)) { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
+      else if ((input === "x" && sessionMutable && sessionActive) || (input === "D" && sessionWritable)) { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") void loadScreen();
       else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
@@ -930,8 +942,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
   </Box>;
   else if (overlay === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
-    {sessionMutable && (sessionActive || sessionDetail.canResume) && <ActionButton label="Attach" onClick={() => void openSelected()} primary />}
-    {sessionMutable && !sessionActive && sessionDetail.canResume && <ActionButton label="Resume" onClick={() => void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
+    {sessionAttachable && <ActionButton label="Attach" onClick={() => void openSelected()} primary />}
+    {sessionRecoverable && <ActionButton label="Resume" onClick={() => void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
     <ActionButton label="Screen" onClick={() => void loadScreen()} />
     {sessionMutable && sessionDetail.canFork && <ActionButton label="Fork" onClick={() => void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
     {sessionMutable && <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay("rename"); }} />}
@@ -941,7 +953,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {sessionLinkUrl(sessionDetail) !== null && <ActionButton label="Open link" onClick={() => { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); }} />}
     {sessionDetail.host === "local" && <ActionButton label="Open folder" onClick={() => void openFolder(sessionDetail)} />}
     {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />}
-    {sessionMutable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}
+    {sessionWritable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}
     <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
   </Box>;
   else if (overlay === "confirm") toolbar = <Box gap={1}>

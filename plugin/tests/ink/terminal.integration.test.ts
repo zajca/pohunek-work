@@ -426,6 +426,137 @@ os.close(master)
 print(json.dumps({"exit": child.returncode, "step": step, "details_visible": details_visible, "opened_without_inspect": opened_without_inspect, **({"trace": trace()} if child.returncode != 0 else {})}))
 `;
 
+const PYTHON_LOST_SESSION_PTY = String.raw`
+import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
+os.close(slave)
+output = bytearray()
+step = 0
+resume_visible = False
+remove_visible = False
+attach_hidden = False
+deadline = time.monotonic() + 20
+def trace():
+    return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([master], [], [], 0.05)
+    if ready:
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError:
+            break
+    now = time.monotonic()
+    if step == 0 and b"\x1b[?1006h" in output:
+        output.clear()
+        os.write(master, b"2")
+        step = 1
+    elif step == 1 and b"SESSIONS  1" in output and b"Lost session" in output:
+        output.clear()
+        os.write(master, b"\r")
+        step = 2
+    elif step == 2 and b"TERMINAL SCREEN" in output and b" Resume " in output and b" Remove " in output:
+        resume_visible = True
+        remove_visible = True
+        attach_hidden = b" Attach " not in output
+        output.clear()
+        os.write(master, b"r")
+        step = 3
+    elif step == 3 and '"resume","lost-1"' in trace() and '"attach","--host","local","--","lost-1"' in trace() and b"SESSIONS  1" in output:
+        output.clear()
+        next_input = now + 0.5
+        step = 31
+    elif step == 31 and now >= next_input:
+        os.write(master, b"\r")
+        step = 4
+    elif step == 4 and b"TERMINAL SCREEN" in output and b" Remove " in output:
+        output.clear()
+        os.write(master, b"D")
+        step = 5
+    elif step == 5 and b"Confirm remove" in output:
+        output.clear()
+        os.write(master, b"y")
+        step = 6
+    elif step == 6 and '"rm","lost-1"' in trace() and b"remove completed" in output:
+        os.write(master, b"q")
+        step = 7
+    if child.poll() is not None:
+        break
+if child.poll() is None:
+    child.kill()
+child.wait()
+os.close(master)
+print(json.dumps({"exit": child.returncode, "step": step, "resume_visible": resume_visible, "remove_visible": remove_visible, "attach_hidden": attach_hidden, **({"trace": trace()} if child.returncode != 0 else {})}))
+`;
+
+const PYTHON_NOTIFICATION_RACE_PTY = String.raw`
+import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
+os.close(slave)
+output = bytearray()
+step = 0
+next_input = 0
+deadline = time.monotonic() + 20
+def trace():
+    return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([master], [], [], 0.05)
+    if ready:
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError:
+            break
+    now = time.monotonic()
+    if step == 0 and b"\x1b[?1006h" in output:
+        output.clear()
+        os.write(master, b"4")
+        step = 1
+    elif step == 1 and b"ACTIVITY  2" in output and b"First notification" in output:
+        output.clear()
+        os.write(master, b"\r")
+        step = 2
+    elif step == 2 and b"First body" in output and '"read","n1"' in trace():
+        output.clear()
+        os.write(master, b"\x1b")
+        next_input = now + 0.15
+        step = 3
+    elif step == 3 and now >= next_input and b"ACTIVITY  2" in output:
+        output.clear()
+        os.write(master, b"\x1b[B")
+        next_input = now + 0.15
+        step = 4
+    elif step == 4 and now >= next_input:
+        output.clear()
+        os.write(master, b"\r")
+        step = 5
+    elif step == 5 and b"Second body" in output and '"read","n2"' in trace():
+        output.clear()
+        next_input = now + 1.0
+        step = 6
+    elif step == 6 and now >= next_input:
+        output.clear()
+        os.write(master, b"o")
+        step = 7
+    elif step == 7 and '"inspect","s2"' in trace() and b"TERMINAL SCREEN" in output:
+        output.clear()
+        os.write(master, b"\x1b")
+        next_input = now + 0.2
+        step = 8
+    elif step == 8 and now >= next_input:
+        os.write(master, b"q")
+        step = 9
+    if child.poll() is not None:
+        break
+if child.poll() is None:
+    child.kill()
+child.wait()
+os.close(master)
+print(json.dumps({"exit": child.returncode, "step": step, "wrong_session_opened": '"inspect","s1"' in trace(), **({"trace": trace()} if child.returncode != 0 else {})}))
+`;
+
 const PYTHON_TEMPLATE_PTY = String.raw`
 import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
@@ -719,6 +850,84 @@ else process.exit(70);
     await rm(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+test("a lost session offers recovery and removal without offering direct attachment", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-lost-"));
+  try {
+    const binary = join(directory, "pohunek");
+    const trace = join(directory, "trace.jsonl");
+    await writeFile(binary, `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const session = {id:"lost-1",name:"Lost session",agent:"codex",cwd:"/repo",state:"running",activity:"working",runtime:{state:"lost"},capabilities:{resume:true,fork:false},updated_at:"2026-10-09T10:00:00Z",project_id:"p1",project_label:"repo",branch:"main",metadata:{},subagents:[]};
+if (args[0] === "host" && args[1] === "discover") ok([]);
+else if (args[2] === "session" && args[3] === "list") ok([session]);
+else if (args[2] === "session" && args[3] === "inspect") ok(session);
+else if (args[2] === "session" && args[3] === "resume") ok({session:{...session,runtime:{state:"active"}}});
+else if (args[2] === "session" && args[3] === "rm") ok({removed:true,stopped:false,worktrees_removed:0,worktrees_failed:0});
+else if (args[2] === "project" && args[3] === "list") ok([]);
+else if (args[2] === "notifications" && args[3] === "list") ok({notifications:[],next_cursor:null});
+else if (args[0] === "attach") process.exit(0);
+else process.exit(70);
+`);
+    await chmod(binary, 0o700);
+    const app = join(import.meta.dir, "../../src/ink/app.tsx");
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
+    const process = Bun.spawn(["python3", "-c", PYTHON_LOST_SESSION_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 7, resume_visible: true, remove_visible: true, attach_hidden: true });
+    const calls = await readFile(trace, "utf8");
+    expect(calls).toContain('["--host","local","session","resume","lost-1","--json"]');
+    expect(calls).toContain('["--host","local","session","rm","lost-1","--json"]');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 25_000);
+
+test("an older read response cannot replace a newer notification detail", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-notification-race-"));
+  try {
+    const binary = join(directory, "pohunek");
+    const trace = join(directory, "trace.jsonl");
+    const secondRead = join(directory, "second-read");
+    await writeFile(binary, `#!/usr/bin/env bun
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const session = (id) => ({id,name:id,agent:"codex",cwd:"/repo",state:"running",activity:"blocked",updated_at:"2026-10-09T10:00:00Z",project_id:"p1",project_label:"repo",branch:"main",metadata:{},subagents:[]});
+const notifications = [{id:"n1",kind:"approval_required",severity:"action_required",status:"unread",title:"First notification",body:"First body",created_at:"2026-10-09T11:00:00Z",session_id:"s1",project_id:"p1"},{id:"n2",kind:"approval_required",severity:"action_required",status:"unread",title:"Second notification",body:"Second body",created_at:"2026-10-09T10:00:00Z",session_id:"s2",project_id:"p1"}];
+if (args[0] === "host" && args[1] === "discover") ok([]);
+else if (args[2] === "session" && args[3] === "list") ok([session("s1"),session("s2")]);
+else if (args[2] === "session" && args[3] === "inspect") ok(session(args[4]));
+else if (args[2] === "project" && args[3] === "list") ok([]);
+else if (args[2] === "notifications" && args[3] === "list") ok({notifications:args[args.indexOf("--status")+1] === "unread" ? notifications : [],next_cursor:null});
+else if (args[2] === "notifications" && args[3] === "read") {
+  if (args[4] === "n1") {
+    for (let i = 0; i < 200 && !existsSync(${JSON.stringify(secondRead)}); i++) await Bun.sleep(20);
+    await Bun.sleep(200);
+  }
+  ok({record:{...notifications.find((item)=>item.id===args[4]),status:"read"}});
+  if (args[4] === "n2") writeFileSync(${JSON.stringify(secondRead)}, "done");
+}
+else process.exit(70);
+`);
+    await chmod(binary, 0o700);
+    const app = join(import.meta.dir, "../../src/ink/app.tsx");
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
+    const process = Bun.spawn(["python3", "-c", PYTHON_NOTIFICATION_RACE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 9, wrong_session_opened: false });
+    expect(await readFile(secondRead, "utf8")).toBe("done");
+    expect(await readFile(trace, "utf8")).toContain('["--host","local","session","inspect","s2","--json"]');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 25_000);
 
 test("switching from a template to blank clears its launch fields", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-template-"));
