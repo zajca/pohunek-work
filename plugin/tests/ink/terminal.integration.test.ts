@@ -394,7 +394,8 @@ while time.monotonic() < deadline:
         output.clear()
         os.write(master, b"4")
         step = 1
-    elif step == 1 and b"ACTIVITY  1" in output and b"Approval required" in output:
+    elif step == 1 and b"ACTIVITY  1" in output and b"Approval required" in output and b"Open notification" in output:
+        time.sleep(0.2)
         output.clear()
         os.write(master, b"\x1b[<0;10;7M")
         step = 2
