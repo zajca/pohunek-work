@@ -120,6 +120,8 @@ export interface TuiConfig {
   readonly bellOnTransition: boolean;
   /** Absolute path of the URL opener (`o`). */
   readonly openCommand: string;
+  /** Optional executable that copies stdin to the clipboard. */
+  readonly clipboardCommand?: string;
   /** Hosts `o` may open; compared exactly against the URL host name. */
   readonly openUrlHosts: readonly string[];
   /** Child stderr lines kept for display. */

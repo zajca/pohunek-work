@@ -28,7 +28,7 @@ export default tseslint.config(
   {
     // The TUI consumes the list/do contracts through child processes only
     // (docs/tui-plan.md 4.1): no pipeline, source or action module may be imported.
-    files: ["src/tui/**/*.ts", "src/commands/tui.ts"],
+    files: ["src/tui/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [
         "error",

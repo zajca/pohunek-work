@@ -14,6 +14,11 @@ public contracts only (CLI `--json`, protocol v4 through SDKs pinned to one core
 release); never import core internals. Pre-1.0: do not add backward-compatibility
 shims unless asked.
 
+The plugin TUI uses Ink for Work, Sessions, Hosts and Activity. The standalone
+`pohunek-work new-session` form and Sway `$mod+n` launcher live in the plugin
+and `launchers/` surfaces. The plugin release archive starts with
+`bun plugin/pohunek-work.js`.
+
 ## Layout rule
 
 Every surface owns a top-level folder with its own toolchain files and lockfile

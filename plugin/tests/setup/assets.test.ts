@@ -10,7 +10,7 @@ async function source(name: string): Promise<string> {
 
 test("embedded scripts are byte-identical to the files under launchers/", async () => {
   expect(SCRIPT_ASSETS.map((asset) => asset.name).sort()).toEqual(
-    ["lib.sh", "pohunek-launch-issue", "pohunek-launch-pr", "pohunek-rofi", "pohunek-rofi-issue"],
+    ["lib.sh", "pohunek-launch-issue", "pohunek-launch-pr", "pohunek-new-session", "pohunek-rofi", "pohunek-rofi-issue"],
   );
   for (const asset of SCRIPT_ASSETS) {
     expect(asset.body).toBe(await source(asset.name));
