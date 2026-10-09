@@ -109,9 +109,9 @@
         addToast("error", "Recovery is unavailable for the current session state");
         return;
       }
-      if (!hasNativeReference(inspected)) {
+      if (inspected.id !== id || !hasSingleNativeReference(inspected)) {
         forkOpen = false;
-        addToast("error", "Recovery target unavailable: session.inspect returned no native reference");
+        addToast("error", "Recovery target unavailable: session.inspect returned an invalid target");
         return;
       }
       recoveryHost = host;
@@ -128,9 +128,10 @@
     return candidate.state === "done" || candidate.state === "failed" || candidate.state === "stopped";
   }
 
-  function hasNativeReference(candidate: HostedSession["session"]): boolean {
-    return (candidate.native_session_id?.length ?? 0) > 0
-      || (candidate.native_session_path?.length ?? 0) > 0;
+  function hasSingleNativeReference(candidate: HostedSession["session"]): boolean {
+    const hasId = (candidate.native_session_id?.length ?? 0) > 0;
+    const hasPath = (candidate.native_session_path?.length ?? 0) > 0;
+    return hasId !== hasPath;
   }
 
   function canResumeSession(candidate: HostedSession["session"]): boolean {
@@ -162,7 +163,8 @@
         closeRecovery();
         return;
       }
-      if (!hasNativeReference(current)
+      if (current.id !== shown.id
+        || !hasSingleNativeReference(current)
         || (intent === "resume" && !canResumeSession(current))
         || (intent === "fork" && !current.capabilities.fork)) {
         closeRecovery();

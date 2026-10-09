@@ -9,6 +9,67 @@ import {
 
 const STALE_RECOVERY_ID = "fixture-obsolete-conversation";
 
+test("fork refuses ambiguous or mismatched inspect responses", async ({ page, stack }) => {
+  let tamperNextInspect: "both-references" | "wrong-session" | undefined = "both-references";
+  await page.routeWebSocket("**/*", (socket): void => {
+    const server = socket.connectToServer();
+    server.onMessage((message): void => {
+      if (tamperNextInspect !== undefined && typeof message === "string") {
+        const response = JSON.parse(message) as unknown;
+        if (typeof response === "object" && response !== null && "ok" in response
+          && typeof response.ok === "object" && response.ok !== null
+          && "id" in response.ok && response.ok.id === FIXTURE_LOCAL_SESSION_ID
+          && "native_session_id" in response.ok) {
+          if (tamperNextInspect === "both-references") {
+            (response.ok as { native_session_path: string }).native_session_path = "/ambiguous/conversation";
+          } else {
+            (response.ok as { id: string }).id = "fixture-other-session";
+          }
+          tamperNextInspect = undefined;
+          socket.send(JSON.stringify(response));
+          return;
+        }
+      }
+      socket.send(message);
+    });
+  });
+
+  await page.goto(stack.backend.url);
+  const address = stack.local.tcpAddress;
+  if (address === undefined) throw new Error("fixture local daemon did not expose a TCP address");
+  const client = await connectTcp(FIXTURE_LOCAL_HOST, address);
+  try {
+    const countBefore = (await client.call("session.list", null)).length;
+    const row = page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${FIXTURE_LOCAL_SESSION_ID}"]`);
+    await row.click();
+
+    await page.getByRole("button", { name: "Fork", exact: true }).click();
+    await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => tamperNextInspect).toBeUndefined();
+    await expect(page.getByRole("dialog", { name: "Confirm fork target" })).toHaveCount(0);
+    expect((await client.call("session.list", null)).length).toBe(countBefore);
+
+    await page.getByRole("button", { name: "Fork", exact: true }).click();
+    await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
+    const confirmation = page.getByRole("dialog", { name: "Confirm fork target" });
+    await expect(confirmation).toContainText(FIXTURE_LOCAL_RECOVERY_ID);
+    tamperNextInspect = "wrong-session";
+    await confirmation.getByRole("button", { name: "Fork session" }).click();
+    await expect.poll(() => tamperNextInspect).toBeUndefined();
+    await expect(confirmation).toHaveCount(0);
+    expect((await client.call("session.list", null)).length).toBe(countBefore);
+
+    tamperNextInspect = "wrong-session";
+    await page.getByRole("button", { name: "Fork", exact: true }).click();
+    await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => tamperNextInspect).toBeUndefined();
+    await expect(confirmation).toHaveCount(0);
+    expect((await client.call("session.list", null)).length).toBe(countBefore);
+  } finally {
+    await client.close();
+  }
+});
+
 test("fork confirms the inspected conversation when the browser list is stale", async ({ page, stack }) => {
   let staleListInjected = false;
   await page.routeWebSocket("**/*", (socket): void => {
