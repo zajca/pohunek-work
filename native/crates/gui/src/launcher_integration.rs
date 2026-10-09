@@ -1,23 +1,29 @@
 //! Headless integration scenarios for the dialog-only GUI process.
 
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File, FileTimes};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use futures::StreamExt as _;
 use iced::Size;
 use iced_runtime::{task::into_stream, Action};
+use pohunek_client::{Client, ClientOptions, OriginSource};
 use pohunek_gui_core::{
-    load_host_snapshot, stop_session, DomainEvent, HostConfig, Selection, UiState, WindowSize,
+    create_session, inspect_session, load_host_snapshot, stop_session, DomainEvent, HostConfig,
+    Selection, UiState, WindowSize,
 };
 use pohunek_platform::process::{HostInspector, ProcessInspector};
 use pohunek_test_support::env::TestEnv;
 use pohunek_test_support::process_env::ProcessEnv;
 use pohunek_test_support::wait;
-use protocol::SessionId;
+use protocol::{
+    method, ProcessStartIdentity, ReportSequence, Request, SessionId, SessionNewParams,
+    SessionReportNativeIdParams,
+};
+use time::format_description::well_known::Rfc3339;
 
 use crate::config::{AppConfig, ConfigError};
 use crate::message::{AppMode, LaunchPhase, Message, ModalView, RecoveryAction};
@@ -26,6 +32,7 @@ use crate::{command, parse_args, BootState, HostId, PohunekApp};
 const STATE_CHILD_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_CHILD";
 const STATE_CHILD_MARKER_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_MARKER";
 const DAEMON_DROP_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+const NATIVE_REPORT_EXPIRY_MINUTES: i64 = 1;
 
 #[test]
 fn launcher_interactions_preserve_the_main_window_state_file() {
@@ -104,7 +111,7 @@ fn run_launcher_state_child() {
     clippy::too_many_lines,
     reason = "the scenario crosses private process setup, daemon transport, GUI updates, and cleanup"
 )]
-async fn launcher_retries_daemon_failure_once_and_locks_after_attach_failure() {
+async fn launcher_retries_failures_and_confirms_native_recovery() {
     let mut process_env = ProcessEnv::lock();
     process_env
         .remove("POHUNEK_SESSION_ID")
@@ -121,6 +128,9 @@ async fn launcher_retries_daemon_failure_once_and_locks_after_attach_failure() {
     let agent = agent_dir.join("codex");
     fs::write(&agent, "#!/bin/sh\n/bin/sleep 30\n").expect("write agent fixture");
     fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).expect("agent executable");
+    let claude = agent_dir.join("claude");
+    fs::write(&claude, "#!/bin/sh\n/bin/sleep 30\n").expect("write Claude fixture");
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).expect("Claude executable");
     let search_path = format!(
         "{}:{}",
         agent_dir.display(),
@@ -362,161 +372,299 @@ async fn launcher_retries_daemon_failure_once_and_locks_after_attach_failure() {
         let _ = command::update(&mut app, message);
     }
     assert!(app.recovery_confirmation.is_none());
-    let mut confirmed_session = load_host_snapshot(&host)
-        .await
-        .expect("fresh confirmation fixture")
-        .sessions
-        .remove(0);
-    confirmed_session.native_session_id = Some("exact-native-id".to_owned());
-    confirmed_session.native_last_activity_at = Some("2026-10-10T12:34:56Z".to_owned());
-    let _pending = command::update(
-        &mut app,
-        Message::OpenSession {
-            host_id: host.id.clone(),
-            session_id: session_id.clone(),
+    let claude_session = create_session(
+        &host,
+        SessionNewParams {
+            agent: "claude".to_owned(),
+            name: None,
+            cwd: Some(repo),
+            cols: 80,
+            rows: 24,
+            project: None,
+            repo: None,
+            branch: None,
+            base_branch: None,
+            input: None,
+            metadata: Default::default(),
         },
-    );
-    let generation = app.recovery_generation;
+    )
+    .await
+    .expect("create real Claude session");
+    let claude_id = claude_session.session.id;
+    let transcript_dir = env.home().join(".claude/projects/fixture");
+    fs::create_dir_all(&transcript_dir).expect("Claude transcript directory");
+    let first_transcript = transcript_dir.join("native-first.jsonl");
+    write_transcript(&first_transcript, 1_700_000_000);
+    report_native_id(&host, &claude_id, "native-first", 1).await;
+    let first = inspect_session(&host, &claude_id)
+        .await
+        .expect("inspect first reported native target");
+    assert_eq!(first.native_session_id.as_deref(), Some("native-first"));
+    assert!(first.native_last_activity_at.is_some());
+    let snapshot = load_host_snapshot(&host)
+        .await
+        .expect("snapshot with reported native target");
     let _ = command::update(
         &mut app,
-        Message::RecoveryInspected {
-            generation,
-            host_id: host.id.clone(),
-            session_id: session_id.clone(),
-            action: RecoveryAction::Resume,
-            result: Ok(confirmed_session.clone()),
-        },
+        Message::Core(DomainEvent::HostSnapshotLoaded { snapshot }),
     );
+    app.workspace
+        .select_session(host.id.clone(), claude_id.clone());
+    app.ui_state.selection = Some(Selection::Session {
+        host_id: host.id.clone(),
+        session_id: claude_id.clone(),
+    });
+
+    let fork = command::update(&mut app, Message::ForkSelectedSession);
+    for message in outputs(fork).await {
+        assert!(matches!(
+            message,
+            Message::RecoveryInspected {
+                action: RecoveryAction::Fork,
+                ..
+            }
+        ));
+        let _ = command::update(&mut app, message);
+    }
     assert_eq!(app.modal, ModalView::ConfirmRecovery);
-    let confirmation = app.recovery_confirmation.as_ref().expect("confirmation");
-    assert_eq!(confirmation.target, "native_session_id: exact-native-id");
-    assert_eq!(
-        confirmation.native_last_activity_at.as_deref(),
-        Some("2026-10-10T12:34:56Z")
-    );
-    let expected = confirmation.clone();
-    let verifying = command::update(&mut app, Message::ConfirmRecovery);
-    assert_eq!(
-        verifying.units(),
-        1,
-        "confirm must schedule a second inspect"
-    );
-    assert!(app.recovery_confirmation.is_none());
-    assert_eq!(app.modal, ModalView::ConfirmRecovery);
-    confirmed_session.native_session_id = None;
-    confirmed_session.native_session_path = Some("/private/conversations/exact.jsonl".to_owned());
-    confirmed_session.native_last_activity_at = None;
-    let reinspection_generation = app.recovery_generation;
-    let changed = command::update(
-        &mut app,
-        Message::RecoveryReinspected {
-            generation: reinspection_generation,
-            expected,
-            result: Ok(confirmed_session.clone()),
-        },
-    );
-    assert_eq!(
-        changed.units(),
-        0,
-        "changed target must not dispatch recovery"
-    );
     let confirmation = app
         .recovery_confirmation
         .as_ref()
-        .expect("updated confirmation");
+        .expect("first confirmation");
+    assert_eq!(confirmation.target, "native_session_id: native-first");
     assert_eq!(
-        confirmation.target,
-        "native_session_path: /private/conversations/exact.jsonl"
+        confirmation.native_last_activity_at,
+        first.native_last_activity_at
     );
-    assert!(confirmation.native_last_activity_at.is_none());
+
+    let second_transcript = transcript_dir.join("native-second.jsonl");
+    write_transcript(&second_transcript, 1_700_000_060);
+    report_native_id(&host, &claude_id, "native-second", 2).await;
+    let second = inspect_session(&host, &claude_id)
+        .await
+        .expect("inspect changed native target");
+    assert_eq!(second.native_session_id.as_deref(), Some("native-second"));
+    assert_ne!(
+        second.native_last_activity_at,
+        first.native_last_activity_at
+    );
+    let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    assert_eq!(verifying.units(), 1, "confirm schedules a second inspect");
+    assert!(app.recovery_confirmation.is_none());
+    for message in outputs(verifying).await {
+        assert!(matches!(message, Message::RecoveryReinspected { .. }));
+        assert_eq!(command::update(&mut app, message).units(), 0);
+    }
+    let confirmation = app.recovery_confirmation.as_ref().expect("updated target");
+    assert_eq!(confirmation.target, "native_session_id: native-second");
+    assert_eq!(
+        confirmation.native_last_activity_at,
+        second.native_last_activity_at
+    );
     assert!(app
         .status
         .as_deref()
         .is_some_and(|status| status.contains("confirm the updated details again")));
-    assert!(load_host_snapshot(&host)
+    assert_eq!(
+        load_host_snapshot(&host)
+            .await
+            .expect("no fork yet")
+            .sessions
+            .len(),
+        2
+    );
+
+    write_transcript(&second_transcript, 1_700_000_120);
+    let activity = inspect_session(&host, &claude_id)
         .await
-        .expect("no recovery before reconfirmation")
-        .sessions[0]
-        .state
-        .is_terminal());
+        .expect("inspect changed native activity");
+    assert_ne!(
+        activity.native_last_activity_at,
+        second.native_last_activity_at
+    );
+    let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    for message in outputs(verifying).await {
+        assert!(matches!(message, Message::RecoveryReinspected { .. }));
+        assert_eq!(command::update(&mut app, message).units(), 0);
+    }
+    let confirmation = app
+        .recovery_confirmation
+        .as_ref()
+        .expect("updated activity");
+    assert_eq!(confirmation.target, "native_session_id: native-second");
+    assert_eq!(
+        confirmation.native_last_activity_at,
+        activity.native_last_activity_at
+    );
+    assert_eq!(
+        load_host_snapshot(&host)
+            .await
+            .expect("no fork yet")
+            .sessions
+            .len(),
+        2
+    );
+
     let _ = command::update(&mut app, Message::CloseModal);
     assert!(app.recovery_confirmation.is_none());
     assert_eq!(
         command::update(&mut app, Message::ConfirmRecovery).units(),
         0
     );
-    let _pending_path = command::update(
+    let fork = command::update(&mut app, Message::ForkSelectedSession);
+    for message in outputs(fork).await {
+        let _ = command::update(&mut app, message);
+    }
+    assert_eq!(app.modal, ModalView::ConfirmRecovery);
+    assert_eq!(
+        app.recovery_confirmation
+            .as_ref()
+            .expect("current confirmation")
+            .native_last_activity_at,
+        activity.native_last_activity_at
+    );
+    let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    let mut launched = None;
+    for message in outputs(verifying).await {
+        assert!(matches!(message, Message::RecoveryReinspected { .. }));
+        launched = Some(command::update(&mut app, message));
+    }
+    let launched = launched.expect("matching inspection");
+    assert_eq!(launched.units(), 1, "matching target dispatches fork");
+    assert!(app.recovery_confirmation.is_none());
+    for message in outputs(launched).await {
+        assert!(
+            matches!(message, Message::CoreCommandCompleted(Ok(_))),
+            "{message:?}"
+        );
+    }
+    assert_eq!(
+        load_host_snapshot(&host)
+            .await
+            .expect("forked session")
+            .sessions
+            .len(),
+        3
+    );
+
+    stop_session(&host, &claude_id)
+        .await
+        .expect("stop Claude session for resume");
+    let snapshot = load_host_snapshot(&host)
+        .await
+        .expect("stopped Claude snapshot");
+    let _ = command::update(
+        &mut app,
+        Message::Core(DomainEvent::HostSnapshotLoaded { snapshot }),
+    );
+    let opening = command::update(
         &mut app,
         Message::OpenSession {
             host_id: host.id.clone(),
-            session_id: session_id.clone(),
+            session_id: claude_id.clone(),
         },
     );
-    let path_generation = app.recovery_generation;
-    let _ = command::update(
-        &mut app,
-        Message::RecoveryInspected {
-            generation: path_generation,
-            host_id: host.id.clone(),
-            session_id,
-            action: RecoveryAction::Resume,
-            result: Ok(confirmed_session.clone()),
-        },
-    );
-    let confirmation = app
-        .recovery_confirmation
-        .as_ref()
-        .expect("path confirmation");
+    for message in outputs(opening).await {
+        let _ = command::update(&mut app, message);
+    }
+    assert_eq!(app.modal, ModalView::ConfirmRecovery);
     assert_eq!(
-        confirmation.target,
-        "native_session_path: /private/conversations/exact.jsonl"
+        app.recovery_confirmation
+            .as_ref()
+            .expect("resume confirmation")
+            .target,
+        "native_session_id: native-second"
     );
-    assert!(confirmation.native_last_activity_at.is_none());
-    let expected_path = confirmation.clone();
-    let verifying_path = command::update(&mut app, Message::ConfirmRecovery);
-    assert_eq!(verifying_path.units(), 1);
-    confirmed_session.native_last_activity_at = Some("2026-10-10T12:35:01Z".to_owned());
-    let verification_generation = app.recovery_generation;
-    let activity_changed = command::update(
-        &mut app,
-        Message::RecoveryReinspected {
-            generation: verification_generation,
-            expected: expected_path,
-            result: Ok(confirmed_session.clone()),
-        },
-    );
+    let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    let mut resuming = None;
+    for message in outputs(verifying).await {
+        assert!(matches!(message, Message::RecoveryReinspected { .. }));
+        resuming = Some(command::update(&mut app, message));
+    }
+    let resuming = resuming.expect("matching resume inspection");
+    assert_eq!(resuming.units(), 1, "matching target dispatches resume");
+    for message in outputs(resuming).await {
+        assert!(
+            matches!(message, Message::CoreCommandCompleted(Ok(_))),
+            "{message:?}"
+        );
+    }
     assert_eq!(
-        activity_changed.units(),
-        0,
-        "changed activity must not dispatch recovery"
+        inspect_session(&host, &claude_id)
+            .await
+            .expect("resumed Claude session")
+            .state,
+        protocol::SessionState::Running
     );
-    let refreshed = app
-        .recovery_confirmation
-        .as_ref()
-        .expect("updated activity");
-    assert_eq!(
-        refreshed.native_last_activity_at.as_deref(),
-        Some("2026-10-10T12:35:01Z")
-    );
-    let expected_activity = refreshed.clone();
-    let verifying_activity = command::update(&mut app, Message::ConfirmRecovery);
-    assert_eq!(verifying_activity.units(), 1);
-    let activity_generation = app.recovery_generation;
-    let verified = command::update(
-        &mut app,
-        Message::RecoveryReinspected {
-            generation: activity_generation,
-            expected: expected_activity,
-            result: Ok(confirmed_session),
-        },
-    );
-    assert_eq!(
-        verified.units(),
-        1,
-        "matching second inspect may dispatch recovery"
-    );
-    assert!(app.recovery_confirmation.is_none());
     daemon.stop();
+}
+
+fn write_transcript(path: &PathBuf, modified_at: u64) {
+    fs::write(path, "{}\n").expect("write Claude transcript");
+    File::options()
+        .write(true)
+        .open(path)
+        .expect("open Claude transcript")
+        .set_times(
+            FileTimes::new()
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(modified_at)),
+        )
+        .expect("set Claude transcript activity");
+}
+
+async fn report_native_id(host: &HostConfig, id: &SessionId, native_id: &str, sequence: u64) {
+    let session = inspect_session(host, id)
+        .await
+        .expect("inspect session before native identity report");
+    let worker_instance_id = session
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.worker_instance_id.clone())
+        .expect("managed session has a runtime id");
+    let process_start_identity = HostInspector::new()
+        .identity(session.pid)
+        .expect("inspect managed process identity")
+        .expect("managed process is live");
+    let expires_at = (time::OffsetDateTime::now_utc()
+        + time::Duration::minutes(NATIVE_REPORT_EXPIRY_MINUTES))
+    .format(&Rfc3339)
+    .expect("format native identity report expiry");
+    let params = SessionReportNativeIdParams::new(
+        id.clone(),
+        worker_instance_id,
+        "claude",
+        session.pid,
+        ProcessStartIdentity::new(process_start_identity.start_identity.get()),
+        ReportSequence::new(sequence),
+        expires_at,
+        native_id,
+        None,
+    )
+    .expect("native identity report params are valid");
+    let socket_path = match &host.transport {
+        pohunek_gui_core::HostTransport::Local { socket_path } => socket_path,
+        _ => panic!("launcher integration uses a local daemon"),
+    };
+    let mut client = Client::connect_local_with_options(
+        socket_path,
+        ClientOptions::default().with_origin_source(OriginSource::Omitted),
+    )
+    .await
+    .expect("connect to fixture daemon");
+    let request = Request::new(
+        "gui-report-native-id",
+        method::SESSION_REPORT_NATIVE_ID,
+        serde_json::to_value(params).expect("serialize native identity report"),
+    )
+    .expect("native identity report request is valid");
+    let reported: protocol::SessionReportNativeIdResult = serde_json::from_value(
+        client
+            .request(&request)
+            .await
+            .expect("session.report_native_id"),
+    )
+    .expect("decode native identity report result");
+    assert!(reported.recorded, "daemon must record the native identity");
 }
 
 async fn outputs(task: iced::Task<Message>) -> Vec<Message> {

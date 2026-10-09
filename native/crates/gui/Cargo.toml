@@ -33,8 +33,11 @@ toml = { workspace = true }
 
 [dev-dependencies]
 iced_runtime = "0.14.0"
+pohunek-client = { workspace = true }
 pohunek-test-support = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 
 [lints]
 workspace = true
