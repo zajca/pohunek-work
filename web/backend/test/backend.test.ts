@@ -7,8 +7,10 @@ import {
   startBackend,
   startHostsPipeline,
   startRelay,
+  type BackendConfig,
   type BackendHandle,
   type BackendHostEntry,
+  type BackendLogEvent,
   type BackendLogger,
   type DaemonTarget,
 } from "@pohunek/backend";
@@ -31,6 +33,10 @@ const TEST_ROWS = 24;
 const DISCOVER_INTERVAL_SECONDS = 0.02;
 const POLL_INTERVAL_MILLISECONDS = 10;
 const POLL_TIMEOUT_MILLISECONDS = 2_000;
+const DAEMON_RETRY_INTERVAL_SECONDS = 0.02;
+const BOUNDED_WAIT_SECONDS = 0.5;
+const LONG_WAIT_SECONDS = 120;
+const INCOMPATIBLE_PROTOCOL_VERSION = PROTOCOL_VERSION + 1;
 const BINARY_PAYLOAD = Uint8Array.of(0x00, 0xff, 0x80, 0x61, 0xc3, 0x28);
 const INDEX_CONTENT = "<!doctype html><title>Pohunek backend test</title>";
 const ASSET_CONTENT = "backend-test-asset";
@@ -275,6 +281,8 @@ describe("@pohunek/backend", () => {
         await startHostsPipeline({
           daemonSocketPath: socketPath,
           discoverIntervalSeconds: 1,
+          daemonWaitSeconds: 0,
+          daemonRetryIntervalSeconds: DAEMON_RETRY_INTERVAL_SECONDS,
           logger: silentLogger,
         });
       } catch (error: unknown) {
@@ -291,6 +299,139 @@ describe("@pohunek/backend", () => {
     }
   });
 });
+
+describe("backend startup before the local daemon", () => {
+  test("connects once the daemon socket appears while the backend waits", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const socketPath = join(root, "daemon.sock");
+    const waiting = deferred();
+    let daemon: FixtureDaemonHandle | undefined;
+    let backend: BackendHandle | undefined;
+    try {
+      const starting = startBackend(
+        backendConfig(root, socketPath, LONG_WAIT_SECONDS),
+        eventLogger((event) => {
+          if (event.event === "daemon_connection" && event.lifecycle === "waiting") {
+            waiting.resolve();
+          }
+        }),
+      );
+      await Promise.race([waiting.promise, starting]);
+
+      daemon = await startFixtureDaemon({
+        listen: { unixSocketPath: socketPath },
+        daemonVersion: LOCAL_DAEMON_VERSION,
+      });
+      backend = await starting;
+
+      const localEntry = backend.hosts.snapshot().find((entry) => entry.host === "local");
+      expect(localEntry?.reachability).toBe("reachable_daemon");
+      expect(localEntry?.daemon_version).toBe(LOCAL_DAEMON_VERSION);
+    } finally {
+      await backend?.close();
+      await daemon?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails with the typed startup error once the wait elapses", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const socketPath = join(root, "missing.sock");
+    const events: BackendLogEvent[] = [];
+    try {
+      const failure = await startFailure(
+        backendConfig(root, socketPath, BOUNDED_WAIT_SECONDS),
+        eventLogger((event) => events.push(event)),
+      );
+
+      expect(failure).toBeInstanceOf(BackendStartupError);
+      expect((failure as BackendStartupError).socketPath).toBe(socketPath);
+      expect(events.filter(isWaitingEvent).length > 0).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a zero wait fails on the first attempt without retrying", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const events: BackendLogEvent[] = [];
+    try {
+      const failure = await startFailure(
+        backendConfig(root, join(root, "missing.sock"), 0),
+        eventLogger((event) => events.push(event)),
+      );
+
+      expect(failure).toBeInstanceOf(BackendStartupError);
+      expect(events.filter(isWaitingEvent).length).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an incompatible daemon fails at once instead of waiting", async () => {
+    const root = await createFixtureRoot("pk-bw-");
+    const socketPath = join(root, "daemon.sock");
+    const events: BackendLogEvent[] = [];
+    const daemon = await startFixtureDaemon({
+      listen: { unixSocketPath: socketPath },
+      protocolVersion: INCOMPATIBLE_PROTOCOL_VERSION,
+    });
+    try {
+      const failure = await startFailure(
+        backendConfig(root, socketPath, LONG_WAIT_SECONDS),
+        eventLogger((event) => events.push(event)),
+      );
+
+      expect(failure).toBeInstanceOf(BackendStartupError);
+      expect(String((failure as BackendStartupError).cause).includes("incompatible")).toBe(true);
+      expect(events.filter(isWaitingEvent).length).toBe(0);
+    } finally {
+      await daemon.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+function backendConfig(root: string, socketPath: string, daemonWaitSeconds: number): BackendConfig {
+  return {
+    bindHost: LOOPBACK_HOST,
+    port: 0,
+    allowLoopbackBind: true,
+    daemonSocketPath: socketPath,
+    derivedRuntime: undefined,
+    logFiles: undefined,
+    discoverIntervalSeconds: DISCOVER_INTERVAL_SECONDS,
+    daemonWaitSeconds,
+    daemonRetryIntervalSeconds: DAEMON_RETRY_INTERVAL_SECONDS,
+    staticAssetsDir: root,
+  };
+}
+
+function eventLogger(onEvent: (event: BackendLogEvent) => void): BackendLogger {
+  return { log: onEvent };
+}
+
+function isWaitingEvent(event: BackendLogEvent): boolean {
+  return event.event === "daemon_connection" && event.lifecycle === "waiting";
+}
+
+async function startFailure(config: BackendConfig, logger: BackendLogger): Promise<unknown> {
+  try {
+    const backend = await startBackend(config, logger);
+    await backend.close();
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error("the backend started although startup was expected to fail");
+}
+
+function deferred(): { readonly promise: Promise<void>; resolve(): void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((settle): void => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 async function startBackendFixture(
   discoverIntervalSeconds: number = DISCOVER_INTERVAL_SECONDS,
@@ -330,6 +471,8 @@ async function startBackendFixture(
         derivedRuntime: undefined,
         logFiles: undefined,
         discoverIntervalSeconds,
+        daemonWaitSeconds: 0,
+        daemonRetryIntervalSeconds: DAEMON_RETRY_INTERVAL_SECONDS,
         staticAssetsDir: assets,
       },
       silentLogger,

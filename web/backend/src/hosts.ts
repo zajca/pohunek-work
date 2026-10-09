@@ -1,5 +1,5 @@
 import type { DaemonHealthResult, HostRecord } from "@pohunek/protocol";
-import { connectLocal } from "@pohunek/sdk";
+import { ClientError, connectLocal } from "@pohunek/sdk";
 import type { DaemonTarget } from "./relay";
 import { externalFqdnSelector, externalPeerSelector } from "./identity";
 import { errorClass, stdoutLogger, type BackendLogger } from "./log";
@@ -19,6 +19,15 @@ export interface BackendHostEntry {
 export interface StartHostsPipelineOptions {
   readonly daemonSocketPath: string;
   readonly discoverIntervalSeconds: number;
+  /** Seconds startup keeps retrying while the daemon socket is unreachable; 0 tries once. */
+  readonly daemonWaitSeconds: number;
+  readonly daemonRetryIntervalSeconds: number;
+  /**
+   * Runs before every connection attempt. Returns the reason the daemon's runtime
+   * directory is not ready yet (retried until the wait elapses, then thrown as is)
+   * or nothing when the attempt may proceed; throws for a failure waiting cannot fix.
+   */
+  readonly preflight?: () => Error | undefined;
   readonly logger?: BackendLogger;
 }
 
@@ -67,11 +76,7 @@ class HostsPipeline implements HostsPipelineHandle {
   }
 
   public async start(): Promise<void> {
-    try {
-      await this.refresh();
-    } catch (error: unknown) {
-      throw new BackendStartupError(this.options.daemonSocketPath, error);
-    }
+    await this.connectWithinWait();
 
     const intervalMilliseconds = this.options.discoverIntervalSeconds * MILLISECONDS_PER_SECOND;
     this.timer = setInterval((): void => {
@@ -86,6 +91,43 @@ class HostsPipeline implements HostsPipelineHandle {
         });
       });
     }, intervalMilliseconds);
+  }
+
+  /**
+   * Retries only a daemon that is not there yet (runtime directory missing or
+   * socket unreachable) until the configured wait elapses. Any other failure,
+   * such as an incompatible protocol version, is reported at once: waiting
+   * cannot fix it.
+   */
+  private async connectWithinWait(): Promise<void> {
+    const retryMilliseconds = this.options.daemonRetryIntervalSeconds * MILLISECONDS_PER_SECOND;
+    const deadline = performance.now() + this.options.daemonWaitSeconds * MILLISECONDS_PER_SECOND;
+    for (;;) {
+      let pending = this.options.preflight?.();
+      if (pending === undefined) {
+        try {
+          await this.refresh();
+          return;
+        } catch (error: unknown) {
+          if (!isDaemonUnreachable(error)) {
+            throw new BackendStartupError(this.options.daemonSocketPath, error);
+          }
+          pending = new BackendStartupError(this.options.daemonSocketPath, error);
+        }
+      }
+      if (performance.now() + retryMilliseconds > deadline) {
+        throw pending;
+      }
+      this.logger.log({
+        level: "warn",
+        event: "daemon_connection",
+        host: LOCAL_HOST,
+        lifecycle: "waiting",
+        status: "retrying",
+        error_class: errorClass(pending instanceof BackendStartupError ? pending.cause : pending),
+      });
+      await delay(retryMilliseconds);
+    }
   }
 
   public snapshot(): readonly BackendHostEntry[] {
@@ -237,6 +279,16 @@ function hostIdentifier(record: HostRecord): string | undefined {
       ? externalFqdnSelector(record.fqdn)
       : undefined;
   return identity === undefined ? undefined : `${record.overlay}:${identity}`;
+}
+
+function isDaemonUnreachable(error: unknown): boolean {
+  return error instanceof ClientError && error.kind === "daemonUnreachable";
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve): void => {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
 function elapsedMilliseconds(startedAt: number): number {

@@ -12,7 +12,10 @@ macOS on Apple Silicon (the archive name says which):
 
 It must run on the same host as a compatible `pohunekd` instance. The backend
 uses that daemon's local Unix socket for discovery and only accepts a NetBird
-address as its public bind address.
+address as its public bind address. The backend may start before the daemon
+(for example at login): it waits for the daemon's socket, 60 seconds by default
+(`POHUNEK_BACKEND_DAEMON_WAIT`, see `backend.env.example`), and the systemd unit
+restarts it after a failed start instead of leaving it down.
 
 ## Install
 

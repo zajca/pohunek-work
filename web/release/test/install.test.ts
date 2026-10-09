@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_DAEMON_WAIT_SECONDS } from "../../backend/src/config";
 
 const execFileAsync = promisify(execFile);
 const RELEASE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -99,6 +100,7 @@ describe("web release installer on Linux", () => {
       const unit = await readFile(unitFile, "utf8");
       expect(unit).toContain(`ExecStart="${installDir}/pohunek-web"`);
       expect(unit).toContain(`EnvironmentFile=${configFile.replaceAll(" ", "\\x20")}`);
+      expectBoundedRestartLoop(unit);
 
       await writeFile(configFile, "POHUNEK_BACKEND_BIND_HOST=100.64.0.1\n", { mode: 0o644 });
       await writeFile(join(installDir, "frontend", "stale.js"), "stale");
@@ -217,7 +219,7 @@ describe("web release installer on macOS", () => {
       await mkdir(dirname(configFile), { recursive: true });
       await writeFile(
         configFile,
-        `# comment\nPOHUNEK_BACKEND_BIND_HOST=100.64.0.7\nPOHUNEK_BACKEND_PORT="8443"\nPOHUNEK_BACKEND_DAEMON_SOCKET=${hostile}\nPOHUNEK_BACKEND_ALLOW_LOOPBACK=\n`,
+        `# comment\nPOHUNEK_BACKEND_BIND_HOST=100.64.0.7\nPOHUNEK_BACKEND_PORT="8443"\nPOHUNEK_BACKEND_DAEMON_SOCKET=${hostile}\nPOHUNEK_BACKEND_DAEMON_WAIT=90\nPOHUNEK_BACKEND_DAEMON_RETRY_INTERVAL=2\nPOHUNEK_BACKEND_ALLOW_LOOPBACK=\n`,
         { mode: 0o644 },
       );
       const runtime = join(harness.root, "run");
@@ -239,6 +241,8 @@ describe("web release installer on macOS", () => {
         POHUNEK_BACKEND_BIND_HOST: "100.64.0.7",
         POHUNEK_BACKEND_PORT: "8443",
         POHUNEK_BACKEND_DAEMON_SOCKET: hostile,
+        POHUNEK_BACKEND_DAEMON_WAIT: "90",
+        POHUNEK_BACKEND_DAEMON_RETRY_INTERVAL: "2",
       });
       expect(plist.KeepAlive).toEqual({ SuccessfulExit: false });
       expect(plist.RunAtLoad).toBe(true);
@@ -481,6 +485,40 @@ async function sealManifest(path: string, target: string, component = "web"): Pr
     args.push(MINIMUM_MACOS);
   }
   await execFileAsync("sh", args);
+}
+
+/**
+ * The installed unit must restart a failed backend at a calm pace and give up
+ * after a bounded number of full wait cycles, so a daemon that never becomes
+ * usable cannot keep the backend in a restart loop.
+ */
+function expectBoundedRestartLoop(unit: string): void {
+  const setting = (name: string): string => {
+    const match = new RegExp(`^${name}=(.+)$`, "m").exec(unit);
+    if (match?.[1] === undefined) {
+      throw new Error(`the rendered unit has no ${name}`);
+    }
+    return match[1];
+  };
+  expect(setting("Restart")).toBe("on-failure");
+  const restartSeconds = seconds(setting("RestartSec"));
+  const intervalSeconds = seconds(setting("StartLimitIntervalSec"));
+  const burst = Number(setting("StartLimitBurst"));
+  expect(restartSeconds >= 1).toBe(true);
+  expect(Number.isInteger(burst) && burst > 1).toBe(true);
+  const cycleSeconds = DEFAULT_DAEMON_WAIT_SECONDS + restartSeconds;
+  // The burst fits inside the interval, or the limit would never trip; several
+  // full wait cycles are allowed before it does.
+  expect(burst * cycleSeconds < intervalSeconds).toBe(true);
+  expect(burst >= 3).toBe(true);
+}
+
+function seconds(value: string): number {
+  const match = /^(\d+)(s|min)?$/.exec(value);
+  if (match?.[1] === undefined) {
+    throw new Error(`unsupported systemd time span: ${value}`);
+  }
+  return Number(match[1]) * (match[2] === "min" ? 60 : 1);
 }
 
 async function install(
