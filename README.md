@@ -6,7 +6,7 @@ runs the checks of another.
 
 | Folder | Surface | Toolchain |
 |--------|---------|-----------|
-| [`plugin/`](plugin/README.md) | `pohunek-work` workflow CLI and work-item TUI | Bun |
+| [`plugin/`](plugin/README.md) | `pohunek-work` workflow CLI and Ink control TUI | Bun |
 | [`web/`](web/docs/web-control-center.md) | Owner web control center (backend, client core, Svelte SPA) | Bun workspace |
 | [`launchers/`](launchers/docs/launcher.md) | rofi, sway and Linear/GitHub launch scripts, installed by `pohunek-work setup` | shell + Bun tests |
 
@@ -15,6 +15,12 @@ runs the checks of another.
 Every surface consumes pohunek through its public contracts: the CLI with
 `--json` and the public protocol (v4), through the SDKs of one pinned core
 release. Core internals are never imported, and core ships no UI.
+
+`pohunek-work tui` provides Work, Sessions, Hosts and Activity in a terminal.
+`pohunek-work new-session` opens a standalone session form. On Sway,
+`pohunek-work setup sway` installs its `$mod+n` launcher by default. The
+plugin release archive runs with `bun plugin/pohunek-work.js`; see the
+[plugin guide](plugin/README.md) for keys and configuration.
 
 ## Core pin
 

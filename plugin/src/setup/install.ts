@@ -10,7 +10,7 @@ import { CONFIG_ASSETS, renderSwayDropin, SCRIPT_ASSETS } from "./assets.ts";
 import type { SetupPaths } from "./paths.ts";
 import { configIncludesDropin, readSwayConfig } from "./sway-include.ts";
 import { hasControlCharacter, isPlainKeybind, quoteForSwayExec } from "./sway-quote.ts";
-import { OBSOLETE_SCRIPTS, SCRIPT_MODE, SWAY_DROPIN_DIR, SWAY_DROPIN_FILE, type IssuePickerSource } from "./settings.ts";
+import { DEFAULT_SWAY_NEW_SESSION_KEYBIND, OBSOLETE_SCRIPTS, SCRIPT_MODE, SWAY_DROPIN_DIR, SWAY_DROPIN_FILE, type IssuePickerSource } from "./settings.ts";
 
 export type WriteOutcome = "created" | "overwritten" | "unchanged" | "skipped";
 
@@ -50,6 +50,7 @@ export interface InstallOptions {
 export interface SwayOptions extends InstallOptions {
   readonly print: boolean;
   readonly keybind: string;
+  readonly newSessionKeybind?: string;
   readonly issueKeybind: string;
   /** Project the issue picker is bound for; null leaves the issue binding out, the picker needs one. */
   readonly issueProject: string | null;
@@ -178,13 +179,14 @@ export function swayDropinPath(paths: SetupPaths): string {
 }
 
 /** Builds the drop-in text; refuses values that would change what sway parses or add a line to its config. */
-export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "keybind" | "issueKeybind" | "issueProject" | "issueSource">): string {
+export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "keybind" | "issueKeybind" | "issueProject" | "issueSource" | "newSessionKeybind">): string {
   if ((options.issueProject === null) !== (options.issueSource === null)) {
     throw new SetupIoError("sway drop-in issue project and issue source are set together or not at all");
   }
   const words: [string, string][] = [
     ["launcher path", join(paths.launcherBinDir, "pohunek-rofi")],
     ["issue launcher path", join(paths.launcherBinDir, "pohunek-rofi-issue")],
+    ["new session launcher path", join(paths.launcherBinDir, "pohunek-new-session")],
   ];
   if (options.issueProject !== null) words.push(["issue project", options.issueProject]);
   for (const [name, value] of words) {
@@ -192,7 +194,8 @@ export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "
       throw new SetupIoError(`sway drop-in value ${name} is empty or contains a control character`);
     }
   }
-  const keybinds = [["keybind", options.keybind], ...(options.issueProject === null ? [] : [["issue keybind", options.issueKeybind]])];
+  const newSessionKeybind = options.newSessionKeybind ?? DEFAULT_SWAY_NEW_SESSION_KEYBIND;
+  const keybinds = [["keybind", options.keybind], ["new session keybind", newSessionKeybind], ...(options.issueProject === null ? [] : [["issue keybind", options.issueKeybind]])];
   for (const [name, value] of keybinds) {
     if (!isPlainKeybind(value ?? "")) {
       throw new SetupIoError(`sway drop-in ${name} ${JSON.stringify(value)} is not a plain key sequence`);
@@ -201,6 +204,7 @@ export function buildSwaySnippet(paths: SetupPaths, options: Pick<SwayOptions, "
   return renderSwayDropin({
     launcher: quoteForSwayExec(words[0]?.[1] ?? ""),
     keybind: options.keybind,
+    newSession: { keybind: newSessionKeybind, launcher: quoteForSwayExec(words[2]?.[1] ?? "") },
     ...(options.issueProject === null
       ? {}
       : {

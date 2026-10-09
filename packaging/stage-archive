@@ -7,7 +7,8 @@
 # component: the input tree assembled by web/release/package.sh, the `launchers/`
 # source directory, or the repository root for the plugin (its sources import
 # files from `launchers/`, so the archive keeps the `plugin/` and `launchers/`
-# sibling layout). The staging directory <output-dir>/<name> is created fresh and the archive name
+# sibling layout). The plugin input must include the Bun bundle built from its
+# locked dependencies. The staging directory <output-dir>/<name> is created fresh and the archive name
 # `<prefix>-<version>-<target>` is printed on stdout. Run from the repository
 # root: the README and the license texts are copied from it.
 #
@@ -74,7 +75,7 @@ case $component in
     launchers)
         # The scripts the launcher setup installs, their default configuration
         # and prompt templates, and the two guides.
-        for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue \
+        for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue pohunek-new-session \
             templates/launcher.conf templates/sway-dropin.conf.tmpl \
             templates/prompts/issue.tmpl templates/prompts/pr.tmpl \
             docs/launcher.md docs/debug-launcher.md; do
@@ -82,9 +83,9 @@ case $component in
         done
         ;;
     plugin)
-        # The CLI sources and prompt templates, and the launcher files that
-        # `plugin/src/setup/assets.ts` imports as text.
-        for member in plugin/package.json plugin/tsconfig.json plugin/README.md; do
+        # The self-contained Bun bundle is the release entry point. Source and
+        # launcher assets are retained for inspection and local development.
+        for member in plugin/package.json plugin/tsconfig.json plugin/README.md plugin/pohunek-work.js; do
             copy_member "$member"
         done
         [ -d "$input/plugin/src" ] || fail "required input directory is missing: $input/plugin/src"
@@ -94,7 +95,7 @@ case $component in
         for member in $members; do
             copy_member "$member"
         done
-        for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue \
+        for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue pohunek-new-session \
             templates/launcher.conf templates/sway-dropin.conf.tmpl templates/sway-issue-binding.conf.tmpl \
             templates/prompts/issue.tmpl templates/prompts/pr.tmpl; do
             copy_member "launchers/$member"

@@ -473,7 +473,11 @@ class SurfaceSelectionTest(unittest.TestCase):
         self.assertIn('packaging/make-archive plugin "$VERSION" noarch . dist', job)
         self.assertIn("--component plugin", job)
         self.assertIn("mktemp -d", job)
-        self.assertIn("bun plugin/src/main.ts", job)
+        self.assertIn("bun install --frozen-lockfile", job)
+        self.assertIn("bun build src/main.ts --target bun --outfile pohunek-work.js", job)
+        self.assertIn("bun plugin/pohunek-work.js", job)
+        self.assertIn("script -e -q -c", job)
+        self.assertIn("plugin/pohunek-work.js' tui", job)
         self.assertIn("name: release-plugin", job)
         self.assertIn("bun-version-file: plugin/package.json", job)
         for use in re.findall(r"uses: (\S+)", job):

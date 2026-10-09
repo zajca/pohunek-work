@@ -23,6 +23,11 @@ declare module "*/launchers/pohunek-rofi" {
   export default text;
 }
 
+declare module "*/launchers/pohunek-new-session" {
+  const text: string;
+  export default text;
+}
+
 declare module "*/launchers/pohunek-rofi-issue" {
   const text: string;
   export default text;
