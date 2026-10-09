@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Box, render, Text, useApp, useInput, usePaste, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createControlClient, type ControlAction, type ControlGovernance, type ControlHostCapabilities, type ControlNotification, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
+import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl } from "../tui/actions.ts";
 import { staleCutoff } from "../output/stale.ts";
@@ -12,8 +12,8 @@ import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { layout } from "./config.ts";
-import { decodeDoEnvelope } from "../tui/decode.ts";
-import { ActivityView, HostsView, orderedSessions, SessionsView, SessionDetail, WorkView, activityRecords, sessionDetailMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
+import { ActivityView, HostsView, orderedSessions, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -34,7 +34,7 @@ export interface InkTuiOptions {
   readonly log?: (event: string, detail?: string) => void;
 }
 
-type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "rename" | "metadata" | "work-actions" | "help";
+type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "rename" | "metadata" | "work-detail" | "work-preview" | "help";
 type ConfirmAction = "stop" | "remove";
 const VIEWS: readonly ViewName[] = ["Work", "Sessions", "Hosts", "Activity"];
 const SCOPES: readonly ActivityScope[] = ["Recent", "Unread", "Archived"];
@@ -107,11 +107,10 @@ function changeTextField(form: LaunchForm, input: string, assistant: boolean, er
   return { ...form, [field]: erase ? value.slice(0, -1) : value + clean };
 }
 
-function FormView({ form, options, actions, assistant, created, busy, onFocus, onChoice, onPickChoice, onScrollChoices, onSubmit, onCancel }: {
+function FormView({ form, options, actions, assistant, created, busy, onFocus, onPickChoice, onScrollChoices, onSubmit, onCancel }: {
   readonly form: LaunchForm; readonly options: LaunchOptions | null; readonly actions: readonly ActionChoice[]; readonly assistant: boolean;
   readonly created: CreatedSession | null; readonly busy: boolean;
   readonly onFocus: (index: number) => void;
-  readonly onChoice: (direction: -1 | 1) => void;
   readonly onPickChoice: (index: number) => void;
   readonly onScrollChoices: (direction: -1 | 1, max: number) => void;
   readonly onSubmit: () => void;
@@ -124,10 +123,15 @@ function FormView({ form, options, actions, assistant, created, busy, onFocus, o
   const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
   const choices = form.focus === 0 ? hostChoices : form.focus === 1 ? projectChoices : form.focus === 2 ? ["default", ...agentChoices] :
     form.focus === 3 ? assistant ? ["help", "setup", "project", "update", "debug"] : ["blank session", ...actions.map((action) => action.label)] : [];
-  const choiceStart = Math.min(form.choice, Math.max(0, choices.length - layout.visibleChoices));
+  const choiceLimit = compact ? 2 : layout.visibleChoices;
+  const choiceStart = Math.min(form.choice, Math.max(0, choices.length - choiceLimit));
+  const selectedChoice = form.focus === 0 ? options?.hosts.findIndex((host) => host.id === form.host) ?? -1 :
+    form.focus === 1 ? options?.projects.filter((project) => `${project.id} ${project.label}`.toLowerCase().includes(form.search.toLowerCase())).findIndex((project) => project.id === form.project) ?? -1 :
+      form.focus === 2 ? form.agent === null ? 0 : 1 + (options?.agents.filter((agent) => !assistant || agent.assistantCapable).findIndex((agent) => agent.id === form.agent) ?? -2) :
+        form.focus === 3 ? assistant ? choices.indexOf(form.intent) : form.action === null ? 0 : 1 + actions.findIndex((action) => action.id === form.action) : -1;
   const fields = [
     hostChoices.find((_, index) => options?.hosts[index]?.id === form.host) ?? form.host,
-    options?.projects.find((project) => project.id === form.project)?.label ?? "none",
+    form.search === "" ? options?.projects.find((project) => project.id === form.project)?.label ?? "none" : `search: ${form.search}`,
     options?.agents.find((agent) => agent.id === form.agent)?.label ?? "default",
     assistant ? form.intent : actions.find((action) => action.id === form.action)?.label ?? "blank session",
     assistant ? "Free-form request unavailable in core CLI" : form.name,
@@ -137,19 +141,19 @@ function FormView({ form, options, actions, assistant, created, busy, onFocus, o
   ];
   return <Box flexDirection="column">
     <Text bold color="cyan">{assistant ? "NEW ASSISTANT" : "NEW SESSION"}</Text>
-    {created === null && !compact && choices.length === 0 && <Text dimColor>Click a field to edit it. Click a selected choice again to cycle options.</Text>}
+    {created === null && !compact && choices.length === 0 && <Text dimColor>Click a field to edit it. Tab moves to the next field.</Text>}
     {created !== null && <Message color="green" text={`Created ${created.host}/${created.sessionId}. Creation is locked.`} />}
     {created?.warnings.map((warning, index) => <Message key={index} text={`Launch warning: ${warning}`} />)}
     {created === null && options?.warning !== null && options?.warning !== undefined && <Text color="yellow" wrap="truncate-end">{safeText(options.warning)}</Text>}
-    {created === null && fields.map((value, index) => <MouseZone key={index} onClick={assistant && index === 4 ? undefined : () => { if (form.focus === index && index <= 3) onChoice(1); else onFocus(index); }}>
+    {created === null && fields.map((value, index) => <MouseZone key={index} onClick={assistant && index === 4 ? undefined : () => { onFocus(index); }}>
       <Text color={assistant && index === 4 ? "gray" : form.focus === index ? "cyan" : "white"} bold={form.focus === index} wrap="truncate-end">
         {`${form.focus === index ? "▸" : " "} ${formFieldLabel(assistant, index).padEnd(16)} ${index <= 3 ? "‹ " : ""}${shorten(value || (index <= 3 ? "none" : "(empty)"), 60)}${index <= 3 ? " ›" : form.focus === index ? "_" : ""}`}
       </Text>
     </MouseZone>)}
-    {!compact && created === null && choices.length > 0 && <MouseZone flexDirection="column" width="100%" onWheel={(direction) => { onScrollChoices(direction, choices.length - layout.visibleChoices); }}>
-      <Text dimColor>{`Choose ${formFieldLabel(assistant, form.focus).toLowerCase()}${choices.length > layout.visibleChoices ? ` (${choiceStart + 1}–${Math.min(choiceStart + layout.visibleChoices, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>
-      {choices.slice(choiceStart, choiceStart + layout.visibleChoices).map((choice, index) => <MouseZone key={`${choiceStart + index}/${choice}`} onClick={() => { onPickChoice(choiceStart + index); }}>
-        <Text color="cyan">{`  ${choiceStart + index + 1}. ${shorten(choice, 65)}`}</Text>
+    {created === null && choices.length > 0 && <MouseZone flexDirection="column" width="100%" onWheel={(direction) => { onScrollChoices(direction, choices.length - choiceLimit); }}>
+      {!compact && <Text dimColor>{`Choose ${formFieldLabel(assistant, form.focus).toLowerCase()}${choices.length > choiceLimit ? ` (${choiceStart + 1}–${Math.min(choiceStart + choiceLimit, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>}
+      {choices.slice(choiceStart, choiceStart + choiceLimit).map((choice, index) => <MouseZone key={`${choiceStart + index}/${choice}`} onClick={() => { onPickChoice(choiceStart + index); }}>
+        <Text color={choiceStart + index === selectedChoice ? "cyan" : "white"} bold={choiceStart + index === selectedChoice}>{`${choiceStart + index === selectedChoice ? "▸" : " "} ${choiceStart + index + 1}. ${shorten(choice, 65)}`}</Text>
       </MouseZone>)}
     </MouseZone>}
     <Box gap={1}>
@@ -160,7 +164,7 @@ function FormView({ form, options, actions, assistant, created, busy, onFocus, o
     {created === null && !compact && form.focus === 0 && <Text dimColor wrap="truncate-end">{`Hosts: ${hostChoices.join(", ") || "loading"}`}</Text>}
     {created === null && !compact && form.focus === 2 && <Text dimColor wrap="truncate-end">{`Agents: ${agentChoices.join(", ") || "loading"}`}</Text>}
     {created === null && !compact && form.focus === 3 && !assistant && <Text dimColor wrap="truncate-end">{`Actions: blank session, ${actions.map((action) => action.label).join(", ")}`}</Text>}
-    <Text dimColor wrap="truncate-end">{busy ? "Working…" : created === null ? "Tab field  ←/→ choice  Ctrl+Enter create  Esc cancel" : "Enter retry attach  Esc close"}</Text>
+    {!compact && <Text dimColor wrap="truncate-end">{busy ? "Working…" : created === null ? "Click a choice · Tab next field · ←/→ change · Ctrl+Enter create · Esc back" : "Enter retry attach  Esc close"}</Text>}
   </Box>;
 }
 
@@ -178,6 +182,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [workFilters, setWorkFilters] = useState<Filters>({ actor: options.initialView === "mine" ? "me" : "all", project: null, text: "", hideStale: false });
   const [workSearch, setWorkSearch] = useState(false);
   const [workKey, setWorkKey] = useState<string | null>(null);
+  const [workDetailKey, setWorkDetailKey] = useState<string | null>(null);
+  const [workPreview, setWorkPreview] = useState<DoOutcome | string | null>(null);
+  const [previewOffset, setPreviewOffset] = useState(0);
   const [stale, setStale] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -222,6 +229,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const records = useMemo(() => snapshot === null ? [] : activityRecords(snapshot, scope), [snapshot, scope]);
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
   const selectedWork = workRows?.find((item) => rowId(item) === workKey) ?? selectedAt(workRows ?? [], cursor.Work);
+  const workDetail = work?.payload?.items.find((item) => rowId(item) === workDetailKey) ?? null;
+  const selectedWorkAction = workDetail?.actions[workChoice];
+  const previewMatchesSelection = workPreview !== null && typeof workPreview !== "string" && workPreview.kind === "ok" &&
+    workDetail !== null && selectedWorkAction !== undefined && workPreview.key === workDetail.key && workPreview.action === selectedWorkAction.name;
   const selectedWorkIndex = selectedWork === null ? 0 : workRows?.indexOf(selectedWork) ?? 0;
   const selectedSession = sessions.find((session) => `${session.host}/${session.id}` === sessionKey) ?? selectedAt(sessions, cursor.Sessions);
   const selectedSessionIndex = selectedSession === null ? 0 : sessions.indexOf(selectedSession);
@@ -230,6 +241,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const visibleRows = Math.max(2, Math.floor((stdout.rows - layout.listReservedRows) / 2));
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
   const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight);
+  const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
+  const previewWidth = Math.max(20, stdout.columns - 4);
+  const previewMaxOffset = workPreview === null ? 0 : workPreviewMaxOffset(workPreview, previewWidth, previewHeight);
+  const sessionMutable = sessionDetail !== null && !sessionDetail.external && !["conflicting", "incompatible", "lost"].includes(sessionDetail.runtimeState ?? "");
+  const sessionActive = sessionDetail !== null && ["running", "working", "starting", "reconnecting", "blocked"].includes(sessionDetail.state);
 
   const loadScreen = useCallback(async (): Promise<void> => {
     if (sessionDetail === null) return;
@@ -398,17 +414,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     finally { setBusy(false); }
   }, [control]);
 
-  const inspectSelected = useCallback(async (): Promise<void> => {
-    if (selectedSession !== null) await inspectSessionAt(selectedSession.host, selectedSession.id);
-  }, [inspectSessionAt, selectedSession]);
-
-  const inspectSelectedHost = useCallback(async (): Promise<void> => {
-    if (selectedHost === null) return;
-    if (!selectedHost.dialable) { setStatus(`Host ${selectedHost.name} has no dialable identity`); return; }
+  const inspectHost = useCallback(async (host: ControlHost): Promise<void> => {
+    if (!host.dialable) { setStatus(`Host ${host.name} has no dialable identity`); return; }
     setBusy(true);
     try {
       const [capabilities, policy] = await Promise.all([
-        control.inspectHost(selectedHost.route), control.inspectGovernance(selectedHost.route),
+        control.inspectHost(host.route), control.inspectGovernance(host.route),
       ]);
       setHostDetail(capabilities.ok ? capabilities.data : null);
       setGovernance(policy.ok ? policy.data : null);
@@ -417,7 +428,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setOverlay("host");
     } catch (error) { setStatus(defaultStatus(error)); }
     finally { setBusy(false); }
-  }, [control, selectedHost]);
+  }, [control]);
 
   const openNotification = useCallback(async (record: ControlNotification): Promise<void> => {
     setNotificationDetail(record);
@@ -429,12 +440,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         try {
           const result = await control.act({ kind: "read", host: record.host, notificationId: record.id });
           if (!result.ok) setStatus(`Mark read failed: ${result.error.message}`);
-          else await refresh();
+          else { if (result.data.kind === "read") setNotificationDetail(result.data.notification); await refresh(); }
         } catch (error) { setStatus(`Mark read failed: ${defaultStatus(error)}`); }
       }
     }
-    if (record.sessionId !== null) await inspectSessionAt(record.host, record.sessionId);
-  }, [control, inspectSessionAt, refresh, snapshot, stale]);
+  }, [control, refresh, snapshot, stale]);
 
   const updateNotification = useCallback(async (record: ControlNotification, kind: "ack" | "archive"): Promise<void> => {
     if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
@@ -443,7 +453,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
       if (!result.ok) setStatus(`${kind} failed: ${result.error.message}`);
-      else await refresh();
+      else { await refresh(); setOverlay("none"); setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`); }
     } catch (error) { setStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);
 
@@ -549,8 +559,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [options.clipboardCommand, options.timeoutMs]);
 
   const workHandover = useCallback(async (action: string): Promise<void> => {
-    if (selectedWork === null || busy) return;
-    const checked = workActionArgv(options.selfBin, selectedWork.key, action, selectedWork.project);
+    if (workDetail === null || busy) return;
+    const checked = workActionArgv(options.selfBin, workDetail.key, action, workDetail.project);
     if (!checked.ok) { setStatus(checked.reason); return; }
     setBusy(true);
     try {
@@ -578,7 +588,19 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setStatus(report);
     } catch (error) { setStatus(`Work action: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
-  }, [busy, options.selfBin, refresh, selectedWork, suspendForChild]);
+  }, [busy, options.selfBin, refresh, suspendForChild, workDetail]);
+
+  const previewWorkAction = useCallback(async (action: string): Promise<void> => {
+    if (workDetail === null || busy) return;
+    setBusy(true);
+    try {
+      const preview = await previewWork(options.selfBin, options.listTimeoutMs, workDetail.key, action, workDetail.project);
+      setWorkPreview(preview);
+      setPreviewOffset(0);
+      setOverlay("work-preview");
+    } catch (error) { setStatus(`Plan preview: ${defaultStatus(error)}`); }
+    finally { setBusy(false); }
+  }, [busy, options.listTimeoutMs, options.selfBin, workDetail]);
 
   const selectIndex = useCallback((index: number): void => {
     const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? snapshot?.hosts.length ?? 0 : records.length;
@@ -592,6 +614,29 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const current = view === "Sessions" ? selectedSessionIndex : view === "Work" ? selectedWorkIndex : cursor[view];
     selectIndex(current + delta);
   }, [cursor, selectedSessionIndex, selectedWorkIndex, selectIndex, view]);
+
+  const openRow = useCallback((index: number): void => {
+    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? snapshot?.hosts.length ?? 0 : records.length;
+    if (count === 0) return;
+    const targetIndex = Math.max(0, Math.min(count - 1, index));
+    selectIndex(targetIndex);
+    if (view === "Work") {
+      const item = workRows?.[targetIndex];
+      if (item === undefined) return;
+      setWorkDetailKey(rowId(item));
+      setWorkChoice(0);
+      setOverlay("work-detail");
+    } else if (view === "Sessions") {
+      const session = sessions[targetIndex];
+      if (session !== undefined) void inspectSessionAt(session.host, session.id);
+    } else if (view === "Hosts") {
+      const host = snapshot?.hosts[targetIndex];
+      if (host !== undefined) void inspectHost(host);
+    } else {
+      const record = records[targetIndex];
+      if (record !== undefined) void openNotification(record);
+    }
+  }, [inspectHost, inspectSessionAt, openNotification, records, selectIndex, sessions, snapshot?.hosts, view, workRows]);
 
   const changeFormChoice = useCallback((delta: number): void => {
     if (launchOptions === null) return;
@@ -648,7 +693,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       if (key.leftArrow || key.upArrow) { changeFormChoice(-1); return; }
       if (key.rightArrow || key.downArrow) { changeFormChoice(1); return; }
-      if (key.return && form.focus === 1) { setForm((old) => ({ ...old, search: "", focus: 2 })); return; }
+      if (key.return && form.focus <= 3) {
+        if (form.focus === 1 && form.search !== "") {
+          const project = launchOptions?.projects.find((entry) => `${entry.id} ${entry.label}`.toLowerCase().includes(form.search.toLowerCase()));
+          if (project === undefined) { setStatus("No project matches the search"); return; }
+          void chooseProject(project.id);
+        }
+        setForm((old) => ({ ...old, search: "", choice: 0, focus: old.focus === 3 && overlay === "assistant" ? 5 : old.focus + 1 }));
+        return;
+      }
       if (key.return && overlay === "form" && form.focus === 5) { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return; }
       if (key.backspace || key.delete) { setForm((old) => changeTextField(old, "", overlay === "assistant", true)); return; }
       if (!key.ctrl && !key.meta && input !== "") setForm((old) => changeTextField(old, input, overlay === "assistant", false));
@@ -673,12 +726,27 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (!key.ctrl && !key.meta) setEdit((old) => old + input);
       return;
     }
+    if ((key.leftArrow || key.rightArrow) && !workSearch && overlay !== "help" && options.mode === "main") {
+      const direction = key.leftArrow ? -1 : 1;
+      setOverlay("none");
+      setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
+      return;
+    }
     if (overlay === "help") { if (key.escape || input === "?" || input === "q") setOverlay("none"); return; }
-    if (overlay === "work-actions") {
+    if (overlay === "work-preview") {
+      if (key.escape) setOverlay("work-detail");
+      else if (key.pageDown || key.downArrow) setPreviewOffset((old) => Math.min(previewMaxOffset, old + layout.detailScrollStep));
+      else if (key.pageUp || key.upArrow) setPreviewOffset((old) => Math.max(0, old - layout.detailScrollStep));
+      else if ((key.return || input === "r") && previewMatchesSelection) void workHandover(selectedWorkAction.name);
+      return;
+    }
+    if (overlay === "work-detail") {
       if (key.escape) { setOverlay("none"); return; }
       if (key.upArrow || input === "k") setWorkChoice((old) => Math.max(0, old - 1));
-      else if (key.downArrow || input === "j") setWorkChoice((old) => Math.min((selectedWork?.actions.length ?? 1) - 1, old + 1));
-      else if (key.return) { const action = selectedWork?.actions[workChoice]; if (action !== undefined) void workHandover(action.name); }
+      else if (key.downArrow || input === "j") setWorkChoice((old) => Math.min((workDetail?.actions.length ?? 1) - 1, old + 1));
+      else if (key.return || input === "p") { const action = workDetail?.actions[workChoice]; if (action !== undefined) void previewWorkAction(action.name); }
+      else if (input === "r") { const action = workDetail?.actions[workChoice]; if (action !== undefined) void workHandover(action.name); }
+      else if (input === "o" && workDetail !== null) { const url = workDetail.pull_request?.url ?? workDetail.issue?.url; if (url !== undefined) openLink(url); }
       return;
     }
     if (overlay === "session") {
@@ -686,11 +754,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (sessionDetail === null) return;
       if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + layout.detailScrollStep)); return; }
       if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - layout.detailScrollStep)); return; }
-      if (input === "o") void openSelected();
-      else if (input === "r") void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id });
-      else if (input === "f") void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id });
-      else if (input === "x" || input === "D") { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
-      else if (input === "e" || input === "m") { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
+      if (input === "o" && sessionMutable && (sessionActive || sessionDetail.canResume)) void openSelected();
+      else if (input === "r" && sessionMutable && !sessionActive && sessionDetail.canResume) void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id });
+      else if (input === "f" && sessionMutable && sessionDetail.canFork) void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id });
+      else if ((input === "x" && sessionMutable && sessionActive) || (input === "D" && sessionMutable)) { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
+      else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") void loadScreen();
       else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
       else if (input === "u") void openFolder(sessionDetail);
@@ -698,7 +766,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "C") void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd);
       return;
     }
-    if (overlay === "host" || overlay === "notification") { if (key.escape) setOverlay("none"); return; }
+    if (overlay === "notification") {
+      if (key.escape) setOverlay("none");
+      else if (notificationDetail !== null && input === "o" && notificationDetail.sessionId !== null) void inspectSessionAt(notificationDetail.host, notificationDetail.sessionId);
+      else if (notificationDetail !== null && (input === "a" || input === "x")) void updateNotification(notificationDetail, input === "a" ? "ack" : "archive");
+      return;
+    }
+    if (overlay === "host") { if (key.escape) setOverlay("none"); return; }
     if (workSearch) {
       if (key.escape) { setWorkFilters((old) => ({ ...old, text: "" })); setWorkSearch(false); return; }
       if (key.return) { setWorkSearch(false); return; }
@@ -722,37 +796,33 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       else if (input === "/") setWorkSearch(true);
       else if (input === "h") setWorkFilters((old) => ({ ...old, hideStale: !old.hideStale }));
-      else if (key.return && selectedWork?.actions[0] !== undefined) void workHandover(selectedWork.actions[0].name);
-      else if (input === "a") { setWorkChoice(0); setOverlay("work-actions"); }
-      else if (input === "t") void workHandover("attach");
-      else if (input === "o" && selectedWork !== null) { const url = selectedWork.pull_request?.url ?? selectedWork.issue?.url; if (url !== undefined) openLink(url); }
-      else if (input === "p" && selectedWork?.actions[0] !== undefined) void previewWork(options.selfBin, options.listTimeoutMs, selectedWork.key, selectedWork.actions[0].name, selectedWork.project).then((result) => {
-        setStatus(typeof result === "string" ? result : JSON.stringify(result));
-      }).catch((error: unknown) => { setStatus(defaultStatus(error)); });
+      else if (key.return || input === "a") openRow(selectedWorkIndex);
       else if (input === "n") openForm(false);
       else if (input === "s") setView("Sessions");
     } else if (view === "Sessions") {
-      if (key.return) void inspectSelected();
+      if (key.return) openRow(selectedSessionIndex);
       else if (input === "o") void openSelected();
       else if (input === "n") openForm(false);
       else if (input === "a") openForm(true);
       else if (input === "P" && snapshot !== null) { const projects = [...new Set(snapshot.sessions.map((session) => session.projectLabel ?? session.projectId).filter((name): name is string => name !== null))].sort(); const index = projects.indexOf(projectFilter ?? ""); setProjectFilter(projects[index + 1] ?? null); setCursor((old) => ({ ...old, Sessions: 0 })); }
     } else if (view === "Hosts") {
-      if (key.return) void inspectSelectedHost();
+      if (key.return) openRow(cursor.Hosts);
     } else {
       if (input === "c") { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }
-      else if (selectedRecord !== null && key.return) void openNotification(selectedRecord);
-      else if (selectedRecord !== null && (input === "a" || input === "x")) void updateNotification(selectedRecord, input === "a" ? "ack" : "archive");
+      else if (key.return) openRow(cursor.Activity);
     }
   });
 
-  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "↑↓ select  ·  Enter action  ·  ? help  ·  q quit" : "Click or use ↑/↓ to select  ·  Enter action  ·  1–4 switch  ·  ? help  ·  q quit" : "Esc back  ·  Tab moves between form fields";
+  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "←→ views · ↑↓ select · Enter/click open · ? help" : "←→ or 1–4 views  ·  ↑↓ select  ·  Enter or click opens  ·  ? help  ·  q quit" :
+    overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : "Tab next field  ·  Ctrl+Enter create  ·  Esc back" :
+      overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
+        overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
-  const listInteraction = { onSelect: selectIndex, onWheel: move, width: Math.max(20, stdout.columns - 4) };
+  const listInteraction = { onOpen: openRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
 
   let content: ReactNode;
   if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy}
-    onFocus={(focus) => { setForm((old) => ({ ...old, focus, choice: 0 })); }} onChoice={changeFormChoice}
+    onFocus={(focus) => { setForm((old) => ({ ...old, focus, choice: 0 })); }}
     onPickChoice={(index) => {
       if (form.focus === 3 && overlay === "assistant") {
         const intents = ["help", "setup", "project", "update", "debug"] as const;
@@ -780,10 +850,28 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     <Section title="Host capabilities"><Text>{safeText(hostDetail === null ? "Unavailable" : `Daemon ${hostDetail.daemonVersion}; protocol ${hostDetail.protocolVersion}; agents ${hostDetail.supportedAgents.join(", ")}`)}</Text></Section>
     <Section title="Governance"><Text>{safeText(governance === null ? "Unavailable" : `Host ${governance.hostId}; enrollment ${governance.enrollment?.status ?? "never enrolled"}; owner ${governance.owner?.id ?? "none"}; quarantine ${governance.quarantine ?? "none"}`)}</Text></Section>
   </Box>;
-  else if (overlay === "notification") content = <Box flexDirection="column"><Section title="Notification"><Text>{safeText(notificationDetail?.title ?? "")}</Text><Text>{safeText(notificationDetail?.body ?? "")}</Text></Section></Box>;
-  else if (overlay === "work-actions") content = <Box flexDirection="column"><Text bold>Work actions</Text>{selectedWork?.actions.map((action, index) =>
-    <MouseZone key={action.name} onClick={() => void workHandover(action.name)}><Text inverse={index === workChoice}>{safeText(action.name)}</Text></MouseZone>)}</Box>;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Work: Enter action, a choose, p preview, t attach, o URL, m mine/all, f actor, P project, / search, h stale</Text><Text>Sessions: Enter detail, o attach, n new session, a Assistant, P project</Text><Text>Hosts: Enter inspect. Activity: c scope, Enter read, a acknowledge, x archive.</Text></Box>;
+  else if (overlay === "notification" && notificationDetail !== null) content = <Box flexDirection="column">
+    <Section title="NOTIFICATION">
+      <Text bold wrap="truncate-end">{safeText(notificationDetail.title)}</Text>
+      <Text dimColor>{safeText(`${notificationDetail.host} · ${notificationDetail.status} · ${notificationDetail.createdAt}`)}</Text>
+      <Text wrap="wrap">{safeText(notificationDetail.body)}</Text>
+    </Section>
+    <Text dimColor>{notificationDetail.sessionId === null ? "No linked session" : `Linked session: ${safeText(notificationDetail.sessionId)}`}</Text>
+  </Box>;
+  else if (overlay === "work-preview" && workPreview !== null) content = <WorkPreview preview={workPreview} width={previewWidth} height={previewHeight} offset={previewOffset} onWheel={(direction) => { setPreviewOffset((old) => Math.max(0, Math.min(previewMaxOffset, old + direction * layout.detailScrollStep))); }} />;
+  else if (overlay === "work-detail") content = workDetail === null ? <Message text="This work item is no longer available. Go back and refresh." /> : <Box flexDirection="column">
+    <Text bold color="cyan">WORK ITEM</Text>
+    <Text bold wrap="truncate-end">{safeText(workDetail.issue?.title ?? workDetail.pull_request?.title ?? workDetail.key)}</Text>
+    <Text dimColor wrap="truncate-end">{safeText(`${workDetail.project} · ${workDetail.key}`)}</Text>
+    <Text>{safeText(`Next: ${workDetail.on_turn.actor} · ${workDetail.on_turn.reason}`)}</Text>
+    <Text dimColor>{safeText(`${workDetail.issue === null ? "No issue" : `Issue: ${workDetail.issue.state}`} · ${workDetail.pull_request === null ? "No pull request" : `Pull request: ${workDetail.pull_request.checks} checks`} · ${workDetail.sessions.length} session(s)`)}</Text>
+    <Text bold>{workDetail.actions.length === 0 ? "No actions available" : "Choose an action"}</Text>
+    {workDetail.actions.map((action, index) => <MouseZone key={action.name} onClick={() => { setWorkChoice(index); void previewWorkAction(action.name); }}>
+      <Text color={index === workChoice ? "cyan" : "white"} bold={index === workChoice}>{`${index === workChoice ? "▸" : " "} ${index + 1}. ${safeText(action.name)}`}</Text>
+    </MouseZone>)}
+    {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
+  </Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, ←/→ or 1–4 switches views.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
   else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
@@ -792,8 +880,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   let toolbar: ReactNode = null;
   if (overlay === "none") {
     if (view === "Work") toolbar = <Box gap={1} flexWrap="wrap">
-      <ActionButton label="New session" onClick={() => { openForm(false); }} primary />
-      {selectedWork !== null && <ActionButton label="Actions" onClick={() => { setWorkChoice(0); setOverlay("work-actions"); }} />}
+      {selectedWork !== null && <ActionButton label="Open item" onClick={() => { openRow(selectedWorkIndex); }} primary />}
+      <ActionButton label="New session" onClick={() => { openForm(false); }} />
       <ActionButton label={`Actor: ${workFilters.actor}`} onClick={() => { setWorkFilters((old) => ({ ...old, actor: ACTOR_FILTERS[(ACTOR_FILTERS.indexOf(old.actor) + 1) % ACTOR_FILTERS.length] ?? "all" })); }} />
       <ActionButton label={`Project: ${shorten(workFilters.project ?? "all", 12)}`} onClick={() => {
         if (work?.payload === null || work === null) return;
@@ -807,10 +895,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       <ActionButton label="Help ?" onClick={() => { setOverlay("help"); }} />
     </Box>;
     else if (view === "Sessions") toolbar = <Box gap={1} flexWrap="wrap">
-      <ActionButton label="New session" onClick={() => { openForm(false); }} primary />
+      {selectedSession !== null && <ActionButton label="Open session" onClick={() => { openRow(selectedSessionIndex); }} primary />}
+      <ActionButton label="New session" onClick={() => { openForm(false); }} />
       <ActionButton label="Assistant" onClick={() => { openForm(true); }} />
-      {selectedSession !== null && <ActionButton label="Details" onClick={() => void inspectSelected()} />}
-      {selectedSession !== null && <ActionButton label="Attach" onClick={() => void openSelected()} />}
       <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => {
         if (snapshot === null) return;
         const projects = [...new Set(snapshot.sessions.map((session) => session.projectLabel ?? session.projectId).filter((name): name is string => name !== null))].sort();
@@ -821,26 +908,40 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       <ActionButton label="Refresh" onClick={() => void refresh()} />
       <ActionButton label="Help ?" onClick={() => { setOverlay("help"); }} />
     </Box>;
-    else if (view === "Hosts") toolbar = <Box gap={1}><ActionButton label="Inspect host" onClick={() => void inspectSelectedHost()} primary /><ActionButton label="Refresh" onClick={() => void refresh()} /></Box>;
+    else if (view === "Hosts") toolbar = <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Refresh" onClick={() => void refresh()} /></Box>;
     else toolbar = <Box gap={1} flexWrap="wrap">
       <ActionButton label={`Scope: ${scope}`} onClick={() => { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }} />
-      {selectedRecord !== null && <ActionButton label="Open" onClick={() => void openNotification(selectedRecord)} primary />}
-      {selectedRecord !== null && <ActionButton label="Acknowledge" onClick={() => void updateNotification(selectedRecord, "ack")} />}
-      {selectedRecord !== null && <ActionButton label="Archive" onClick={() => void updateNotification(selectedRecord, "archive")} />}
+      {selectedRecord !== null && <ActionButton label="Open notification" onClick={() => { openRow(cursor.Activity); }} primary />}
     </Box>;
-  } else if (overlay === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
-    <ActionButton label="Attach" onClick={() => void openSelected()} primary />
-    <ActionButton label="Resume" onClick={() => void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id })} />
+  } else if (overlay === "work-detail") toolbar = <Box gap={1} flexWrap="wrap">
+    {selectedWorkAction !== undefined && <ActionButton label={`Run ${selectedWorkAction.name}`} onClick={() => { void workHandover(selectedWorkAction.name); }} primary />}
+    {selectedWorkAction !== undefined && <ActionButton label="Preview plan" onClick={() => { void previewWorkAction(selectedWorkAction.name); }} />}
+    {(workDetail?.pull_request?.url ?? workDetail?.issue?.url) !== undefined && <ActionButton label="Open link" onClick={() => { const url = workDetail?.pull_request?.url ?? workDetail?.issue?.url; if (url !== undefined) openLink(url); }} />}
+    <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
+  </Box>;
+  else if (overlay === "work-preview") toolbar = <Box gap={1} flexWrap="wrap">
+    {previewMatchesSelection && <ActionButton label={`Run ${selectedWorkAction.name}`} onClick={() => { void workHandover(selectedWorkAction.name); }} primary />}
+    <ActionButton label="Back to item" onClick={() => { setOverlay("work-detail"); }} />
+  </Box>;
+  else if (overlay === "notification" && notificationDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
+    {notificationDetail.sessionId !== null && <ActionButton label="Open session" onClick={() => { if (notificationDetail.sessionId !== null) void inspectSessionAt(notificationDetail.host, notificationDetail.sessionId); }} primary />}
+    <ActionButton label="Acknowledge" onClick={() => void updateNotification(notificationDetail, "ack")} />
+    <ActionButton label="Archive" onClick={() => void updateNotification(notificationDetail, "archive")} />
+    <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
+  </Box>;
+  else if (overlay === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
+    {sessionMutable && (sessionActive || sessionDetail.canResume) && <ActionButton label="Attach" onClick={() => void openSelected()} primary />}
+    {sessionMutable && !sessionActive && sessionDetail.canResume && <ActionButton label="Resume" onClick={() => void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
     <ActionButton label="Screen" onClick={() => void loadScreen()} />
-    <ActionButton label="Fork" onClick={() => void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id })} />
-    <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay("rename"); }} />
-    <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />
-    <ActionButton label="Copy branch" onClick={() => void copyValue(sessionDetail.branch ?? "")} />
+    {sessionMutable && sessionDetail.canFork && <ActionButton label="Fork" onClick={() => void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
+    {sessionMutable && <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay("rename"); }} />}
+    {sessionMutable && <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />}
+    {sessionDetail.branch !== null && <ActionButton label="Copy branch" onClick={() => void copyValue(sessionDetail.branch ?? "")} />}
     <ActionButton label="Copy path" onClick={() => void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd)} />
     {sessionLinkUrl(sessionDetail) !== null && <ActionButton label="Open link" onClick={() => { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); }} />}
     {sessionDetail.host === "local" && <ActionButton label="Open folder" onClick={() => void openFolder(sessionDetail)} />}
-    <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />
-    <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />
+    {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />}
+    {sessionMutable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}
     <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
   </Box>;
   else if (overlay === "confirm") toolbar = <Box gap={1}>
