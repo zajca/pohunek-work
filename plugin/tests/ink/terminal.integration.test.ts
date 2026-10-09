@@ -114,7 +114,7 @@ print(json.dumps({"exit": child.returncode, "clicked": clicked, "edited": edited
 `;
 
 const PYTHON_LIST_MOUSE_PTY = String.raw`
-import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+import fcntl, json, os, pty, re, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
@@ -122,6 +122,9 @@ os.close(slave)
 output = bytearray()
 step = 0
 next_input = 0
+mouse_scrolled = False
+keyboard_scrolled = False
+screen_start = 0
 deadline = time.monotonic() + 20
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.05)
@@ -143,35 +146,57 @@ while time.monotonic() < deadline:
         os.write(master, b"\r")
         step = 3
     elif step == 3 and os.path.exists(sys.argv[3]) and '"inspect","s2"' in open(sys.argv[3]).read():
-        os.write(master, b"\x1b")
-        next_input = now + 0.3
+        output.clear()
+        os.write(master, b"p")
         step = 4
-    elif step == 4 and now >= next_input:
-        os.write(master, b"\x1b[<0;10;13M")
-        next_input = now + 0.3
-        step = 5
-    elif step == 5 and now >= next_input:
-        os.write(master, b"\r")
-        step = 6
-    elif step == 6 and os.path.exists(sys.argv[3]) and '"inspect","s4"' in open(sys.argv[3]).read():
-        os.write(master, b"\x1b")
-        next_input = now + 0.3
-        step = 7
+    elif step == 4 and os.path.exists(sys.argv[3]) and '"screen","s2"' in open(sys.argv[3]).read():
+        positions = re.findall(rb"(\d+)\xe2\x80\x93(\d+) / (\d+)", output)
+        if positions:
+            screen_start = int(positions[-1][0])
+            output.clear()
+            os.write(master, b"\x1b[<64;10;8M")
+            step = 5
+    elif step == 5:
+        positions = re.findall(rb"(\d+)\xe2\x80\x93(\d+) / (\d+)", output)
+        if positions and int(positions[-1][0]) < screen_start:
+            mouse_scrolled = True
+            screen_start = int(positions[-1][0])
+            output.clear()
+            os.write(master, b"\x1b[5~")
+            step = 6
+    elif step == 6:
+        positions = re.findall(rb"(\d+)\xe2\x80\x93(\d+) / (\d+)", output)
+        if positions and int(positions[-1][0]) < screen_start:
+            keyboard_scrolled = True
+            os.write(master, b"\x1b")
+            next_input = now + 0.3
+            step = 7
     elif step == 7 and now >= next_input:
-        os.write(master, b"\x1b[<0;10;9M")
+        os.write(master, b"\x1b[<0;10;13M")
         next_input = now + 0.3
         step = 8
     elif step == 8 and now >= next_input:
-        os.write(master, b"o")
+        os.write(master, b"\r")
         step = 9
-    elif step == 9 and os.path.exists(sys.argv[3]) and '["attach","--host","local","--","s2"]' in open(sys.argv[3]).read():
+    elif step == 9 and os.path.exists(sys.argv[3]) and '"inspect","s4"' in open(sys.argv[3]).read():
+        os.write(master, b"\x1b")
         next_input = now + 0.3
         step = 10
     elif step == 10 and now >= next_input:
-        os.write(master, b"q")
+        os.write(master, b"\x1b[<0;10;9M")
         next_input = now + 0.3
         step = 11
     elif step == 11 and now >= next_input:
+        os.write(master, b"o")
+        step = 12
+    elif step == 12 and os.path.exists(sys.argv[3]) and '["attach","--host","local","--","s2"]' in open(sys.argv[3]).read():
+        next_input = now + 0.3
+        step = 13
+    elif step == 13 and now >= next_input:
+        os.write(master, b"q")
+        next_input = now + 0.3
+        step = 14
+    elif step == 14 and now >= next_input:
         os.write(master, b"q")
         next_input = now + 0.3
     if child.poll() is not None:
@@ -180,7 +205,7 @@ if child.poll() is None:
     child.kill()
 child.wait()
 os.close(master)
-print(json.dumps({"exit": child.returncode, "step": step}))
+print(json.dumps({"exit": child.returncode, "step": step, "mouse_scrolled": mouse_scrolled, "keyboard_scrolled": keyboard_scrolled}))
 `;
 
 const PYTHON_TWO_FORMS_PTY = String.raw`
@@ -381,6 +406,7 @@ const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:
 if (args[0] === "host" && args[1] === "discover") ok([]);
 else if (args[2] === "session" && args[3] === "list") ok(Array.from({length:12}, (_, index) => session(index + 1)));
 else if (args[2] === "session" && args[3] === "inspect") ok(session(Number(args[4].slice(1))));
+else if (args[2] === "session" && args[3] === "screen") ok({session_id:args[4],title:"terminal",progress:null,visible_lines:Array.from({length:40},(_,index)=>"SCREEN_LINE_"+(index+1))});
 else if (args[2] === "project" && args[3] === "list") ok([]);
 else if (args[2] === "notifications" && args[3] === "list") ok({notifications:[],next_cursor:null});
 else if (args[0] === "attach") process.exit(0);
@@ -392,7 +418,7 @@ else process.exit(70);
     const process = Bun.spawn(["python3", "-c", PYTHON_LIST_MOUSE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 11 });
+    expect(JSON.parse(stdout)).toEqual({ exit: 0, step: 14, mouse_scrolled: true, keyboard_scrolled: true });
     expect(await readFile(trace, "utf8")).toContain('["--host","local","session","inspect","s2","--json"]');
     expect(await readFile(trace, "utf8")).toContain('["--host","local","session","inspect","s4","--json"]');
     expect(await readFile(trace, "utf8")).toContain('["attach","--host","local","--","s2"]');
