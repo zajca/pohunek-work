@@ -82,6 +82,10 @@ an explicit policy.
 M0 and M1 are merged: `pohunek-work list` and `doctor`. M2a and M2b are in
 progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 
+- `pohunek-work tui` opens the current full-screen work-item view in a terminal.
+  It lists items from the plugin's public CLI output and hands actions to
+  `pohunek-work do`. Session, host and activity views and a standalone new-session
+  dialog are not available yet;
 - `pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--dry-run]`
   launches a linked session; `implement` also launches a `github-issue:` row: the
   branch is `<branch_prefix>/<issue_number_prefix><n>/<slug>` (the project's
@@ -165,7 +169,7 @@ given.
   `on_turn` is computed at read time and never stored.
 - **Public contracts only.** The plugin talks to pohunek through its public
   CLI with `--json` (verified against pohunek 0.31.6). The other surfaces of
-  this repository (`web/`, `native/`) additionally speak the public protocol
+  this repository (`web/`) additionally speaks the public protocol
   through SDKs pinned to a core release; none of them reaches into core
   internals.
 - **Owner-controlled autonomy.** What an agent may do without confirmation is
@@ -180,7 +184,7 @@ given.
 | [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md) | Refined plan for M2 (links and actions): decisions, verified pohunek facts, spikes, steps M2a-M2d with definitions of done, risks |
 | [docs/watch-and-agents.md](docs/watch-and-agents.md) | How to run `watch` (configuration, what is and is not notified, logs) and how an agent drives pohunek work without growing context or spinning |
 | [docs/rfc.md](docs/rfc.md) | Target design: joining rules, the `on_turn` rules, interfaces, actions, storage, per-project configuration, autonomy levels, full 28-step roadmap including the pohunek release, task layer and relay stages |
-| [docs/work-overview.html](docs/work-overview.html) | Visual summary with diagrams (open in a browser) |
+| [docs/work-overview.html](docs/work-overview.html) | Historical visual summary from September 2026 (open in a browser) |
 
 ## Milestones
 
@@ -196,8 +200,8 @@ given.
 
 - **D2 — language and runtime.** Recommended: TypeScript on Bun (`strict`,
   ESLint, Bun test). Must be confirmed before M0.2.
-- The keyring service name used by pohunek GUI for the Linear token, and the
-  list of ignored CI checks for connection, are filled in during M0.
+- The Linear token's keyring service and the list of ignored CI checks for
+  connection are configured for each installation.
 
 ## Related repositories
 

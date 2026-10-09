@@ -17,7 +17,7 @@ on:
   workflow_call:
     inputs:
       surface:
-        description: "Release surface (gui, web, launchers or plugin); empty runs every job"
+        description: "Release surface (web, launchers or plugin); empty runs every job"
         required: false
         type: string
   schedule:
@@ -39,7 +39,6 @@ jobs:
     outputs:
       plugin: ${{ steps.filter.outputs.plugin }}
       launchers: ${{ steps.filter.outputs.launchers }}
-      native: ${{ steps.filter.outputs.native }}
       web: ${{ steps.filter.outputs.web }}
       packaging: ${{ steps.filter.outputs.packaging }}
       macos_package: ${{ steps.filter.outputs.macos_package }}
@@ -56,13 +55,11 @@ jobs:
             plugin:
               - 'plugin/**'
               - 'launchers/**'
+              - 'web/core-sdk.json'
               - '.github/workflows/ci.yml'
             launchers:
               - 'launchers/**'
-              - '.github/workflows/ci.yml'
-            native:
-              - 'native/**'
-              - 'packaging/**'
+              - 'web/core-sdk.json'
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
@@ -72,14 +69,13 @@ jobs:
               - 'packaging/**'
               - 'plugin/**'
               - 'launchers/**'
-              - 'native/packaging/**'
+              - 'web/core-sdk.json'
               - 'web/packaging/**'
-              - 'native/scripts/**'
               - 'web/release/**'
               - '.github/workflows/**'
             macos_package:
               - 'packaging/**'
-              - 'native/packaging/**'
+              - 'web/core-sdk.json'
               - 'web/packaging/**'
               - 'web/release/**'
               - '.github/workflows/ci.yml'
@@ -129,6 +125,15 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
+      - name: Check the launcher release against the shared core pin
+        if: ${{ matrix.render }}
+        run: |
+          set -euo pipefail
+          core_ref="$(../packaging/core-pin --web ../web/core-sdk.json | sed -n 's/^core_ref=//p')"
+          if [[ "$core_ref" == v* && "$POHUNEK_RELEASE" != "$core_ref" ]]; then
+            echo "::error::launcher release $POHUNEK_RELEASE differs from core pin $core_ref"
+            exit 1
+          fi
       - name: Install the pohunek release binary
         if: ${{ matrix.render }}
         working-directory: ${{ runner.temp }}
@@ -157,16 +162,13 @@ jobs:
   # real sources.
   packaging:
     needs: changes
-    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui' || inputs.surface == 'web' || inputs.surface == 'launchers' || inputs.surface == 'plugin')) }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'web' || inputs.surface == 'launchers' || inputs.surface == 'plugin')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Packaging script tests
         run: python3 -m unittest discover -s packaging/tests
-
-      - name: Native acceptance helper tests
-        run: python3 -m unittest discover -s native/scripts/tests
 
       - name: Lint the workflows and their shell steps
         uses: docker://rhysd/actionlint:1.7.7
@@ -179,10 +181,9 @@ jobs:
         run: |
           shellcheck --severity=error \
             packaging/archive packaging/stage-archive packaging/write-manifest \
-            packaging/verify-archive packaging/make-archive packaging/macos/* \
-            native/packaging/macos/build-release native/packaging/macos/build-app-bundle \
-            native/scripts/smoke-gui-release native/scripts/smoke-gui-release-macos \
-            native/scripts/acceptance/macos-gui-launch \
+            packaging/verify-archive packaging/make-archive \
+            packaging/macos/audit-macho packaging/macos/package \
+            packaging/macos/sign packaging/macos/verify-signed \
             web/release/package.sh web/release/install.sh
 
   # The web control center against the core revision pinned in web/core-sdk.json:
@@ -387,233 +388,19 @@ jobs:
           POHUNEK_E2E: "1"
           POHUNEK_E2E_DEFAULT_RUNTIME: "1"
 
-  native:
-    needs: changes
-    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui')) }}
-    runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
-      CARGO_INCREMENTAL: "0"
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-    defaults:
-      run:
-        working-directory: native
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: native
-          shared-key: native
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        with:
-          tool: cargo-nextest
-
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-
-      # The loopback and prompt-parity tests drive the real daemon, worker and
-      # CLI binaries of the core revision pinned in native/Cargo.toml.
-      - name: Resolve the pinned core revision
-        id: core
-        run: echo "rev=$(grep '^pohunek-protocol = ' Cargo.toml | sed -n -e 's/.*tag = "\([^"]*\)".*/\1/p' -e 's/.*rev = "\([0-9a-f]\{40\}\)".*/\1/p' | head -n 1)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore the core binaries
-        id: core-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/core-binaries
-          key: core-binaries-${{ runner.os }}-${{ steps.core.outputs.rev }}-${{ hashFiles('native/scripts/build-core-binaries') }}
-
-      - name: Build the core binaries
-        if: ${{ steps.core-cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-core-binaries "$RUNNER_TEMP/core-binaries" > /dev/null
-
-      - name: Locate the core binaries
-        run: |
-          {
-            echo "POHUNEK_DAEMON_BIN=$RUNNER_TEMP/core-binaries/bin/pohunekd"
-            echo "POHUNEK_WORKER_BIN=$RUNNER_TEMP/core-binaries/bin/pohunek-sessiond"
-            echo "POHUNEK_CLI_BIN=$RUNNER_TEMP/core-binaries/bin/pohunek"
-          } >> "$GITHUB_ENV"
-
-      - name: Tests
-        run: cargo nextest run --locked --profile ci --workspace --all-features
-
-      - name: Release build
-        run: cargo build --locked --workspace --release
-
-  native-macos:
-    needs: changes
-    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui')) }}
-    runs-on: macos-15
-    env:
-      CARGO_TERM_COLOR: always
-      CARGO_INCREMENTAL: "0"
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-    defaults:
-      run:
-        working-directory: native
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: stable
-          components: clippy
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: native
-          shared-key: native-macos
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      # gui-core selects its keyring backend (`apple-native`) only on macOS.
-      - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-
-      - name: Resolve the pinned core revision
-        id: core
-        run: echo "rev=$(grep '^pohunek-protocol = ' Cargo.toml | sed -n -e 's/.*tag = "\([^"]*\)".*/\1/p' -e 's/.*rev = "\([0-9a-f]\{40\}\)".*/\1/p' | head -n 1)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore the core binaries
-        id: core-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/core-binaries
-          key: core-binaries-${{ runner.os }}-${{ steps.core.outputs.rev }}-${{ hashFiles('native/scripts/build-core-binaries') }}
-
-      - name: Build the core binaries
-        if: ${{ steps.core-cache.outputs.cache-hit != 'true' }}
-        run: scripts/build-core-binaries "$RUNNER_TEMP/core-binaries" > /dev/null
-
-      - name: Locate the core binaries
-        run: |
-          {
-            echo "POHUNEK_DAEMON_BIN=$RUNNER_TEMP/core-binaries/bin/pohunekd"
-            echo "POHUNEK_WORKER_BIN=$RUNNER_TEMP/core-binaries/bin/pohunek-sessiond"
-            echo "POHUNEK_CLI_BIN=$RUNNER_TEMP/core-binaries/bin/pohunek"
-          } >> "$GITHUB_ENV"
-
-      - name: Test GUI
-        timeout-minutes: 15
-        run: cargo test --locked -p pohunek-gui
-
-      # Throwaway keychain for tests/keychain_macos.rs. It becomes the only
-      # keychain in the user search list and the user default, so the real
-      # keyring backend never sees the runner's login keychain. The password
-      # exists only in this step's shell, is masked, and is never written to
-      # disk or the environment. The 3600 s auto-lock outlasts a cold build
-      # between this step and the test run; the test locks the keychain itself.
-      # Only the GUI core test runs while the keychain exists: that test deletes
-      # it, so no later step may see a default pointing at a deleted keychain.
-      - name: Create throwaway keychain
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The file-name marker is defined once, in the test that guards on it.
-          marker="$(sed -n 's/^const KEYCHAIN_MARKER: &str = "\(.*\)";$/\1/p' crates/gui-core/tests/keychain_macos.rs)"
-          [[ -n "$marker" ]] || { echo "KEYCHAIN_MARKER not found in keychain_macos.rs" >&2; exit 1; }
-          keychain="$RUNNER_TEMP/$marker.keychain-db"
-          # Exported before the keychain exists so the teardown step can always
-          # find it.
-          echo "GUI_CORE_TEST_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-          security list-keychains -d user > "$RUNNER_TEMP/keychains.orig"
-          security default-keychain -d user > "$RUNNER_TEMP/keychain-default.orig"
-          password="$(openssl rand -hex 24)"
-          echo "::add-mask::$password"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -t 3600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security list-keychains -d user -s "$keychain"
-          security default-keychain -d user -s "$keychain"
-
-      - name: Test GUI core keychain backend
-        timeout-minutes: 15
-        # The loopback and prompt-parity binaries need the core binaries and run
-        # on Linux; this job runs the library tests and the keychain test.
-        run: cargo test --locked --no-fail-fast -p pohunek-gui-core --lib --test keychain_macos
-
-      # Deletes the throwaway keychain, restores the runner's keychain list and
-      # default, then re-reads both and fails the step when they differ from the
-      # saved originals. Each action runs even if an earlier one failed.
-      - name: Remove throwaway keychain
-        if: always()
-        shell: bash
-        run: |
-          set -uo pipefail
-          failures=0
-          fail() { echo "::error::$1"; failures=1; }
-          # Strips the indentation and quotes `security` prints around a path;
-          # spaces inside the path are kept.
-          normalize() {
-            sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' | sed -e '/^$/d'
-          }
-
-          keychain="${GUI_CORE_TEST_KEYCHAIN:-}"
-          if [[ -n "$keychain" && -e "$keychain" ]]; then
-            security delete-keychain "$keychain" || fail "could not delete $keychain"
-            rm -f "$keychain" || fail "could not remove $keychain"
-          fi
-
-          list_file="$RUNNER_TEMP/keychains.orig"
-          default_file="$RUNNER_TEMP/keychain-default.orig"
-          if [[ ! -f "$list_file" || ! -f "$default_file" ]]; then
-            echo "no saved keychain state: the create step did not change it"
-            exit "$failures"
-          fi
-
-          originals=()
-          while IFS= read -r line; do
-            originals+=("$line")
-          done < <(normalize < "$list_file")
-          default="$(normalize < "$default_file" | head -n 1)"
-
-          if (( ${#originals[@]} > 0 )); then
-            security list-keychains -d user -s "${originals[@]}" || fail "could not restore the keychain search list"
-          fi
-          if [[ -n "$default" ]]; then
-            security default-keychain -d user -s "$default" || fail "could not restore the default keychain"
-          fi
-
-          if ! diff <(security list-keychains -d user | normalize) <(normalize < "$list_file"); then
-            fail "keychain search list differs from the saved original"
-          fi
-          if ! diff <(security default-keychain -d user | normalize) <(normalize < "$default_file"); then
-            fail "default keychain differs from the saved original"
-          fi
-          exit "$failures"
-
-  # The macOS release packaging path with the real codesign: each component is
+  # The macOS release packaging path with the real codesign: web is
   # staged, ad-hoc signed by `package --adhoc-release`, and the archive is
   # checked and extracted so `verify-signed --adhoc` inspects the shipped bytes.
   # The path filter is wider than the surface jobs because the signing scripts
   # only run for real here.
   macos-package:
-    name: macOS ad-hoc signing (${{ matrix.component }})
+    name: macOS ad-hoc signing (web)
     needs: changes
-    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.macos_package == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui' || inputs.surface == 'web')) }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.macos_package == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'web')) }}
     runs-on: macos-15
     timeout-minutes: 60
     env:
-      RUSTFLAGS: -D warnings
-    strategy:
-      fail-fast: false
-      matrix:
-        # A release builds only its own component; every other run builds both.
-        component: ${{ fromJSON(inputs.surface == 'gui' && '["gui"]' || inputs.surface == 'web' && '["web"]' || '["gui", "web"]') }}
+      COMPONENT: web
     steps:
       - uses: actions/checkout@v4
         with:
@@ -626,68 +413,36 @@ jobs:
         id: pin
         run: |
           set -euo pipefail
-          packaging/core-pin --require-web | tee -a "$GITHUB_OUTPUT"
-
-      - name: Install Rust toolchain
-        if: matrix.component == 'gui'
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: stable
-
-      - name: Cache cargo build
-        if: matrix.component == 'gui'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: native
-          shared-key: release-macos-gui
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build the GUI
-        if: matrix.component == 'gui'
-        id: build
-        run: |
-          set -euo pipefail
-          bindir="$(native/packaging/macos/build-release)"
-          echo "bindir=$bindir" >> "$GITHUB_OUTPUT"
+          packaging/core-pin | tee -a "$GITHUB_OUTPUT"
 
       - name: Install Bun
-        if: matrix.component == 'web'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: web/package.json
 
       - name: Pack the core SDK tarballs
-        if: matrix.component == 'web'
         working-directory: web
         run: bun scripts/pack-core-sdk.ts
 
       - name: Install web dependencies
-        if: matrix.component == 'web'
         working-directory: web
         run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
 
       - name: Build the web control center input tree
-        if: matrix.component == 'web'
         id: webinput
         env:
-          VERSION: ${{ steps.pin.outputs.native_version }}
+          VERSION: ${{ steps.pin.outputs.web_version }}
         run: bash web/release/package.sh "$VERSION" aarch64-apple-darwin --input-only
 
       - name: Stage, ad-hoc sign, and verify
         id: package
         env:
-          COMPONENT: ${{ matrix.component }}
-          VERSION: ${{ steps.pin.outputs.native_version }}
+          VERSION: ${{ steps.pin.outputs.web_version }}
           POHUNEK_CORE_REF: ${{ steps.pin.outputs.core_ref }}
-          GUI_BINDIR: ${{ steps.build.outputs.bindir }}
           WEB_INPUT: ${{ steps.webinput.outputs.input }}
         run: |
           set -euo pipefail
-          if [ "$COMPONENT" = web ]; then
-            input="$WEB_INPUT"
-          else
-            input="$GUI_BINDIR"
-          fi
+          input="$WEB_INPUT"
           mkdir -p dist
           staging="$(packaging/macos/package --stage-release "$COMPONENT" "$VERSION" "$input" dist)"
           archive="$(packaging/macos/package --adhoc-release "$COMPONENT" "$VERSION" "$staging")"
@@ -697,8 +452,7 @@ jobs:
       - name: Check the archive and verify the extracted signatures
         env:
           ARCHIVE: ${{ steps.package.outputs.archive }}
-          COMPONENT: ${{ matrix.component }}
-          VERSION: ${{ steps.pin.outputs.native_version }}
+          VERSION: ${{ steps.pin.outputs.web_version }}
           POHUNEK_CORE_REF: ${{ steps.pin.outputs.core_ref }}
         run: |
           set -euo pipefail
@@ -713,7 +467,7 @@ jobs:
 
   ci:
     if: ${{ always() }}
-    needs: [changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package]
+    needs: [changes, plugin, launchers, web, web-macos, packaging, macos-package]
     runs-on: ubuntu-latest
     steps:
       # A skipped surface job is a pass; a failed or cancelled one is not.

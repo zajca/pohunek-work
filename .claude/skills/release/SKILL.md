@@ -1,7 +1,7 @@
 ---
 name: release
 description: >-
-  Release one surface of pohunek-work (plugin, launchers, web or gui) by
+  Release one surface of pohunek-work (plugin, launchers or web) by
   bumping its version, tagging <surface>-vX.Y.Z, and verifying the Release
   workflow builds, attests and publishes its archives. Use when the user asks
   to cut or publish a version of a surface.
@@ -9,8 +9,8 @@ description: >-
 
 # release — cut and publish one surface
 
-Each surface has its own tag and version (`gui-vX.Y.Z`, `web-vX.Y.Z`,
-`launchers-vX.Y.Z`, `plugin-vX.Y.Z`; no bare `vX.Y.Z`). The `Release` workflow
+Each surface has its own tag and version (`web-vX.Y.Z`, `launchers-vX.Y.Z`,
+`plugin-vX.Y.Z`; no bare `vX.Y.Z`). The `Release` workflow
 (`.github/workflows/release.yml`) runs only the tagged surface's jobs.
 Releasing needs the owner's explicit request; `deliver-issue` never releases.
 
@@ -19,18 +19,16 @@ Releasing needs the owner's explicit request; `deliver-issue` never releases.
 - On `main`, up to date with `origin/main`, working tree clean.
 - The `main` CI run of the commit being released is green.
 - The tag does not exist yet.
-- The core pin is consistent: `packaging/core-pin --require-web` passes; a
-  release of any surface fails while `native/Cargo.toml` and `web/core-sdk.json`
-  disagree.
+- The core pin is valid: `packaging/core-pin` resolves the core
+  release named by `web/core-sdk.json`.
 
 ## Steps
 
 1. **Pick surface and version** from the request. The version source is in
-   `.github/agent-workflow.json` (`surfaces`): `native/Cargo.toml`
-   `[workspace.package]` for gui, otherwise the surface's `package.json`.
+   `.github/agent-workflow.json` (`surfaces`): the surface's `package.json`.
 2. **Bump the version first**, in a small PR through the normal loop (gate of
-   that surface, merge on green). Refresh lockfiles the surface owns
-   (`native/Cargo.lock`). Do not tag before the bump has landed on `main`.
+   that surface, merge on green). Refresh any lockfile the surface owns.
+   Do not tag before the bump has landed on `main`.
 3. **Check the tag against the sources** on the landed commit:
 
    ```bash
@@ -53,7 +51,7 @@ Releasing needs the owner's explicit request; `deliver-issue` never releases.
    attached. Verify one archive: `gh attestation verify <archive> --repo zajca/pohunek-work`.
 7. **Record it** per `github-workflow` on the issue the release completes.
 8. **Report** the tag, the workflow conclusion (failing job if any), and the
-   attached assets. gui and web publish Linux and macOS archives together;
+   attached assets. Web publishes Linux and macOS archives together;
    there is no opt-out for macOS. Distribution through the Homebrew tap
    `zajca/homebrew-pohunek` is owned by core.
 

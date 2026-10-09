@@ -37,11 +37,9 @@ Use the split setup commands when diagnosing or applying changes:
 1. `pohunek-work setup scripts` installs the launcher scripts into the data
    directory bin path.
 2. `pohunek-work setup config` writes default launcher configuration and prompt
-   templates (`issue.tmpl`, `pr.tmpl`, `review.tmpl`). `issue.tmpl` and
-   `pr.tmpl` are the host-level prompt templates the pohunek daemon falls back to
-   when a project action names a template without an in-repo copy; `review.tmpl`
-   is GUI-only: the native GUI reads and renders it directly to build a
-   review-dispatch session's prompt.
+   templates (`issue.tmpl`, `pr.tmpl`). These are the host-level prompt templates
+   the pohunek daemon falls back to when a project action names a template
+   without an in-repo copy.
 3. `pohunek-work setup sway` writes the sway drop-in, or
    `pohunek-work setup sway --print` prints the snippet for manual review.
    `--keybind` chooses the session switcher key (default `$mod+p`). The issue
@@ -142,7 +140,7 @@ and use explicit native recovery only when supported. Set
 ## Work-item Links
 
 `pohunek-launch-issue` and `pohunek-launch-pr` render the action's prompt with
-`pohunek prompt render` (the same shared renderer the GUI uses), then build the
+`pohunek prompt render`, then build the
 session-link metadata with a sibling client-side subcommand, `pohunek prompt link --provider <linear_issue|github_pr>
 --item-id <id> --url <url>`, reading the same provider JSON from stdin. It
 derives `link.branch` from the provider JSON and prints the five canonical
@@ -153,9 +151,8 @@ subcommand talks to the daemon.
 `pohunek_run_session_new` forwards each line as a repeated `session new --meta
 key=value` flag, so the link is written atomically in the same `session.new`
 call that starts the agent — never as a separate post-launch step. Because
-both surfaces build the metadata from the one shared implementation, a link
-written by a launch script is byte-identical to one written by the GUI for the
-same work item; the native GUI follows the same convention.
+both launch scripts build the metadata from the one shared implementation, a
+link with the same work item has the same format from either script.
 
 ## Release archive
 

@@ -6,28 +6,25 @@
 #   package --stage-release <component> <version> <bindir> <output-dir>
 #   package --adhoc-release <component> <version> <staging-dir>
 #
-# <component> is gui or web (the gui archive holds Pohunek.app, built here from
-# <bindir>/pohunek-gui by native/packaging/macos/build-app-bundle; for web,
-# <bindir> is the input tree of
-# `web/release/package.sh <version> aarch64-apple-darwin --input-only`). The
+# <component> is web: <bindir> is the input tree of
+# `web/release/package.sh <version> aarch64-apple-darwin --input-only`. The
 # staged tree is audited (`audit-macho`), then sealed with a MANIFEST and
 # archived reproducibly; the archive path is printed on stdout.
 #
 # A release is made in two steps so that the tree is assembled and signed on
 # separate runners. `--stage-release` assembles and audits the tree and prints
 # the staging directory. `--adhoc-release` then ad-hoc signs every Mach-O file
-# and app bundle of the tree (`sign`), verifies the result
-# (`verify-signed --adhoc`), and writes the manifest and the archive, so the
-# manifest hashes the final signed bytes and records `signing adhoc`. It audits
-# the tree again before signing (the tree came from another runner) and runs
-# nothing from it. An ad-hoc signature uses no certificate and no keychain, so
-# the step needs no credential.
+# of the tree (`sign`), verifies the result (`verify-signed --adhoc`), and
+# writes the manifest and the archive, so the manifest hashes the final signed
+# bytes and records `signing adhoc`. It audits the tree again before signing
+# (the tree came from another runner) and runs nothing from it. An ad-hoc
+# signature uses no certificate and no keychain, so the step needs no
+# credential.
 #
-# `--development` builds an unsigned archive for local use and CI acceptance
-# (an app bundle gets only an ad-hoc seal so it can launch). Its name ends in
-# `-unsigned-development` and its MANIFEST says `signing unsigned-development`,
-# so it can never be mistaken for a release artifact and is never attached to a
-# release.
+# `--development` builds an unsigned archive for local use and CI acceptance.
+# Its name ends in `-unsigned-development` and its MANIFEST says
+# `signing unsigned-development`, so it can never be mistaken for a release
+# artifact and is never attached to a release.
 #
 # The MANIFEST records the pinned core version from POHUNEK_CORE_REF
 # (`packaging/core-pin`); the release modes fail when it is unset, the
@@ -55,16 +52,13 @@ $usage" ;;
 esac
 component=$2
 version=$3
-case $component in
-    gui) require="--require Pohunek.app/Contents/MacOS/pohunek-gui" ;;
-    web) require="--require pohunek-web --no-string-scan" ;;
-    *) fail "unsupported component: $component" ;;
-esac
+[ "$component" = web ] || fail "unsupported component: $component"
+require="--require pohunek-web --no-string-scan"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
 target=aarch64-apple-darwin
-minimum_macos=$(tr -d ' \n' < "$root/native/packaging/macos/DEPLOYMENT_TARGET")
+minimum_macos=$(tr -d ' \n' < "$root/packaging/macos/DEPLOYMENT_TARGET")
 core_ref=${POHUNEK_CORE_REF:-}
 if [ "$mode" != --development ] && [ -z "$core_ref" ]; then
     fail "POHUNEK_CORE_REF is not set: a release archive records the pinned core version"
@@ -120,13 +114,6 @@ if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
 fi
 export SOURCE_DATE_EPOCH
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/pohunek-package.XXXXXX")
-trap 'rm -rf -- "$work"' EXIT
-if [ "$component" = gui ]; then
-    "$root/native/packaging/macos/build-app-bundle" "$bindir/pohunek-gui" "$version" "$work" > /dev/null
-    bindir=$work
-fi
-
 name=$("$root/packaging/stage-archive" "$component" "$version" "$target" "$bindir" "$output")
 if [ "$mode" = --development ]; then
     suffix=-unsigned-development
@@ -135,14 +122,6 @@ if [ "$mode" = --development ]; then
     name=$name$suffix
 fi
 staging=$output/$name
-
-if [ "$mode" = --development ] && [ "$component" = gui ]; then
-    # Apple Silicon kills an app whose bundle seal is invalid. An ad-hoc seal
-    # (no identity, no trust) lets a development bundle launch; the manifest
-    # still says `unsigned-development`.
-    codesign --force --sign - "$staging/Pohunek.app" >&2
-    codesign --verify --strict --deep "$staging/Pohunek.app" >&2
-fi
 
 # The Bun runtime embedded in the web backend carries its own build paths, so
 # its string scan is skipped through $require.

@@ -53,7 +53,7 @@ signing=$5
 minimum_macos=${6:-}
 
 case $component in
-    gui | web | launchers | plugin) ;;
+    web | launchers | plugin) ;;
     *) fail "unsupported component: $component" ;;
 esac
 case $version in

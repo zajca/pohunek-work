@@ -54,9 +54,7 @@ the review loop, CI triage, and the merge decision. Where a step below says
 ## Phase 2 — plan
 
 1. Read AGENTS.md, the README, the docs of every surface the issue touches
-   (`plugin/docs/`, `web/docs/`, `native/docs/`), and every doc the issue names.
-   Before any `.rs` work in `native/`, read `.agents/rust-guidelines/` per
-   AGENTS.md.
+   (`plugin/docs/`, `web/docs/`, `launchers/docs/`), and every doc the issue names.
 2. Split the work into a PR stack per `milestone` step 4 and
    `pullRequests` in `.github/agent-workflow.json`: one concern per slice,
    dependency order, each slice mapped to its DoD items. Record the slice
@@ -72,7 +70,7 @@ Create the sibling worktree per `milestone` step 2 (`<primary>-<slug>` on
 
 1. Write a **shared context file** (in the session scratchpad) holding: the
    worktree path and HEAD, "no commits, no pushes, no branches", the mandatory
-   repo rules (Rust guidelines for `native/`, comment rules below, no
+   repo rules (comment rules below, no
    hardcoded tuning values, new behavior verified by integration/end-to-end
    tests, never unit tests, core only through public contracts), the local test
    environment rules (below), and the report format. Brief every worker with
@@ -84,8 +82,7 @@ Create the sibling worktree per `milestone` step 2 (`<primary>-<slug>` on
      premise with `path:line` evidence instead of changing code;
    - add a regression test at an integration or end-to-end boundary and show
      it fails without the change and passes with it;
-   - run its surface's tests and lint per the `gates` skill (for `native/`
-     also `cargo fmt` and clippy `-D warnings`);
+   - run its surface's tests and lint per the `gates` skill;
    - report root cause, changes with `path:line`, test evidence, and open
      points.
 3. Follow-ups in a worker's area go to **the same worker** via SendMessage
@@ -208,8 +205,7 @@ address its findings in a new fix PR off the updated `main` (same loop).
   "no longer", "as before", "this replaces …"); the before/after story goes
   in the commit message and PR description.
 - **No hardcoded tuning values**: reuse existing config/settings, or add a
-  config knob in the same pattern; document magic values
-  (`M-DOCUMENTED-MAGIC` in `native/`).
+  config knob in the same pattern; document magic values when needed.
 - **Durability and concurrency**: a destructive step runs only after the
   durable write it depends on applied (check the result, never log-and-go);
   a conditional write is compared against the record as persisted; never
@@ -228,12 +224,11 @@ address its findings in a new fix PR off the updated `main` (same loop).
   Never print variable values.
 - `launchers/` tests need `POHUNEK_TEST_SHELL` (`sh`, `bash` or `dash`) and, for
   the rendering tests, `POHUNEK_TEST_BIN` (absolute path of a core `pohunek`
-  binary). `native/` and `web/` build the pinned core binaries with
-  `eval "$(native/scripts/build-core-binaries)"` and
+  binary). `web/` builds the pinned core binaries with
   `eval "$(bun scripts/build-core-binaries.ts)"` (from `web/`).
 - The `web/` browser end-to-end tests need Playwright Chromium
   (`bunx playwright install --only-shell chromium`).
-- macOS jobs (`web-macos`, `native-macos`, `macos-package`) are CI-only
+- macOS jobs (`web-macos`, `macos-package`) are CI-only
   evidence on a Linux host.
 - `/tmp` is a small tmpfs: no worktrees or build output there.
 - `dash` and `shellcheck` may be missing locally; shell scripts stay POSIX (CI

@@ -7,7 +7,6 @@ usage: resolve-release --tag REF_NAME
 Each surface is released by its own tag, `<surface>-vX.Y.Z`, and has its own
 version:
 
-  gui        native/Cargo.toml          [workspace.package] version
   web        web/package.json           version
   launchers  launchers/package.json     version
   plugin     plugin/package.json        version
@@ -16,7 +15,7 @@ version:
 manual dispatch inputs. Prints `key=value` lines (usable with
 `>> "$GITHUB_OUTPUT"`):
 
-  surface  gui, web, launchers or plugin
+  surface  web, launchers or plugin
   version  X.Y.Z
   tag      `<surface>-vX.Y.Z`
 
@@ -24,8 +23,7 @@ Exits 1, printing nothing on stdout, when the surface is missing or unknown, the
 version is not X.Y.Z, or the version differs from the surface's source version,
 so a tag can never disagree with the sources it builds.
 
-Run from the repository root (or pass `--root`). Python 3.11 or newer
-(tomllib), standard library only.
+Run from the repository root (or pass `--root`). Standard library only.
 """
 
 from __future__ import annotations
@@ -35,13 +33,11 @@ import json
 from pathlib import Path
 import re
 import sys
-import tomllib
 
-SURFACES = ("gui", "web", "launchers", "plugin")
+SURFACES = ("web", "launchers", "plugin")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
 TAG = re.compile(r"^(?P<surface>[a-z]+)-v(?P<version>[0-9]+\.[0-9]+\.[0-9]+)\Z")
 SOURCES = {
-    "gui": "native/Cargo.toml",
     "web": "web/package.json",
     "launchers": "launchers/package.json",
     "plugin": "plugin/package.json",
@@ -62,11 +58,8 @@ def parse_tag(name: str) -> tuple[str, str]:
 def source_version(root: Path, surface: str) -> str:
     path = root / SOURCES[surface]
     try:
-        if surface == "gui":
-            version = tomllib.loads(path.read_text()).get("workspace", {}).get("package", {}).get("version")
-        else:
-            version = json.loads(path.read_text()).get("version")
-    except (OSError, tomllib.TOMLDecodeError, json.JSONDecodeError, AttributeError) as error:
+        version = json.loads(path.read_text()).get("version")
+    except (OSError, json.JSONDecodeError, AttributeError) as error:
         raise ReleaseError(f"cannot read the version of {surface} from {path}: {error}") from error
     if not isinstance(version, str) or not VERSION.match(version):
         raise ReleaseError(f"{path} must declare a version X.Y.Z, got: {version!r}")

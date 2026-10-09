@@ -7,17 +7,17 @@ file in the same change.
 ## What this repository is
 
 `pohunek-work` holds the user surfaces of pohunek (see the
-[README](README.md)): the `plugin/` workflow CLI, the `web/` control center, the
-`native/` Iced GUI and the `launchers/`. Core (`zajca/pohunek`) ships the daemon,
+[README](README.md)): the `plugin/` workflow CLI and TUI, the `web/` control
+center and the `launchers/`. Core (`zajca/pohunek`) ships the daemon,
 session worker, CLI and SDKs and no UI. This repository consumes core through
-public contracts only (CLI `--json`, protocol v3 through SDKs pinned to one core
+public contracts only (CLI `--json`, protocol v4 through SDKs pinned to one core
 release); never import core internals. Pre-1.0: do not add backward-compatibility
 shims unless asked.
 
 ## Layout rule
 
 Every surface owns a top-level folder with its own toolchain files and lockfile
-(`package.json` + `bun.lock`, or `Cargo.toml` + `Cargo.lock`). The repository root
+(`package.json` + `bun.lock`). The repository root
 has no shared workspace. A path used by more than one surface must be listed in
 the CI filter of every job that uses it.
 
@@ -35,13 +35,6 @@ cd launchers && bun install --frozen-lockfile && bun run check   # lint, typeche
 # `bun run test` (part of `check`) runs the suite under a private TMPDIR and fails
 # when a test leaves anything in it
 
-# native/ (Cargo workspace; run with POHUNEK_* variables unset)
-cd native
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-eval "$(scripts/build-core-binaries)"   # builds the pinned pohunekd, pohunek-sessiond, pohunek; exports their paths
-cargo nextest run --workspace --all-features
-
 # web/ (Bun; core binaries and SDK tarballs come from web/core-sdk.json)
 cd web
 eval "$(bun scripts/build-core-binaries.ts)"
@@ -52,19 +45,10 @@ POHUNEK_E2E=1 bun test backend/test/real-daemon.e2e.test.ts
 
 # packaging/ (shared release scripts)
 python3 -m unittest discover -s packaging/tests
-python3 -m unittest discover -s native/scripts/tests
 ```
 
 The `gates` skill (`.claude/skills/gates/SKILL.md`) maps changed paths to the
 surfaces whose gate to run and lists the full CI-mirror commands.
-
-## Rust rules (native/)
-
-Before creating or editing any `.rs` file, read the vendored Pragmatic Rust
-Guidelines: `.agents/rust-guidelines/SKILL.md` is the index; always read
-`11_universal_guidelines.md`. Apply `M-CANONICAL-DOCS`, prefer
-`#[expect(..., reason = "...")]` over `#[allow]`, keep headless state and I/O in
-`gui-core` and the Iced view in `gui`, and use typed `thiserror` errors.
 
 ## Agent workflow
 
@@ -103,18 +87,17 @@ workaround here.
 
 ## Releases and macOS signing
 
-Each surface is released by its own tag and version: `gui-vX.Y.Z`,
-`web-vX.Y.Z`, `launchers-vX.Y.Z` and `plugin-vX.Y.Z` (no bare `vX.Y.Z` tag).
+Each surface is released by its own tag and version: `web-vX.Y.Z`,
+`launchers-vX.Y.Z` and `plugin-vX.Y.Z` (no bare `vX.Y.Z` tag).
 `.github/workflows/release.yml` runs only the jobs of the tagged surface:
 `prepare` (the only job that reads the tag name or the dispatch inputs) calls
 `packaging/resolve-release`, which fails unless the tag's version equals the
-version in the surface's sources (`native/Cargo.toml`, `web/package.json`,
-`launchers/package.json`, `plugin/package.json`); `gate` fails the release
+version in the surface's sources (`web/package.json`, `launchers/package.json`,
+`plugin/package.json`); `gate` fails the release
 unless exactly that surface's jobs succeeded. Bump the surface's version before
-tagging. `gui` and `web` publish the Linux and the macOS archives together;
-there is no opt-out for macOS. The core pin (`packaging/core-pin --require-web`)
-is shared by every surface and recorded in every manifest, so a release of any
-surface fails while `native/Cargo.toml` and `web/core-sdk.json` disagree. macOS
+tagging. `web` publishes the Linux and the macOS archives together;
+there is no opt-out for macOS. The core pin (`packaging/core-pin`)
+comes from `web/core-sdk.json` and is recorded in every manifest. macOS
 archives are ad-hoc signed (`packaging/macos/package --adhoc-release`) and no
 job uses a secret, environment or
 repository variable. Only `attest` holds `id-token: write` and
@@ -122,8 +105,8 @@ repository variable. Only `attest` holds `id-token: write` and
 only `publish` holds `contents: write`. `packaging/tests/test_release_workflow.py`
 pins these boundaries; changing a job's permissions or steps means updating its
 allowlist on purpose. Distribution is the Homebrew tap `zajca/homebrew-pohunek`
-(formulae `pohunek-gui`, `pohunek-web`), owned by core, which consumes the
-`gui-v*` and `web-v*` release assets. After a published `gui-v*` or `web-v*`
+(formula `pohunek-web`), owned by core, which consumes the
+`web-v*` release assets. After a published `web-v*`
 release, `.github/workflows/notify-tap.yml` (a `workflow_run` of `Release`, the
 only workflow with a secret, `TAP_DISPATCH_PAT`) sends the tap a
 `pohunek-work-release` repository dispatch with the formula and the tag; the tap

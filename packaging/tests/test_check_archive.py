@@ -13,16 +13,16 @@ from test_packaging import CORE_REF, EPOCH, PACKAGING, TARGET, VERSION, Workspac
 
 
 class CheckArchiveTest(unittest.TestCase):
-    def build(self, component="gui", target=TARGET):
+    def build(self, component="web", target=TARGET):
         ws = Workspace(self)
         name = run(
-            [PACKAGING / "make-archive", component, VERSION, target, ws.bindir if component == "gui" else ws.launchers, ws.out],
+            [PACKAGING / "make-archive", component, VERSION, target, ws.web if component == "web" else ws.launchers, ws.out],
             cwd=ws.root,
             env={"SOURCE_DATE_EPOCH": EPOCH, "POHUNEK_CORE_REF": CORE_REF},
         ).stdout.strip()
         return ws, Path(name)
 
-    def check(self, archive, *extra, component="gui"):
+    def check(self, archive, *extra, component="web"):
         return subprocess.run(
             [str(PACKAGING / "check-archive"), str(archive), "--component", component, "--version", VERSION, *extra],
             stdout=subprocess.PIPE,
@@ -64,7 +64,7 @@ class CheckArchiveTest(unittest.TestCase):
             result = self.check(archive, *extra)
             self.assertEqual(result.returncode, 1, extra)
             self.assertIn(message, result.stderr)
-        result = self.check(archive, component="web")
+        result = self.check(archive, component="launchers")
         self.assertIn("MANIFEST component", result.stderr)
 
     def test_an_adhoc_archive_passes_only_when_adhoc_is_expected(self):
@@ -95,11 +95,11 @@ class CheckArchiveTest(unittest.TestCase):
     def test_a_modified_member_fails_even_with_a_fresh_checksum(self):
         _, archive = self.build()
         name = archive.name[: -len(".tar.gz")]
-        self.rewrite(archive, lambda members: members.__setitem__(f"{name}/pohunek-gui", b"tampered"))
+        self.rewrite(archive, lambda members: members.__setitem__(f"{name}/pohunek-web", b"tampered"))
         self.refresh_checksum(archive)
         result = self.check(archive)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("digest mismatch: pohunek-gui", result.stderr)
+        self.assertIn("digest mismatch: pohunek-web", result.stderr)
 
     def test_an_unlisted_member_fails(self):
         _, archive = self.build()
@@ -125,7 +125,7 @@ class CheckArchiveTest(unittest.TestCase):
                 tar.addfile(member, io.BytesIO(data) if data is not None else None)
             link = tarfile.TarInfo(f"{name}/link")
             link.type = tarfile.SYMTYPE
-            link.linkname = "pohunek-gui"
+            link.linkname = "pohunek-web"
             tar.addfile(link)
         self.refresh_checksum(archive)
         self.assertIn("neither a file nor a directory", self.check(archive).stderr)
@@ -140,7 +140,7 @@ class CheckArchiveTest(unittest.TestCase):
     def test_a_file_that_is_not_a_targz_fails(self):
         directory = Path(tempfile.mkdtemp(prefix="pohunek-check-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
-        junk = directory / "pohunek-gui-1.2.3-x.tar.gz"
+        junk = directory / "pohunek-web-1.2.3-x.tar.gz"
         junk.write_text("not a tarball")
         self.refresh_checksum(junk)
         self.assertEqual(self.check(junk).returncode, 1)

@@ -6,8 +6,7 @@
 //
 //   coreRepository  the core GitHub repository
 //   coreRev         the 40-digit core commit; CI builds the real daemon, worker
-//                   and CLI from it, and it must equal the revision in
-//                   `native/Cargo.toml` (`packaging/core-pin` checks both)
+//                   and CLI from it (`packaging/core-pin` reads this pin)
 //   sdkVersion      the version stamped into the three tarballs
 //   assetBaseUrl    where `vSDKVERSION/pohunek-ts-<package>-SDKVERSION.tgz` is
 //                   served: a core release

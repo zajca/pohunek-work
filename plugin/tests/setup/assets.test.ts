@@ -25,6 +25,5 @@ test("config assets are byte-identical to the templates under launchers/template
     "launcher.conf",
     "prompts/issue.tmpl",
     "prompts/pr.tmpl",
-    "prompts/review.tmpl",
   ]);
 });

@@ -4,9 +4,6 @@ name: Release
 # own version. A `<surface>-vX.Y.Z` tag builds, attests and publishes only that
 # surface's archives:
 #
-#   gui-vX.Y.Z        pohunek-gui: x86_64-unknown-linux-gnu archive (headless
-#                     Wayland smoke) and the ad-hoc signed Pohunek.app archive
-#                     (aarch64-apple-darwin)
 #   web-vX.Y.Z        pohunek-web: linux-x86_64 archive and the ad-hoc signed
 #                     aarch64-apple-darwin archive of the web control center
 #   launchers-vX.Y.Z  pohunek-launchers: the rofi/sway launcher scripts,
@@ -32,7 +29,7 @@ name: Release
 #
 #   stage-macos    builds and audits the archive tree and uploads it.
 #   package-macos  a fresh runner downloads the staged tree, checks it, audits
-#                  it again, ad-hoc signs every Mach-O file and the app bundle,
+#                  it again, ad-hoc signs every Mach-O file,
 #                  verifies the signatures, writes the manifest over the signed
 #                  bytes, and archives it. It runs nothing from the tree.
 #   verify-macos   extracts the archive outside the checkout, verifies its
@@ -46,7 +43,6 @@ name: Release
 on:
   push:
     tags:
-      - "gui-v[0-9]+.[0-9]+.[0-9]+"
       - "web-v[0-9]+.[0-9]+.[0-9]+"
       - "launchers-v[0-9]+.[0-9]+.[0-9]+"
       - "plugin-v[0-9]+.[0-9]+.[0-9]+"
@@ -57,7 +53,6 @@ on:
         required: true
         type: choice
         options:
-          - gui
           - web
           - launchers
           - plugin
@@ -114,13 +109,12 @@ jobs:
           printf '%s\n' "$release" >> "$GITHUB_OUTPUT"
 
       # The core pin is shared by the whole repository and recorded in every
-      # manifest, so it is resolved for every surface. Fails when
-      # native/Cargo.toml and web/core-sdk.json pin different core releases.
+      # manifest, so it is resolved for every surface.
       - name: Resolve the core pin
         id: pin
         run: |
           set -euo pipefail
-          packaging/core-pin --require-web | tee -a "$GITHUB_OUTPUT"
+          packaging/core-pin | tee -a "$GITHUB_OUTPUT"
 
   # The jobs that gate a pull request, called as a workflow so no job is defined
   # twice. Only the jobs of the selected surface (and the shared packaging job)
@@ -134,71 +128,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       surface: ${{ needs.prepare.outputs.surface }}
-
-  build-gui-linux:
-    name: Build pohunek-gui for x86_64-unknown-linux-gnu
-    needs: [prepare, ci]
-    if: ${{ needs.prepare.outputs.surface == 'gui' }}
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: -D warnings
-      VERSION: ${{ needs.prepare.outputs.version }}
-      POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: Install the headless compositor for the smoke test
-        run: sudo apt-get update && sudo apt-get install -y weston
-
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: stable
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: native
-          shared-key: native-release
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build the GUI
-        working-directory: native
-        run: cargo build --release --locked -p pohunek-gui --bin pohunek-gui
-
-      - name: Package
-        id: package
-        run: |
-          set -euo pipefail
-          # Archives are stamped with the tagged commit's time.
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          export SOURCE_DATE_EPOCH
-          archive="$(packaging/make-archive gui "$VERSION" x86_64-unknown-linux-gnu native/target/release dist)"
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-          packaging/check-archive "$archive" --component gui --version "$VERSION" \
-            --target x86_64-unknown-linux-gnu --core "$POHUNEK_CORE_REF"
-
-      - name: Smoke-test the packaged GUI
-        env:
-          ARCHIVE: ${{ steps.package.outputs.archive }}
-        run: |
-          set -euo pipefail
-          extract_dir="$(mktemp -d)"
-          trap 'rm -rf "$extract_dir"' EXIT
-          tar -xzf "$ARCHIVE" -C "$extract_dir"
-          native/scripts/smoke-gui-release \
-            "$extract_dir/pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu/pohunek-gui"
-
-      - name: Upload the archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-gui-linux
-          path: |
-            ${{ steps.package.outputs.archive }}
-            ${{ steps.package.outputs.archive }}.sha256
-          if-no-files-found: error
-          retention-days: 7
 
   # web/ is its own Bun workspace. Its core SDK tarballs are packed from the
   # revision in web/core-sdk.json and served locally while the dependencies are
@@ -359,19 +288,15 @@ jobs:
           retention-days: 7
 
   stage-macos:
-    name: Stage ${{ matrix.component }} for aarch64-apple-darwin
+    name: Stage web for aarch64-apple-darwin
     needs: [prepare, ci]
-    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}
+    if: ${{ needs.prepare.outputs.surface == 'web' }}
     runs-on: macos-15
     timeout-minutes: 120
     env:
-      RUSTFLAGS: -D warnings
       VERSION: ${{ needs.prepare.outputs.version }}
       POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
-    strategy:
-      fail-fast: false
-      matrix:
-        component: ["${{ needs.prepare.outputs.surface }}"]
+      COMPONENT: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -380,67 +305,35 @@ jobs:
       - name: Verify native runner architecture
         run: test "$(uname -m)" = "arm64"
 
-      - name: Install Rust toolchain
-        if: matrix.component == 'gui'
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: stable
-
-      - name: Cache cargo build
-        if: matrix.component == 'gui'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: native
-          shared-key: release-macos-gui
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build the GUI
-        if: matrix.component == 'gui'
-        id: build
-        run: |
-          set -euo pipefail
-          bindir="$(native/packaging/macos/build-release)"
-          echo "bindir=$bindir" >> "$GITHUB_OUTPUT"
-
       - name: Install Bun
-        if: matrix.component == 'web'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: web/package.json
 
       - name: Pack the core SDK tarballs
-        if: matrix.component == 'web'
         working-directory: web
         run: bun scripts/pack-core-sdk.ts
 
       - name: Install web dependencies
-        if: matrix.component == 'web'
         working-directory: web
         run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
 
       # The compiled backend (Bun runtime plus the compiled SPA), smoke-tested
       # unsigned by package.sh; signing happens in package-macos.
       - name: Build the web control center input tree
-        if: matrix.component == 'web'
         id: webinput
         run: bash web/release/package.sh "$VERSION" aarch64-apple-darwin --input-only
 
       - name: Stage and audit the archive tree
         env:
-          GUI_BINDIR: ${{ steps.build.outputs.bindir }}
           WEB_INPUT: ${{ steps.webinput.outputs.input }}
-          COMPONENT: ${{ matrix.component }}
         run: |
           set -euo pipefail
           mkdir -p dist
           # Archives are stamped with the tagged commit's time.
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           export SOURCE_DATE_EPOCH
-          if [ "$COMPONENT" = web ]; then
-            input="$WEB_INPUT"
-          else
-            input="$GUI_BINDIR"
-          fi
+          input="$WEB_INPUT"
           staging="$(packaging/macos/package --stage-release "$COMPONENT" "$VERSION" "$input" dist)"
           # A tar keeps the modes that an artifact upload would drop.
           mkdir -p "$RUNNER_TEMP/stage-upload"
@@ -450,15 +343,15 @@ jobs:
       - name: Upload the staged tree
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: macos-stage-${{ matrix.component }}
+          name: macos-stage-web
           path: ${{ runner.temp }}/stage-upload
           if-no-files-found: error
           retention-days: 1
 
   package-macos:
-    name: Package ${{ matrix.component }} for aarch64-apple-darwin
+    name: Package web for aarch64-apple-darwin
     needs: [prepare, stage-macos]
-    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}
+    if: ${{ needs.prepare.outputs.surface == 'web' }}
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
@@ -466,10 +359,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
-    strategy:
-      fail-fast: false
-      matrix:
-        component: ["${{ needs.prepare.outputs.surface }}"]
+      COMPONENT: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -481,7 +371,7 @@ jobs:
       - name: Download the staged tree
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: macos-stage-${{ matrix.component }}
+          name: macos-stage-web
           path: ${{ runner.temp }}/stage-download
 
       # The artifact is untrusted data: the directory it must hold is named from
@@ -489,8 +379,6 @@ jobs:
       # value is ever interpolated into a script.
       - name: Check and extract the staged tree
         shell: bash
-        env:
-          COMPONENT: ${{ matrix.component }}
         run: |
           set -euo pipefail
           name="pohunek-${COMPONENT}-${VERSION}-aarch64-apple-darwin"
@@ -513,8 +401,6 @@ jobs:
       - name: Ad-hoc sign, verify, and package
         id: package
         shell: bash
-        env:
-          COMPONENT: ${{ matrix.component }}
         run: |
           set -euo pipefail
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
@@ -527,15 +413,15 @@ jobs:
       - name: Upload the signed archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-macos-${{ matrix.component }}
+          name: release-macos-web
           path: ${{ runner.temp }}/signed-upload
           if-no-files-found: error
           retention-days: 7
 
   verify-macos:
-    name: Verify ${{ matrix.component }} for aarch64-apple-darwin
+    name: Verify web for aarch64-apple-darwin
     needs: [prepare, package-macos]
-    if: ${{ needs.prepare.outputs.surface == 'gui' || needs.prepare.outputs.surface == 'web' }}
+    if: ${{ needs.prepare.outputs.surface == 'web' }}
     runs-on: macos-15
     timeout-minutes: 120
     permissions:
@@ -543,10 +429,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       POHUNEK_CORE_REF: ${{ needs.prepare.outputs.core_ref }}
-    strategy:
-      fail-fast: false
-      matrix:
-        component: ["${{ needs.prepare.outputs.surface }}"]
+      COMPONENT: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -555,15 +438,13 @@ jobs:
       - name: Download the signed archive
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-macos-${{ matrix.component }}
+          name: release-macos-web
           path: ${{ runner.temp }}/signed-download
 
       # Everything below runs from the extracted archive outside the
       # checkout: the published bytes, not the build tree.
       - name: Extract the archive and verify its signatures
         id: extract
-        env:
-          COMPONENT: ${{ matrix.component }}
         shell: bash
         run: |
           set -euo pipefail
@@ -587,23 +468,19 @@ jobs:
       # The ad-hoc signed backend serves the compiled SPA from the extracted
       # archive.
       - name: Install Bun
-        if: matrix.component == 'web'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: web/package.json
 
       - name: Pack the core SDK tarballs
-        if: matrix.component == 'web'
         working-directory: web
         run: bun scripts/pack-core-sdk.ts
 
       - name: Install web dependencies
-        if: matrix.component == 'web'
         working-directory: web
         run: bun scripts/serve-core-sdk.ts --run bun install --frozen-lockfile
 
       - name: Smoke-test the packaged web backend
-        if: matrix.component == 'web'
         working-directory: web
         env:
           ARCHIVE_ROOT: ${{ steps.extract.outputs.root }}
@@ -613,19 +490,13 @@ jobs:
           test -f "$ARCHIVE_ROOT/packaging/verify-archive"
           bun run release/smoke.ts "$ARCHIVE_ROOT/pohunek-web" "$ARCHIVE_ROOT/frontend"
 
-      - name: Smoke-test the packaged app bundle
-        if: matrix.component == 'gui'
-        env:
-          ARCHIVE_ROOT: ${{ steps.extract.outputs.root }}
-        run: native/scripts/smoke-gui-release-macos "$ARCHIVE_ROOT/Pohunek.app"
-
   # A skipped dependency skips its dependents, so the jobs that attest and
   # publish wait for this one job instead. It fails unless the jobs of the
   # selected surface succeeded and every other surface's job was skipped. It
   # checks out nothing and holds no token beyond read access.
   gate:
     name: Check that only the selected surface was built
-    needs: [prepare, build-gui-linux, package-web, package-launchers, package-plugin, verify-macos]
+    needs: [prepare, package-web, package-launchers, package-plugin, verify-macos]
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -633,7 +504,6 @@ jobs:
       contents: read
     env:
       SURFACE: ${{ needs.prepare.outputs.surface }}
-      GUI_LINUX: ${{ needs.build-gui-linux.result }}
       WEB_LINUX: ${{ needs.package-web.result }}
       LAUNCHERS: ${{ needs.package-launchers.result }}
       PLUGIN: ${{ needs.package-plugin.result }}
@@ -644,16 +514,15 @@ jobs:
         run: |
           set -euo pipefail
           case "$SURFACE" in
-            gui) want="build-gui-linux=success package-web=skipped package-launchers=skipped package-plugin=skipped verify-macos=success" ;;
-            web) want="build-gui-linux=skipped package-web=success package-launchers=skipped package-plugin=skipped verify-macos=success" ;;
-            launchers) want="build-gui-linux=skipped package-web=skipped package-launchers=success package-plugin=skipped verify-macos=skipped" ;;
-            plugin) want="build-gui-linux=skipped package-web=skipped package-launchers=skipped package-plugin=success verify-macos=skipped" ;;
+            web) want="package-web=success package-launchers=skipped package-plugin=skipped verify-macos=success" ;;
+            launchers) want="package-web=skipped package-launchers=success package-plugin=skipped verify-macos=skipped" ;;
+            plugin) want="package-web=skipped package-launchers=skipped package-plugin=success verify-macos=skipped" ;;
             *)
               echo "::error::unknown surface: $SURFACE"
               exit 1
               ;;
           esac
-          have="build-gui-linux=$GUI_LINUX package-web=$WEB_LINUX package-launchers=$LAUNCHERS package-plugin=$PLUGIN verify-macos=$MACOS"
+          have="package-web=$WEB_LINUX package-launchers=$LAUNCHERS package-plugin=$PLUGIN verify-macos=$MACOS"
           if [ "$have" != "$want" ]; then
             echo "::error::the job results do not match the ${SURFACE} release"
             echo "expected: $want"
@@ -749,12 +618,6 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/release"
           case "$SURFACE" in
-            gui)
-              expected=(
-                "pohunek-gui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz:gui:x86_64-unknown-linux-gnu:none"
-                "pohunek-gui-${VERSION}-aarch64-apple-darwin.tar.gz:gui:aarch64-apple-darwin:adhoc"
-              )
-              ;;
             web)
               expected=(
                 "pohunek-web-${VERSION}-linux-x86_64.tar.gz:web:x86_64-unknown-linux-gnu:none"
