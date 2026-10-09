@@ -30,6 +30,11 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
+A project file may set the optional table `[teardown]` with the required keys `argv`
+(an array whose first element is an absolute program path; no shell, no placeholders) and
+`timeout_ms` (positive integer). `do <key> cleanup` runs that command in the session worktree
+before it removes the session; without the table nothing runs. See the `cleanup` entry below.
+
 A project file may set the optional key `ignore_label`. Rows whose pull request
 or joined issue carries that label (compared case-insensitively) are hidden from
 `list` (`list --mine` included), refused by `do` and never notified by `watch`;
@@ -113,7 +118,10 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   check and removes nothing; otherwise it re-reads the session first (a `working`
   or `blocked` session is refused with `precondition_failed`, nothing stopped),
   stops it, re-runs the checks, refuses when the sessions sharing the worktree
-  changed since the evidence, runs `session rm` (never
+  changed since the evidence, runs the project's `[teardown]` command in the worktree
+  (after a session-list recheck, and followed by every check again;a nonzero exit, a start failure or `timeout_ms` exceeded refuses with `command_failed`
+  or `command_timed_out`; the session stays stopped and nothing is removed; `--dry-run`
+  only shows it, `plan.teardown_argv`; `result.teardown_ran` reports the run), runs `session rm` (never
   `--accept-unconfirmed-cleanup`) and re-reads `session list`. An `rm` result
   with `removed=false` or failed worktrees is `command_unverified`: the session
   may be gone, check `pohunek session list` and the disk. It needs the `[actions]` keys `git_bin` (absolute path),

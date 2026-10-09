@@ -43,6 +43,7 @@ function planText(plan: CleanupPlan): string {
     `  ignored files that are lost with the worktree (${String(inventory.ignored.length)}):`,
     ...inventory.ignored.map((path) => `    ${esc(path)}`),
     `stop:    ${commandLine(plan.stopArgv)} (only while the session runs)`,
+    ...(plan.teardownArgv === null ? [] : [`teardown: ${commandLine(plan.teardownArgv)} (runs in the worktree before the removal)`]),
     `remove:  ${commandLine(plan.removeArgv)}`,
   ].join("\n");
 }
@@ -67,6 +68,7 @@ function planJson(plan: CleanupPlan): Record<string, unknown> {
     },
     stop_argv: plan.stopArgv,
     remove_argv: plan.removeArgv,
+    teardown_argv: plan.teardownArgv,
   };
 }
 
@@ -75,6 +77,7 @@ function resultJson(result: CleanupResult): Record<string, unknown> {
     session_id: result.sessionId,
     stopped: result.stopped,
     removed: result.removed,
+    teardown_ran: result.teardownRan,
     worktrees_removed: result.worktreesRemoved,
     verified_absent: result.verifiedAbsent,
   };
@@ -102,6 +105,7 @@ export async function runCleanup(config: PluginConfig, options: DoOptions, deps:
     failed_checks: plan.checks.filter((c) => !c.ok).map((c) => c.name),
     stop_argv: [...plan.stopArgv],
     remove_argv: [...plan.removeArgv],
+    teardown_argv: plan.teardownArgv === null ? null : [...plan.teardownArgv],
   });
 
   if (options.dryRun) {
@@ -116,6 +120,7 @@ export async function runCleanup(config: PluginConfig, options: DoOptions, deps:
     action: plan.action,
     session_id: result.sessionId,
     stopped: result.stopped,
+    teardown_ran: result.teardownRan,
     worktrees_removed: result.worktreesRemoved,
   });
   const stdout = options.json

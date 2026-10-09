@@ -365,6 +365,11 @@ The checks, all of which must hold:
 | `not_awaiting_owner` | the session is not `blocked` and no `unread` or `read` `agent_blocked` or `approval_required` notification names it or a session sharing the worktree; an error reading notifications fails the check |
 | `diff_complete` | `session diff` is not truncated |
 
+A project that sets `[teardown]` in its project file also has a teardown command in the plan
+(`plan.teardown_argv`; the dry run lists it and never runs it). A real run executes it in the
+worktree after the checks passed again and before `session rm`; when it fails or times out the
+session stays stopped and nothing is removed, so the owner fixes the cause and runs cleanup again.
+
 A real run first re-reads the session: a `working` or `blocked` session is
 refused with `precondition_failed` and nothing is stopped. It stops the session
 when it is running, re-runs every check (the agent could write or commit until

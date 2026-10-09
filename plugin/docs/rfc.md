@@ -655,10 +655,24 @@ check it refuses with `precondition_failed` naming every failed check and
 removes nothing. It re-reads the session first (a `working` or `blocked` session
 is refused with `precondition_failed`, nothing stopped), stops it, re-runs every
 check, refuses when the sessions sharing the worktree changed since the
-evidence, runs `session rm` (never `--accept-unconfirmed-cleanup`) and re-reads
-`session list`. An `rm` result with `removed=false` or failed worktrees is
+evidence, runs the project's `[teardown]` command when it has one (below), reads
+`session list` once more, runs `session rm` (never `--accept-unconfirmed-cleanup`) and
+re-reads `session list`. An `rm` result with `removed=false` or failed worktrees is
 `command_unverified`: the session may be gone, check `pohunek session list` and
-the disk. Other
+the disk.
+
+A project file may set the optional table `[teardown]` (`argv`, `timeout_ms`; both required inside
+it). `argv` is a non-empty array of non-empty strings without control characters whose first element is
+an absolute path; it is run without a shell and without placeholders, with the session worktree as its
+working directory, after the post-stop checks and a `session list` recheck, and before the last `session list` read and
+`session rm`. Every check is read again after it, so a teardown that leaves the worktree dirty or its
+branch out of sync refuses the removal (`precondition_failed`). It is meant for host resources the worktree owns that `session rm` does not remove (for
+example Docker networks): it must be idempotent and exit 0 only after it verified its own result. A
+start failure, a nonzero exit (`command_failed`) or a run longer than `timeout_ms`
+(`command_timed_out`) refuses the cleanup: the session stays stopped (if it was stopped) and nothing is
+removed. Its output is never put into a message, a log or the JSON. `--dry-run` shows the argv
+(`plan.teardown_argv`, null without a table) and never runs it; a real run reports
+`result.teardown_ran`. A project without the table runs no teardown. Other
 codes it returns: `unknown_item`, `ambiguous_item`, `source_unavailable`,
 `no_session`, `ambiguous_session`, `command_failed`, `command_timed_out`,
 `verification_failed`, `command_unverified` and `invalid_value` (session id, worktree path or branch not plain). A row marked ignored is refused without `--include-ignored`.
@@ -839,6 +853,11 @@ paused_states = ["On hold", "Waiting for Support"]   # only with issue_source = 
 # Optional per-project overrides; a table here replaces the global table whole.
 # [profiles]
 # [policy]
+
+# Optional; absent = `cleanup` runs no teardown. Runs in the session worktree before `session rm`.
+# [teardown]
+# argv = ["/home/zajca/bin/wt-teardown"]   # argv[0] absolute; no shell; no placeholders
+# timeout_ms = 120000                      # positive integer; required with argv
 ```
 
 Rules:
@@ -873,6 +892,9 @@ Rules:
   unknown (joined to a key, or an authored Linear pull request without a key)
   is `unknown`; all before rules 1 and 2, with no actions and no notification,
   because that issue may carry the label (8.3).
+- **`[teardown]` is a per-project cleanup step.** It is optional and has no
+  default; `argv` and `timeout_ms` are both required inside it, `argv[0]` must be an
+  absolute path, and an unknown key is an error naming the file and key. See `cleanup` above.
 - **`reviews` says who reviews the project's pull requests.** It is required
   and has no default. `session`: `do <key> review` launches a pohunek review
   session with the `review` profile and rule 3 is the owner's turn. `external`:

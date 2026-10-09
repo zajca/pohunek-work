@@ -86,6 +86,13 @@ export interface ActionsConfig {
   readonly holderEntryMaxLength: number;
 }
 
+/** Command `cleanup` runs in the session worktree before the session is removed. */
+export interface TeardownConfig {
+  /** Absolute program path followed by its arguments; run without a shell. */
+  readonly argv: readonly string[];
+  readonly timeoutMs: number;
+}
+
 export interface PolicyConfig {
   readonly delegable: readonly string[];
   readonly maxActiveTasks: number;
@@ -210,6 +217,8 @@ export interface ProjectConfig {
   readonly ignoreLabel: string | null;
   readonly policy: PolicyConfig | null;
   readonly profiles: ProfilesConfig | null;
+  /** Null when the project has no `[teardown]` table, which turns the teardown step off. */
+  readonly teardown: TeardownConfig | null;
 }
 
 export interface PluginConfig {
