@@ -18,10 +18,12 @@ use super::{
 
 /// Session-detail dialog opened from the prioritized list.
 pub(crate) fn session_modal_content(app: &PohunekApp) -> Element<'_, Message> {
-    dialog_card(
-        "Session",
-        scrollable(session_pane(app)).height(Fill).width(Fill),
-    )
+    let mut content = column![].spacing(8);
+    if let Some(notice) = &app.recovery_notice {
+        content = content.push(text(notice).size(14));
+    }
+    content = content.push(scrollable(session_pane(app)).height(Fill).width(Fill));
+    dialog_card("Session", content)
 }
 
 /// Confirms permanent deletion of the selected logical session.
@@ -55,6 +57,50 @@ pub(crate) fn confirm_delete_modal_content(app: &PohunekApp) -> Element<'_, Mess
     )
 }
 
+pub(crate) fn confirm_recovery_modal_content(app: &PohunekApp) -> Element<'_, Message> {
+    let Some(confirmation) = &app.recovery_confirmation else {
+        return dialog_card(
+            "Confirm native recovery",
+            text("Checking the current native recovery target..."),
+        );
+    };
+    let action = match confirmation.action {
+        crate::message::RecoveryAction::Resume => "Resume",
+        crate::message::RecoveryAction::Fork => "Fork",
+    };
+    let mut content = column![
+        text(format!(
+            "{action} {} / {}?",
+            app.workspace.host_label(&confirmation.host_id),
+            confirmation.session_id.0
+        ))
+        .size(14),
+        selectable_text(confirmation.target.clone()).size(14),
+        selectable_text(format!(
+            "native last activity: {}",
+            confirmation
+                .native_last_activity_at
+                .as_deref()
+                .unwrap_or("unknown")
+        ))
+        .size(14),
+    ]
+    .spacing(14);
+    if let Some(notice) = &app.recovery_notice {
+        content = content.push(text(notice).size(14));
+    }
+    content = content.push(
+        row![
+            button("Cancel")
+                .on_press(Message::CloseModal)
+                .style(iced::widget::button::secondary),
+            button(action).on_press(Message::ConfirmRecovery),
+        ]
+        .spacing(8),
+    );
+    dialog_card("Confirm native recovery", content)
+}
+
 /// Session surface: the session card with its actions and metadata.
 pub(crate) fn session_pane(app: &PohunekApp) -> Element<'_, Message> {
     session_detail(app)
@@ -79,6 +125,24 @@ fn session_detail(app: &PohunekApp) -> Element<'_, Message> {
                 .push(selectable_text(origin_label(session)).size(14))
                 .push(selectable_text(format!("state: {}", session.state.as_str())).size(14))
                 .push(selectable_text(format!("activity: {activity}")).size(14));
+            if let Some(id) = &session.native_session_id {
+                detail = detail.push(selectable_text(format!("native_session_id: {id}")).size(14));
+            } else if let Some(path) = &session.native_session_path {
+                detail =
+                    detail.push(selectable_text(format!("native_session_path: {path}")).size(14));
+            }
+            if session.native_session_id.is_some() || session.native_session_path.is_some() {
+                detail = detail.push(
+                    selectable_text(format!(
+                        "native last activity: {}",
+                        session
+                            .native_last_activity_at
+                            .as_deref()
+                            .unwrap_or("unknown")
+                    ))
+                    .size(14),
+                );
+            }
             detail = detail.push(session_attention_view(app, host_id, session));
             detail = detail.push(subagent_view(&session.subagents));
             if let Some(links) = links_view(app, host_id, session) {

@@ -14,9 +14,9 @@ use protocol::{SessionId, SessionInfo};
 use thiserror::Error;
 
 use crate::bin_resolver::{BinError, BinResolver};
-use crate::command::resume_session_task;
+use crate::command::recovery_inspect_task;
 use crate::config::{AttachCommandMode, AttachSelection, LaunchSettings};
-use crate::message::Message;
+use crate::message::{Message, RecoveryAction};
 use crate::runtime;
 use crate::terminal::{
     attach_arguments, endpoint_environment, spawn_observed, ObserveError, TerminalError,
@@ -149,6 +149,7 @@ pub(crate) fn attach_task(
     app: &PohunekApp,
     host_id: &HostId,
     session_id: &SessionId,
+    generation: u64,
 ) -> Result<Task<Message>, String> {
     let session = app
         .workspace
@@ -159,10 +160,7 @@ pub(crate) fn attach_task(
         if !session.capabilities.resume {
             return Err("session does not support resume".to_owned());
         }
-        if !session_has_native_resume_reference(session) {
-            return Err("session does not have native resume metadata".to_owned());
-        }
-        return resume_session_task(app, host_id, session_id);
+        return recovery_inspect_task(app, host_id, session_id, RecoveryAction::Resume, generation);
     }
 
     let plan = app.attach_plan(host_id, session_id)?;
@@ -177,18 +175,7 @@ pub(crate) fn attach_task(
     ))
 }
 
-fn session_has_native_resume_reference(session: &SessionInfo) -> bool {
-    session
-        .native_session_id
-        .as_deref()
-        .is_some_and(|value| !value.is_empty())
-        || session
-            .native_session_path
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
-}
-
-fn session_is_in_resumable_state(session: &SessionInfo) -> bool {
+pub(crate) fn session_is_in_resumable_state(session: &SessionInfo) -> bool {
     session.state.is_terminal()
         || session
             .runtime

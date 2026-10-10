@@ -893,6 +893,7 @@ fn form_fields(app: &PohunekApp) -> Vec<FormField> {
         ModalView::None
         | ModalView::Session
         | ModalView::ConfirmDeleteSession
+        | ModalView::ConfirmRecovery
         | ModalView::Keymap
         | ModalView::Hosts
         | ModalView::Inbox => Vec::new(),
@@ -1189,6 +1190,7 @@ fn form_submit_message_for(
         ModalView::None
         | ModalView::Session
         | ModalView::ConfirmDeleteSession
+        | ModalView::ConfirmRecovery
         | ModalView::Keymap
         | ModalView::Hosts
         | ModalView::Inbox => None,
@@ -1318,6 +1320,7 @@ fn modal_primary(app: &PohunekApp, open_terminal: bool) -> Vec<Message> {
         ModalView::Assistant => vec![Message::LaunchAssistant],
         ModalView::Session => open_selected_session(app),
         ModalView::ConfirmDeleteSession => vec![Message::ConfirmDeleteSession],
+        ModalView::ConfirmRecovery => vec![Message::ConfirmRecovery],
         ModalView::Inbox => inbox_primary(app, open_terminal),
         ModalView::Keymap | ModalView::Hosts | ModalView::None => Vec::new(),
     }
@@ -1409,6 +1412,7 @@ pub(crate) fn focus_task(app: &PohunekApp) -> Task<Message> {
         ModalView::None
         | ModalView::Session
         | ModalView::ConfirmDeleteSession
+        | ModalView::ConfirmRecovery
         | ModalView::Keymap
         | ModalView::Hosts
         | ModalView::Inbox => Task::none(),

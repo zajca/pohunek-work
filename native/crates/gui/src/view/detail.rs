@@ -346,6 +346,20 @@ fn session_meta(row: &SessionRow) -> String {
         &mut meta,
         &format!("updated {}", notification_age_label(&row.updated_at)),
     );
+    if let Some(id) = &row.native_session_id {
+        push_meta(&mut meta, &format!("native_session_id: {id}"));
+    } else if let Some(path) = &row.native_session_path {
+        push_meta(&mut meta, &format!("native_session_path: {path}"));
+    }
+    if row.native_session_id.is_some() || row.native_session_path.is_some() {
+        push_meta(
+            &mut meta,
+            &format!(
+                "native last activity: {}",
+                row.native_last_activity_at.as_deref().unwrap_or("unknown")
+            ),
+        );
+    }
     meta
 }
 
