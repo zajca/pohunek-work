@@ -9,15 +9,14 @@ resolver = "2"
 members = ["crates/gui", "crates/gui-core"]
 
 [workspace.dependencies]
-# Core crates, pinned to one core release tag. Every core crate lives in the same
-# repository, so bumping the `tag` below moves them all together.
-pohunek-assistant = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
-pohunek-client = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
-pohunek-paths = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
-pohunek-platform = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
-pohunek-prompt = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
-pohunek-protocol = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
-pohunek-test-support = { git = "https://github.com/zajca/pohunek", tag = "v0.33.1" }
+# Core crates share one revision so the native client and web SDK use the same contract.
+pohunek-assistant = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
+pohunek-client = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
+pohunek-paths = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
+pohunek-platform = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
+pohunek-prompt = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
+pohunek-protocol = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
+pohunek-test-support = { git = "https://github.com/zajca/pohunek", rev = "2a81f1eeab504570381327c9bdf1080c3f7f13b8" }
 
 pohunek-gui-core = { path = "crates/gui-core" }
 

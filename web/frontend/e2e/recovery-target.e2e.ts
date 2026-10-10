@@ -21,7 +21,7 @@ test("fork refuses ambiguous or mismatched inspect responses", async ({ page, st
           && "id" in response.ok && response.ok.id === FIXTURE_LOCAL_SESSION_ID
           && "native_session_id" in response.ok) {
           if (tamperNextInspect === "both-references") {
-            (response.ok as { native_session_path: string }).native_session_path = "/ambiguous/conversation";
+            Object.assign(response.ok, { native_session_path: "/ambiguous/conversation" });
           } else {
             (response.ok as { id: string }).id = "fixture-other-session";
           }
@@ -39,7 +39,7 @@ test("fork refuses ambiguous or mismatched inspect responses", async ({ page, st
   if (address === undefined) throw new Error("fixture local daemon did not expose a TCP address");
   const client = await connectTcp(FIXTURE_LOCAL_HOST, address);
   try {
-    const countBefore = (await client.call("session.list", null)).length;
+    const countBefore = (await client.call("session.list", {})).length;
     const row = page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${FIXTURE_LOCAL_SESSION_ID}"]`);
     await row.click();
 
@@ -47,7 +47,7 @@ test("fork refuses ambiguous or mismatched inspect responses", async ({ page, st
     await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
     await expect.poll(() => tamperNextInspect).toBeUndefined();
     await expect(page.getByRole("dialog", { name: "Confirm fork target" })).toHaveCount(0);
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
 
     await page.getByRole("button", { name: "Fork", exact: true }).click();
     await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
@@ -57,14 +57,14 @@ test("fork refuses ambiguous or mismatched inspect responses", async ({ page, st
     await confirmation.getByRole("button", { name: "Fork session" }).click();
     await expect.poll(() => tamperNextInspect).toBeUndefined();
     await expect(confirmation).toHaveCount(0);
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
 
     tamperNextInspect = "wrong-session";
     await page.getByRole("button", { name: "Fork", exact: true }).click();
     await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
     await expect.poll(() => tamperNextInspect).toBeUndefined();
     await expect(confirmation).toHaveCount(0);
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
   } finally {
     await client.close();
   }
@@ -79,11 +79,11 @@ test("fork confirms the inspected conversation when the browser list is stale", 
         const response = JSON.parse(message) as unknown;
         if (typeof response === "object" && response !== null && "ok" in response && Array.isArray(response.ok)) {
           const sessions = response.ok as unknown[];
-          const localSession = sessions.find((entry): boolean =>
+          const localSession = sessions.find((entry): entry is { id: string } =>
             typeof entry === "object" && entry !== null && "id" in entry && entry.id === FIXTURE_LOCAL_SESSION_ID);
           if (localSession !== undefined) {
             // Keep the daemon's seeded recovery target intact; delay only the browser's list view.
-            (localSession as { native_session_id: string }).native_session_id = STALE_RECOVERY_ID;
+            Object.assign(localSession, { native_session_id: STALE_RECOVERY_ID });
             staleListInjected = true;
             socket.send(JSON.stringify(response));
             return;
@@ -104,7 +104,7 @@ test("fork confirms the inspected conversation when the browser list is stale", 
   const client = await connectTcp(FIXTURE_LOCAL_HOST, address);
   try {
     expect((await client.call("session.inspect", FIXTURE_LOCAL_SESSION_ID)).native_session_id).toBe(FIXTURE_LOCAL_RECOVERY_ID);
-    const countBefore = (await client.call("session.list", null)).length;
+    const countBefore = (await client.call("session.list", {})).length;
 
     await row.click();
     await page.getByRole("button", { name: "Fork", exact: true }).click();
@@ -113,16 +113,16 @@ test("fork confirms the inspected conversation when the browser list is stale", 
     await expect(confirmation).toContainText(FIXTURE_LOCAL_RECOVERY_ID);
     await expect(confirmation).toContainText(FIXTURE_LOCAL_NATIVE_ACTIVITY);
     await expect(confirmation).not.toContainText(STALE_RECOVERY_ID);
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
 
     await confirmation.getByRole("button", { name: "Cancel" }).click();
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
     await page.getByRole("button", { name: "Fork", exact: true }).click();
     await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
     const secondConfirmation = page.getByRole("dialog", { name: "Confirm fork target" });
     await expect(secondConfirmation).toContainText(FIXTURE_LOCAL_RECOVERY_ID);
     await secondConfirmation.getByRole("button", { name: "Fork session" }).click();
-    await expect.poll(async () => (await client.call("session.list", null)).length).toBe(countBefore + 1);
+    await expect.poll(async () => (await client.call("session.list", {})).length).toBe(countBefore + 1);
   } finally {
     await client.close();
   }
@@ -139,7 +139,7 @@ test("fork requires a new confirmation when the inspected target changes", async
           && typeof response.ok === "object" && response.ok !== null
           && "id" in response.ok && response.ok.id === FIXTURE_LOCAL_SESSION_ID) {
           // Model an inspect response captured just before a native target switch.
-          (response.ok as { native_session_id: string }).native_session_id = STALE_RECOVERY_ID;
+          Object.assign(response.ok, { native_session_id: STALE_RECOVERY_ID });
           delayOneInspect = false;
           socket.send(JSON.stringify(response));
           return;
@@ -154,7 +154,7 @@ test("fork requires a new confirmation when the inspected target changes", async
   if (address === undefined) throw new Error("fixture local daemon did not expose a TCP address");
   const client = await connectTcp(FIXTURE_LOCAL_HOST, address);
   try {
-    const countBefore = (await client.call("session.list", null)).length;
+    const countBefore = (await client.call("session.list", {})).length;
     await page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${FIXTURE_LOCAL_SESSION_ID}"]`).click();
     await page.getByRole("button", { name: "Fork", exact: true }).click();
     delayOneInspect = true;
@@ -163,15 +163,15 @@ test("fork requires a new confirmation when the inspected target changes", async
     await expect(confirmation).toContainText(STALE_RECOVERY_ID);
     await expect(confirmation).toContainText(FIXTURE_LOCAL_NATIVE_ACTIVITY);
     expect(delayOneInspect).toBe(false);
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
 
     await confirmation.getByRole("button", { name: "Fork session" }).click();
     await expect(confirmation).toContainText(FIXTURE_LOCAL_RECOVERY_ID);
     await expect(confirmation).not.toContainText(STALE_RECOVERY_ID);
-    expect((await client.call("session.list", null)).length).toBe(countBefore);
+    expect((await client.call("session.list", {})).length).toBe(countBefore);
 
     await confirmation.getByRole("button", { name: "Fork session" }).click();
-    await expect.poll(async () => (await client.call("session.list", null)).length).toBe(countBefore + 1);
+    await expect.poll(async () => (await client.call("session.list", {})).length).toBe(countBefore + 1);
   } finally {
     await client.close();
   }

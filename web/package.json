@@ -9,9 +9,9 @@
     "frontend"
   ],
   "catalog": {
-    "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.33.1/pohunek-ts-protocol-0.33.1.tgz",
-    "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v0.33.1/pohunek-ts-sdk-0.33.1.tgz",
-    "@pohunek/testkit": "https://github.com/zajca/pohunek/releases/download/v0.33.1/pohunek-ts-testkit-0.33.1.tgz"
+    "@pohunek/protocol": "http://127.0.0.1:8765/releases/download/v0.34.0-core.2a81f1eea/pohunek-ts-protocol-0.34.0-core.2a81f1eea.tgz",
+    "@pohunek/sdk": "http://127.0.0.1:8765/releases/download/v0.34.0-core.2a81f1eea/pohunek-ts-sdk-0.34.0-core.2a81f1eea.tgz",
+    "@pohunek/testkit": "http://127.0.0.1:8765/releases/download/v0.34.0-core.2a81f1eea/pohunek-ts-testkit-0.34.0-core.2a81f1eea.tgz"
   },
   "scripts": {
     "core-sdk:sync": "bun scripts/sync-core-sdk.ts",
