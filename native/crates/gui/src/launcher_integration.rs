@@ -1,5 +1,6 @@
 //! Headless integration scenarios for the dialog-only GUI process.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, File, FileTimes};
 use std::os::unix::fs::PermissionsExt as _;
@@ -385,7 +386,7 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
             branch: None,
             base_branch: None,
             input: None,
-            metadata: Default::default(),
+            metadata: BTreeMap::default(),
         },
     )
     .await
@@ -641,9 +642,8 @@ async fn report_native_id(host: &HostConfig, id: &SessionId, native_id: &str, se
         None,
     )
     .expect("native identity report params are valid");
-    let socket_path = match &host.transport {
-        pohunek_gui_core::HostTransport::Local { socket_path } => socket_path,
-        _ => panic!("launcher integration uses a local daemon"),
+    let pohunek_gui_core::HostTransport::Local { socket_path } = &host.transport else {
+        panic!("launcher integration uses a local daemon");
     };
     let mut client = Client::connect_local_with_options(
         socket_path,
