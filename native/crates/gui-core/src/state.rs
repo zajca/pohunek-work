@@ -3085,6 +3085,7 @@ mod tests {
             subagents: Vec::new(),
             native_session_id: None,
             native_session_path: None,
+            native_last_activity_at: None,
             active_agent: None,
             active_agent_base: None,
             active_agent_pid: None,

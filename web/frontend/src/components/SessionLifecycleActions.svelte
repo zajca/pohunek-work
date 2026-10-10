@@ -3,6 +3,7 @@
   import { addErrorToast, addToast, hasKnownSessionAgentBases } from "../lib";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import FormDialog from "./FormDialog.svelte";
+  import RecoveryTarget from "./RecoveryTarget.svelte";
 
   interface Props {
     workspace: Workspace;
@@ -20,6 +21,9 @@
   let forkCols = $state(80);
   let forkRows = $state(24);
   let pending = $state(false);
+  let recoveryIntent: "resume" | "fork" | undefined = $state();
+  let recoverySession: Awaited<ReturnType<Workspace["actions"]["sessionInspect"]>> | undefined = $state();
+  let recoveryHost: string | undefined = $state();
   let generation = 0;
 
   const session = $derived(entry.session);
@@ -82,14 +86,48 @@
     });
   }
 
-  async function resume(): Promise<void> {
-    const currentSession = entry.session;
-    if (pending || !canResumeSession(currentSession)) {
+  async function requestRecovery(intent: "resume" | "fork"): Promise<void> {
+    if (pending) {
       return;
     }
+    const host = entry.host;
+    const id = entry.session.id;
     await mutate(async (): Promise<void> => {
-      await workspace.actions.sessionResume(entry.host, currentSession.id);
-      addToast("success", "Session resumed");
+      let inspected: Awaited<ReturnType<Workspace["actions"]["sessionInspect"]>>;
+      try {
+        inspected = await workspace.actions.sessionInspect(host, id);
+      } catch (error: unknown) {
+        forkOpen = false;
+        throw error;
+      }
+      if (entry.host !== host || entry.session.id !== id) {
+        return;
+      }
+      if ((intent === "resume" && !canResumeSession(inspected))
+        || (intent === "fork" && !inspected.capabilities.fork)) {
+        forkOpen = false;
+        addToast("error", "Recovery is unavailable for the current session state");
+        return;
+      }
+      if (inspected.id !== id) {
+        forkOpen = false;
+        addToast("error", "Recovery target unavailable: session.inspect returned a different session");
+        return;
+      }
+      if (!inspected.native_session_id && !inspected.native_session_path) {
+        forkOpen = false;
+        addToast("error", "Recovery target unavailable: session.inspect returned no native reference");
+        return;
+      }
+      if (!hasSingleNativeReference(inspected)) {
+        forkOpen = false;
+        addToast("error", "Recovery target unavailable: session.inspect returned an invalid target");
+        return;
+      }
+      recoveryHost = host;
+      recoverySession = inspected;
+      recoveryIntent = intent;
+      forkOpen = false;
     });
   }
 
@@ -100,27 +138,79 @@
     return candidate.state === "done" || candidate.state === "failed" || candidate.state === "stopped";
   }
 
-  function hasNativeReference(candidate: HostedSession["session"]): boolean {
-    return (candidate.native_session_id?.length ?? 0) > 0
-      || (candidate.native_session_path?.length ?? 0) > 0;
+  function hasSingleNativeReference(candidate: HostedSession["session"]): boolean {
+    return (typeof candidate.native_session_id === "string"
+      && candidate.native_session_id.length > 0
+      && candidate.native_session_path === undefined)
+      || (typeof candidate.native_session_path === "string"
+        && candidate.native_session_path.length > 0
+        && candidate.native_session_id === undefined);
   }
 
   function canResumeSession(candidate: HostedSession["session"]): boolean {
-    return candidate.capabilities.resume && isResumableState(candidate) && hasNativeReference(candidate);
+    return candidate.capabilities.resume && isResumableState(candidate);
   }
 
-  async function fork(): Promise<void> {
+  function closeRecovery(): void {
+    recoveryIntent = undefined;
+    recoverySession = undefined;
+    recoveryHost = undefined;
+  }
+
+  async function confirmRecovery(): Promise<void> {
+    const intent = recoveryIntent;
+    const shown = recoverySession;
+    const host = recoveryHost;
+    if (pending || intent === undefined || shown === undefined || host === undefined) {
+      return;
+    }
     await mutate(async (): Promise<void> => {
-      const result = await workspace.actions.sessionFork(entry.host, {
-        session_id: session.id,
-        cwd_mode: "same",
-        cols: forkCols,
-        rows: forkRows,
-        ...(nameDraft.trim().length === 0 ? {} : { name: nameDraft.trim() }),
-      });
-      forkOpen = false;
-      addToast("success", "Session forked");
-      onfork(entry.host, result.id);
+      let current: Awaited<ReturnType<Workspace["actions"]["sessionInspect"]>>;
+      try {
+        current = await workspace.actions.sessionInspect(host, shown.id);
+      } catch (error: unknown) {
+        closeRecovery();
+        throw error;
+      }
+      if (entry.host !== host || entry.session.id !== shown.id) {
+        closeRecovery();
+        return;
+      }
+      if (current.id !== shown.id
+        || !hasSingleNativeReference(current)
+        || (intent === "resume" && !canResumeSession(current))
+        || (intent === "fork" && !current.capabilities.fork)) {
+        closeRecovery();
+        addToast("error", "Recovery target is no longer available");
+        return;
+      }
+      if (shown.native_session_id !== current.native_session_id
+        || shown.native_session_path !== current.native_session_path
+        || shown.native_last_activity_at !== current.native_last_activity_at) {
+        recoverySession = current;
+        addToast("info", "Recovery target changed. Review and confirm the current target.");
+        return;
+      }
+      try {
+        if (intent === "resume") {
+          await workspace.actions.sessionResume(host, shown.id);
+          addToast("success", "Session resumed");
+        } else {
+          const result = await workspace.actions.sessionFork(host, {
+            session_id: shown.id,
+            cwd_mode: "same",
+            cols: forkCols,
+            rows: forkRows,
+            ...(nameDraft.trim().length === 0 ? {} : { name: nameDraft.trim() }),
+          });
+          addToast("success", "Session forked");
+          onfork(host, result.id);
+        }
+      } catch (error: unknown) {
+        closeRecovery();
+        throw error;
+      }
+      closeRecovery();
     });
   }
 
@@ -160,14 +250,10 @@
     {#if canStop}
       <button type="button" onclick={() => { confirmStop = true; }} disabled={pending}>Stop</button>
     {:else if canResume}
-      <button type="button" onclick={() => void resume()} disabled={pending}>Resume</button>
+      <button type="button" onclick={() => void requestRecovery("resume")} disabled={pending}>Resume</button>
     {:else if canRecover && !session.capabilities.resume}
       <button type="button" disabled title="This session's agent adapter does not support native resume">
         Resume unsupported
-      </button>
-    {:else if canRecover}
-      <button type="button" disabled title="This session has no usable native resume reference">
-        Resume unavailable
       </button>
     {:else}
       <button type="button" disabled title="Resolve the runtime conflict or incompatibility before recovery">
@@ -184,6 +270,9 @@
       Remove
     </button>
   </div>
+  {#if canRecover || canFork}
+    <RecoveryTarget {session} />
+  {/if}
 {/if}
 
 <ConfirmDialog
@@ -216,7 +305,7 @@
     if (renameOpen) {
       void rename();
     } else {
-      void fork();
+      void requestRecovery("fork");
     }
   }}
 >
@@ -228,6 +317,20 @@
     <label>Rows<input type="number" min="1" bind:value={forkRows} /></label>
   {/if}
 </FormDialog>
+
+{#if recoveryIntent !== undefined && recoverySession !== undefined}
+  <FormDialog
+    open
+    title={recoveryIntent === "resume" ? "Resume session?" : "Confirm fork target"}
+    submitLabel={recoveryIntent === "resume" ? "Resume session" : "Fork session"}
+    submitting={pending}
+    onclose={closeRecovery}
+    onsubmit={() => void confirmRecovery()}
+  >
+    <p>Review the current conversation before launching the agent.</p>
+    <RecoveryTarget session={recoverySession} />
+  </FormDialog>
+{/if}
 
 <style>
   .session-lifecycle-actions {

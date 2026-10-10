@@ -224,7 +224,12 @@ pub async fn resume_session_with_options(
     session_id: &SessionId,
     options: ConnectionOptions,
 ) -> Result<SessionResumeResult, CoreError> {
-    call_host::<method::SessionResume>(config, options, session_id.clone()).await
+    call_host::<method::SessionResume>(
+        config,
+        options,
+        protocol::SessionResumeParams::Id(session_id.clone()),
+    )
+    .await
 }
 
 /// Fork a session's native agent conversation on a host through the SDK.
@@ -565,6 +570,7 @@ pub async fn launch_action_prompt_with_options(
             branch,
             base_branch: params.action.base_branch,
             input: Some(params.preview.rendered),
+            extended_input_ready_wait: None,
             metadata: params.metadata,
         },
         options,

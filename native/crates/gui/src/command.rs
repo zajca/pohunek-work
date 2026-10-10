@@ -1004,6 +1004,7 @@ fn create_session_task(app: &PohunekApp) -> Result<Task<Message>, String> {
         branch,
         base_branch,
         input: (!input.trim().is_empty()).then_some(input),
+        extended_input_ready_wait: None,
         metadata: BTreeMap::new(),
     };
     Ok(Task::perform(
@@ -1534,6 +1535,7 @@ pub(crate) fn fork_session_task(
         cwd_mode: ForkCwdMode::Same,
         cols: terminal_size.cols,
         rows: terminal_size.rows,
+        accept_profile_change: false,
     };
     Ok(Task::perform(
         runtime::perform(async move {

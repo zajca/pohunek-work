@@ -59,7 +59,7 @@ open_command = "xdg-open"   # optional; see Links and folders
 
 [gui]
 connect_timeout_ms = 2000
-request_timeout_ms = 5000
+# request_timeout_ms = 5000            # optional override; omit for SDK input-launch budget
 reconcile_secs = 30
 backoff_initial_ms = 1000
 backoff_max_ms = 30000

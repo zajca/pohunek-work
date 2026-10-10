@@ -19,6 +19,7 @@ use pohunek_test_support::process_env::ProcessEnv;
 use pohunek_test_support::wait;
 use protocol::SessionId;
 
+use crate::config::{AppConfig, ConfigError};
 use crate::message::{AppMode, LaunchPhase, Message};
 use crate::{command, parse_args, BootState, HostId, PohunekApp};
 
@@ -132,14 +133,43 @@ async fn launcher_retries_daemon_failure_once_and_locks_after_attach_failure() {
     fs::create_dir(config_dir).expect("create config directory");
     fs::set_permissions(config_dir, fs::Permissions::from_mode(0o700))
         .expect("private config directory");
+    let config_text = format!(
+        "pohunek_bin = {}\nattach_command = \"/bin/false {{bin}} --host={{host}} attach {{id}}\"\nattach_command_mode = \"argv\"\n",
+        toml::Value::String(cli.to_string_lossy().into_owned())
+    );
+    fs::write(&gui_config, &config_text).expect("write GUI configuration");
+    assert_eq!(
+        AppConfig::load()
+            .expect("load default GUI configuration")
+            .connection_options
+            .request_timeout,
+        None
+    );
     fs::write(
         &gui_config,
-        format!(
-            "pohunek_bin = {}\nattach_command = \"/bin/false {{bin}} --host={{host}} attach {{id}}\"\nattach_command_mode = \"argv\"\n",
-            toml::Value::String(cli.to_string_lossy().into_owned())
-        ),
+        format!("{config_text}\n[gui]\nrequest_timeout_ms = 5000\n"),
     )
-    .expect("write GUI configuration");
+    .expect("write explicit timeout");
+    assert_eq!(
+        AppConfig::load()
+            .expect("load explicit GUI timeout")
+            .connection_options
+            .request_timeout,
+        Some(Duration::from_secs(5))
+    );
+    fs::write(
+        &gui_config,
+        format!("{config_text}\n[gui]\nrequest_timeout_ms = 0\n"),
+    )
+    .expect("write zero timeout");
+    assert!(matches!(
+        AppConfig::load(),
+        Err(ConfigError::Invalid {
+            field: "gui.request_timeout_ms",
+            ..
+        })
+    ));
+    fs::write(&gui_config, &config_text).expect("restore GUI configuration");
 
     let repo = env.cwd().join("project");
     fs::create_dir(&repo).expect("project directory");

@@ -1,5 +1,8 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import {
   DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS,
   DEFAULT_DAEMON_WAIT_SECONDS,
@@ -7,7 +10,6 @@ import {
   DEFAULT_STATIC_ASSETS_DIR,
   externalPeerSelector,
   startBackend,
-  type BackendHandle,
   type BackendLogger,
 } from "@pohunek/backend";
 import type { HostRecord, NotificationRecord, ProjectInfo, SessionInfo } from "@pohunek/protocol";
@@ -23,6 +25,8 @@ export const FIXTURE_LOCAL_HOST = "local";
 const FIXTURE_PEER_NAME = "fixture-peer";
 export const FIXTURE_PEER_HOST = `netbird:${externalPeerSelector(FIXTURE_PEER_NAME)}`;
 export const FIXTURE_LOCAL_SESSION_ID = "s-local-seed";
+export const FIXTURE_LOCAL_RECOVERY_ID = "fixture-local-conversation";
+export const FIXTURE_LOCAL_NATIVE_ACTIVITY = "2026-07-22T11:15:00Z";
 export const FIXTURE_PEER_SESSION_ID = "s-peer-seed";
 export const FIXTURE_NOTIFICATION_ID = "n-local-seed";
 export const FIXTURE_EXTERNAL_SESSION_ID = "s-external-seed";
@@ -42,6 +46,8 @@ const FIXTURE_TERMINAL_ROWS = 30;
 const FIXTURE_LOCAL_PID = 42_001;
 const FIXTURE_PEER_PID = 42_002;
 const DYNAMIC_PORT = 0;
+const PACKAGED_BACKEND_STARTUP_TIMEOUT_MS = 10_000;
+const PACKAGED_BACKEND_STOP_TIMEOUT_MS = 5_000;
 
 const silentLogger: BackendLogger = {
   log(): void {},
@@ -50,13 +56,22 @@ const silentLogger: BackendLogger = {
 export interface FixtureStackOptions {
   readonly staticAssetsDir?: string;
   readonly logger?: BackendLogger;
+  readonly packagedBackend?: {
+    readonly executable: string;
+    readonly staticAssetsDir: string;
+  };
+}
+
+interface FixtureBackendHandle {
+  readonly url: string;
+  close(): Promise<void>;
 }
 
 export interface FixtureStackHandle {
   readonly root: string;
   readonly local: FixtureDaemonHandle;
   readonly peer: FixtureDaemonHandle;
-  readonly backend: BackendHandle;
+  readonly backend: FixtureBackendHandle;
   close(): Promise<void>;
 }
 
@@ -66,7 +81,7 @@ export async function startFixtureStack(options: FixtureStackOptions = {}): Prom
   const socketPath = join(root, FIXTURE_LOCAL_SOCKET_FILENAME);
   let peer: FixtureDaemonHandle | undefined;
   let local: FixtureDaemonHandle | undefined;
-  let backend: BackendHandle | undefined;
+  let backend: FixtureBackendHandle | undefined;
 
   try {
     peer = await startFixtureDaemon({
@@ -94,21 +109,23 @@ export async function startFixtureStack(options: FixtureStackOptions = {}): Prom
       initialProjects: [localProject()],
     });
 
-    backend = await startBackend(
-      {
-        bindHost: FIXTURE_LOOPBACK_HOST,
-        port: DYNAMIC_PORT,
-        allowLoopbackBind: true,
-        daemonSocketPath: socketPath,
-        derivedRuntime: undefined,
-        logFiles: undefined,
-        discoverIntervalSeconds: DEFAULT_DISCOVER_INTERVAL_SECONDS,
-        daemonWaitSeconds: DEFAULT_DAEMON_WAIT_SECONDS,
-        daemonRetryIntervalSeconds: DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS,
-        staticAssetsDir: options.staticAssetsDir ?? DEFAULT_STATIC_ASSETS_DIR,
-      },
-      options.logger ?? silentLogger,
-    );
+    backend = options.packagedBackend === undefined
+      ? await startBackend(
+        {
+          bindHost: FIXTURE_LOOPBACK_HOST,
+          port: DYNAMIC_PORT,
+          allowLoopbackBind: true,
+          daemonSocketPath: socketPath,
+          derivedRuntime: undefined,
+          logFiles: undefined,
+          discoverIntervalSeconds: DEFAULT_DISCOVER_INTERVAL_SECONDS,
+          daemonWaitSeconds: DEFAULT_DAEMON_WAIT_SECONDS,
+          daemonRetryIntervalSeconds: DEFAULT_DAEMON_RETRY_INTERVAL_SECONDS,
+          staticAssetsDir: options.staticAssetsDir ?? DEFAULT_STATIC_ASSETS_DIR,
+        },
+        options.logger ?? silentLogger,
+      )
+      : await startPackagedBackend(options.packagedBackend, socketPath);
   } catch (error: unknown) {
     await closeStartedResources(backend, local, peer, root);
     throw error;
@@ -141,6 +158,14 @@ function peerHostRecord(port: number): HostRecord {
 }
 
 function localSession(): SessionInfo {
+  return {
+    ...baseLocalSession(),
+    native_session_id: FIXTURE_LOCAL_RECOVERY_ID,
+    native_last_activity_at: FIXTURE_LOCAL_NATIVE_ACTIVITY,
+  };
+}
+
+function baseLocalSession(): SessionInfo {
   return {
     id: FIXTURE_LOCAL_SESSION_ID,
     capabilities: { resume: true, fork: true },
@@ -190,7 +215,7 @@ function peerSession(): SessionInfo {
 
 function externalSession(): SessionInfo {
   return {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_EXTERNAL_SESSION_ID,
     name: "Observed external session",
     external: true,
@@ -200,7 +225,7 @@ function externalSession(): SessionInfo {
 
 function unknownActiveSession(): SessionInfo {
   return {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_UNKNOWN_ACTIVE_SESSION_ID,
     name: "Unknown active agent session",
     active_agent: "future-profile",
@@ -212,7 +237,7 @@ function unknownActiveSession(): SessionInfo {
 
 function unknownPersistedSession(): SessionInfo {
   return {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_UNKNOWN_PERSISTED_SESSION_ID,
     name: "Unknown persisted agent session",
     agent: "future-profile",
@@ -224,7 +249,7 @@ function unknownPersistedSession(): SessionInfo {
 
 function legacyBaselessSession(): SessionInfo {
   const session = {
-    ...localSession(),
+    ...baseLocalSession(),
     id: FIXTURE_LEGACY_BASELESS_SESSION_ID,
     name: "Legacy baseless profile session",
     agent: "legacy-profile",
@@ -287,7 +312,7 @@ function requireTcpAddress(
 }
 
 async function closeStartedResources(
-  backend: BackendHandle | undefined,
+  backend: FixtureBackendHandle | undefined,
   local: FixtureDaemonHandle | undefined,
   peer: FixtureDaemonHandle | undefined,
   root: string,
@@ -310,5 +335,87 @@ async function closeStartedResources(
   }
   if (failures.length > 0) {
     throw new AggregateError(failures, "failed to close the frontend fixture stack cleanly");
+  }
+}
+
+async function startPackagedBackend(
+  packaged: NonNullable<FixtureStackOptions["packagedBackend"]>,
+  daemonSocketPath: string,
+): Promise<FixtureBackendHandle> {
+  const child = spawn(packaged.executable, [], {
+    env: {
+      ...process.env,
+      POHUNEK_BACKEND_ALLOW_LOOPBACK: "true",
+      POHUNEK_BACKEND_BIND_HOST: FIXTURE_LOOPBACK_HOST,
+      POHUNEK_BACKEND_DAEMON_SOCKET: daemonSocketPath,
+      POHUNEK_BACKEND_LOG_DIR: undefined,
+      POHUNEK_BACKEND_PORT: String(DYNAMIC_PORT),
+      POHUNEK_BACKEND_STATIC_DIR: packaged.staticAssetsDir,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout = createInterface({ input: child.stdout });
+  const stderr = createInterface({ input: child.stderr });
+  const errors: string[] = [];
+  stderr.on("line", (line: string): void => { errors.push(line); });
+
+  try {
+    const url = await new Promise<string>((resolveReady, rejectReady): void => {
+      const timeout = setTimeout((): void => {
+        cleanup();
+        rejectReady(new Error(`packaged backend did not become ready: ${errors.join("\n")}`));
+      }, PACKAGED_BACKEND_STARTUP_TIMEOUT_MS);
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        stdout.off("line", onLine);
+        child.off("error", onError);
+        child.off("exit", onExit);
+      };
+      const onLine = (line: string): void => {
+        try {
+          const event = JSON.parse(line) as { event?: unknown; lifecycle?: unknown; url?: unknown };
+          if (event.event === "backend_server" && event.lifecycle === "listening" && typeof event.url === "string") {
+            cleanup();
+            resolveReady(event.url);
+          }
+        } catch {
+          // Other output is not a readiness event.
+        }
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        rejectReady(error);
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+        cleanup();
+        rejectReady(new Error(`packaged backend exited before readiness (code=${String(code)}, signal=${String(signal)}): ${errors.join("\n")}`));
+      };
+      stdout.on("line", onLine);
+      child.once("error", onError);
+      child.once("exit", onExit);
+    });
+    return { url, close: (): Promise<void> => stopPackagedBackend(child) };
+  } catch (error: unknown) {
+    await stopPackagedBackend(child);
+    throw error;
+  } finally {
+    stdout.close();
+    stderr.close();
+    child.stdout.resume();
+    child.stderr.resume();
+  }
+}
+
+async function stopPackagedBackend(child: ChildProcess): Promise<void> {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  const exited = once(child, "exit");
+  const timeout = setTimeout((): void => { child.kill("SIGKILL"); }, PACKAGED_BACKEND_STOP_TIMEOUT_MS);
+  try {
+    child.kill("SIGTERM");
+    await exited;
+  } finally {
+    clearTimeout(timeout);
   }
 }
