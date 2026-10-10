@@ -109,7 +109,17 @@
         addToast("error", "Recovery is unavailable for the current session state");
         return;
       }
-      if (inspected.id !== id || !hasSingleNativeReference(inspected)) {
+      if (inspected.id !== id) {
+        forkOpen = false;
+        addToast("error", "Recovery target unavailable: session.inspect returned a different session");
+        return;
+      }
+      if (!inspected.native_session_id && !inspected.native_session_path) {
+        forkOpen = false;
+        addToast("error", "Recovery target unavailable: session.inspect returned no native reference");
+        return;
+      }
+      if (!hasSingleNativeReference(inspected)) {
         forkOpen = false;
         addToast("error", "Recovery target unavailable: session.inspect returned an invalid target");
         return;
