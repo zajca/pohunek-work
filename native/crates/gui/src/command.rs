@@ -1534,6 +1534,7 @@ pub(crate) fn fork_session_task(
         cwd_mode: ForkCwdMode::Same,
         cols: terminal_size.cols,
         rows: terminal_size.rows,
+        accept_profile_change: false,
     };
     Ok(Task::perform(
         runtime::perform(async move {
