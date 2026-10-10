@@ -139,9 +139,12 @@
   }
 
   function hasSingleNativeReference(candidate: HostedSession["session"]): boolean {
-    const hasId = (candidate.native_session_id?.length ?? 0) > 0;
-    const hasPath = (candidate.native_session_path?.length ?? 0) > 0;
-    return hasId !== hasPath;
+    return (typeof candidate.native_session_id === "string"
+      && candidate.native_session_id.length > 0
+      && candidate.native_session_path === undefined)
+      || (typeof candidate.native_session_path === "string"
+        && candidate.native_session_path.length > 0
+        && candidate.native_session_id === undefined);
   }
 
   function canResumeSession(candidate: HostedSession["session"]): boolean {

@@ -9,19 +9,39 @@ import {
 
 const STALE_RECOVERY_ID = "fixture-obsolete-conversation";
 
-test("fork refuses ambiguous or mismatched inspect responses", async ({ page, stack }) => {
-  let tamperNextInspect: "both-references" | "wrong-session" | undefined = "both-references";
+test("recovery refuses ambiguous, empty, or mismatched inspect responses", async ({ page, stack }) => {
+  type TamperMode = "both-references" | "empty-id-with-path" | "id-with-empty-path" | "wrong-session";
+  let tamperNextInspect: TamperMode | undefined;
+  let targetSessionId = FIXTURE_LOCAL_SESSION_ID;
+  let inspectCalls = 0;
+  const recoveryCalls: string[] = [];
   await page.routeWebSocket("**/*", (socket): void => {
     const server = socket.connectToServer();
+    socket.onMessage((message): void => {
+      if (typeof message === "string") {
+        const request = JSON.parse(message) as { method?: string };
+        if (request.method === "session.inspect") {
+          inspectCalls += 1;
+        }
+        if (request.method === "session.fork" || request.method === "session.resume") {
+          recoveryCalls.push(request.method);
+        }
+      }
+      server.send(message);
+    });
     server.onMessage((message): void => {
       if (tamperNextInspect !== undefined && typeof message === "string") {
         const response = JSON.parse(message) as unknown;
         if (typeof response === "object" && response !== null && "ok" in response
           && typeof response.ok === "object" && response.ok !== null
-          && "id" in response.ok && response.ok.id === FIXTURE_LOCAL_SESSION_ID
+          && "id" in response.ok && response.ok.id === targetSessionId
           && "native_session_id" in response.ok) {
           if (tamperNextInspect === "both-references") {
             Object.assign(response.ok, { native_session_path: "/ambiguous/conversation" });
+          } else if (tamperNextInspect === "empty-id-with-path") {
+            Object.assign(response.ok, { native_session_id: "", native_session_path: "/valid/conversation" });
+          } else if (tamperNextInspect === "id-with-empty-path") {
+            Object.assign(response.ok, { native_session_path: "" });
           } else {
             (response.ok as { id: string }).id = "fixture-other-session";
           }
@@ -43,11 +63,17 @@ test("fork refuses ambiguous or mismatched inspect responses", async ({ page, st
     const row = page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${FIXTURE_LOCAL_SESSION_ID}"]`);
     await row.click();
 
-    await page.getByRole("button", { name: "Fork", exact: true }).click();
-    await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
-    await expect.poll(() => tamperNextInspect).toBeUndefined();
-    await expect(page.getByRole("dialog", { name: "Confirm fork target" })).toHaveCount(0);
-    expect((await client.call("session.list", {})).length).toBe(countBefore);
+    for (const mode of ["both-references", "empty-id-with-path", "id-with-empty-path"] as const) {
+      tamperNextInspect = mode;
+      await page.getByRole("button", { name: "Fork", exact: true }).click();
+      await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
+      await expect.poll(() => tamperNextInspect).toBeUndefined();
+      await expect(page.getByRole("dialog", { name: "Confirm fork target" })).toHaveCount(0);
+      await expect(page.getByText("Recovery target unavailable: session.inspect returned an invalid target").last()).toBeVisible();
+      expect(inspectCalls).toBeGreaterThan(0);
+      expect(recoveryCalls).toEqual([]);
+      expect((await client.call("session.list", {})).length).toBe(countBefore);
+    }
 
     await page.getByRole("button", { name: "Fork", exact: true }).click();
     await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
@@ -64,7 +90,27 @@ test("fork refuses ambiguous or mismatched inspect responses", async ({ page, st
     await page.getByRole("dialog", { name: "Fork session" }).getByRole("button", { name: "Save" }).click();
     await expect.poll(() => tamperNextInspect).toBeUndefined();
     await expect(confirmation).toHaveCount(0);
+    expect(recoveryCalls).toEqual([]);
     expect((await client.call("session.list", {})).length).toBe(countBefore);
+
+    const resumed = await client.call("session.fork", {
+      session_id: FIXTURE_LOCAL_SESSION_ID,
+      cwd_mode: "same",
+      cols: 80,
+      rows: 24,
+    });
+    await client.call("session.stop", resumed.id);
+    targetSessionId = resumed.id;
+    await page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${resumed.id}"]`).click();
+    await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+    for (const mode of ["empty-id-with-path", "id-with-empty-path"] as const) {
+      tamperNextInspect = mode;
+      await page.getByRole("button", { name: "Resume", exact: true }).click();
+      await expect.poll(() => tamperNextInspect).toBeUndefined();
+      await expect(page.getByRole("dialog", { name: "Resume session?" })).toHaveCount(0);
+      await expect(page.getByText("Recovery target unavailable: session.inspect returned an invalid target").last()).toBeVisible();
+      expect(recoveryCalls).toEqual([]);
+    }
   } finally {
     await client.close();
   }

@@ -7,10 +7,14 @@
 
   let { session }: Props = $props();
 
-  const targetKind = $derived(session.native_session_id !== undefined
-    ? " (ID)"
-    : session.native_session_path !== undefined ? " (path)" : "");
-  const target = $derived(session.native_session_id ?? session.native_session_path ?? "Unknown");
+  const hasId = $derived(typeof session.native_session_id === "string"
+    && session.native_session_id.length > 0
+    && session.native_session_path === undefined);
+  const hasPath = $derived(typeof session.native_session_path === "string"
+    && session.native_session_path.length > 0
+    && session.native_session_id === undefined);
+  const targetKind = $derived(hasId ? " (ID)" : hasPath ? " (path)" : "");
+  const target = $derived(hasId ? session.native_session_id : hasPath ? session.native_session_path : "Unknown");
 </script>
 
 <dl class="recovery-target">
