@@ -570,6 +570,7 @@ pub async fn launch_action_prompt_with_options(
             branch,
             base_branch: params.action.base_branch,
             input: Some(params.preview.rendered),
+            extended_input_ready_wait: None,
             metadata: params.metadata,
         },
         options,

@@ -116,8 +116,8 @@ jobs:
     env:
       # The rendering tests drive the real `pohunek prompt` CLI; this is the
       # core release they are pinned to. Bump it together with the digest.
-      POHUNEK_RELEASE: v0.33.1
-      POHUNEK_MUSL_SHA256: 2b700b305007321f4d931cf995cc7cfdab50ad6da5540a03baeb43433b4efd25
+      POHUNEK_RELEASE: v0.34.2
+      POHUNEK_MUSL_SHA256: b73368c876a12ba3c56b4851ba81d0651dfbcfb8395700de2a92073f94c83a5e
     defaults:
       run:
         working-directory: launchers
@@ -282,6 +282,18 @@ jobs:
           bash release/package.sh 0.0.0 linux-x86_64
           ../packaging/check-archive dist/pohunek-web-0.0.0-linux-x86_64.tar.gz \
             --component web --version 0.0.0 --target x86_64-unknown-linux-gnu --core "$POHUNEK_CORE_REF"
+
+      - name: Browser recovery against the packaged backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$PWD/dist/pohunek-web-0.0.0-linux-x86_64"
+          test -x "$package_dir/pohunek-web"
+          test -f "$package_dir/frontend/index.html"
+          POHUNEK_E2E_PACKAGED_BACKEND_BIN="$package_dir/pohunek-web" \
+          POHUNEK_E2E_PACKAGED_STATIC_DIR="$package_dir/frontend" \
+            bun ./node_modules/@playwright/test/cli.js test \
+              --config frontend/playwright.config.ts frontend/e2e/recovery-target.e2e.ts
 
   # The compiled backend and the browser suite on Apple Silicon, against the
   # real macOS pohunekd, pohunek-sessiond and pohunek. The runner is ephemeral,

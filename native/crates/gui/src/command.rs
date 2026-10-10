@@ -1004,6 +1004,7 @@ fn create_session_task(app: &PohunekApp) -> Result<Task<Message>, String> {
         branch,
         base_branch,
         input: (!input.trim().is_empty()).then_some(input),
+        extended_input_ready_wait: None,
         metadata: BTreeMap::new(),
     };
     Ok(Task::perform(

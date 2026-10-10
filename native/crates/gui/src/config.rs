@@ -219,10 +219,9 @@ impl RawGuiConfig {
                 "gui.connect_timeout_ms",
                 defaults.connect_timeout,
             )?,
-            request_timeout: duration_millis(
+            request_timeout: optional_duration_millis(
                 self.request_timeout_ms,
                 "gui.request_timeout_ms",
-                defaults.request_timeout,
             )?,
             reconcile_interval: duration_secs(
                 self.reconcile_secs,
@@ -436,22 +435,37 @@ fn duration_secs(
     duration(value, field, default, Duration::from_secs)
 }
 
+fn optional_duration_millis(
+    value: Option<u64>,
+    field: &'static str,
+) -> Result<Option<Duration>, ConfigError> {
+    value
+        .map(|value| nonzero_duration(value, field, Duration::from_millis))
+        .transpose()
+}
+
 fn duration(
     value: Option<u64>,
     field: &'static str,
     default: Duration,
     convert: fn(u64) -> Duration,
 ) -> Result<Duration, ConfigError> {
-    value.map_or(Ok(default), |value| {
-        if value == 0 {
-            Err(ConfigError::Invalid {
-                field,
-                message: "must be greater than zero".to_owned(),
-            })
-        } else {
-            Ok(convert(value))
-        }
-    })
+    value.map_or(Ok(default), |value| nonzero_duration(value, field, convert))
+}
+
+fn nonzero_duration(
+    value: u64,
+    field: &'static str,
+    convert: fn(u64) -> Duration,
+) -> Result<Duration, ConfigError> {
+    if value == 0 {
+        Err(ConfigError::Invalid {
+            field,
+            message: "must be greater than zero".to_owned(),
+        })
+    } else {
+        Ok(convert(value))
+    }
 }
 
 fn terminal_dimension(

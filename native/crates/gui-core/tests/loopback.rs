@@ -415,6 +415,7 @@ async fn session_lifecycle_create_inspect_and_stop_reconciles_workspace_state() 
             branch: None,
             base_branch: None,
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::from([("source".to_owned(), "gui".to_owned())]),
         },
     )
@@ -500,6 +501,7 @@ async fn session_children_receive_the_fixture_environment_not_the_host_one() {
             branch: None,
             base_branch: None,
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::new(),
         },
     )
@@ -615,6 +617,7 @@ async fn stale_subagent_events_from_replaced_workers_never_revive_the_session_vi
             branch: None,
             base_branch: None,
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::new(),
         },
     )
@@ -761,6 +764,7 @@ async fn conflicted_and_incompatible_runtime_sessions_fail_closed_in_session_row
             branch: None,
             base_branch: None,
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::new(),
         },
     )
@@ -926,6 +930,7 @@ async fn session_metadata_merge_and_clear_round_trips() {
             branch: None,
             base_branch: None,
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::from([
                 ("keep".to_owned(), "original".to_owned()),
                 ("remove".to_owned(), "gone".to_owned()),
@@ -1075,6 +1080,7 @@ async fn worktree_creation_is_session_new_with_branch_and_visible_in_project_sho
             branch: Some("feature/gui-m2".to_owned()),
             base_branch: Some("main".to_owned()),
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::new(),
         },
     )
@@ -1895,6 +1901,7 @@ async fn create_worktree_session(host: &HostConfig, project_id: &str, branch: &s
             branch: Some(branch.to_owned()),
             base_branch: Some("main".to_owned()),
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::new(),
         },
     )
@@ -2767,7 +2774,7 @@ fn test_connection_options() -> ConnectionOptions {
         // Single-shot request call sites (e.g. `assistant::launch_with_options`,
         // `dispatch_review`) need that budget; the reconciliation-loop call
         // sites retry on timeout via `backoff_initial`/`backoff_max`.
-        request_timeout: Duration::from_secs(15),
+        request_timeout: Some(Duration::from_secs(15)),
         reconcile_interval: Duration::from_millis(100),
         backoff_initial: Duration::from_millis(10),
         backoff_max: Duration::from_millis(50),
@@ -3231,6 +3238,7 @@ async fn create_agent_session(host: &HostConfig, agent: RuntimeRef, cwd: PathBuf
             branch: None,
             base_branch: None,
             input: None,
+            extended_input_ready_wait: None,
             metadata: std::collections::BTreeMap::new(),
         })
         .expect("serialize session.new params"),

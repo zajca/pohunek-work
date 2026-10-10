@@ -183,6 +183,7 @@ pub async fn dispatch_review(
         branch: None,
         base_branch: None,
         input: Some(rendered_prompt),
+        extended_input_ready_wait: None,
         metadata,
     };
 
