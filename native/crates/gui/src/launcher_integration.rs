@@ -9,12 +9,15 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use futures::StreamExt as _;
+use iced::advanced::widget::operation::Operation;
+use iced::advanced::widget::Tree;
+use iced::advanced::{layout, Layout};
 use iced::Size;
 use iced_runtime::{task::into_stream, Action};
 use pohunek_client::{Client, ClientOptions, OriginSource};
 use pohunek_gui_core::{
-    create_session, inspect_session, load_host_snapshot, stop_session, DomainEvent, HostConfig,
-    Selection, UiState, WindowSize,
+    create_session, inspect_session, load_host_snapshot, remove_session, stop_session, CoreError,
+    DomainEvent, HostConfig, Selection, UiState, WindowSize,
 };
 use pohunek_platform::process::{HostInspector, ProcessInspector};
 use pohunek_test_support::env::TestEnv;
@@ -28,7 +31,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::config::{AppConfig, ConfigError};
 use crate::message::{AppMode, LaunchPhase, Message, ModalView, RecoveryAction};
-use crate::{command, parse_args, BootState, HostId, PohunekApp};
+use crate::{command, parse_args, view, BootState, HostId, PohunekApp};
 
 const STATE_CHILD_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_CHILD";
 const STATE_CHILD_MARKER_ENV: &str = "POHUNEK_GUI_LAUNCHER_STATE_MARKER";
@@ -304,6 +307,8 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         1
     );
 
+    app.mode = AppMode::Full;
+
     stop_session(&host, &created.sessions[0].id)
         .await
         .expect("stop fixture session");
@@ -326,6 +331,20 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         .get_mut(&session_id.0)
         .expect("stopped session")
         .native_session_id = Some("stale-native-id".to_owned());
+    app.modal = ModalView::Session;
+    let configured_hosts = std::mem::take(&mut app.hosts);
+    let unavailable = command::update(
+        &mut app,
+        Message::OpenSession {
+            host_id: host.id.clone(),
+            session_id: session_id.clone(),
+        },
+    );
+    assert_eq!(unavailable.units(), 0);
+    assert!(modal_text(&app)
+        .iter()
+        .any(|text| text.contains("unknown host")));
+    app.hosts = configured_hosts;
     let opening = command::update(
         &mut app,
         Message::OpenSession {
@@ -347,6 +366,9 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         .status
         .as_deref()
         .is_some_and(|status| status.contains("native recovery target")));
+    assert!(modal_text(&app)
+        .iter()
+        .any(|text| text.contains("native recovery target")));
     assert!(load_host_snapshot(&host)
         .await
         .expect("session remained stopped")
@@ -359,6 +381,13 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         host_id: host.id.clone(),
         session_id: session_id.clone(),
     });
+    let configured_hosts = std::mem::take(&mut app.hosts);
+    let unavailable = command::update(&mut app, Message::ForkSelectedSession);
+    assert_eq!(unavailable.units(), 0);
+    assert!(modal_text(&app)
+        .iter()
+        .any(|text| text.contains("unknown host")));
+    app.hosts = configured_hosts;
     let fork = command::update(&mut app, Message::ForkSelectedSession);
     assert_eq!(app.recovery_pending, Some(app.recovery_generation));
     let fork_inspected = outputs(fork).await;
@@ -373,6 +402,35 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         let _ = command::update(&mut app, message);
     }
     assert!(app.recovery_confirmation.is_none());
+    let fork_notice = app.recovery_notice.as_deref().expect("fork refusal");
+    assert!(modal_text(&app)
+        .iter()
+        .any(|text| text.contains(fork_notice)));
+
+    remove_session(&host, &session_id)
+        .await
+        .expect("remove stopped fixture session");
+    let missing = inspect_session(&host, &session_id)
+        .await
+        .expect_err("removed session must refuse inspection");
+    let code = match missing {
+        CoreError::Client(error) => error.to_protocol_error().code,
+        CoreError::Protocol(error) => error.code,
+        error => panic!("expected typed daemon refusal: {error}"),
+    };
+    let opening = command::update(
+        &mut app,
+        Message::OpenSession {
+            host_id: host.id.clone(),
+            session_id: session_id.clone(),
+        },
+    );
+    for message in outputs(opening).await {
+        let _ = command::update(&mut app, message);
+    }
+    assert_eq!(app.modal, ModalView::Session);
+    assert!(modal_text(&app).iter().any(|text| text.contains(&code)));
+
     let claude_session = create_session(
         &host,
         SessionNewParams {
@@ -466,13 +524,16 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         .status
         .as_deref()
         .is_some_and(|status| status.contains("confirm the updated details again")));
+    assert!(modal_text(&app)
+        .iter()
+        .any(|text| text.contains("confirm the updated details again")));
     assert_eq!(
         load_host_snapshot(&host)
             .await
             .expect("no fork yet")
             .sessions
             .len(),
-        2
+        1
     );
 
     write_transcript(&second_transcript, 1_700_000_120);
@@ -484,6 +545,7 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         second.native_last_activity_at
     );
     let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    assert!(app.recovery_notice.is_none());
     for message in outputs(verifying).await {
         assert!(matches!(message, Message::RecoveryReinspected { .. }));
         assert_eq!(command::update(&mut app, message).units(), 0);
@@ -503,11 +565,12 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
             .expect("no fork yet")
             .sessions
             .len(),
-        2
+        1
     );
 
     let _ = command::update(&mut app, Message::CloseModal);
     assert!(app.recovery_confirmation.is_none());
+    assert!(app.recovery_notice.is_none());
     assert_eq!(
         command::update(&mut app, Message::ConfirmRecovery).units(),
         0
@@ -545,7 +608,7 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
             .expect("forked session")
             .sessions
             .len(),
-        3
+        2
     );
 
     stop_session(&host, &claude_id)
@@ -597,6 +660,41 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
             .state,
         protocol::SessionState::Running
     );
+
+    stop_session(&host, &claude_id)
+        .await
+        .expect("stop Claude session for reinspection refusal");
+    let snapshot = load_host_snapshot(&host)
+        .await
+        .expect("stopped Claude snapshot for reinspection refusal");
+    let _ = command::update(
+        &mut app,
+        Message::Core(DomainEvent::HostSnapshotLoaded { snapshot }),
+    );
+    let opening = command::update(
+        &mut app,
+        Message::OpenSession {
+            host_id: host.id.clone(),
+            session_id: claude_id.clone(),
+        },
+    );
+    for message in outputs(opening).await {
+        let _ = command::update(&mut app, message);
+    }
+    assert_eq!(app.modal, ModalView::ConfirmRecovery);
+    remove_session(&host, &claude_id)
+        .await
+        .expect("remove Claude session before reinspection");
+    let verifying = command::update(&mut app, Message::ConfirmRecovery);
+    for message in outputs(verifying).await {
+        assert!(matches!(
+            message,
+            Message::RecoveryReinspected { result: Err(_), .. }
+        ));
+        assert_eq!(command::update(&mut app, message).units(), 0);
+    }
+    assert_eq!(app.modal, ModalView::Session);
+    assert!(modal_text(&app).iter().any(|text| text.contains(&code)));
     daemon.stop();
 }
 
@@ -665,6 +763,49 @@ async fn report_native_id(host: &HostConfig, id: &SessionId, native_id: &str, se
     )
     .expect("decode native identity report result");
     assert!(reported.recorded, "daemon must record the native identity");
+}
+
+#[derive(Default)]
+struct ModalText {
+    values: Vec<String>,
+}
+
+impl Operation for ModalText {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+
+    fn text(
+        &mut self,
+        _id: Option<&iced::advanced::widget::Id>,
+        _bounds: iced::Rectangle,
+        value: &str,
+    ) {
+        self.values.push(value.to_owned());
+    }
+}
+
+fn modal_text(app: &PohunekApp) -> Vec<String> {
+    let mut content = match app.modal {
+        ModalView::Session => view::session::session_modal_content(app),
+        ModalView::ConfirmRecovery => view::session::confirm_recovery_modal_content(app),
+        modal => panic!("expected recovery modal, got {modal:?}"),
+    };
+    let renderer = iced_renderer::fallback::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+        iced::Font::DEFAULT,
+        iced::Pixels(16.0),
+    ));
+    let mut tree = Tree::new(content.as_widget());
+    let node = content.as_widget_mut().layout(
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(Size::ZERO, Size::new(800.0, 800.0)),
+    );
+    let mut operation = ModalText::default();
+    content
+        .as_widget_mut()
+        .operate(&mut tree, Layout::new(&node), &renderer, &mut operation);
+    operation.values
 }
 
 async fn outputs(task: iced::Task<Message>) -> Vec<Message> {

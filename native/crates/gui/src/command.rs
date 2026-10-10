@@ -155,6 +155,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             {
                 app.ui_state.selection = app.workspace.selection.clone();
                 app.modal = ModalView::Session;
+                app.recovery_notice = None;
                 app.inbox_view = InboxView::List;
                 sync_rename_edit_for_selection(app);
                 tasks.push(save_ui_state_task(app));
@@ -190,6 +191,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                 .and_then(|session| session.name.clone())
                 .unwrap_or_default();
             app.modal = ModalView::Session;
+            app.recovery_notice = None;
             tasks.push(save_ui_state_task(app));
         }
         Message::OpenSession {
@@ -199,6 +201,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.recovery_generation += 1;
             app.recovery_pending = None;
             app.recovery_confirmation = None;
+            app.recovery_notice = None;
             let needs_inspect = app
                 .workspace
                 .hosts
@@ -212,6 +215,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                     }
                     tasks.push(task);
                 }
+                Err(err) if needs_inspect => show_recovery_refusal(app, err),
                 Err(err) => app.status = Some(err),
             }
         }
@@ -266,6 +270,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.modal = ModalView::None;
             app.recovery_pending = None;
             app.recovery_confirmation = None;
+            app.recovery_notice = None;
             app.form_select = None;
             if app.mode == AppMode::NewSession {
                 tasks.push(iced::exit());
@@ -490,12 +495,13 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
             app.recovery_generation += 1;
             app.recovery_pending = None;
             app.recovery_confirmation = None;
+            app.recovery_notice = None;
             match fork_selected_session_task(app) {
                 Ok(task) => {
                     app.recovery_pending = Some(app.recovery_generation);
                     tasks.push(task);
                 }
-                Err(err) => app.status = Some(err),
+                Err(err) => show_recovery_refusal(app, err),
             }
         }
         Message::RecoveryInspected {
@@ -514,12 +520,13 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                         app.recovery_confirmation = Some(confirmation);
                         app.modal = ModalView::ConfirmRecovery;
                     }
-                    Err(err) => app.status = Some(err),
+                    Err(err) => show_recovery_refusal(app, err),
                 }
             }
         }
         Message::ConfirmRecovery => {
             if let Some(confirmation) = app.recovery_confirmation.take() {
+                app.recovery_notice = None;
                 app.recovery_generation += 1;
                 match recovery_reinspect_task(app, confirmation, app.recovery_generation) {
                     Ok(task) => {
@@ -527,8 +534,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                         tasks.push(task);
                     }
                     Err(err) => {
-                        app.modal = ModalView::None;
-                        app.status = Some(err);
+                        show_recovery_refusal(app, err);
                     }
                 }
             }
@@ -550,6 +556,7 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                 }) {
                     Ok(refreshed) if refreshed == expected => {
                         app.modal = ModalView::None;
+                        app.recovery_notice = None;
                         let task = match refreshed.action {
                             RecoveryAction::Resume => {
                                 resume_session_task(app, &refreshed.host_id, &refreshed.session_id)
@@ -560,19 +567,17 @@ pub(crate) fn update(app: &mut PohunekApp, message: Message) -> Task<Message> {
                         };
                         match task {
                             Ok(task) => tasks.push(task),
-                            Err(err) => app.status = Some(err),
+                            Err(err) => show_recovery_refusal(app, err),
                         }
                     }
                     Ok(refreshed) => {
                         app.recovery_confirmation = Some(refreshed);
-                        app.status = Some(
-                            "Native recovery target or last activity changed; confirm the updated details again."
-                                .to_owned(),
-                        );
+                        let notice = "Native recovery target or last activity changed; confirm the updated details again.".to_owned();
+                        app.recovery_notice = Some(notice.clone());
+                        app.status = Some(notice);
                     }
                     Err(err) => {
-                        app.modal = ModalView::None;
-                        app.status = Some(err);
+                        show_recovery_refusal(app, err);
                     }
                 }
             }
@@ -1521,6 +1526,13 @@ fn recovery_confirmation(
         target,
         native_last_activity_at: session.native_last_activity_at,
     })
+}
+
+fn show_recovery_refusal(app: &mut PohunekApp, error: String) {
+    app.modal = ModalView::Session;
+    app.recovery_confirmation = None;
+    app.recovery_notice = Some(error.clone());
+    app.status = Some(error);
 }
 
 fn core_error_label(error: &CoreError) -> String {

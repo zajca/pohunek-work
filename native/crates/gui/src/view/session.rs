@@ -18,10 +18,12 @@ use super::{
 
 /// Session-detail dialog opened from the prioritized list.
 pub(crate) fn session_modal_content(app: &PohunekApp) -> Element<'_, Message> {
-    dialog_card(
-        "Session",
-        scrollable(session_pane(app)).height(Fill).width(Fill),
-    )
+    let mut content = column![].spacing(8);
+    if let Some(notice) = &app.recovery_notice {
+        content = content.push(text(notice).size(14));
+    }
+    content = content.push(scrollable(session_pane(app)).height(Fill).width(Fill));
+    dialog_card("Session", content)
 }
 
 /// Confirms permanent deletion of the selected logical session.
@@ -66,34 +68,37 @@ pub(crate) fn confirm_recovery_modal_content(app: &PohunekApp) -> Element<'_, Me
         crate::message::RecoveryAction::Resume => "Resume",
         crate::message::RecoveryAction::Fork => "Fork",
     };
-    dialog_card(
-        "Confirm native recovery",
-        column![
-            text(format!(
-                "{action} {} / {}?",
-                app.workspace.host_label(&confirmation.host_id),
-                confirmation.session_id.0
-            ))
-            .size(14),
-            selectable_text(confirmation.target.clone()).size(14),
-            selectable_text(format!(
-                "native last activity: {}",
-                confirmation
-                    .native_last_activity_at
-                    .as_deref()
-                    .unwrap_or("unknown")
-            ))
-            .size(14),
-            row![
-                button("Cancel")
-                    .on_press(Message::CloseModal)
-                    .style(iced::widget::button::secondary),
-                button(action).on_press(Message::ConfirmRecovery),
-            ]
-            .spacing(8),
+    let mut content = column![
+        text(format!(
+            "{action} {} / {}?",
+            app.workspace.host_label(&confirmation.host_id),
+            confirmation.session_id.0
+        ))
+        .size(14),
+        selectable_text(confirmation.target.clone()).size(14),
+        selectable_text(format!(
+            "native last activity: {}",
+            confirmation
+                .native_last_activity_at
+                .as_deref()
+                .unwrap_or("unknown")
+        ))
+        .size(14),
+    ]
+    .spacing(14);
+    if let Some(notice) = &app.recovery_notice {
+        content = content.push(text(notice).size(14));
+    }
+    content = content.push(
+        row![
+            button("Cancel")
+                .on_press(Message::CloseModal)
+                .style(iced::widget::button::secondary),
+            button(action).on_press(Message::ConfirmRecovery),
         ]
-        .spacing(14),
-    )
+        .spacing(8),
+    );
+    dialog_card("Confirm native recovery", content)
 }
 
 /// Session surface: the session card with its actions and metadata.

@@ -272,6 +272,7 @@ struct PohunekApp {
     recovery_generation: u64,
     recovery_pending: Option<u64>,
     recovery_confirmation: Option<message::RecoveryConfirmation>,
+    recovery_notice: Option<String>,
     /// Active inbox host filter; `None` fields do not constrain the notification list.
     notification_filter: NotificationFilter,
     /// `Recent | Unread | Archived` scope picked in the activity modal.
@@ -331,6 +332,7 @@ impl PohunekApp {
             recovery_generation: 0,
             recovery_pending: None,
             recovery_confirmation: None,
+            recovery_notice: None,
             notification_filter: NotificationFilter::default(),
             inbox_scope: NotificationScope::default(),
             inbox_view: InboxView::default(),

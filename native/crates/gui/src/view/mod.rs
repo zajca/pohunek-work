@@ -7,7 +7,7 @@ pub(crate) mod inbox;
 mod links;
 mod modals;
 mod selectable_text;
-mod session;
+pub(crate) mod session;
 mod subagents;
 
 use iced::widget::{
