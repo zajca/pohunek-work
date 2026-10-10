@@ -474,6 +474,87 @@ async fn launcher_retries_failures_and_confirms_native_recovery() {
         session_id: claude_id.clone(),
     });
 
+    for (description, invalid_id, invalid_path) in [
+        ("empty id with path", true, false),
+        ("id with empty path", false, true),
+    ] {
+        let mut malformed = first.clone();
+        if invalid_id {
+            malformed.native_session_id = Some(String::new());
+            malformed.native_session_path = Some("/valid/conversation".to_owned());
+        }
+        if invalid_path {
+            malformed.native_session_path = Some(String::new());
+        }
+
+        let initial = command::update(&mut app, Message::ForkSelectedSession);
+        assert_eq!(initial.units(), 1, "{description}: inspect was requested");
+        let generation = app.recovery_generation;
+        let refused = command::update(
+            &mut app,
+            Message::RecoveryInspected {
+                generation,
+                host_id: host.id.clone(),
+                session_id: claude_id.clone(),
+                action: RecoveryAction::Fork,
+                result: Ok(malformed.clone()),
+            },
+        );
+        assert_eq!(refused.units(), 0, "{description}: no fork task");
+        assert!(app.recovery_confirmation.is_none(), "{description}");
+        assert_eq!(app.modal, ModalView::Session, "{description}");
+        assert!(modal_text(&app)
+            .iter()
+            .any(|text| text.contains("exactly one native recovery target")));
+
+        let initial = command::update(&mut app, Message::ForkSelectedSession);
+        assert_eq!(initial.units(), 1, "{description}: inspect was requested");
+        let generation = app.recovery_generation;
+        let accepted = command::update(
+            &mut app,
+            Message::RecoveryInspected {
+                generation,
+                host_id: host.id.clone(),
+                session_id: claude_id.clone(),
+                action: RecoveryAction::Fork,
+                result: Ok(first.clone()),
+            },
+        );
+        assert_eq!(accepted.units(), 0, "{description}: confirmation only");
+        let expected = app
+            .recovery_confirmation
+            .as_ref()
+            .expect("valid target was shown")
+            .clone();
+        let verifying = command::update(&mut app, Message::ConfirmRecovery);
+        assert_eq!(
+            verifying.units(),
+            1,
+            "{description}: reinspection was requested"
+        );
+        let generation = app.recovery_generation;
+        let refused = command::update(
+            &mut app,
+            Message::RecoveryReinspected {
+                generation,
+                expected,
+                result: Ok(malformed),
+            },
+        );
+        assert_eq!(refused.units(), 0, "{description}: no fork task");
+        assert!(app.recovery_confirmation.is_none(), "{description}");
+        assert_eq!(app.modal, ModalView::Session, "{description}");
+        assert_eq!(
+            load_host_snapshot(&host)
+                .await
+                .expect("malformed target did not create a worker")
+                .sessions
+                .len(),
+            1,
+            "{description}"
+        );
+    }
+
     let fork = command::update(&mut app, Message::ForkSelectedSession);
     for message in outputs(fork).await {
         assert!(matches!(

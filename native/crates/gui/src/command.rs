@@ -1502,17 +1502,11 @@ fn recovery_confirmation(
         ));
     }
     let target = match (
-        session
-            .native_session_id
-            .as_deref()
-            .filter(|s| !s.is_empty()),
-        session
-            .native_session_path
-            .as_deref()
-            .filter(|s| !s.is_empty()),
+        session.native_session_id.as_deref(),
+        session.native_session_path.as_deref(),
     ) {
-        (Some(id), None) => format!("native_session_id: {id}"),
-        (None, Some(path)) => format!("native_session_path: {path}"),
+        (Some(id), None) if !id.is_empty() => format!("native_session_id: {id}"),
+        (None, Some(path)) if !path.is_empty() => format!("native_session_path: {path}"),
         _ => {
             return Err(
                 "session.inspect did not return exactly one native recovery target".to_owned(),
