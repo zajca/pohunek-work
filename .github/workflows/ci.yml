@@ -43,6 +43,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       packaging: ${{ steps.filter.outputs.packaging }}
       macos_package: ${{ steps.filter.outputs.macos_package }}
+      ci_reporter: ${{ steps.filter.outputs.ci_reporter }}
     steps:
       # Only pull requests read the filter outputs; every other event runs all
       # jobs, so a tag push (the release gate) needs no path comparison.
@@ -83,6 +84,26 @@ jobs:
               - 'web/packaging/**'
               - 'web/release/**'
               - '.github/workflows/ci.yml'
+            ci_reporter:
+              - 'ci-reporter/**'
+              - '.github/workflows/ci.yml'
+
+  ci-reporter:
+    needs: changes
+    if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.ci_reporter == 'true') || (github.event_name == 'workflow_call' && inputs.surface == '') || (github.event_name != 'pull_request' && github.event_name != 'workflow_call') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ci-reporter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ci-reporter/package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
 
   plugin:
     needs: changes
@@ -725,7 +746,7 @@ jobs:
 
   ci:
     if: ${{ always() }}
-    needs: [changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package]
+    needs: [changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package, ci-reporter]
     runs-on: ubuntu-latest
     steps:
       # A skipped surface job is a pass; a failed or cancelled one is not.

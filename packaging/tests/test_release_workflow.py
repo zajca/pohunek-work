@@ -217,7 +217,7 @@ class ReleaseTriggerTest(unittest.TestCase):
             self.assertRegex(RELEASE_JOBS[name], r"needs: \[prepare, ci\]", name)
         self.assertRegex(CI.split("\njobs:\n", 1)[0], r"workflow_call:\n    inputs:\n      surface:\n")
         self.assertIn("ci:\n    if: ${{ always() }}", CI)
-        self.assertRegex(CI, r"needs: \[changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package\]")
+        self.assertRegex(CI, r"needs: \[changes, plugin, launchers, native, native-macos, web, web-macos, packaging, macos-package, ci-reporter\]")
 
     def test_the_release_and_ci_concurrency_groups_cannot_collide(self):
         self.assertIn("group: release-${{ github.ref }}-${{ inputs.surface }}", RELEASE)

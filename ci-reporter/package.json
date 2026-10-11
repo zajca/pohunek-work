@@ -1,0 +1,19 @@
+{
+  "name": "@pohunek/ci-reporter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.11.0",
+    "typescript": "6",
+    "typescript-eslint": "^8.71.0"
+  },
+  "packageManager": "bun@1.4.2"
+}
