@@ -2,6 +2,7 @@ export const CORE_REPOSITORY = "zajca/pohunek";
 export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 export const ISSUE_LABEL = "red-main-incident";
 export const REPORTER_JOB_NAME = "red-main-report";
+export const COLLECTOR_JOB_NAME = "red-main-read";
 
 export interface TrackedMacosJob {
   readonly key: string;

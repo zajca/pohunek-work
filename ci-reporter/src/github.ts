@@ -6,7 +6,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 export interface GithubApi {
   get<T>(path: string): Promise<T>;
   getAll<T>(path: string): Promise<readonly T[]>;
-  getAllFrom<T>(path: string, collectionKey: string): Promise<readonly T[]>;
+  getAllFrom<T>(path: string, collectionKey: string, maxItems?: number): Promise<readonly T[]>;
   post<T>(path: string, body: JsonObject): Promise<T>;
   patch<T>(path: string, body: JsonObject): Promise<T>;
 }
@@ -31,7 +31,10 @@ export class GithubRestApi implements GithubApi {
     return this.getAllFrom<T>(path, "");
   }
 
-  public async getAllFrom<T>(path: string, collectionKey: string): Promise<readonly T[]> {
+  public async getAllFrom<T>(path: string, collectionKey: string, maxItems?: number): Promise<readonly T[]> {
+    if (maxItems !== undefined && (!Number.isSafeInteger(maxItems) || maxItems < 1)) {
+      throw new Error("GitHub API collection limit must be a positive integer");
+    }
     const values: T[] = [];
     let next: string | null = this.url(path);
     const visited = new Set<string>();
@@ -50,7 +53,11 @@ export class GithubRestApi implements GithubApi {
       if (!Array.isArray(collection)) {
         throw new Error("GitHub API returned an invalid paginated response");
       }
-      values.push(...(collection as T[]));
+      const remaining = maxItems === undefined ? undefined : maxItems - values.length;
+      values.push(...(remaining === undefined ? collection as T[] : (collection as T[]).slice(0, remaining)));
+      if (maxItems !== undefined && values.length >= maxItems) {
+        break;
+      }
       next = this.nextPage(response.headers.get("link"));
     }
     return values;

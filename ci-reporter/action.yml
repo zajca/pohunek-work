@@ -1,6 +1,13 @@
 name: Report red-main macOS CI incidents
 description: Verify the current pohunek CI run and track macOS job incidents in GitHub Issues
+outputs:
+  snapshot:
+    description: Sanitized bounded CI snapshot produced by collect mode
+    value: ${{ steps.run_reporter.outputs.snapshot }}
 inputs:
+  mode:
+    description: collect reads Actions data or report writes issue updates
+    required: true
   run-id:
     description: Current core CI run ID to verify and report
     required: true
@@ -11,16 +18,24 @@ inputs:
     description: Read and plan changes without creating, commenting on, or closing issues
     required: false
     default: "false"
+  snapshot:
+    description: Sanitized snapshot output from a collect-mode action invocation
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: 1.4.2
-    - name: Verify and report the core CI run
+    - name: Collect or report red-main incidents
+      id: run_reporter
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ inputs.mode == 'report' && github.token || '' }}
+        ACTIONS_READ_TOKEN: ${{ inputs.mode == 'collect' && github.token || '' }}
+        REPORT_SNAPSHOT: ${{ inputs.snapshot }}
+        MODE: ${{ inputs.mode }}
         RUN_ID: ${{ inputs.run-id }}
         REPOSITORY: ${{ inputs.repository }}
         CALLER_JOB_NAME: ${{ github.job }}
@@ -30,7 +45,7 @@ runs:
         CALLER_REPOSITORY: ${{ github.repository }}
         CALLER_SHA: ${{ github.sha }}
       run: |
-        args=(--run-id "$RUN_ID" --repository "$REPOSITORY" --caller-run-id "$CALLER_RUN_ID" --caller-repository "$CALLER_REPOSITORY" --caller-sha "$CALLER_SHA" --caller-job-name "$CALLER_JOB_NAME")
+        args=(--mode "$MODE" --run-id "$RUN_ID" --repository "$REPOSITORY" --caller-run-id "$CALLER_RUN_ID" --caller-repository "$CALLER_REPOSITORY" --caller-sha "$CALLER_SHA" --caller-job-name "$CALLER_JOB_NAME")
         if [[ "$DRY_RUN" == "true" ]]; then
           args+=(--dry-run)
         fi

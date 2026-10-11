@@ -1,11 +1,12 @@
 # Red-main macOS CI reporter
 
 This composite action tracks failures of the macOS jobs in `zajca/pohunek`'s
-`.github/workflows/ci.yml`. It receives the caller run ID, fetches the run and
-its jobs from the Actions API, verifies that the run came from the trusted
-repository's main `push` or `schedule` and the expected workflow, then creates or updates
-one issue per failing macOS job. A later green run comments on and closes that
-job's open incident. Job labels provide stable deduplication across deliveries.
+`.github/workflows/ci.yml`. It has two modes so the Actions reader and issue
+writer receive separate least-privilege workflow tokens. `collect` verifies the
+run and its jobs, then produces a bounded sanitized snapshot. `report` consumes
+that snapshot and creates or updates one issue per failing macOS job. A later
+green run comments on and closes the incident. Job labels provide stable
+deduplication across deliveries.
 
 The action's tracked job names mirror core CI. Update `src/config.ts` and its
 fixtures when a macOS job is renamed or added. The package-install matrix is
@@ -13,47 +14,74 @@ tracked per runner, including the informational `macos-14` leg.
 
 ## Caller permissions
 
-Call the action from the final job of core `ci.yml`, which runs on main pushes
-and the weekly schedule. The caller's `GITHUB_TOKEN` must have only this write
-permission:
+The core caller must use a read-only collection job followed by the final
+writer job. The collection job's token has only `actions: read`:
 
 ```yaml
 permissions:
-  issues: write
+  actions: read
 ```
 
-The action reads public Actions run data without authentication. The writer
-token is used only for issue and label endpoints, so it does not need
-`actions:read`. Pin the action to the reviewed commit SHA when wiring it into
-core CI:
+The final reporter job's token has only `issues: write`. It does not receive or
+use an Actions-read token:
 
 ```yaml
-  red-main-report:
+  red-main-read:
     needs: [platform-contracts, macos-package, hermes-compatibility-macos, sdk-macos]
     if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
+    outputs:
+      snapshot: ${{ steps.collect.outputs.snapshot }}
+    permissions:
+      actions: read
+    steps:
+      - uses: zajca/pohunek-work/ci-reporter@<reviewed-commit-sha>
+        id: collect
+        with:
+          mode: collect
+          run-id: ${{ github.run_id }}
+          repository: ${{ github.repository }}
+  red-main-report:
+    needs: [red-main-read]
+    if: ${{ always() && needs.red-main-read.result == 'success' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: red-main-report-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       issues: write
     steps:
       - uses: zajca/pohunek-work/ci-reporter@<reviewed-commit-sha>
         with:
+          mode: report
           run-id: ${{ github.run_id }}
           repository: ${{ github.repository }}
+          snapshot: ${{ needs.red-main-read.outputs.snapshot }}
 ```
 
-The job ID must remain `red-main-report` with no custom display name so it
-matches the Actions API job name. The action reads that ID from the runner's
-current GitHub context. The run identity and repository from the caller are
-only lookup keys. The action independently queries GitHub and
-refuses any run that does not match the expected repository,
-workflow path, `push` or `schedule` event, main branch, commit SHA, and that the
-run ID/repository match the current caller context. The final caller job must
-be named `red-main-report`, depend on all macOS jobs, and use `if: always()`.
-While that job runs, GitHub reports its overall run as `in_progress`; the action
-accepts that state only when the matching reporter job itself is in progress
-and every tracked macOS job has a terminal conclusion. For a completed run,
-the matching reporter job must also be completed. No reporter secret is needed
-beyond the caller's scoped `GITHUB_TOKEN`.
+The job IDs must remain `red-main-read` and `red-main-report`, with no custom
+display names, so the collector can verify its current Actions job. The read
+job depends on every tracked macOS job and passes only the sanitized snapshot to
+the writer job. While the jobs run, GitHub reports the overall run as
+`in_progress`; the collector accepts it only when its own job is running and
+every required tracked macOS job is terminal. The final reporter job has a
+repository-wide concurrency group with `cancel-in-progress: false`. This is a
+required cross-run serialization boundary: it protects issue lookup/create,
+update, and close ordering across independent runners. Do not rely on an
+in-process mutex. The workflow-level CI concurrency group should also remain
+serialized for main runs.
+
+The reader scans at most the latest 50 trusted completed main CI runs and
+requests each run's jobs at most once. It fails closed for a red or green
+mutation when the newest per-job outcome cannot be established: an unavailable
+run list, an unreadable newer run, or a current run older than the 50-run window
+marks that job uncertain and the writer skips it. Failure to read only older
+history or the compare endpoint affects commit-range enrichment alone, so a
+verified incident still gets reported with an explicit unavailable range. The
+snapshot is limited to 64 KiB and contains only run provenance,
+tracked job outcomes/failed steps, bounded history outcomes, and optional
+compare links. No external secret is required; each job uses its own scoped
+standard GitHub token.
 
 Pass `dry-run: "true"` to inspect the proposed changes. Dry-run still performs
 the read-only provenance, job, issue, and history queries, and makes no API
@@ -62,11 +90,20 @@ write request.
 ## Commit range and incident ordering
 
 Each issue includes failed step names, the Actions run link, and the compare
-range from the latest earlier successful `main` run of that same job. If no
-earlier green run exists, the issue says so explicitly. The latest observed run
-number and attempt are stored in an HTML comment in the issue body. Duplicate
-deliveries are ignored, and a green run older than the issue's recorded failure
-cannot close it.
+range from the latest earlier successful `main` run of that same job. If history
+or compare enrichment is unavailable, incident reporting continues and says no
+previous green range is available. The latest observed run number, attempt, and
+outcome are stored in an HTML comment in the issue body, including after close.
+Later failures reopen the same labeled issue. A bounded history check rejects
+older failures delivered after a newer green run, even when the green run
+arrived before any issue existed. Duplicate deliveries are ignored, and stale
+green runs cannot close a newer incident. These checks also protect delayed
+snapshots: the writer compares each event with the issue's persisted run and
+outcome marker. The official caller must keep the exact repository-wide writer
+group `red-main-report-${{ github.repository }}` with
+`cancel-in-progress: false`; this serializes issue mutations across runs, while
+the action itself does not provide a distributed lock. The CI workflow's
+workflow-level main-run concurrency must remain enabled as well.
 
 The reporter is deliberately outside `zajca/pohunek`; it contains GitHub issue
 provider behavior only in this client repository.

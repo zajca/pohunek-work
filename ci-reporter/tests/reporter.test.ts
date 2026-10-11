@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { CORE_REPOSITORY, TRACKED_MACOS_JOBS, jobLabel, ISSUE_LABEL, REPORTER_JOB_NAME } from "../src/config.ts";
+import { COLLECTOR_JOB_NAME, CORE_REPOSITORY, TRACKED_MACOS_JOBS, jobLabel, ISSUE_LABEL, REPORTER_JOB_NAME } from "../src/config.ts";
 import { GithubRestApi, type GithubApi, type JsonObject } from "../src/github.ts";
-import { reportCoreRun, type ReporterResult } from "../src/reporter.ts";
+import {
+  collectCoreRun,
+  reportCollectedSnapshot,
+  reportCoreRun,
+  type ReporterResult,
+} from "../src/reporter.ts";
 
 interface TestRun extends JsonObject {
   readonly id: number;
@@ -45,6 +50,11 @@ class MemoryGithubApi implements GithubApi {
   public readonly runs = new Map<number, TestRun>();
   public readonly jobs = new Map<number, TestJob[]>();
   public readonly comparisons: string[] = [];
+  public readonly historyLimits: number[] = [];
+  public readonly historyJobReads: number[] = [];
+  public failHistoryReads = false;
+  public readonly failedHistoryJobReads = new Set<number>();
+  public failCompareReads = false;
   public failNextClosePatch = false;
   private nextIssueNumber = 1;
 
@@ -62,6 +72,9 @@ class MemoryGithubApi implements GithubApi {
     const comparePath = /compare\/([^?]+)/.exec(path)?.[1];
     if (comparePath !== undefined) {
       this.comparisons.push(comparePath);
+      if (this.failCompareReads) {
+        return Promise.reject(new Error("compare endpoint unavailable"));
+      }
       return Promise.resolve({
         html_url: `https://github.com/${CORE_REPOSITORY}/compare/${comparePath}`,
         total_commits: 7,
@@ -71,10 +84,6 @@ class MemoryGithubApi implements GithubApi {
   }
 
   public getAll<T>(path: string): Promise<readonly T[]> {
-    const runId = /actions\/runs\/(\d+)\/jobs/.exec(path)?.[1];
-    if (runId !== undefined) {
-      return Promise.resolve((this.jobs.get(Number(runId)) ?? []) as T[]);
-    }
     const issueComments = /issues\/(\d+)\/comments/.exec(path)?.[1];
     if (issueComments !== undefined) {
       return Promise.resolve((this.comments.get(Number(issueComments)) ?? []) as T[]);
@@ -82,27 +91,35 @@ class MemoryGithubApi implements GithubApi {
     if (path.endsWith("/labels?per_page=100")) {
       return Promise.resolve([...this.labels].map((name) => ({ name })) as T[]);
     }
-    if (path.includes("/issues?state=open&labels=")) {
+    if (path.includes("/issues?state=all&labels=")) {
       const labelsValue = new URLSearchParams(path.split("?")[1]).get("labels");
       const wanted = labelsValue?.split(",") ?? [];
-      return Promise.resolve(this.issues.filter((issue) => issue.state === "open"
-        && wanted.every((name) => issue.labels.some((label) => label.name === name))) as T[]);
+      return Promise.resolve(this.issues.filter((issue) =>
+        wanted.every((name) => issue.labels.some((label) => label.name === name))) as T[]);
     }
     throw new Error(`unexpected GET all ${path}`);
   }
 
-  public getAllFrom<T>(path: string, collectionKey: string): Promise<readonly T[]> {
+  public getAllFrom<T>(path: string, collectionKey: string, maxItems?: number): Promise<readonly T[]> {
     const jobsRunId = /actions\/runs\/(\d+)\/jobs/.exec(path)?.[1];
     if (collectionKey === "jobs" && jobsRunId !== undefined) {
-      return Promise.resolve((this.jobs.get(Number(jobsRunId)) ?? []) as T[]);
+      const id = Number(jobsRunId);
+      this.historyJobReads.push(id);
+      if (this.failedHistoryJobReads.has(id)) {
+        return Promise.reject(new Error("Actions job history unavailable"));
+      }
+      return Promise.resolve((this.jobs.get(id) ?? []) as T[]);
     }
     if (collectionKey !== "workflow_runs") {
       throw new Error(`unexpected collection key ${collectionKey}`);
     }
-    const before = Number(new URLSearchParams(path.split("?")[1]).get("before") ?? Number.MAX_SAFE_INTEGER);
+    this.historyLimits.push(maxItems ?? Number.MAX_SAFE_INTEGER);
+    if (this.failHistoryReads) {
+      return Promise.reject(new Error("Actions history rate limit exceeded"));
+    }
     return Promise.resolve([...this.runs.values()]
-      .filter((run) => run.run_number < before)
-      .sort((left, right) => right.run_number - left.run_number) as T[]);
+      .sort((left, right) => right.run_number - left.run_number)
+      .slice(0, maxItems) as T[]);
   }
 
   public post<T>(path: string, body: JsonObject): Promise<T> {
@@ -202,6 +219,15 @@ function jobFixtures(runId: number, failingKey?: string, reporterStatus: string 
     html_url: `https://github.com/${CORE_REPOSITORY}/actions/runs/${runId}/job/reporter`,
     run_url: `https://api.github.com/repos/${CORE_REPOSITORY}/actions/runs/${runId}`,
     steps: [],
+  }, {
+    id: runId * 10 + trackedJobs.length + 1,
+    run_id: runId,
+    name: COLLECTOR_JOB_NAME,
+    status: reporterStatus,
+    conclusion: reporterStatus === "completed" ? "success" : null,
+    html_url: `https://github.com/${CORE_REPOSITORY}/actions/runs/${runId}/job/collector`,
+    run_url: `https://api.github.com/repos/${CORE_REPOSITORY}/actions/runs/${runId}`,
+    steps: [],
   }];
 }
 
@@ -229,7 +255,9 @@ describe("red-main incident reporter", () => {
   test("reads GitHub Actions jobs from the REST API jobs collection envelope", async () => {
     const apiData = setupFailingRun();
     const writer = new MemoryGithubApi();
-    const readApi = new GithubRestApi(undefined, (input) => {
+    const authorizationHeaders: string[] = [];
+    const fetcher = (input: string, init: RequestInit): Promise<Response> => {
+      authorizationHeaders.push(new Headers(init.headers).get("authorization") ?? "");
       const url = new URL(input);
       const currentRunId = /actions\/runs\/(\d+)$/.exec(url.pathname)?.[1];
       if (currentRunId !== undefined) {
@@ -248,18 +276,29 @@ describe("red-main incident reporter", () => {
         return Promise.resolve(Response.json({ html_url: "https://github.com/compare", total_commits: 7 }));
       }
       throw new Error(`unexpected HTTP GET ${url.pathname}`);
-    });
+    };
+    const readApi = new GithubRestApi("actions-read-only-token", fetcher);
+    const compareApi = new GithubRestApi(undefined, fetcher);
 
-    const result = await reportCoreRun(readApi, writer, CORE_REPOSITORY, 100, REPORTER_JOB_NAME, {
+    const callerSha = apiData.runs.get(100)?.head_sha ?? "0".repeat(40);
+    const snapshot = await collectCoreRun(readApi, CORE_REPOSITORY, 100, {
+      callerRunId: 100,
+      callerRepository: CORE_REPOSITORY,
+      callerSha,
+      callerJobName: COLLECTOR_JOB_NAME,
+    }, compareApi);
+    const result = await reportCollectedSnapshot(writer, snapshot, {
       dryRun: false,
       callerRunId: 100,
       callerRepository: CORE_REPOSITORY,
-      callerSha: apiData.runs.get(100)?.head_sha ?? "0".repeat(40),
+      callerSha,
       callerJobName: REPORTER_JOB_NAME,
     });
 
     expect(result.actions.some((action) => action.kind === "create")).toBe(true);
     expect(writer.issues).toHaveLength(1);
+    expect(authorizationHeaders).toContain("Bearer actions-read-only-token");
+    expect(authorizationHeaders).toContain("");
   });
 
   test("creates one labeled issue with failing step, run link and range from the last green job run", async () => {
@@ -326,6 +365,123 @@ describe("red-main incident reporter", () => {
     expect(closeResult.actions.some((action) => action.kind === "close")).toBe(true);
     expect(api.issues[0]?.state).toBe("closed");
     expect(api.comments.get(1)?.some((comment) => comment.body.includes("actions/runs/103"))).toBe(true);
+  });
+
+  test("retains the green high-water mark after close and rejects late failure delivery", async () => {
+    const api = setupFailingRun();
+    await report(api, 100, false);
+    const green = run(101, 101, "success");
+    api.runs.set(101, green);
+    api.jobs.set(101, jobFixtures(101));
+    await report(api, 101, false);
+    expect(api.issues[0]?.state).toBe("closed");
+    expect(api.issues[0]?.body).toContain('"outcome":"success"');
+
+    const late = await report(api, 100, false);
+
+    expect(late.actions.some((action) => action.kind === "skip")).toBe(true);
+    expect(api.issues).toHaveLength(1);
+    expect(api.issues[0]?.state).toBe("closed");
+  });
+
+  test("a green run delivered before an older failure suppresses stale issue creation", async () => {
+    const red = run(100, 100, null, "in_progress");
+    const green = run(101, 101, "success");
+    const api = new MemoryGithubApi(red, green);
+    api.jobs.set(100, jobFixtures(100, "macos-package-macos-15", "in_progress"));
+    api.jobs.set(101, jobFixtures(101));
+
+    const result = await report(api, 100, false);
+
+    expect(result.actions.some((action) => action.kind === "skip"
+      && action.jobKey === "macos-package-macos-15")).toBe(true);
+    expect(api.issues).toHaveLength(0);
+    expect(api.writes).toHaveLength(0);
+  });
+
+  test("serialized failure-green-failure runs reopen one issue with the newest state", async () => {
+    const api = setupFailingRun();
+    await report(api, 100, false);
+    const green = run(101, 101, "success");
+    api.runs.set(101, green);
+    api.jobs.set(101, jobFixtures(101));
+    await report(api, 101, false);
+    const newerFailure = run(102, 102, null, "in_progress");
+    api.runs.set(102, newerFailure);
+    api.jobs.set(102, jobFixtures(102, "macos-package-macos-15", "in_progress"));
+
+    await report(api, 102, false);
+
+    expect(api.issues).toHaveLength(1);
+    expect(api.issues[0]?.state).toBe("open");
+    expect(api.issues[0]?.body).toContain('"runNumber":102');
+    expect(api.issues[0]?.body).toContain('"outcome":"failure"');
+  });
+
+  test("unavailable ordering history fails closed without issue writes", async () => {
+    const api = setupFailingRun();
+    api.failHistoryReads = true;
+
+    const result = await report(api, 100, false);
+
+    expect(result.actions.some((action) => action.kind === "skip"
+      && action.detail === "latest outcome for this job could not be verified")).toBe(true);
+    expect(api.issues).toHaveLength(0);
+    expect(api.writes).toHaveLength(0);
+    expect(api.historyLimits).toEqual([50]);
+  });
+
+  test("older history enrichment failure permits incident without commit range", async () => {
+    const api = setupFailingRun();
+    api.failedHistoryJobReads.add(90);
+
+    const result = await report(api, 100, false);
+
+    expect(result.actions.some((action) => action.kind === "create")).toBe(true);
+    expect(api.issues).toHaveLength(1);
+    expect(api.issues[0]?.body).toContain("History lookup was unavailable; the previous green run could not be determined.");
+  });
+
+  test("unavailable newer outcome lookup fails closed", async () => {
+    const api = setupFailingRun();
+    const newer = run(101, 101, "failure");
+    api.runs.set(newer.id, newer);
+    api.jobs.set(newer.id, jobFixtures(newer.id));
+    api.failedHistoryJobReads.add(newer.id);
+
+    const result = await report(api, 100, false);
+
+    expect(result.actions.some((action) => action.kind === "skip"
+      && action.detail === "latest outcome for this job could not be verified")).toBe(true);
+    expect(api.issues).toHaveLength(0);
+    expect(api.writes).toHaveLength(0);
+  });
+
+  test("compare enrichment failure does not prevent incident creation", async () => {
+    const api = setupFailingRun();
+    api.failCompareReads = true;
+
+    const result = await report(api, 100, false);
+
+    expect(result.actions.some((action) => action.kind === "create")).toBe(true);
+    expect(api.issues).toHaveLength(1);
+    expect(api.issues[0]?.body).toContain("Previous green run #90 was found, but compare details are unavailable.");
+  });
+
+  test("history job lookups are bounded to the latest fifty runs", async () => {
+    const current = run(100, 100, null, "in_progress");
+    const history = Array.from({ length: 65 }, (_, index) => run(index + 1, index + 1));
+    const api = new MemoryGithubApi(...history, current);
+    for (const historic of history) {
+      api.jobs.set(historic.id, jobFixtures(historic.id));
+    }
+    api.jobs.set(100, jobFixtures(100, "macos-package-macos-15", "in_progress"));
+
+    await report(api, 100, false);
+
+    expect(api.historyLimits).toEqual([50]);
+    expect(api.historyJobReads).toHaveLength(50);
+    expect(api.jobs.size).toBe(66);
   });
 
   test("dry-run makes no API writes", async () => {
@@ -425,7 +581,7 @@ describe("red-main incident reporter", () => {
       callerRepository: CORE_REPOSITORY,
       callerSha: api.runs.get(100)?.head_sha ?? "0".repeat(40),
       callerJobName: "arbitrary-job",
-    }), "reporter must run");
+    }), "reporter wrapper must run from the red-main-report job");
     await expectFailure(reportCoreRun(api, api, CORE_REPOSITORY, 100, REPORTER_JOB_NAME, {
       dryRun: false,
       callerRunId: 100,
@@ -436,23 +592,22 @@ describe("red-main incident reporter", () => {
     expect(api.writes).toHaveLength(0);
   });
 
-  test("API requests authenticate with the supplied scoped token", async () => {
+  test("Actions reads and issue writes use separate scoped tokens", async () => {
     let authorization = "";
-    const api = new GithubRestApi("scoped-token", (_input, init) => {
+    const writerApi = new GithubRestApi("issues-write-token", (_input, init) => {
       authorization = new Headers(init.headers).get("authorization") ?? "";
       return Promise.resolve(Response.json({ id: 1 }));
     });
 
-    await api.get("repos/zajca/pohunek/issues");
-    expect(authorization).toBe("Bearer scoped-token");
+    await writerApi.get("repos/zajca/pohunek/issues");
+    expect(authorization).toBe("Bearer issues-write-token");
 
-    authorization = "unset";
-    const publicApi = new GithubRestApi(undefined, (_input, init) => {
+    const readerApi = new GithubRestApi("actions-read-token", (_input, init) => {
       authorization = new Headers(init.headers).get("authorization") ?? "unset";
       return Promise.resolve(Response.json({ id: 1 }));
     });
-    await publicApi.get("repos/zajca/pohunek/actions/runs/1");
-    expect(authorization).toBe("unset");
+    await readerApi.get("repos/zajca/pohunek/actions/runs/1");
+    expect(authorization).toBe("Bearer actions-read-token");
   });
 });
 
