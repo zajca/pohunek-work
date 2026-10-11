@@ -92,6 +92,10 @@ class MemoryGithubApi implements GithubApi {
   }
 
   public getAllFrom<T>(path: string, collectionKey: string): Promise<readonly T[]> {
+    const jobsRunId = /actions\/runs\/(\d+)\/jobs/.exec(path)?.[1];
+    if (collectionKey === "jobs" && jobsRunId !== undefined) {
+      return Promise.resolve((this.jobs.get(Number(jobsRunId)) ?? []) as T[]);
+    }
     if (collectionKey !== "workflow_runs") {
       throw new Error(`unexpected collection key ${collectionKey}`);
     }
@@ -222,6 +226,42 @@ function report(api: MemoryGithubApi, runId: number, dryRun: boolean): Promise<R
 }
 
 describe("red-main incident reporter", () => {
+  test("reads GitHub Actions jobs from the REST API jobs collection envelope", async () => {
+    const apiData = setupFailingRun();
+    const writer = new MemoryGithubApi();
+    const readApi = new GithubRestApi(undefined, (input) => {
+      const url = new URL(input);
+      const currentRunId = /actions\/runs\/(\d+)$/.exec(url.pathname)?.[1];
+      if (currentRunId !== undefined) {
+        return Promise.resolve(Response.json(apiData.runs.get(Number(currentRunId))));
+      }
+      const jobsRunId = /actions\/runs\/(\d+)\/jobs$/.exec(url.pathname)?.[1];
+      if (jobsRunId !== undefined) {
+        return Promise.resolve(Response.json({ jobs: apiData.jobs.get(Number(jobsRunId)) ?? [] }));
+      }
+      if (url.pathname.endsWith("/actions/workflows/ci.yml/runs")) {
+        return Promise.resolve(Response.json({
+          workflow_runs: [apiData.runs.get(90)],
+        }));
+      }
+      if (/\/compare\//.test(url.pathname)) {
+        return Promise.resolve(Response.json({ html_url: "https://github.com/compare", total_commits: 7 }));
+      }
+      throw new Error(`unexpected HTTP GET ${url.pathname}`);
+    });
+
+    const result = await reportCoreRun(readApi, writer, CORE_REPOSITORY, 100, REPORTER_JOB_NAME, {
+      dryRun: false,
+      callerRunId: 100,
+      callerRepository: CORE_REPOSITORY,
+      callerSha: apiData.runs.get(100)?.head_sha ?? "0".repeat(40),
+      callerJobName: REPORTER_JOB_NAME,
+    });
+
+    expect(result.actions.some((action) => action.kind === "create")).toBe(true);
+    expect(writer.issues).toHaveLength(1);
+  });
+
   test("creates one labeled issue with failing step, run link and range from the last green job run", async () => {
     const api = setupFailingRun();
     const result = await report(api, 100, false);
@@ -310,6 +350,35 @@ describe("red-main incident reporter", () => {
     expect(result.actions.some((action) => action.kind === "create"
       && action.jobKey === "macos-package-macos-14")).toBe(true);
     expect(api.issues).toHaveLength(1);
+  });
+
+  test("main push skips leave an open optional-job incident unchanged", async () => {
+    const scheduled = run(100, 100, "success", "completed", "schedule");
+    const mainPush = run(101, 101, "success", "completed", "push");
+    const api = new MemoryGithubApi(scheduled, mainPush);
+    api.jobs.set(100, jobFixtures(100, "macos-package-macos-14"));
+    api.jobs.set(101, jobFixtures(101).map((job) => job.name.includes("macos-14")
+      || job.name.includes("Hermes compatibility")
+      ? { ...job, conclusion: "skipped" }
+      : job));
+
+    await report(api, 100, false);
+    const greenResult = await report(api, 101, false);
+
+    expect(api.issues).toHaveLength(1);
+    expect(api.issues[0]?.state).toBe("open");
+    expect(greenResult.actions.some((action) => action.kind === "close")).toBe(false);
+  });
+
+  test("scheduled runs reject a skipped required macOS 14 leg before writing", async () => {
+    const scheduled = run(100, 100, "success", "completed", "schedule");
+    const api = new MemoryGithubApi(scheduled);
+    api.jobs.set(100, jobFixtures(100).map((job) => job.name.includes("macos-14")
+      ? { ...job, conclusion: "skipped" }
+      : job));
+
+    await expectFailure(report(api, 100, false), "skipped required macOS job macos-package-macos-14");
+    expect(api.writes).toHaveLength(0);
   });
 
   test("rejects a run from a different repository before reading jobs or writing", async () => {

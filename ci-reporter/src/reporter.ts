@@ -102,15 +102,22 @@ export async function reportCoreRun(
 ): Promise<ReporterResult> {
   const run = await readApi.get<WorkflowRun>(`repos/${repository}/actions/runs/${runId}`);
   verifyRun(run, repository, runId, callerJobName, options);
-  const jobs = await readApi.getAll<WorkflowJob>(`repos/${repository}/actions/runs/${runId}/jobs?per_page=100`);
+  const jobs = await readApi.getAllFrom<WorkflowJob>(
+    `repos/${repository}/actions/runs/${runId}/jobs?per_page=100`,
+    "jobs",
+  );
   verifyReporterJob(jobs, run.status);
   const tracked = mapTrackedJobs(jobs);
+  for (const required of requiredJobsForEvent(run.event)) {
+    const requiredJob = tracked.get(required.key);
+    if (requiredJob === undefined || requiredJob.conclusion === "skipped") {
+      throw new Error(`core CI run ${runId} is missing or skipped required macOS job ${required.key}`);
+    }
+  }
   for (const job of TRACKED_MACOS_JOBS) {
     const current = tracked.get(job.key);
-    if (current === undefined) {
-      throw new Error(`core CI run ${runId} is missing tracked macOS job ${job.key}`);
-    }
-    if (current.conclusion !== SUCCESS_CONCLUSION && !isFailureConclusion(current.conclusion)) {
+    if (current !== undefined && current.conclusion !== SUCCESS_CONCLUSION
+      && current.conclusion !== "skipped" && !isFailureConclusion(current.conclusion)) {
       throw new Error(`core CI job ${job.name} has unsupported conclusion ${String(current.conclusion)}`);
     }
   }
@@ -126,8 +133,8 @@ export async function reportCoreRun(
 
   for (const job of TRACKED_MACOS_JOBS) {
     const current = tracked.get(job.key);
-    if (current === undefined) {
-      throw new Error(`core CI run ${runId} is missing tracked macOS job ${job.key}`);
+    if (current === undefined || current.conclusion === "skipped") {
+      continue;
     }
     if (current.conclusion === SUCCESS_CONCLUSION) {
       actions.push(...await closeIncident(issueApi, repository, run, job, options));
@@ -214,6 +221,18 @@ function mapTrackedJobs(jobs: readonly WorkflowJob[]): Map<string, WorkflowJob> 
   return map;
 }
 
+function requiredJobsForEvent(event: string): readonly TrackedMacosJob[] {
+  const requiredKeys = new Set([
+    "platform-contracts-arm64",
+    "macos-package-macos-15",
+    "sdk-workspace-macos-arm64",
+  ]);
+  if (event === "schedule") {
+    requiredKeys.add("macos-package-macos-14");
+  }
+  return TRACKED_MACOS_JOBS.filter((job) => requiredKeys.has(job.key));
+}
+
 function verifyReporterJob(jobs: readonly WorkflowJob[], runStatus: string): void {
   const reporterJobs = jobs.filter((job) => job.name === REPORTER_JOB_NAME);
   if (reporterJobs.length !== 1) {
@@ -247,8 +266,9 @@ async function findLastGreenRuns(
     if (!trustedCompletedRun(candidate, repository)) {
       continue;
     }
-    const jobs = await api.getAll<WorkflowJob>(
+    const jobs = await api.getAllFrom<WorkflowJob>(
       `repos/${repository}/actions/runs/${candidate.id}/jobs?per_page=100`,
+      "jobs",
     );
     for (const previousJob of jobs) {
       const tracked = findTrackedJob(previousJob.name);
