@@ -822,6 +822,9 @@ async function closeIncident(
   if (compareOrder(toRunOrder(run), toRunOrder(latest)) <= 0) {
     return [{ kind: "skip", jobKey: job.key, detail: `green run ${run.run_number} is older than issue #${incident.number}` }];
   }
+  if (latest.outcome === "success" && incident.state === "closed") {
+    return [];
+  }
   if (options.dryRun) {
     return [{ kind: "dry-run", jobKey: job.key, detail: `would close issue #${incident.number}` }];
   }
@@ -841,7 +844,7 @@ async function closeIncident(
   };
   await api.patch(`repos/${repository}/issues/${incident.number}`, {
     state: "closed",
-    body: issueBody(recovered, `Job **${escapeMarkdown(job.name)}** passed in [run #${run.run_number}](${run.html_url}).`),
+    body: replaceMetadata(incident.body, recovered),
   });
   return [{ kind: "close", jobKey: job.key, detail: `closed issue #${incident.number}` }];
 }
@@ -890,6 +893,14 @@ function failureDetails(
 
 function issueBody(metadataValue: IncidentMetadata, details: string): string {
   return `${metadataMarker(metadataValue)}\n\n${details}`;
+}
+
+function replaceMetadata(body: string | null, metadataValue: IncidentMetadata): string {
+  const marker = /<!-- pohunek-red-main: \{[^\n]+\} -->/;
+  if (body === null || !marker.test(body)) {
+    throw new Error("incident issue has no valid ordering marker");
+  }
+  return body.replace(marker, metadataMarker(metadataValue));
 }
 
 function metadataMarker(value: IncidentMetadata): string {

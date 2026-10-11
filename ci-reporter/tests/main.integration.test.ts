@@ -134,10 +134,10 @@ class GithubFixture {
     await writeFile(this.statePath, JSON.stringify(state));
   }
 
-  public async setGreenRun(): Promise<void> {
+  public async setGreenRun(runId: number): Promise<void> {
     const state = await this.read();
-    state.run = runRecord(RUN_ID + 1, RUN_ID + 1, "in_progress");
-    state.jobs = jobRecords(RUN_ID + 1, "in_progress", false);
+    state.run = runRecord(runId, runId, "in_progress");
+    state.jobs = jobRecords(runId, "in_progress", false);
     await writeFile(this.statePath, JSON.stringify(state));
   }
 }
@@ -287,6 +287,92 @@ describe("red-main reporter action boundary", () => {
     expect(state.calls.slice(reportStart).every((call) => call.authorization === "Bearer issue-write-token")).toBe(true);
   });
 
+  test("success closes once, preserves failure diagnostics, and later green runs only advance watermark", async () => {
+    const current = await harness();
+    const redCollection = await current.runStep();
+    expect(redCollection.status).toBe(0);
+    const redSnapshot = await current.snapshot();
+    const redReport = await current.runStep({
+      MODE: "report",
+      CALLER_JOB_NAME: REPORTER_JOB_NAME,
+      REPORT_SNAPSHOT: redSnapshot,
+    });
+    expect(redReport.status).toBe(0);
+
+    const failingJob = TRACKED_MACOS_JOBS.find((job) => job.key === "macos-package-macos-15");
+    if (failingJob === undefined) {
+      throw new Error("tracked macOS package job must exist");
+    }
+    let state = await current.fixture.read();
+    const incident = state.issues.find((issue) => issue.labels.some((label) =>
+      label.name === "red-main-incident") && issue.labels.some((label) =>
+      label.name === jobLabel(failingJob)));
+    if (incident === undefined || incident.body === null) {
+      throw new Error("failure incident must be created before recovery");
+    }
+    const failureBody = incident.body;
+    expect(failureBody).toContain("Package install acceptance");
+    expect(failureBody).toContain("actions/runs/100");
+
+    await current.fixture.setGreenRun(101);
+    const greenCollection = await current.runStep({ RUN_ID: "101", CALLER_RUN_ID: "101" });
+    expect(greenCollection.status).toBe(0);
+    const greenSnapshot = await current.snapshot();
+    const firstRecovery = await current.runStep({
+      MODE: "report",
+      RUN_ID: "101",
+      CALLER_RUN_ID: "101",
+      CALLER_JOB_NAME: REPORTER_JOB_NAME,
+      REPORT_SNAPSHOT: greenSnapshot,
+    });
+    expect(firstRecovery.status).toBe(0);
+    expect(firstRecovery.stdout).toContain("close: macos-package-macos-15");
+
+    state = await current.fixture.read();
+    const recoveredIncident = state.issues.find((issue) => issue.number === incident.number);
+    expect(recoveredIncident?.state).toBe("closed");
+    expect(recoveredIncident?.body).toContain('"outcome":"success"');
+    expect(recoveredIncident?.body).toContain("Package install acceptance");
+    expect(recoveredIncident?.body).toContain("actions/runs/100");
+    const recoveredBody = recoveredIncident?.body;
+    const commentsAfterRecovery = state.comments[String(incident.number)] ?? [];
+    expect(commentsAfterRecovery.some((comment) => comment.body.includes("actions/runs/101"))).toBe(true);
+
+    await current.fixture.setGreenRun(102);
+    const secondGreenCollection = await current.runStep({ RUN_ID: "102", CALLER_RUN_ID: "102" });
+    expect(secondGreenCollection.status).toBe(0);
+    const secondGreenSnapshot = await current.snapshot();
+    state = await current.fixture.read();
+    const writesBeforeSecondGreen = state.calls.length;
+    const secondRecovery = await current.runStep({
+      MODE: "report",
+      RUN_ID: "102",
+      CALLER_RUN_ID: "102",
+      CALLER_JOB_NAME: REPORTER_JOB_NAME,
+      REPORT_SNAPSHOT: secondGreenSnapshot,
+    });
+    expect(secondRecovery.status).toBe(0);
+    expect(secondRecovery.stdout).not.toContain("close: macos-package-macos-15");
+    expect(secondRecovery.stdout).not.toContain("comment: macos-package-macos-15");
+
+    state = await current.fixture.read();
+    const finalIncident = state.issues.find((issue) => issue.number === incident.number);
+    expect(finalIncident?.state).toBe("closed");
+    expect(finalIncident?.body).toBe(recoveredBody);
+    expect(state.comments[String(incident.number)]).toEqual(commentsAfterRecovery);
+    const incidentWrites = state.calls.slice(writesBeforeSecondGreen).filter((call) =>
+      call.pathname.endsWith(`/issues/${incident.number}`)
+      || call.pathname.endsWith(`/issues/${incident.number}/comments`));
+    expect(incidentWrites.some((call) => call.method === "PATCH" || call.method === "POST")).toBe(false);
+
+    const watermark = state.issues.find((issue) => issue.labels.some((label) =>
+      label.name === "red-main-watermark") && issue.labels.some((label) =>
+      label.name === jobLabel(failingJob)));
+    expect(watermark?.body).toContain('"runNumber":102');
+    expect(watermark?.body).toContain('"outcome":"success"');
+    expect(failureBody).toContain("Package install acceptance");
+  });
+
   test("dry-run is read-only and caller identity or snapshot size failures stop at the CLI boundary", async () => {
     const current = await harness();
     const collection = await current.runStep();
@@ -367,7 +453,7 @@ describe("red-main reporter action boundary", () => {
       label.name === jobLabel(failedJob)))).toHaveLength(1);
     expect(retry.stdout).toContain("skip: macos-package-macos-15");
 
-    await current.fixture.setGreenRun();
+    await current.fixture.setGreenRun(RUN_ID + 1);
     const greenCollection = await current.runStep({
       RUN_ID: String(RUN_ID + 1),
       CALLER_RUN_ID: String(RUN_ID + 1),
