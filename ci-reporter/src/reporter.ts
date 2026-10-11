@@ -62,12 +62,34 @@ interface CompareResult extends JsonObject {
   readonly total_commits: number;
 }
 
+type SnapshotRun = Pick<WorkflowRun,
+  | "id"
+  | "run_number"
+  | "run_attempt"
+  | "event"
+  | "head_branch"
+  | "head_sha"
+  | "status"
+  | "conclusion"
+  | "path"
+  | "html_url"
+  | "repository"
+  | "head_repository"
+>;
+
+type SnapshotCompare = Pick<CompareResult, "html_url" | "total_commits">;
+
 interface IncidentMetadata {
   readonly jobKey: string;
   readonly runId: number;
   readonly runNumber: number;
   readonly runAttempt: number;
   readonly outcome: "failure" | "success";
+}
+
+interface WatermarkRecord {
+  readonly issue: Issue;
+  readonly metadata: IncidentMetadata;
 }
 
 interface HistoricalRun {
@@ -78,12 +100,12 @@ interface HistoricalRun {
 export interface CollectedSnapshot extends JsonObject {
   readonly version: number;
   readonly repository: string;
-  readonly run: WorkflowRun;
+  readonly run: SnapshotRun;
   readonly jobs: readonly CollectedJob[];
   readonly history: readonly HistoricalRun[];
   readonly historyComplete: boolean;
   readonly freshness: Readonly<Record<string, "fresh" | "stale" | "uncertain">>;
-  readonly comparisons: Readonly<Record<string, CompareResult | null>>;
+  readonly comparisons: Readonly<Record<string, SnapshotCompare | null>>;
   readonly collectorRunId: number;
   readonly collectorRepository: string;
   readonly collectorSha: string;
@@ -118,6 +140,7 @@ const SUCCESS_CONCLUSION = "success";
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const MAX_HISTORY_RUNS = 50;
 const MAX_SNAPSHOT_BYTES = 64 * 1024;
+const WATERMARK_LABEL = "red-main-watermark";
 
 export async function reportCoreRun(
   readApi: GithubApi,
@@ -176,14 +199,18 @@ export async function collectCoreRun(
   const priorGreenRuns = history.complete
     ? findLastGreenRunsFromHistory(history.runs, failedJobs, run.run_number)
     : new Map<string, Pick<WorkflowRun, "id" | "run_number" | "run_attempt" | "head_sha">>();
-  const comparisons: Record<string, CompareResult | null> = {};
+  const comparisons: Record<string, SnapshotCompare | null> = {};
   for (const job of failedJobs) {
     const priorGreen = priorGreenRuns.get(job.key);
     if (priorGreen !== undefined) {
       try {
-        comparisons[job.key] = await compareApi.get<CompareResult>(
+        const compare = await compareApi.get<CompareResult>(
           `repos/${repository}/compare/${priorGreen.head_sha}...${run.head_sha}`,
         );
+        comparisons[job.key] = {
+          html_url: compare.html_url,
+          total_commits: compare.total_commits,
+        };
       } catch {
         comparisons[job.key] = null;
       }
@@ -193,12 +220,28 @@ export async function collectCoreRun(
   const snapshot: CollectedSnapshot = {
     version: 1,
     repository,
-    run,
+    run: {
+      id: run.id,
+      run_number: run.run_number,
+      run_attempt: run.run_attempt,
+      event: run.event,
+      head_branch: run.head_branch,
+      head_sha: run.head_sha,
+      status: run.status,
+      conclusion: run.conclusion,
+      path: run.path,
+      html_url: run.html_url,
+      repository: { full_name: run.repository.full_name },
+      head_repository: run.head_repository === null
+        ? null
+        : { full_name: run.head_repository.full_name },
+    },
     jobs: jobs.filter((job) => findTrackedJob(job.name) !== undefined).map((job) => ({
       name: job.name,
       status: job.status,
       conclusion: job.conclusion,
-      steps: job.steps.map((step) => ({ name: step.name, conclusion: step.conclusion })),
+      steps: job.steps.filter((step) => isFailureConclusion(step.conclusion))
+        .map((step) => ({ name: step.name, conclusion: step.conclusion })),
     })),
     history: history.runs,
     historyComplete: history.complete,
@@ -272,37 +315,95 @@ export async function reportCollectedSnapshot(
       actions.push({ kind: "skip", jobKey: job.key, detail: `newer run #${latestObserved.run.run_number} already recorded` });
       continue;
     }
-    if (current.conclusion === SUCCESS_CONCLUSION) {
-      actions.push(...await closeIncident(issueApi, snapshot.repository, run, job, options));
+    const outcome: IncidentMetadata["outcome"] = current.conclusion === SUCCESS_CONCLUSION
+      ? "success"
+      : "failure";
+    const watermark = await getWatermark(issueApi, snapshot.repository, job);
+    if (watermark !== undefined
+      && compareOrder(toRunOrder(run), toRunOrder(watermark.metadata)) < 0) {
+      actions.push({
+        kind: "skip",
+        jobKey: job.key,
+        detail: `run #${run.run_number} is older than persisted outcome #${watermark.metadata.runNumber}`,
+      });
       continue;
     }
-    if (!isFailureConclusion(current.conclusion)) {
-      throw new Error(`core CI job ${job.name} has unsupported conclusion ${String(current.conclusion)}`);
+    if (watermark !== undefined && compareOrder(toRunOrder(run), toRunOrder(watermark.metadata)) === 0
+      && (watermark.metadata.runId !== run.id || watermark.metadata.outcome !== outcome)) {
+      throw new Error(`persisted outcome conflicts with run #${run.run_number} for ${job.key}`);
     }
 
-    const priorGreen = snapshot.historyComplete
-      ? findLastGreenRunsFromHistory(snapshot.history, [job], run.run_number).get(job.key)
-      : undefined;
-    const compare = snapshot.comparisons[job.key] ?? undefined;
-    const labels = [ISSUE_LABEL, jobLabel(job)];
-    if (!options.dryRun && !labelsReady.has(jobLabel(job))) {
-      await ensureLabels(issueApi, snapshot.repository, labels);
-      labelsReady.add(jobLabel(job));
+    let outcomeActions: readonly ReporterAction[];
+    if (current.conclusion === SUCCESS_CONCLUSION) {
+      outcomeActions = await closeIncident(issueApi, snapshot.repository, run, job, options);
+    } else if (isFailureConclusion(current.conclusion)) {
+      const priorGreen = snapshot.historyComplete
+        ? findLastGreenRunsFromHistory(snapshot.history, [job], run.run_number).get(job.key)
+        : undefined;
+      const compare = snapshot.comparisons[job.key] ?? undefined;
+      const labels = [ISSUE_LABEL, jobLabel(job)];
+      const labelKey = labels.join(",");
+      if (!options.dryRun && !labelsReady.has(labelKey)) {
+        await ensureLabels(issueApi, snapshot.repository, labels);
+        labelsReady.add(labelKey);
+      }
+      outcomeActions = await openOrUpdateIncident(
+        issueApi,
+        snapshot.repository,
+        run,
+        current,
+        job,
+        labels,
+        compare ?? undefined,
+        priorGreen,
+        snapshot.historyComplete,
+        options,
+      );
+    } else {
+      throw new Error(`core CI job ${job.name} has unsupported conclusion ${String(current.conclusion)}`);
     }
-    actions.push(...await openOrUpdateIncident(
+    actions.push(...outcomeActions);
+    if (!options.dryRun && await outcomeIsNotSuperseded(
       issueApi,
       snapshot.repository,
       run,
-      current,
       job,
-      labels,
-      compare ?? undefined,
-      priorGreen,
-      snapshot.historyComplete,
-      options,
-    ));
+      outcome,
+      outcomeActions,
+    )) {
+      const watermarkLabels = [WATERMARK_LABEL, jobLabel(job)];
+      const watermarkLabelKey = watermarkLabels.join(",");
+      if (!labelsReady.has(watermarkLabelKey)) {
+        await ensureLabels(issueApi, snapshot.repository, watermarkLabels);
+        labelsReady.add(watermarkLabelKey);
+      }
+      await saveWatermark(issueApi, snapshot.repository, run, job, outcome, watermark);
+    }
   }
   return { actions };
+}
+
+async function outcomeIsNotSuperseded(
+  api: GithubApi,
+  repository: string,
+  run: SnapshotRun,
+  job: TrackedMacosJob,
+  outcome: IncidentMetadata["outcome"],
+  actions: readonly ReporterAction[],
+): Promise<boolean> {
+  if (!actions.some((action) => action.kind === "skip")) {
+    return true;
+  }
+  const labels = [ISSUE_LABEL, jobLabel(job)];
+  const issues = await api.getAll<Issue>(
+    `repos/${repository}/issues?state=all&labels=${encodeURIComponent(labels.join(","))}&per_page=100`,
+  );
+  const incident = latestIncident(issues, job);
+  const recorded = incident === undefined ? undefined : metadata(incident.body);
+  return recorded !== undefined
+    && compareOrder(toRunOrder(recorded), toRunOrder(run)) === 0
+    && recorded.runId === run.id
+    && recorded.outcome === outcome;
 }
 
 function verifyRun(
@@ -570,17 +671,80 @@ async function ensureLabels(api: GithubApi, repository: string, labels: readonly
         color: name === ISSUE_LABEL ? "b60205" : "d93f0b",
         description: name === ISSUE_LABEL
           ? "Automated report for a failing macOS job on main"
-          : "Stable job key for a red-main incident",
+          : name === WATERMARK_LABEL
+          ? "Persisted latest outcome for a tracked macOS job on main"
+          : "Stable job key for a red-main incident or persisted outcome watermark",
       });
       known.add(name.toLowerCase());
     }
   }
 }
 
+async function getWatermark(
+  api: GithubApi,
+  repository: string,
+  job: TrackedMacosJob,
+): Promise<WatermarkRecord | undefined> {
+  const labels = [WATERMARK_LABEL, jobLabel(job)];
+  const issues = await api.getAll<Issue>(
+    `repos/${repository}/issues?state=all&labels=${encodeURIComponent(labels.join(","))}&per_page=100`,
+  );
+  const records = issues.filter((issue) => issue.pull_request === undefined
+    && issue.labels.some((label) => label.name === WATERMARK_LABEL));
+  if (records.length > 1) {
+    throw new Error(`multiple persisted outcome records found for ${job.key}`);
+  }
+  const issue = records[0];
+  if (issue === undefined) {
+    return undefined;
+  }
+  const parsed = metadata(issue.body);
+  if (parsed === undefined || parsed.jobKey !== job.key) {
+    throw new Error(`persisted outcome record is invalid for ${job.key}`);
+  }
+  return { issue, metadata: parsed };
+}
+
+async function saveWatermark(
+  api: GithubApi,
+  repository: string,
+  run: SnapshotRun,
+  job: TrackedMacosJob,
+  outcome: IncidentMetadata["outcome"],
+  existing: WatermarkRecord | undefined,
+): Promise<void> {
+  const next: IncidentMetadata = {
+    jobKey: job.key,
+    runId: run.id,
+    runNumber: run.run_number,
+    runAttempt: run.run_attempt,
+    outcome,
+  };
+  if (existing !== undefined && compareOrder(toRunOrder(next), toRunOrder(existing.metadata)) === 0) {
+    if (existing.issue.state !== "closed") {
+      await api.patch(`repos/${repository}/issues/${existing.issue.number}`, { state: "closed" });
+    }
+    return;
+  }
+  if (existing === undefined) {
+    const created = await api.post<Issue>(`repos/${repository}/issues`, {
+      title: `[macOS CI] Latest outcome for ${job.name}`,
+      body: metadataMarker(next),
+      labels: [WATERMARK_LABEL, jobLabel(job)],
+    });
+    await api.patch(`repos/${repository}/issues/${created.number}`, { state: "closed" });
+    return;
+  }
+  await api.patch(`repos/${repository}/issues/${existing.issue.number}`, {
+    body: metadataMarker(next),
+    state: "closed",
+  });
+}
+
 async function openOrUpdateIncident(
   api: GithubApi,
   repository: string,
-  run: WorkflowRun,
+  run: SnapshotRun,
   jobRun: CollectedJob,
   job: TrackedMacosJob,
   labels: readonly string[],
@@ -639,7 +803,7 @@ async function openOrUpdateIncident(
 async function closeIncident(
   api: GithubApi,
   repository: string,
-  run: WorkflowRun,
+  run: SnapshotRun,
   job: TrackedMacosJob,
   options: ReporterOptions,
 ): Promise<readonly ReporterAction[]> {
@@ -696,7 +860,7 @@ function latestIncident(issues: readonly Issue[], job: TrackedMacosJob): Issue |
 }
 
 function failureDetails(
-  run: WorkflowRun,
+  run: SnapshotRun,
   job: CollectedJob,
   tracked: TrackedMacosJob,
   compare: CompareResult | undefined,
@@ -767,7 +931,7 @@ function compareOrder(left: RunOrder, right: RunOrder): number {
   return left.runNumber - right.runNumber || left.attempt - right.attempt;
 }
 
-function runMarker(run: WorkflowRun): string {
+function runMarker(run: SnapshotRun): string {
   return `<!-- pohunek-red-main-run: ${run.run_number}:${run.run_attempt} -->`;
 }
 

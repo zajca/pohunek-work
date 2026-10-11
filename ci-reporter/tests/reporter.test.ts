@@ -52,10 +52,13 @@ class MemoryGithubApi implements GithubApi {
   public readonly comparisons: string[] = [];
   public readonly historyLimits: number[] = [];
   public readonly historyJobReads: number[] = [];
+  public comparePayloadBytes = 0;
   public failHistoryReads = false;
   public readonly failedHistoryJobReads = new Set<number>();
   public failCompareReads = false;
   public failNextClosePatch = false;
+  public loseNextWatermarkCreateAck = false;
+  public loseNextWatermarkUpdateAck = false;
   private nextIssueNumber = 1;
 
   public constructor(...runs: TestRun[]) {
@@ -78,6 +81,7 @@ class MemoryGithubApi implements GithubApi {
       return Promise.resolve({
         html_url: `https://github.com/${CORE_REPOSITORY}/compare/${comparePath}`,
         total_commits: 7,
+        files: "x".repeat(this.comparePayloadBytes),
       } as T);
     }
     throw new Error(`unexpected GET ${path}`);
@@ -144,27 +148,38 @@ class MemoryGithubApi implements GithubApi {
         labels: (body["labels"] as string[]).map((name) => ({ name })),
       };
       this.issues.push(issue);
+      if (issue.labels.some((label) => label.name === "red-main-watermark")
+        && this.loseNextWatermarkCreateAck) {
+        this.loseNextWatermarkCreateAck = false;
+        return Promise.reject(new Error("watermark create acknowledgement lost"));
+      }
       return Promise.resolve(issue as T);
     }
     throw new Error(`unexpected POST ${path}`);
   }
 
   public patch<T>(path: string, body: JsonObject): Promise<T> {
-    if (body["state"] === "closed" && this.failNextClosePatch) {
-      this.failNextClosePatch = false;
-      return Promise.reject(new Error("temporary patch failure"));
-    }
-    this.writes.push({ method: "PATCH", path, body });
     const issueNumber = /issues\/(\d+)$/.exec(path)?.[1];
     const issue = this.issues.find((item) => item.number === Number(issueNumber));
     if (issue === undefined) {
       throw new Error(`unexpected PATCH ${path}`);
     }
+    if (body["state"] === "closed" && this.failNextClosePatch
+      && issue.labels.some((label) => label.name === ISSUE_LABEL)) {
+      this.failNextClosePatch = false;
+      return Promise.reject(new Error("temporary patch failure"));
+    }
+    this.writes.push({ method: "PATCH", path, body });
     if (typeof body["body"] === "string") {
       issue.body = body["body"];
     }
     if (typeof body["state"] === "string") {
       issue.state = body["state"];
+    }
+    if (issue.labels.some((label) => label.name === "red-main-watermark")
+      && typeof body["body"] === "string" && this.loseNextWatermarkUpdateAck) {
+      this.loseNextWatermarkUpdateAck = false;
+      return Promise.reject(new Error("watermark update acknowledgement lost"));
     }
     return Promise.resolve(issue as T);
   }
@@ -251,7 +266,69 @@ function report(api: MemoryGithubApi, runId: number, dryRun: boolean): Promise<R
   });
 }
 
+function incidentIssues(api: MemoryGithubApi): TestIssue[] {
+  return api.issues.filter((issue) => issue.labels.some((label) => label.name === ISSUE_LABEL));
+}
+
+function incidentForJob(api: MemoryGithubApi, key = "macos-package-macos-15"): TestIssue | undefined {
+  const job = TRACKED_MACOS_JOBS.find((candidate) => candidate.key === key);
+  if (job === undefined) {
+    throw new Error(`unknown tracked job ${key}`);
+  }
+  return incidentIssues(api).find((issue) => issue.labels.some((label) => label.name === jobLabel(job)));
+}
+
+function watermarkForJob(api: MemoryGithubApi, key: string): TestIssue | undefined {
+  const job = TRACKED_MACOS_JOBS.find((candidate) => candidate.key === key);
+  if (job === undefined) {
+    throw new Error(`unknown tracked job ${key}`);
+  }
+  return api.issues.find((issue) => issue.labels.some((label) => label.name === "red-main-watermark")
+    && issue.labels.some((label) => label.name === jobLabel(job)));
+}
+
 describe("red-main incident reporter", () => {
+  test("projects bounded run and compare fields before serializing the workflow snapshot", async () => {
+    const api = setupFailingRun();
+    const current = api.runs.get(100);
+    expect(current).toBeDefined();
+    api.runs.set(100, {
+      ...(current as TestRun),
+      webhook_payload: "x".repeat(72 * 1024),
+    });
+    api.comparePayloadBytes = 72 * 1024;
+    api.jobs.set(100, jobFixtures(100, "macos-package-macos-15", "in_progress").map((job) => ({
+      ...job,
+      raw_logs: "x".repeat(16 * 1024),
+      steps: job.steps.map((step) => ({ ...step, raw_log: "x".repeat(16 * 1024) })),
+    })));
+
+    const callerSha = api.runs.get(100)?.head_sha ?? "0".repeat(40);
+    const snapshot = await collectCoreRun(api, CORE_REPOSITORY, 100, {
+      callerRunId: 100,
+      callerRepository: CORE_REPOSITORY,
+      callerSha,
+      callerJobName: COLLECTOR_JOB_NAME,
+    });
+
+    expect(new TextEncoder().encode(JSON.stringify(snapshot)).byteLength).toBeLessThan(64 * 1024);
+    expect(snapshot.run).not.toHaveProperty("webhook_payload");
+    expect(snapshot.jobs.every((job) => !("raw_logs" in job))).toBe(true);
+    expect(snapshot.comparisons["macos-package-macos-15"]).not.toHaveProperty("files");
+
+    const writer = new MemoryGithubApi();
+    const result = await reportCollectedSnapshot(writer, snapshot, {
+      dryRun: false,
+      callerRunId: 100,
+      callerRepository: CORE_REPOSITORY,
+      callerSha,
+      callerJobName: REPORTER_JOB_NAME,
+    });
+    expect(result.actions.some((action) => action.kind === "create"
+      && action.jobKey === "macos-package-macos-15")).toBe(true);
+    expect(incidentIssues(writer)).toHaveLength(1);
+  });
+
   test("reads GitHub Actions jobs from the REST API jobs collection envelope", async () => {
     const apiData = setupFailingRun();
     const writer = new MemoryGithubApi();
@@ -296,7 +373,7 @@ describe("red-main incident reporter", () => {
     });
 
     expect(result.actions.some((action) => action.kind === "create")).toBe(true);
-    expect(writer.issues).toHaveLength(1);
+    expect(incidentIssues(writer)).toHaveLength(1);
     expect(authorizationHeaders).toContain("Bearer actions-read-only-token");
     expect(authorizationHeaders).toContain("");
   });
@@ -305,26 +382,25 @@ describe("red-main incident reporter", () => {
     const api = setupFailingRun();
     const result = await report(api, 100, false);
 
-    expect(result.actions).toContainEqual({
-      kind: "create",
-      jobKey: "macos-package-macos-15",
-      detail: "created issue #1",
-    });
-    expect(api.issues).toHaveLength(1);
-    expect(api.issues[0]?.labels.map((label) => label.name)).toEqual([
+    expect(result.actions.some((action) => action.kind === "create"
+      && action.jobKey === "macos-package-macos-15")).toBe(true);
+    expect(incidentIssues(api)).toHaveLength(1);
+    const incident = incidentForJob(api);
+    expect(incident?.labels.map((label) => label.name)).toEqual([
       ISSUE_LABEL,
       jobLabel(TRACKED_MACOS_JOBS.find((job) => job.key === "macos-package-macos-15") ?? {
         key: "missing",
         name: "missing",
       }),
     ]);
-    expect(api.issues[0]?.body).toContain("Package install acceptance");
-    expect(api.issues[0]?.body).toContain("actions/runs/100");
-    expect(api.issues[0]?.body).toContain("(7 commits)");
-    expect(api.issues[0]?.body).toContain("/compare/000000000000000000000000000000000000005a...0000000000000000000000000000000000000064");
+    expect(incident?.body).toContain("Package install acceptance");
+    expect(incident?.body).toContain("actions/runs/100");
+    expect(incident?.body).toContain("(7 commits)");
+    expect(incident?.body).toContain("/compare/000000000000000000000000000000000000005a...0000000000000000000000000000000000000064");
     expect(api.comparisons).toEqual([
       "000000000000000000000000000000000000005a...0000000000000000000000000000000000000064",
     ]);
+    expect(watermarkForJob(api, "macos-package-macos-15")?.body).toContain('"outcome":"failure"');
   });
 
   test("duplicate delivery does not create a second issue or write again", async () => {
@@ -333,7 +409,7 @@ describe("red-main incident reporter", () => {
     const writeCount = api.writes.length;
     const duplicate = await report(api, 100, false);
 
-    expect(api.issues).toHaveLength(1);
+    expect(incidentIssues(api)).toHaveLength(1);
     expect(api.writes).toHaveLength(writeCount);
     expect(duplicate.actions.some((action) => action.kind === "skip")).toBe(true);
   });
@@ -353,18 +429,19 @@ describe("red-main incident reporter", () => {
     const staleResult = await report(api, 101, false);
     expect(staleResult.actions.some((action) => action.kind === "skip"
       && action.jobKey === "macos-package-macos-15")).toBe(true);
-    expect(api.issues[0]?.state).toBe("open");
+    expect(incidentForJob(api)?.state).toBe("open");
 
     const laterGreen = run(103, 103, "success");
     api.runs.set(103, laterGreen);
     api.jobs.set(103, jobFixtures(103));
     api.failNextClosePatch = true;
     await expectFailure(report(api, 103, false), "temporary patch failure");
-    expect(api.comments.get(1)?.filter((comment) => comment.body.includes("actions/runs/103"))).toHaveLength(1);
+    const incidentNumber = incidentForJob(api)?.number;
+    expect(api.comments.get(incidentNumber ?? -1)?.filter((comment) => comment.body.includes("actions/runs/103"))).toHaveLength(1);
     const closeResult = await report(api, 103, false);
     expect(closeResult.actions.some((action) => action.kind === "close")).toBe(true);
-    expect(api.issues[0]?.state).toBe("closed");
-    expect(api.comments.get(1)?.some((comment) => comment.body.includes("actions/runs/103"))).toBe(true);
+    expect(incidentForJob(api)?.state).toBe("closed");
+    expect(api.comments.get(incidentNumber ?? -1)?.some((comment) => comment.body.includes("actions/runs/103"))).toBe(true);
   });
 
   test("retains the green high-water mark after close and rejects late failure delivery", async () => {
@@ -374,14 +451,14 @@ describe("red-main incident reporter", () => {
     api.runs.set(101, green);
     api.jobs.set(101, jobFixtures(101));
     await report(api, 101, false);
-    expect(api.issues[0]?.state).toBe("closed");
-    expect(api.issues[0]?.body).toContain('"outcome":"success"');
+    expect(incidentForJob(api)?.state).toBe("closed");
+    expect(incidentForJob(api)?.body).toContain('"outcome":"success"');
 
     const late = await report(api, 100, false);
 
     expect(late.actions.some((action) => action.kind === "skip")).toBe(true);
-    expect(api.issues).toHaveLength(1);
-    expect(api.issues[0]?.state).toBe("closed");
+    expect(incidentIssues(api)).toHaveLength(1);
+    expect(incidentForJob(api)?.state).toBe("closed");
   });
 
   test("a green run delivered before an older failure suppresses stale issue creation", async () => {
@@ -399,6 +476,83 @@ describe("red-main incident reporter", () => {
     expect(api.writes).toHaveLength(0);
   });
 
+  test("persists green outcomes so an older failure stays suppressed after history ages out", async () => {
+    const green = run(101, 101, "success");
+    const api = new MemoryGithubApi(green);
+    api.jobs.set(101, jobFixtures(101));
+
+    await report(api, 101, false);
+
+    const watermarkIssues = api.issues.filter((issue) => issue.labels.some((label) => label.name === "red-main-watermark"));
+    expect(watermarkIssues).toHaveLength(TRACKED_MACOS_JOBS.length);
+    expect(watermarkIssues.every((issue) => issue.state === "closed"
+      && issue.body?.includes('"outcome":"success"') === true)).toBe(true);
+    const writesBeforeLateFailure = api.writes.length;
+
+    api.runs.delete(101);
+    const lateRed = run(100, 100, null, "in_progress");
+    api.runs.set(100, lateRed);
+    api.jobs.set(100, jobFixtures(100, "macos-package-macos-15", "in_progress"));
+    const result = await report(api, 100, false);
+
+    expect(result.actions.some((action) => action.kind === "skip"
+      && action.jobKey === "macos-package-macos-15"
+      && action.detail.includes("persisted outcome #101"))).toBe(true);
+    expect(incidentIssues(api)).toHaveLength(0);
+    expect(api.writes).toHaveLength(writesBeforeLateFailure);
+  });
+
+  test("a stale green outcome cannot overwrite a newer open incident marker", async () => {
+    const api = setupFailingRun();
+    const newerRed = run(102, 102, null, "in_progress");
+    api.runs.set(102, newerRed);
+    api.jobs.set(102, jobFixtures(102, "macos-package-macos-15", "in_progress"));
+    await report(api, 102, false);
+    api.issues.splice(0, api.issues.length, ...api.issues.filter((issue) =>
+      !issue.labels.some((label) => label.name === "red-main-watermark")));
+
+    const olderGreen = run(101, 101, "success");
+    api.runs.delete(102);
+    api.runs.set(101, olderGreen);
+    api.jobs.set(101, jobFixtures(101));
+    const result = await report(api, 101, false);
+
+    expect(result.actions.some((action) => action.kind === "skip"
+      && action.jobKey === "macos-package-macos-15")).toBe(true);
+    expect(incidentForJob(api)?.state).toBe("open");
+    expect(watermarkForJob(api, "macos-package-macos-15")).toBeUndefined();
+  });
+
+  test("reruns recover from lost watermark create and update acknowledgements", async () => {
+    const firstJob = TRACKED_MACOS_JOBS[0];
+    if (firstJob === undefined) {
+      throw new Error("tracked macOS job list must not be empty");
+    }
+    const green = run(101, 101, "success");
+    const api = new MemoryGithubApi(green);
+    api.jobs.set(101, jobFixtures(101));
+    api.loseNextWatermarkCreateAck = true;
+    await expectFailure(report(api, 101, false), "watermark create acknowledgement lost");
+    expect(watermarkForJob(api, firstJob.key)?.body).toContain('"runNumber":101');
+    await report(api, 101, false);
+    expect(api.issues.filter((issue) => issue.labels.some((label) => label.name === "red-main-watermark")
+      && issue.labels.some((label) => label.name === jobLabel(firstJob)))).toHaveLength(1);
+    const writesAfterRetry = api.writes.length;
+    await report(api, 101, false);
+    expect(api.writes).toHaveLength(writesAfterRetry);
+
+    const newerGreen = run(102, 102, "success");
+    api.runs.set(102, newerGreen);
+    api.jobs.set(102, jobFixtures(102));
+    api.loseNextWatermarkUpdateAck = true;
+    await expectFailure(report(api, 102, false), "watermark update acknowledgement lost");
+    expect(watermarkForJob(api, firstJob.key)?.body).toContain('"runNumber":102');
+    await report(api, 102, false);
+    const writesAfterUpdateRetry = api.writes.length;
+    await report(api, 102, false);
+    expect(api.writes).toHaveLength(writesAfterUpdateRetry);
+  });
+
   test("serialized failure-green-failure runs reopen one issue with the newest state", async () => {
     const api = setupFailingRun();
     await report(api, 100, false);
@@ -412,10 +566,11 @@ describe("red-main incident reporter", () => {
 
     await report(api, 102, false);
 
-    expect(api.issues).toHaveLength(1);
-    expect(api.issues[0]?.state).toBe("open");
-    expect(api.issues[0]?.body).toContain('"runNumber":102');
-    expect(api.issues[0]?.body).toContain('"outcome":"failure"');
+    expect(incidentIssues(api)).toHaveLength(1);
+    expect(incidentForJob(api)?.state).toBe("open");
+    expect(incidentForJob(api)?.body).toContain('"runNumber":102');
+    expect(incidentForJob(api)?.body).toContain('"outcome":"failure"');
+    expect(watermarkForJob(api, "macos-package-macos-15")?.body).toContain('"runNumber":102');
   });
 
   test("unavailable ordering history fails closed without issue writes", async () => {
@@ -438,8 +593,8 @@ describe("red-main incident reporter", () => {
     const result = await report(api, 100, false);
 
     expect(result.actions.some((action) => action.kind === "create")).toBe(true);
-    expect(api.issues).toHaveLength(1);
-    expect(api.issues[0]?.body).toContain("History lookup was unavailable; the previous green run could not be determined.");
+    expect(incidentIssues(api)).toHaveLength(1);
+    expect(incidentForJob(api)?.body).toContain("History lookup was unavailable; the previous green run could not be determined.");
   });
 
   test("unavailable newer outcome lookup fails closed", async () => {
@@ -464,8 +619,8 @@ describe("red-main incident reporter", () => {
     const result = await report(api, 100, false);
 
     expect(result.actions.some((action) => action.kind === "create")).toBe(true);
-    expect(api.issues).toHaveLength(1);
-    expect(api.issues[0]?.body).toContain("Previous green run #90 was found, but compare details are unavailable.");
+    expect(incidentIssues(api)).toHaveLength(1);
+    expect(incidentForJob(api)?.body).toContain("Previous green run #90 was found, but compare details are unavailable.");
   });
 
   test("history job lookups are bounded to the latest fifty runs", async () => {
@@ -505,7 +660,7 @@ describe("red-main incident reporter", () => {
 
     expect(result.actions.some((action) => action.kind === "create"
       && action.jobKey === "macos-package-macos-14")).toBe(true);
-    expect(api.issues).toHaveLength(1);
+    expect(incidentIssues(api)).toHaveLength(1);
   });
 
   test("main push skips leave an open optional-job incident unchanged", async () => {
@@ -521,8 +676,8 @@ describe("red-main incident reporter", () => {
     await report(api, 100, false);
     const greenResult = await report(api, 101, false);
 
-    expect(api.issues).toHaveLength(1);
-    expect(api.issues[0]?.state).toBe("open");
+    expect(incidentIssues(api)).toHaveLength(1);
+    expect(incidentForJob(api, "macos-package-macos-14")?.state).toBe("open");
     expect(greenResult.actions.some((action) => action.kind === "close")).toBe(false);
   });
 

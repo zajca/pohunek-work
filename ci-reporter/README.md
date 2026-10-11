@@ -105,5 +105,13 @@ group `red-main-report-${{ github.repository }}` with
 the action itself does not provide a distributed lock. The CI workflow's
 workflow-level main-run concurrency must remain enabled as well.
 
+To retain ordering after a green run ages out of the 50-run history window, the
+writer keeps one closed issue per tracked job with the `red-main-watermark`
+label and that job's stable label. It creates this record even if the job has
+never had an incident. These closed issues are reporter state: do not delete
+them or edit their ordering marker, or a delayed older failure could be
+reported as current. The repository-wide writer concurrency above serializes
+watermark creation and updates as well as incident mutations.
+
 The reporter is deliberately outside `zajca/pohunek`; it contains GitHub issue
 provider behavior only in this client repository.
