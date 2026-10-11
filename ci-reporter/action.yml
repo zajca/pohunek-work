@@ -1,0 +1,37 @@
+name: Report red-main macOS CI incidents
+description: Verify the current pohunek CI run and track macOS job incidents in GitHub Issues
+inputs:
+  run-id:
+    description: Current core CI run ID to verify and report
+    required: true
+  repository:
+    description: Core repository whose current CI run will be verified
+    required: true
+  dry-run:
+    description: Read and plan changes without creating, commenting on, or closing issues
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.2
+    - name: Verify and report the core CI run
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        RUN_ID: ${{ inputs.run-id }}
+        REPOSITORY: ${{ inputs.repository }}
+        CALLER_JOB_NAME: ${{ github.job }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        REPORTER_PATH: ${{ github.action_path }}
+        CALLER_RUN_ID: ${{ github.run_id }}
+        CALLER_REPOSITORY: ${{ github.repository }}
+        CALLER_SHA: ${{ github.sha }}
+      run: |
+        args=(--run-id "$RUN_ID" --repository "$REPOSITORY" --caller-run-id "$CALLER_RUN_ID" --caller-repository "$CALLER_REPOSITORY" --caller-sha "$CALLER_SHA" --caller-job-name "$CALLER_JOB_NAME")
+        if [[ "$DRY_RUN" == "true" ]]; then
+          args+=(--dry-run)
+        fi
+        bun "$REPORTER_PATH/src/main.ts" "${args[@]}"

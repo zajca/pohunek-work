@@ -10,6 +10,7 @@ runs the checks of another.
 | [`web/`](web/docs/web-control-center.md) | Owner web control center (backend, client core, Svelte SPA) | Bun workspace |
 | [`native/`](native/docs/gui.md) | Native Iced GUI (`pohunek-gui`) and its headless core | Cargo workspace |
 | [`launchers/`](launchers/docs/launcher.md) | rofi, sway and Linear/GitHub launch scripts, installed by `pohunek-work setup` | shell + Bun tests |
+| [`ci-reporter/`](ci-reporter/README.md) | External red-main macOS CI incident reporter action | Bun |
 
 ## Public contracts only
 
@@ -51,7 +52,7 @@ surfaces, a bump pull request runs the jobs of each surface it touches.
 `.github/workflows/ci.yml` computes the changed surfaces (`changes` job), runs
 only their jobs on pull requests, runs everything on `main`, the weekly
 schedule and manual dispatch, and reports one always-present `ci` check that
-is the single required status. Jobs exist for `plugin/`, `launchers/`,
+is the single required status. Jobs exist for `plugin/`, `ci-reporter/`, `launchers/`,
 `native/`, `web/` (Linux and macOS, against the core binaries and SDK tarballs
 of the revision in `web/core-sdk.json`) and the shared `packaging/`. A new
 surface adds a filter entry, a job and an entry in the `ci` job's `needs`.
