@@ -29,6 +29,10 @@ places, which a bump must change together:
 - `.github/workflows/ci.yml` (`launchers` job): `POHUNEK_RELEASE` and
   `POHUNEK_MUSL_SHA256`, the core release whose `pohunek` binary the launcher
   rendering tests run.
+- `plugin/core-release.json`: the core release and, per platform, the name and
+  sha256 of its daemon archive (`pohunekd`, `pohunek-sessiond`, `pohunek`), which
+  `plugin/scripts/core-binaries.ts` downloads for the plugin's real-daemon tests.
+  Take the digests from the release's `.sha256` assets.
 - `web/core-sdk.json`: the core commit (`coreRev`) of that release and where its
   `@pohunek/protocol`, `@pohunek/sdk` and `@pohunek/testkit` tarballs are
   downloaded (`assetBaseUrl`, `sdkVersion`, the release `vSDKVERSION`).
@@ -42,9 +46,10 @@ The TypeScript SDK handshake requires the daemon's `health.protocol_version` to
 equal `PROTOCOL_VERSION`, so the UIs move in lockstep with the core protocol
 version.
 
-Bump procedure: change every pin above to the same core release, refresh the
-lockfiles, and run every surface's CI, including the real-daemon end-to-end
-tests against that release's binaries. Because the pins sit in different
+Bump procedure: change every pin above to the same core release (the plugin pin
+with every archive name and digest of that release), refresh the lockfiles, and
+run every surface's CI, including the real-daemon end-to-end tests against that
+release's binaries. Because the pins sit in different
 surfaces, a bump pull request runs the jobs of each surface it touches.
 
 ## CI

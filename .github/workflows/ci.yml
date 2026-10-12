@@ -120,6 +120,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
+      # Downloads the daemon archive pinned in plugin/core-release.json, verifies
+      # its sha256 and exports POHUNEK_TEST_CORE_DIR for the real-daemon tests.
+      - name: Install the pinned core binaries
+        shell: bash
+        run: bun scripts/core-binaries.ts | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
       # `bun run test` runs the suite under a private TMPDIR and fails on leftovers.
       - run: bun run test
 

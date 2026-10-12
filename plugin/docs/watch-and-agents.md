@@ -13,9 +13,11 @@ through `[notify] command` for each row that becomes the owner's turn.
 ```bash
 pohunek-work watch                      # every configured project
 pohunek-work watch --project widgets    # one pohunek project label
+pohunek-work watch --project widgets --project gadgets   # several labels
 ```
 
-A label with no project file is rejected at start (`unknown_project`, exit 2).
+Labels with no project file are rejected at start, all of them named in one
+error (`unknown_project`, exit 2).
 A project that is configured but skipped at run time (not registered in
 pohunek, origin mismatch) is logged as `watch_warning` on every poll.
 

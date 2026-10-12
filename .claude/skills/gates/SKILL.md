@@ -46,10 +46,16 @@ bash -c 'for v in $(compgen -e | grep "^POHUNEK_"); do unset "$v"; done; <comman
 
 Never print variable values.
 
-**plugin/**
+**plugin/** — the real-daemon tests need `POHUNEK_TEST_CORE_DIR`, the
+directory of the core binaries pinned in `plugin/core-release.json`;
+`bun scripts/core-binaries.ts` downloads and verifies them into
+`plugin/.core-binaries/` (reused once verified) and prints the export. Without
+it those tests fail.
 
 ```bash
-cd plugin && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
+cd plugin
+eval "$(bun scripts/core-binaries.ts)"
+bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
 ```
 
 **launchers/** — `bun test` needs `POHUNEK_TEST_SHELL` (`sh`, `bash` or

@@ -26,7 +26,7 @@ export async function resolveRow(
   deps: Omit<ListDeps, "cliVersion">,
 ): Promise<Resolved> {
   const key = normalizeKey(input);
-  const collected = await collectRows(config, onlyProject, deps);
+  const collected = await collectRows(config, onlyProject === null ? null : [onlyProject], deps);
   const matches = collected.rows.filter((row) => row.listItem.key === key);
   const [row] = matches;
   if (row === undefined) {

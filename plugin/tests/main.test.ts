@@ -88,6 +88,20 @@ test("do rejects unknown actions and options that do not apply, before reading t
   expect(envelope.err.msg).toContain("attach takes --json only with --dry-run");
 });
 
+test("do takes one --project: a repeated one is a usage error before the config is read", async () => {
+  const dir = await tempDir();
+  const result = await run(["do", "ABC-1", "ready", "--project", "widgets", "--project", "gadgets"], dir);
+  expect(result.code).toBe(2);
+  expect(result.err).toContain("do takes one --project");
+  expect(result.err).toContain("usage:");
+  expect(result.err).not.toContain("config.toml");
+  const json = await run(["do", "ABC-1", "ready", "--project", "widgets", "--project", "widgets", "--json"], dir);
+  expect(json.code).toBe(2);
+  const envelope = JSON.parse(json.out) as { err: { class: string; msg: string } };
+  expect(envelope.err.class).toBe("usage");
+  expect(envelope.err.msg).toContain("do takes one --project");
+});
+
 test("do accepts every action name and reaches the config", async () => {
   const dir = await tempDir();
   for (const action of ["fix-ci", "rebase", "review", "ready", "cleanup", "merge"]) {

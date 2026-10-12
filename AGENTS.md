@@ -28,7 +28,10 @@ the jobs of changed surfaces on pull requests.
 
 ```bash
 # plugin/ and launchers/ (Bun)
-cd plugin && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
+cd plugin && eval "$(bun scripts/core-binaries.ts)" && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
+# `bun scripts/core-binaries.ts` downloads the daemon archive pinned in
+# plugin/core-release.json, verifies its sha256 and exports POHUNEK_TEST_CORE_DIR;
+# the real-daemon tests fail without it
 cd launchers && bun install --frozen-lockfile && bun run check   # lint, typecheck, tests
 # `bun test` in launchers/ needs POHUNEK_TEST_SHELL (sh, bash or dash) and, for
 # the rendering tests, POHUNEK_TEST_BIN (absolute path of a core `pohunek` binary)
