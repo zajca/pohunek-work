@@ -296,12 +296,13 @@ test("a confirmation does not authorize a plan that changed while the owner was 
   const { daemon: core, fixture, workdir } = await setUp();
   const child = spawnPluginInTerminal(fixture, ["manager", "start", "--project", "widgets", "--json"]);
   const output = { text: "" };
-  const reading = collect(child.stdout, output);
+  const errors = { text: "" };
+  const reading = Promise.all([collect(child.stdout, output), collect(child.stderr, errors)]);
   let rival: string | undefined;
   try {
     const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS;
     while (!output.text.includes("Run this command?")) {
-      if (child.exitCode !== null) throw new Error(`manager start exited before asking (${String(child.exitCode)}):\n${output.text}`);
+      if (child.exitCode !== null) throw new Error(`manager start exited before asking (${String(child.exitCode)}):\n${output.text}\nstderr:\n${errors.text}`);
       if (Date.now() > deadline) throw new Error(`no confirmation question within ${String(CONFIRMATION_TIMEOUT_MS)} ms:\n${output.text}`);
       await Bun.sleep(POLL_INTERVAL_MS);
     }
