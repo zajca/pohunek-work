@@ -70,11 +70,12 @@ Linear request rate. Choose it with the API budget in mind.
 
 ### Running it
 
-`pohunek` refuses to answer when the process has `POHUNEK_SESSION_ID` set
-without `POHUNEK_DAEMON_ID`, which is the case inside a pohunek agent session.
-Every poll then reports `pohunek: origin_environment` and `watch` never gets a
-baseline. Start `watch` from a normal terminal or a service, or run it as
-`env -u POHUNEK_SESSION_ID pohunek-work watch` from inside a session.
+`pohunek` refuses to answer when only one of `POHUNEK_SESSION_ID` and
+`POHUNEK_DAEMON_ID` is set; every poll then reports `pohunek: origin_environment`
+and `watch` never gets a baseline. A session started by core 0.34.2 or later
+carries both, so `watch` runs unchanged inside it; an older core sets only
+`POHUNEK_SESSION_ID`, so there start `watch` from a normal terminal or a service.
+Never unset just one of the two.
 
 Run `pohunek-work doctor` first; it must pass the `pohunek` and `github auth`
 checks.
@@ -148,11 +149,12 @@ Rules for the agent:
   act on absence.
 - Every `do` re-reads fresh data and refuses when the row's rule no longer
   holds. The agent must not cache rows between steps.
-- **Temporary:** inside a pohunek session `POHUNEK_SESSION_ID` is set without
-  `POHUNEK_DAEMON_ID`, and `pohunek` refuses to answer (`list` reports the
-  pohunek source as `origin_environment`). Prefix every `pohunek-work` and
-  `pohunek` command with `env -u POHUNEK_SESSION_ID`. Remove this when
-  [zajca/pohunek#541](https://github.com/zajca/pohunek/issues/541) is released.
+- Run `pohunek-work` and `pohunek` commands unchanged inside the session:
+  core 0.34.2 and later give it both `POHUNEK_SESSION_ID` and
+  `POHUNEK_DAEMON_ID`. Never unset one of them; `pohunek` refuses a half-set
+  pair (`incomplete_origin_environment`, and `list` reports the pohunek source
+  as `origin_environment`). That error inside a session means the core is older
+  than 0.34.2: report it and stop.
 
 ### What the manager does and does not do
 
