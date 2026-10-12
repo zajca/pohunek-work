@@ -1,8 +1,8 @@
 // End-to-end scenario of the real-daemon fixture itself: a live shell session started through the
 // pinned CLI binds its worker socket at the path whose length the fixture checks before the daemon
-// starts, and stopping the fixture leaves no session worker running below its root.
+// starts, and stopping the fixture leaves no session worker running and removes its directories.
 import { afterEach, expect, test } from "bun:test";
-import { stat } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { startCoreDaemon, workersBelow, type CoreDaemon } from "./helpers/core-daemon.ts";
 
 const SCENARIO_TIMEOUT_MS = 60_000;
@@ -15,6 +15,16 @@ afterEach(async () => {
   await daemon?.stop();
   daemon = null;
 });
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
 
 async function waitForSocket(path: string): Promise<void> {
   const deadline = Date.now() + SOCKET_TIMEOUT_MS;
@@ -39,8 +49,10 @@ test("a live shell session binds its worker socket at the checked length and its
   const socket = fixture.workerSocketPath(id);
   await waitForSocket(socket);
   expect(Buffer.byteLength(socket)).toBe(Buffer.byteLength(fixture.longestSocketPath));
-  expect(await workersBelow(fixture.root)).toHaveLength(1);
+  expect(await workersBelow(fixture.runtimeDir)).toHaveLength(1);
 
   await fixture.stop();
-  expect(await workersBelow(fixture.root)).toEqual([]);
+  expect(await workersBelow(fixture.runtimeDir)).toEqual([]);
+  expect(await exists(fixture.root)).toBe(false);
+  expect(await exists(fixture.runtimeDir)).toBe(false);
 }, SCENARIO_TIMEOUT_MS);
