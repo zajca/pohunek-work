@@ -66,6 +66,16 @@ test("an unexpected positional argument is a usage error", async () => {
   expect((await run([], dir)).code).toBe(2);
 });
 
+test("beads validates its explicit workspace and confirmation before running bd", async () => {
+  const dir = await tempDir();
+  const usage = await run(["beads", "claim", "bd-1", "--json"], dir);
+  expect(usage.code).toBe(2);
+  const envelope = JSON.parse(usage.out) as { protocol: { maximum: number }; err: { code: string; msg: string } };
+  expect(envelope.protocol.maximum).toBe(1);
+  expect(envelope.err.code).toBe("usage");
+  expect(envelope.err.msg).toContain("--workspace");
+});
+
 test("do rejects unknown actions and options that do not apply, before reading the config", async () => {
   const dir = await tempDir();
   const cases: readonly (readonly string[])[] = [

@@ -77,6 +77,13 @@ stays manual),
 and a path toward a managing agent that runs those actions for the owner under
 an explicit policy.
 
+An experimental `beads` command lets a managing agent read a Beads dependency
+queue and claim a ready bead linked by `external_ref` to a GitHub issue. It
+returns the existing `pohunek-work do ... implement --dry-run --json` command as
+the next step. GitHub remains the source of the issue and pull request; the
+Beads workspace is opt-in and is not initialized or synchronized by this plugin.
+See [the manager guide](docs/watch-and-agents.md#experimental-beads-queue).
+
 ## Status
 
 M0 and M1 are merged: `pohunek-work list` and `doctor`. M2a and M2b are in
@@ -160,9 +167,10 @@ given.
   GitHub or work items. Everything specific lives here, following the
   workflow plugin model of
   [zajca/pohunek#148](https://github.com/zajca/pohunek/issues/148).
-- **No new state.** Linear, GitHub and pohunek remain the sources of truth.
+- **No new state in the default workflow.** Linear, GitHub and pohunek remain the sources of truth.
   The only write is session metadata (`work.link.*`, `work.role`) at launch;
-  `on_turn` is computed at read time and never stored.
+  `on_turn` is computed at read time and never stored. The opt-in Beads pilot
+  writes a claim to its separate workspace.
 - **Public contracts only.** The plugin talks to pohunek through its public
   CLI with `--json` (verified against pohunek 0.31.6). The other surfaces of
   this repository (`web/`, `native/`) additionally speak the public protocol
