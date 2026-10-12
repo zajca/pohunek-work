@@ -3,7 +3,7 @@
 // starts, and stopping the fixture leaves no session worker running and removes its directories.
 import { afterEach, expect, test } from "bun:test";
 import { access, stat } from "node:fs/promises";
-import { startCoreDaemon, workersBelow, type CoreDaemon } from "./helpers/core-daemon.ts";
+import { DAEMON_STOP_HOOK_TIMEOUT_MS, startCoreDaemon, workersBelow, type CoreDaemon } from "./helpers/core-daemon.ts";
 
 const SCENARIO_TIMEOUT_MS = 60_000;
 const SOCKET_TIMEOUT_MS = 10_000;
@@ -14,7 +14,7 @@ let daemon: CoreDaemon | null = null;
 afterEach(async () => {
   await daemon?.stop();
   daemon = null;
-});
+}, DAEMON_STOP_HOOK_TIMEOUT_MS);
 
 async function exists(path: string): Promise<boolean> {
   try {
