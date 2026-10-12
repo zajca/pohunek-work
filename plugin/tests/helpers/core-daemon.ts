@@ -248,6 +248,8 @@ export interface PluginProject {
   readonly label: string;
   /** GitHub `owner/name` the project file names. */
   readonly repo: string;
+  /** Text of the project file in place of the Linear template; its `pohunek_label` and `repo` lines are replaced the same way. */
+  readonly template?: string;
 }
 
 /** Options of `writePluginConfig`. */
@@ -256,6 +258,11 @@ export interface PluginConfigOptions {
   readonly name?: string;
   /** TOML appended to the global file, for optional tables such as `[manager]`. */
   readonly extraGlobal?: string;
+  /**
+   * Values of existing global keys, by `<table>.<key>` (for example `actions.launch_timeout_ms`); a number is
+   * written as a TOML integer, a string as a TOML string. Applied after the paths this function sets.
+   */
+  readonly overrides?: Readonly<Record<string, string | number>>;
 }
 
 export interface PluginFixture {
@@ -271,6 +278,20 @@ function setValue(text: string, key: string, value: string): string {
   const matches = text.match(line)?.length ?? 0;
   if (matches !== 1) throw new Error(`the fixture has ${String(matches)} lines for ${key}, expected 1`);
   return text.replace(line, `${key} = ${JSON.stringify(value)}`);
+}
+
+/** Replaces the value of the one line `key = ...` inside `[table]`; fails when that table does not have exactly one. */
+function setTableValue(text: string, table: string, key: string, value: string | number): string {
+  const lines = text.split("\n");
+  const start = lines.indexOf(`[${table}]`);
+  if (start === -1) throw new Error(`the fixture has no table [${table}]`);
+  const next = lines.findIndex((line, index) => index > start && line.startsWith("["));
+  const end = next === -1 ? lines.length : next;
+  const matches = lines.flatMap((line, index) => (index > start && index < end && line.startsWith(`${key} = `) ? [index] : []));
+  const [only] = matches;
+  if (only === undefined || matches.length !== 1) throw new Error(`the fixture has ${String(matches.length)} lines for ${table}.${key}, expected 1`);
+  lines[only] = `${key} = ${typeof value === "number" ? String(value) : JSON.stringify(value)}`;
+  return lines.join("\n");
 }
 
 /**
@@ -290,14 +311,34 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
   global = setValue(global, "gh_bin", join(missing, "gh"));
   global = setValue(global, "secret_tool_bin", join(missing, "secret-tool"));
   global = setValue(global, "command", join(missing, "notify-send"));
+  for (const [path, value] of Object.entries(options.overrides ?? {})) {
+    const dot = path.indexOf(".");
+    if (dot === -1) throw new Error(`override ${path} is not <table>.<key>`);
+    global = setTableValue(global, path.slice(0, dot), path.slice(dot + 1), value);
+  }
   await writeFile(join(configDir, "config.toml"), `${global}${options.extraGlobal ?? ""}`);
   const template = await readFile(join(FIXTURE_CONFIG, "projects", `${PROJECT_TEMPLATE}.toml`), "utf8");
   for (const project of projects) {
-    const text = setValue(setValue(template, "pohunek_label", project.label), "repo", project.repo);
+    const text = setValue(setValue(project.template ?? template, "pohunek_label", project.label), "repo", project.repo);
     await writeFile(join(configDir, "projects", `${project.label}.toml`), text);
   }
   const env = { ...daemon.clientEnv, POHUNEK_WORK_CONFIG_DIR: configDir, POHUNEK_WORK_STATE_DIR: stateDir };
   return { configDir, stateDir, env };
+}
+
+/**
+ * Installs the host agent profile `name` of the daemon, based on agent `shell`, whose program is `script`
+ * (the text of a `/bin/sh` script). The daemon reads profiles from `$XDG_CONFIG_HOME/pohunek/agents`; the
+ * script lives in the daemon's `bin` directory, so it must name every other program by absolute path.
+ */
+export async function installAgentProfile(daemon: CoreDaemon, name: string, script: string): Promise<void> {
+  if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`agent profile name ${JSON.stringify(name)} is not lowercase letters, digits and -`);
+  const program = join(daemon.root, "bin", `agent-${name}`);
+  await writeFile(program, script, { mode: 0o755 });
+  await chmod(program, 0o755);
+  const agents = join(daemon.root, "config", "pohunek", "agents");
+  await mkdir(agents, { recursive: true, mode: 0o700 });
+  await writeFile(join(agents, `${name}.toml`), `base = "shell"\nprogram = ${JSON.stringify(program)}\nargs = []\n`, { mode: 0o600 });
 }
 
 /** pgrep exit status when no process matched. */
