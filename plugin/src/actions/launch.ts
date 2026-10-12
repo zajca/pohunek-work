@@ -3,6 +3,7 @@
 // the daemon's answer.
 import type { CollectedRow } from "../commands/list.ts";
 import { configuredProfile } from "../config/profiles.ts";
+import { PROFILE_NAME } from "../config/validate.ts";
 import { keyFromBranch } from "../join.ts";
 import { isGithubProject } from "../config/issue-source.ts";
 import { isGithubIssueRowKey } from "../config/row-key.ts";
@@ -29,9 +30,6 @@ const REVIEW_RULE = 3;
 /** Rule for a failing check or a merge conflict on the owner's pull request. */
 const FIX_RULE = 5;
 
-/** A profile name is a pohunek identifier, never an option. */
-const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
 export interface PlanOptions {
   /** `--profile`; overrides the configured profile of the action. */
   readonly profile: string | null;
@@ -54,6 +52,10 @@ function profileFor(action: LaunchAction, row: CollectedRow, config: PluginConfi
   if (profile === undefined) {
     throw new ActionError("no_profile", `no agent profile for ${action}: set [profiles] ${action} or pass --profile`);
   }
+  return requireProfileName(profile);
+}
+
+export function requireProfileName(profile: string): string {
   if (!PROFILE_NAME.test(profile)) {
     throw new ActionError("invalid_value", `agent profile ${JSON.stringify(profile)} is not a valid profile name`);
   }
@@ -95,7 +97,7 @@ function linkOfRow(row: CollectedRow, pr: PullRequest): { provider: string; kind
   return { provider: "github", kind: "pull_request", id: pr.id };
 }
 
-function metaArgs(metadata: Readonly<Record<string, string>>): string[] {
+export function metaArgs(metadata: Readonly<Record<string, string>>): string[] {
   return Object.entries(metadata).flatMap(([key, value]) => ["--meta", `${key}=${value}`]);
 }
 
@@ -550,7 +552,7 @@ export async function planLaunch(
 }
 
 /** Argv shown to the owner and logged; the prompt travels on stdin. */
-export function displayArgv(bin: string, plan: ActionPlan): string[] {
+export function displayArgv(bin: string, plan: Pick<SessionLaunch, "args">): string[] {
   return [bin, "session", "new", ...plan.args, "--json"];
 }
 
@@ -642,14 +644,24 @@ function requireSetupSucceeded(sessionId: string, failures: readonly SetupFailur
   );
 }
 
+/** What one `pohunek session new` sends and what the daemon's record has to carry afterwards. */
+export interface SessionLaunch {
+  /** Arguments after `pohunek session new`, without `--json`. */
+  readonly args: readonly string[];
+  /** Prompt sent on stdin; never part of argv. */
+  readonly prompt: string;
+  readonly metadata: Readonly<Record<string, string>>;
+}
+
 /**
- * Runs the plan once. The process gets `launchKillMarginMs` more than the
+ * Runs `session new` once, then checks the project setup, the daemon's metadata
+ * and the prompt delivery. The process gets `launchKillMarginMs` more than the
  * daemon so the daemon's own timeout answer arrives first. A timeout is not
  * retried: the session may exist, so the error tells the owner to look at
  * `pohunek session list`.
  */
-export async function executePlan(
-  plan: ActionPlan,
+export async function launchVerified(
+  plan: SessionLaunch,
   pohunek: PohunekClient,
   config: PluginConfig,
 ): Promise<ActionResult> {
@@ -670,7 +682,7 @@ export async function executePlan(
   const { session, warnings, setupFailures } = launched.data;
   // First, so that a failed setup is never hidden behind another launch finding.
   requireSetupSucceeded(session.id, setupFailures);
-  // The daemon's own record has to carry exactly the link that was planned.
+  // The daemon's own record has to carry exactly the metadata that was planned.
   const mismatched = Object.entries(plan.metadata).filter(([key, value]) => session.metadata[key] !== value);
   if (mismatched.length > 0) {
     throw new ActionError(
@@ -688,6 +700,16 @@ export async function executePlan(
     headMismatch: null,
   };
   await verifyPromptDelivery(session.id, pohunek, config);
+  return result;
+}
+
+/** Runs the plan once through `launchVerified`, then checks the worktree head when the plan expects one. */
+export async function executePlan(
+  plan: ActionPlan,
+  pohunek: PohunekClient,
+  config: PluginConfig,
+): Promise<ActionResult> {
+  const result = await launchVerified(plan, pohunek, config);
   if (plan.expectedHead === null) return result;
   return { ...result, headMismatch: await verifyHead(plan, plan.expectedHead, result, pohunek) };
 }

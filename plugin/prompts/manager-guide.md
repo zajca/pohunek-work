@@ -1,8 +1,10 @@
 # Driving pohunek work from an agent
 
 This guide is the single source of the rules for an agent that drives pohunek
-work (the "manager"). This repository ships no skill and no MCP server for it,
-and no manager start prompt; the interface is the CLI.
+work (the "manager"). `pohunek-work manager start` launches the manager with the
+prompt from `plugin/prompts/work-manager.tmpl`, which points here and does not
+restate these rules. This repository ships no skill and no MCP server for it;
+the interface is the CLI.
 
 Rules marked **temporary** exist because an open issue has not landed. Each
 names the issue and when to remove or update the rule.

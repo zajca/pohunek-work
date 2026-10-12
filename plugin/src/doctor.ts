@@ -1,9 +1,10 @@
-// `pohunek-work doctor`: verifies configuration, pohunek, project matching,
-// GitHub authentication and the Linear keyring entry. Every failure mode has a
-// distinct code and exit code. The optional launcher requirements are reported
+// `pohunek-work doctor`: verifies configuration, the manager workdir, pohunek,
+// project matching, GitHub authentication and the Linear keyring entry. Every
+// failure mode has a distinct code and exit code. The optional launcher requirements are reported
 // as advisory `warn` lines that never change the exit code. No secret value is
 // read, kept or printed.
 
+import { workdirProblem } from "./actions/manager.ts";
 import { ConfigError, loadConfig as defaultLoadConfig } from "./config/index.ts";
 import {
   createPohunekClient as defaultCreatePohunekClient,
@@ -26,6 +27,7 @@ export const DOCTOR_EXIT_CODES = {
   linear_keyring_missing: 17,
   linear_keyring_unavailable: 18,
   pohunek_protocol: 19,
+  manager_workdir_missing: 20,
 } as const;
 
 export type DoctorFailureCode = keyof typeof DOCTOR_EXIT_CODES;
@@ -115,6 +117,14 @@ function checkRegistration(
   return pass(checkName, `label "${label}" matches ${repo}`);
 }
 
+async function checkManagerWorkdir(config: PluginConfig): Promise<DoctorCheck> {
+  const name = "manager workdir";
+  const manager = config.global.manager;
+  if (manager === null) return pass(name, "not needed: config.toml has no [manager] table");
+  const problem = await workdirProblem(manager.workdir);
+  return problem === null ? pass(name, `${manager.workdir} is a directory`) : failed(name, "manager_workdir_missing", problem);
+}
+
 async function checkGithub(config: PluginConfig, run: Exec): Promise<DoctorCheck> {
   const name = "github auth";
   const { ghBin, timeoutMs } = config.global.github;
@@ -184,6 +194,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     throw error;
   }
   checks.push(pass("config", `${String(config.projects.length)} project file(s) loaded`));
+  // Checked right after the configuration, so its exit code wins over every pohunek and provider check.
+  checks.push(await checkManagerWorkdir(config));
 
   const client = createClient(config.global.pohunek, {
     exec: run,

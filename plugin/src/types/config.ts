@@ -128,6 +128,14 @@ export interface TuiConfig {
   readonly detailMinWidth: number;
 }
 
+/** `pohunek-work manager start`: where the manager session runs and which agent it starts. */
+export interface ManagerConfig {
+  /** pohunek agent profile of the manager session; `--profile` overrides it. */
+  readonly profile: string;
+  /** Absolute path of the directory every manager session runs in; it never holds a project checkout. */
+  readonly workdir: string;
+}
+
 export interface GlobalConfig {
   readonly identity: IdentityConfig;
   readonly github: GithubConfig;
@@ -141,6 +149,8 @@ export interface GlobalConfig {
   readonly policy: PolicyConfig;
   readonly profiles: ProfilesConfig;
   readonly tui: TuiConfig;
+  /** Present only when the global file has a `[manager]` table; only `manager start` requires it. */
+  readonly manager: ManagerConfig | null;
 }
 
 /** Issues of a project come from Linear. */

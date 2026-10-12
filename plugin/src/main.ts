@@ -4,6 +4,8 @@ import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
+import { MANAGER_CONTRACT_VERSION } from "./actions/manager.ts";
+import { runManagerStart, type ManagerStartCommandOptions } from "./commands/manager.ts";
 import { runList } from "./commands/list.ts";
 import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupStep } from "./commands/setup.ts";
 import { ISSUE_PICKER_SOURCES, SETUP_CONTRACT_VERSION } from "./setup/settings.ts";
@@ -36,6 +38,7 @@ const USAGE = `usage:
   pohunek-work do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work doctor
   pohunek-work manager guide
+  pohunek-work manager start (--project <label>... | --all) [--profile <name>] [--dry-run] [--yes] [--json]
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]
   pohunek-work setup config [--force] [--json]
@@ -43,7 +46,7 @@ const USAGE = `usage:
   pohunek-work tui
   pohunek-work watch [--project <label>]...
 
---project on list and watch repeats to select several projects; do takes one.
+--project on list, watch and manager start repeats to select several projects; do takes one.
 merge is not an action: merging stays manual.
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
 doctor exits with the code of its first failed check (see doctor output)`;
@@ -313,10 +316,79 @@ async function doctorCommand(argv: readonly string[]): Promise<number> {
   return report.exitCode;
 }
 
-function managerCommand(argv: readonly string[]): number {
-  const [sub, ...extra] = argv;
-  if (sub !== "guide") throw new UsageError(sub === undefined ? "manager needs a subcommand (known: guide)" : `unknown manager subcommand: ${sub} (known: guide)`);
-  if (extra.length > 0) throw new UsageError(`manager guide takes no arguments: ${extra.join(" ")}`);
+function parseManagerStartArgs(argv: readonly string[]): ManagerStartCommandOptions {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...argv],
+      options: {
+        project: { type: "string", multiple: true },
+        all: { type: "boolean", default: false },
+        profile: { type: "string" },
+        "dry-run": { type: "boolean", default: false },
+        yes: { type: "boolean", default: false },
+        json: { type: "boolean", default: false },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+    if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
+    const projects = projectSelection(values.project);
+    if (projects !== null && values.all) throw new UsageError("--project and --all exclude each other");
+    // No implicit "every project": the owner names the set or asks for all of them.
+    if (projects === null && !values.all) throw new UsageError("manager start needs --project <label> (repeatable) or --all");
+    if (values["dry-run"] && values.yes) throw new UsageError("--dry-run and --yes exclude each other");
+    return { projects, profile: values.profile ?? null, dryRun: values["dry-run"], yes: values.yes, json: values.json };
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
+  }
+}
+
+async function managerStartCommand(argv: readonly string[]): Promise<number> {
+  const options = parseManagerStartArgs(argv);
+  let config;
+  try {
+    config = await loadConfig(resolveConfigDir());
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    return reportError(options.json, MANAGER_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
+  }
+  const manager = config.global.manager;
+  if (manager === null) {
+    return reportError(options.json, MANAGER_CONTRACT_VERSION, "configuration", "config_invalid", "config.toml: [manager] is required by manager start: set its profile and workdir keys");
+  }
+
+  const logger = createLogger({
+    logDir: resolveLogDir(),
+    command: "manager",
+    maxStringLength: config.global.log.maxStringLength,
+  });
+  try {
+    const output = await runManagerStart(config, manager, options, {
+      pohunek: createPohunekClient(config.global.pohunek),
+      logger,
+      cliVersion: pkg.version,
+      confirm: terminalConfirm(),
+    });
+    for (const warning of output.warnings) console.error(toAscii(warning));
+    console.log(output.stdout);
+    return 0;
+  } catch (error) {
+    if (error instanceof ActionError) return reportError(options.json, MANAGER_CONTRACT_VERSION, "action", error.code, error.message);
+    logger.error("manager_failed", { error: error instanceof Error ? error : String(error) });
+    throw error;
+  } finally {
+    await logger.close();
+    const logFailure = logger.failure();
+    if (logFailure !== null) console.error(`log write failed: ${logFailure.message}`);
+  }
+}
+
+async function managerCommand(argv: readonly string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  if (sub === "start") return managerStartCommand(rest);
+  if (sub !== "guide") throw new UsageError(sub === undefined ? "manager needs a subcommand (known: guide, start)" : `unknown manager subcommand: ${sub} (known: guide, start)`);
+  if (rest.length > 0) throw new UsageError(`manager guide takes no arguments: ${rest.join(" ")}`);
   process.stdout.write(managerGuide);
   return 0;
 }
@@ -436,7 +508,11 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
 async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv;
   const json = argv.includes("--json");
-  const contract = command === "do" ? DO_CONTRACT_VERSION : command === "setup" ? SETUP_CONTRACT_VERSION : LIST_CONTRACT_VERSION;
+  const contract =
+    command === "do" ? DO_CONTRACT_VERSION
+    : command === "manager" ? MANAGER_CONTRACT_VERSION
+    : command === "setup" ? SETUP_CONTRACT_VERSION
+    : LIST_CONTRACT_VERSION;
   try {
     switch (command) {
       case "list":
@@ -446,7 +522,7 @@ async function main(argv: readonly string[]): Promise<number> {
       case "doctor":
         return await doctorCommand(rest);
       case "manager":
-        return managerCommand(rest);
+        return await managerCommand(rest);
       case "setup":
         return await setupCommand(rest);
       case "tui":

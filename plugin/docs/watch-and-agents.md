@@ -123,17 +123,19 @@ installed binary without a source tree.
 
 ### Where the manager prompt comes from
 
-No file in this repository holds the prompt of a manager session, and
-`~/.config/pohunek/prompts` holds only core's `issue.tmpl` and `pr.tmpl`. Today the owner starts the manager by hand, for example
-`pohunek session new --agent claude --project <p> --meta work.role=manager
---input <prompt>`. That prompt must tell the agent to run
-`pohunek-work manager guide` and must not restate its rules, so the two cannot
-contradict each other. The prompts that `do` sends to the sessions it launches
-are different: they live in `plugin/prompts/*.tmpl`.
+`pohunek-work manager start (--project <label>... | --all)` launches the manager.
+Its prompt is `plugin/prompts/work-manager.tmpl`, rendered with the project set
+and the matching `pohunek-work list --mine --json [--project <label>]...`
+command. The prompt tells the agent to run `pohunek-work manager guide` first
+and does not restate the guide's rules, so the two cannot contradict each
+other; a change to the rules goes into the guide only. The session runs in the
+configured `[manager] workdir`, never in a project checkout, and carries
+`work.role=manager` and `work.manager.projects` (the sorted labels joined by
+`,`, or `*` for `--all`). The prompts that `do` sends to the sessions it
+launches are different: they live in the other `plugin/prompts/*.tmpl` files.
 
-[#81](https://github.com/zajca/pohunek-work/issues/81) will generate the manager
-start from a `pohunek-work` action; that prompt must point at the guide the
-same way.
+[#81](https://github.com/zajca/pohunek-work/issues/81) tracks the GUI and TUI
+entry points that will run `manager start` and so reuse its prompt.
 
 ### Why there is no skill
 

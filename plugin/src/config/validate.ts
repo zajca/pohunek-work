@@ -8,6 +8,9 @@ export type KeyPath = readonly string[];
 
 const REPO_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 
+/** A profile name is a pohunek identifier, never an option. */
+export const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 /** `[table] key` for nested keys, `key` for top-level ones. */
 function describe(path: KeyPath): string {
   const last = path[path.length - 1] ?? "";
@@ -158,4 +161,12 @@ export function readStringMapTable(section: Table, file: string, path: KeyPath):
     result[key] = value;
   }
   return result;
+}
+
+export function readProfileName(table: Table, name: string, file: string, path: KeyPath): string {
+  const value = readString(table, name, file, path);
+  if (!PROFILE_NAME.test(value)) {
+    throw fail(file, [...path, name], "must be a profile name of letters, digits, ., _ and -, starting with a letter or digit");
+  }
+  return value;
 }

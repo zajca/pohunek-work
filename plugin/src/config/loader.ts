@@ -10,6 +10,7 @@ import type {
   IssueSource,
   LinearConfig,
   LogConfig,
+  ManagerConfig,
   NotifyConfig,
   PluginConfig,
   PohunekConfig,
@@ -37,6 +38,7 @@ import {
   readNonEmptyStringArray,
   readNonNegativeNumber,
   readPositiveInt,
+  readProfileName,
   readRepo,
   readString,
   readStringArray,
@@ -373,10 +375,20 @@ function parseTui(root: Table, file: string): TuiConfig {
   };
 }
 
+function parseManager(root: Table, file: string): ManagerConfig {
+  const table = requireTable(root, "manager", file);
+  const path = ["manager"];
+  rejectUnknownKeys(table, ["profile", "workdir"], file, path);
+  return {
+    profile: readProfileName(table, "profile", file, path),
+    workdir: readAbsolutePath(table, "workdir", file, path),
+  };
+}
+
 function parseGlobal(root: Table, file: string): GlobalConfig {
   rejectUnknownKeys(
     root,
-    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui"],
+    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui", "manager"],
     file,
     [],
   );
@@ -392,6 +404,7 @@ function parseGlobal(root: Table, file: string): GlobalConfig {
     policy: parsePolicy(root, file),
     profiles: parseProfiles(root, file),
     tui: parseTui(root, file),
+    manager: "manager" in root ? parseManager(root, file) : null,
   };
 }
 

@@ -229,6 +229,14 @@ export interface PluginProject {
   readonly repo: string;
 }
 
+/** Options of `writePluginConfig`. */
+export interface PluginConfigOptions {
+  /** Directory name of this configuration below the root, so one daemon can serve several configurations. */
+  readonly name?: string;
+  /** TOML appended to the global file, for optional tables such as `[manager]`. */
+  readonly extraGlobal?: string;
+}
+
 export interface PluginFixture {
   readonly configDir: string;
   readonly stateDir: string;
@@ -250,9 +258,10 @@ function setValue(text: string, key: string, value: string): string {
  * that do not exist, so the GitHub and Linear sources fail at once without any
  * network access. One project file is written per entry of `projects`.
  */
-export async function writePluginConfig(daemon: CoreDaemon, projects: readonly PluginProject[]): Promise<PluginFixture> {
-  const configDir = join(daemon.root, "plugin-config");
-  const stateDir = join(daemon.root, "plugin-state");
+export async function writePluginConfig(daemon: CoreDaemon, projects: readonly PluginProject[], options: PluginConfigOptions = {}): Promise<PluginFixture> {
+  const name = options.name ?? "plugin";
+  const configDir = join(daemon.root, `${name}-config`);
+  const stateDir = join(daemon.root, `${name}-state`);
   const missing = join(daemon.root, "missing");
   await mkdir(join(configDir, "projects"), { recursive: true, mode: 0o700 });
   let global = await readFile(join(FIXTURE_CONFIG, "config.toml"), "utf8");
@@ -260,7 +269,7 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
   global = setValue(global, "gh_bin", join(missing, "gh"));
   global = setValue(global, "secret_tool_bin", join(missing, "secret-tool"));
   global = setValue(global, "command", join(missing, "notify-send"));
-  await writeFile(join(configDir, "config.toml"), global);
+  await writeFile(join(configDir, "config.toml"), `${global}${options.extraGlobal ?? ""}`);
   const template = await readFile(join(FIXTURE_CONFIG, "projects", `${PROJECT_TEMPLATE}.toml`), "utf8");
   for (const project of projects) {
     const text = setValue(setValue(template, "pohunek_label", project.label), "repo", project.repo);
@@ -268,6 +277,19 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
   }
   const env = { ...daemon.clientEnv, POHUNEK_WORK_CONFIG_DIR: configDir, POHUNEK_WORK_STATE_DIR: stateDir };
   return { configDir, stateDir, env };
+}
+
+/** pgrep exit status when no process matched. */
+const PGREP_NO_MATCH = 1;
+const PGREP_TIMEOUT_MS = 10_000;
+
+/** Pids of the session workers whose command line names a path below `root`. */
+export async function workersBelow(root: string): Promise<string[]> {
+  const pattern = `pohunek-sessiond .*${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`;
+  const result = await exec(["pgrep", "-f", pattern], { timeoutMs: PGREP_TIMEOUT_MS });
+  if (result.exitCode === PGREP_NO_MATCH) return [];
+  if (result.exitCode !== 0) throw new Error(`pgrep failed (${String(result.exitCode)}): ${result.stderr}`);
+  return result.stdout.split("\n").filter((line) => line !== "");
 }
 
 /** Runs `pohunek-work <args>` to completion with the fixture's environment. */
