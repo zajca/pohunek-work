@@ -120,9 +120,13 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pw-")));
   let runtimeDir: string | null = null;
   const dir = (name: (typeof PRIVATE_DIRS)[number]): string => join(root, name);
+  // The runtime directory is outside the private TMPDIR, so it is removed even when removing the root fails.
   const removeDirs = async (): Promise<void> => {
-    await rm(root, { recursive: true, force: true });
-    if (runtimeDir !== null) await rm(runtimeDir, { recursive: true, force: true });
+    try {
+      await rm(root, { recursive: true, force: true });
+    } finally {
+      if (runtimeDir !== null) await rm(runtimeDir, { recursive: true, force: true });
+    }
   };
   let daemon: Bun.Subprocess | null = null;
   try {
