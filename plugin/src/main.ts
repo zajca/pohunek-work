@@ -135,7 +135,8 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
       args: [...argv],
       options: {
         profile: { type: "string" },
-        project: { type: "string" },
+        // Parsed as a list so a repeated --project is refused instead of keeping the last one.
+        project: { type: "string", multiple: true },
         "include-ignored": { type: "boolean", default: false },
         "dry-run": { type: "boolean", default: false },
         yes: { type: "boolean", default: false },
@@ -150,6 +151,8 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
     const known = DO_ACTIONS.find((name) => name === action);
     if (known === undefined) throw new UsageError(`unknown action: ${action} (known: ${DO_ACTIONS.join(", ")})`);
     if (values["dry-run"] && values.yes) throw new UsageError("--dry-run and --yes exclude each other");
+    const [project, ...moreProjects] = values.project ?? [];
+    if (moreProjects.length > 0) throw new UsageError("do takes one --project");
     if (values.profile !== undefined && !isLaunchAction(known)) throw new UsageError(`--profile does not apply to ${known}`);
     // attach hands the terminal to the session, so there is no JSON result to print afterwards.
     if (known === "attach" && values.json && !values["dry-run"]) throw new UsageError("attach takes --json only with --dry-run");
@@ -157,7 +160,7 @@ function parseDoArgs(argv: readonly string[]): DoArgs {
       key,
       action: known,
       profile: values.profile ?? null,
-      project: values.project ?? null,
+      project: project ?? null,
       includeIgnored: values["include-ignored"],
       dryRun: values["dry-run"],
       yes: values.yes,

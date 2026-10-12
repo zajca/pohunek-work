@@ -19,9 +19,15 @@ const DAEMON_STOP_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 50;
 const CLI_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 10_000;
-/** Linux `sun_path` holds 108 bytes including the terminating NUL. */
-const LINUX_SOCKET_PATH_MAX = 107;
-const PRIVATE_DIRS = ["run", "data", "state", "cache", "config", "home", "bin", "tmp", "repos"] as const;
+/** Size of `sockaddr_un.sun_path`, which also holds the terminating NUL. */
+const SUN_PATH_SIZE: Readonly<Partial<Record<NodeJS.Platform, number>>> = { linux: 108, darwin: 104 };
+/** Characters of a session id after its `s-` prefix (a ULID). */
+const SESSION_ULID_LENGTH = 26;
+/** A session id of the longest form, for the worst-case socket path. */
+const LONGEST_SESSION_ID = `s-${"0".repeat(SESSION_ULID_LENGTH)}`;
+/** XDG_RUNTIME_DIR below the root; one letter because the socket paths under it are length-limited. */
+const RUNTIME_DIR = "r";
+const PRIVATE_DIRS = [RUNTIME_DIR, "data", "state", "cache", "config", "home", "bin", "tmp", "repos"] as const;
 
 export interface CliResult {
   readonly code: number | null;
@@ -34,6 +40,10 @@ export interface CoreDaemon {
   readonly root: string;
   /** Directory holding `pohunekd`, `pohunek-sessiond` and `pohunek`. */
   readonly coreDir: string;
+  /** Path of the longest socket the daemon may bind (a session worker's), checked against the platform limit. */
+  readonly longestSocketPath: string;
+  /** Where the worker of session `sessionId` binds its control socket. */
+  workerSocketPath(sessionId: string): string;
   /** Environment of the daemon's clients: the CLI finds the socket through `XDG_RUNTIME_DIR`. */
   readonly clientEnv: Readonly<Record<string, string>>;
   /** Runs the release's `pohunek` CLI against this daemon. */
@@ -75,6 +85,27 @@ function parseOk(stdout: string): Record<string, unknown> | null {
   }
 }
 
+/** Fails before the daemon starts when a session worker could not bind its socket below this TMPDIR. */
+function checkSocketPathLength(path: string): void {
+  const size = SUN_PATH_SIZE[process.platform];
+  if (size === undefined) throw new Error(`no unix socket path limit is known for platform ${process.platform}`);
+  const length = Buffer.byteLength(path);
+  if (length >= size) {
+    throw new Error(
+      `TMPDIR ${tmpdir()} is too long for the daemon's sockets: a session worker socket would be ${path} ` +
+        `(${String(length)} bytes, the ${process.platform} limit is ${String(size - 1)}); set TMPDIR to a shorter directory`,
+    );
+  }
+}
+
+/**
+ * The session worker's control socket, the longest socket the daemon binds below
+ * XDG_RUNTIME_DIR; core's layout as observed on the pinned release.
+ */
+function workerSocketPath(runtimeDir: string, sessionId: string): string {
+  return join(runtimeDir, "pohunek", "workers", sessionId, "control.sock");
+}
+
 export async function startCoreDaemon(): Promise<CoreDaemon> {
   const coreDir = await requireCoreDir();
   const git = requireGit();
@@ -82,17 +113,15 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
   const dir = (name: (typeof PRIVATE_DIRS)[number]): string => join(root, name);
   let daemon: Bun.Subprocess | null = null;
   try {
-    const socket = join(dir("run"), "pohunek", "daemon.sock");
-    if (process.platform === "linux" && Buffer.byteLength(socket) > LINUX_SOCKET_PATH_MAX) {
-      throw new Error(`the daemon socket path ${socket} exceeds ${String(LINUX_SOCKET_PATH_MAX)} bytes; use a shorter TMPDIR`);
-    }
+    const longestSocketPath = workerSocketPath(dir(RUNTIME_DIR), LONGEST_SESSION_ID);
+    checkSocketPathLength(longestSocketPath);
     for (const name of PRIVATE_DIRS) await mkdir(dir(name), { mode: 0o700 });
     // The daemon's PATH holds only this directory; it runs git for project and worktree work.
     await writeFile(join(dir("bin"), "git"), `#!/bin/sh\nexec '${git.replaceAll("'", "'\\''")}' "$@"\n`);
     await chmod(join(dir("bin"), "git"), 0o755);
 
     const clientEnv: Record<string, string> = {
-      XDG_RUNTIME_DIR: dir("run"),
+      XDG_RUNTIME_DIR: dir(RUNTIME_DIR),
       XDG_DATA_HOME: dir("data"),
       XDG_STATE_HOME: dir("state"),
       XDG_CACHE_HOME: dir("cache"),
@@ -141,6 +170,8 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
     return {
       root,
       coreDir,
+      longestSocketPath,
+      workerSocketPath: (sessionId) => workerSocketPath(dir(RUNTIME_DIR), sessionId),
       clientEnv,
       pohunek,
       async registerProject(label, repo) {
