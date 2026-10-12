@@ -38,9 +38,16 @@ places, which a bump must change together:
   downloaded (`assetBaseUrl`, `sdkVersion`, the release `vSDKVERSION`).
   `web/package.json` carries the resulting URLs in its `catalog` (refresh it
   with `bun run core-sdk:sync` in `web/`) and `web/bun.lock` records the
-  integrity of the published tarballs. `packaging/core-pin` fails when the web
-  pin and `native/Cargo.toml` name different core commits or tags; see
+  integrity of the published tarballs; see
   [`web/docs/core-sdk.md`](web/docs/core-sdk.md).
+
+`packaging/core-pin` checks every location above against `native/Cargo.toml`
+and fails when one names a different core release: the web pin's commit and
+release tag, the plugin pin's `release` and the launchers job's
+`POHUNEK_RELEASE`. Against a native `rev` it resolves each release tag to its
+commit. It does not check the archive digests (`POHUNEK_MUSL_SHA256`, the
+plugin's `sha256`) or the lockfiles; the jobs that download an archive verify
+its digest.
 
 The TypeScript SDK handshake requires the daemon's `health.protocol_version` to
 equal `PROTOCOL_VERSION`, so the UIs move in lockstep with the core protocol
@@ -82,8 +89,8 @@ source file before tagging: `packaging/resolve-release` fails the release when
 the tag's version differs from the sources, and when the prefix is not one of
 the four surfaces. Every archive has a `.sha256` file and a `MANIFEST` that
 records the pinned core version; `packaging/core-pin` reads it from
-`native/Cargo.toml` and fails a release of any surface when `web/core-sdk.json`
-pins a different core. Core ships the CLI, daemon and worker archives; this
+`native/Cargo.toml` and fails a release of any surface when another location
+listed under [Core pin](#core-pin) pins a different core. Core ships the CLI, daemon and worker archives; this
 repository builds none of them.
 
 Download an archive with `gh release download gui-vX.Y.Z -R zajca/pohunek-work -p

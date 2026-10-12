@@ -117,7 +117,9 @@ unless exactly that surface's jobs succeeded. Bump the surface's version before
 tagging. `gui` and `web` publish the Linux and the macOS archives together;
 there is no opt-out for macOS. The core pin (`packaging/core-pin --require-web`)
 is shared by every surface and recorded in every manifest, so a release of any
-surface fails while `native/Cargo.toml` and `web/core-sdk.json` disagree. macOS
+surface fails while `web/core-sdk.json`, `plugin/core-release.json` or the
+launchers job's `POHUNEK_RELEASE` in `.github/workflows/ci.yml` disagrees with
+`native/Cargo.toml`. macOS
 archives are ad-hoc signed (`packaging/macos/package --adhoc-release`) and no
 job uses a secret, environment or
 repository variable. Only `attest` holds `id-token: write` and

@@ -77,12 +77,15 @@ jobs:
               - 'web/packaging/**'
               - 'native/scripts/**'
               - 'web/release/**'
+              - 'native/Cargo.toml'
+              - 'web/core-sdk.json'
               - '.github/workflows/**'
             macos_package:
               - 'packaging/**'
               - 'native/packaging/**'
               - 'web/packaging/**'
               - 'web/release/**'
+              - 'plugin/core-release.json'
               - '.github/workflows/ci.yml'
             ci_reporter:
               - 'ci-reporter/**'
@@ -180,7 +183,8 @@ jobs:
   # filter lists `packaging/**` too, because its installer tests run the
   # manifest and verification scripts from there; the filter also lists
   # `plugin/**` and `launchers/**` because the plugin archive tests stage the
-  # real sources.
+  # real sources, and every core pin location because the core-pin tests check
+  # the repository's own pins.
   packaging:
     needs: changes
     if: ${{ (github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true') || (github.event_name != 'pull_request' && (inputs.surface == '' || inputs.surface == 'gui' || inputs.surface == 'web' || inputs.surface == 'launchers' || inputs.surface == 'plugin')) }}

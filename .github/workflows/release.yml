@@ -115,7 +115,8 @@ jobs:
 
       # The core pin is shared by the whole repository and recorded in every
       # manifest, so it is resolved for every surface. Fails when
-      # native/Cargo.toml and web/core-sdk.json pin different core releases.
+      # web/core-sdk.json, plugin/core-release.json or the launchers job's
+      # POHUNEK_RELEASE pins a different core release than native/Cargo.toml.
       - name: Resolve the core pin
         id: pin
         run: |

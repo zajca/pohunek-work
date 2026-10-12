@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Resolve the pohunek core version every surface is pinned to.
 
-usage: core-pin [--native PATH] [--web PATH] [--require-web] [--expect-version X.Y.Z]
+usage: core-pin [--native PATH] [--web PATH] [--plugin PATH] [--ci-workflow PATH]
+                [--require-web] [--expect-version X.Y.Z]
 
 Reads the core crates' git pin from native/Cargo.toml (the single source for the
-GUI) and, when web/core-sdk.json exists, checks that the web pin names the same
-core commit. Prints `key=value` lines (usable with `>> "$GITHUB_OUTPUT"`):
+GUI) and checks every other core pin against it: web/core-sdk.json (when it
+exists) names the same core commit, and the core release in
+plugin/core-release.json and the launchers job's `POHUNEK_RELEASE` in
+.github/workflows/ci.yml name the same core release. Prints `key=value` lines
+(usable with `>> "$GITHUB_OUTPUT"`):
 
   core_ref        the core release tag `vX.Y.Z` when known, else the 40-digit commit
   core_rev        the 40-digit core commit, empty when only a tag is known
@@ -16,6 +20,10 @@ web/core-sdk.json (see web/scripts/core-sdk.ts) holds `coreRepository`,
 repository's GitHub release download URL, the web pin also names the release tag
 `v<sdkVersion>`.
 
+plugin/core-release.json (see plugin/scripts/core-binaries.ts) holds `release`
+and `assetBaseUrl`; its `targets` are validated by core-binaries.ts. The
+workflow is not parsed as YAML: its single `POHUNEK_RELEASE:` line is read.
+
 The pin is refused, with exit status 1, when
   - the core crates in native/Cargo.toml do not all share one git URL and one
     `rev` or `tag`;
@@ -24,6 +32,13 @@ The pin is refused, with exit status 1, when
   - the two pins disagree: a native commit against the web `coreRev`, a native
     tag (resolved with `git ls-remote`, the peeled commit of an annotated tag
     counts) against the web `coreRev`, a native tag against the web release tag;
+  - plugin/core-release.json or the workflow is missing or unreadable;
+  - plugin/core-release.json lacks a `vX.Y.Z` `release`, or its `assetBaseUrl`
+    is not the GitHub release download URL of the core crates' repository;
+  - the workflow does not set `POHUNEK_RELEASE` on exactly one line, or sets it
+    to anything but `vX.Y.Z`;
+  - the plugin release or the launchers release differs from the native pin: a
+    different tag than a native tag, or a tag whose commit is not a native rev;
   - `--require-web` is given and web/core-sdk.json is absent;
   - `--expect-version` is given and differs from the native GUI version.
 
@@ -47,6 +62,10 @@ SDK_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[
 CORE_CRATE_PREFIX = "pohunek-"
 WEB_KEYS = ("coreRepository", "coreRev", "sdkVersion", "assetBaseUrl")
 RELEASE_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download$")
+PLUGIN_KEYS = ("release", "assetBaseUrl")
+# The key, not a valid value, so a malformed value is reported as such; shell
+# references such as `$POHUNEK_RELEASE` have no `KEY:` form and do not match.
+LAUNCHERS_RELEASE = re.compile(r"^[ \t]*POHUNEK_RELEASE:(.*)$", re.MULTILINE)
 
 
 class PinError(Exception):
@@ -126,6 +145,42 @@ def read_web(path: Path, core_repo: str | None) -> tuple[str, str | None] | None
     return pin["coreRev"], tag
 
 
+def read_plugin(path: Path, core_repo: str | None) -> str:
+    """Returns the core release tag of the plugin pin."""
+    try:
+        pin = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise PinError(f"cannot read {path}: {error}") from error
+    if not isinstance(pin, dict):
+        raise PinError(f"{path} must be an object")
+    for key in PLUGIN_KEYS:
+        if not isinstance(pin.get(key), str) or not pin[key]:
+            raise PinError(f"{path}: {key} must be a non-empty string")
+    if not TAG.match(pin["release"]):
+        raise PinError(f"{path}: release must look like vX.Y.Z: {pin['release']}")
+    release = RELEASE_URL.match(pin["assetBaseUrl"])
+    if release is None:
+        raise PinError(f"{path}: assetBaseUrl must be https://github.com/<owner>/<repo>/releases/download")
+    if core_repo is not None and release.group(1) != core_repo:
+        raise PinError(f"{path}: assetBaseUrl comes from {release.group(1)}, not the core repository {core_repo}")
+    return pin["release"]
+
+
+def read_launchers(path: Path) -> str:
+    """Returns the core release tag of the launchers job's `POHUNEK_RELEASE`."""
+    try:
+        workflow = path.read_text()
+    except OSError as error:
+        raise PinError(f"cannot read {path}: {error}") from error
+    values = LAUNCHERS_RELEASE.findall(workflow)
+    if len(values) != 1:
+        raise PinError(f"{path} must set POHUNEK_RELEASE on exactly one line, found {len(values)}")
+    release = values[0].strip()
+    if not TAG.match(release):
+        raise PinError(f"{path}: POHUNEK_RELEASE must look like vX.Y.Z: {release!r}")
+    return release
+
+
 def resolve_tag(git: str, tag: str) -> str:
     """The commit a core tag points at (the peeled commit for an annotated tag)."""
     result = subprocess.run(
@@ -147,13 +202,34 @@ def resolve_tag(git: str, tag: str) -> str:
     return commit
 
 
-def resolve(native: Path, web: Path, require_web: bool, expect_version: str | None) -> dict[str, str]:
+def check_release(label: str, release: str, git: str, native_tag: str | None, native_rev: str | None) -> None:
+    """Fails unless a release tag names the native pin: the same tag, or the native rev."""
+    if native_tag is not None:
+        if release != native_tag:
+            raise PinError(f"{label} pins core {release}, native pins core {native_tag}")
+        return
+    commit = resolve_tag(git, release)
+    if commit != native_rev:
+        raise PinError(f"{label} pins core {release} = {commit}, native pins core commit {native_rev}")
+
+
+def resolve(
+    native: Path,
+    web: Path,
+    plugin: Path,
+    ci_workflow: Path,
+    require_web: bool,
+    expect_version: str | None,
+) -> dict[str, str]:
     git, native_tag, native_rev, version = read_native(native)
     if expect_version is not None and expect_version != version:
         raise PinError(f"the GUI version in {native} is {version}, but the release is {expect_version}")
+    # Every file is validated before any tag is resolved over the network.
     pin = read_web(web, repo_slug(git))
     if pin is None and require_web:
         raise PinError(f"{web} does not exist")
+    plugin_release = read_plugin(plugin, repo_slug(git))
+    launchers_release = read_launchers(ci_workflow)
     ref, rev = native_tag or native_rev, native_rev
     if pin is not None:
         web_rev, web_tag = pin
@@ -167,6 +243,8 @@ def resolve(native: Path, web: Path, require_web: bool, expect_version: str | No
         native_commit = native_rev if native_rev is not None else resolve_tag(git, native_tag or "")
         if native_commit != web_rev:
             raise PinError(f"native pins core {native_tag or native_rev} = {native_commit}, but web pins core commit {web_rev}")
+    check_release(str(plugin), plugin_release, git, native_tag, native_rev)
+    check_release(f"{ci_workflow} POHUNEK_RELEASE", launchers_release, git, native_tag, native_rev)
     return {"core_ref": ref, "core_rev": rev or "", "native_version": version}
 
 
@@ -174,11 +252,13 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--native", type=Path, default=Path("native/Cargo.toml"))
     parser.add_argument("--web", type=Path, default=Path("web/core-sdk.json"))
+    parser.add_argument("--plugin", type=Path, default=Path("plugin/core-release.json"))
+    parser.add_argument("--ci-workflow", type=Path, default=Path(".github/workflows/ci.yml"))
     parser.add_argument("--require-web", action="store_true")
     parser.add_argument("--expect-version")
     args = parser.parse_args(argv)
     try:
-        pin = resolve(args.native, args.web, args.require_web, args.expect_version)
+        pin = resolve(args.native, args.web, args.plugin, args.ci_workflow, args.require_web, args.expect_version)
     except PinError as error:
         print(f"core-pin: {error}", file=sys.stderr)
         return 1
