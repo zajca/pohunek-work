@@ -18,6 +18,16 @@ CORE_PIN = ROOT / "packaging" / "core-pin"
 CRATES = ("protocol", "client", "paths")
 LOCAL_BASE = "http://127.0.0.1:47321/releases/download"
 
+WORKFLOW_HEAD = """jobs:
+  launchers:
+    env:
+      # The rendering tests drive the real `pohunek prompt` CLI.
+"""
+WORKFLOW_TAIL = """      POHUNEK_MUSL_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - run: gh release download "$POHUNEK_RELEASE" -p "pohunek-cli-${POHUNEK_RELEASE#v}.tar.gz"
+"""
+
 CARGO = """[workspace]
 members = ["crates/gui"]
 
@@ -73,6 +83,10 @@ class CorePinTest(unittest.TestCase):
         self.second = head(self.core)
         git(self.core, "tag", "v1.2.4")
         self.url = f"file://{self.core}"
+        self.tags = {self.first: "v1.2.3", self.second: "v1.2.4"}
+        # The release the plugin and launchers fixtures name unless a test sets
+        # its own: the tag of the last native pin written.
+        self.release = "v1.2.3"
 
     def native(self, *, version="0.1.0", pins=None):
         pins = pins if pins is not None else [{"rev": self.first}] * len(CRATES)
@@ -82,6 +96,25 @@ class CorePinTest(unittest.TestCase):
             lines.append(f'pohunek-{crate} = {{ git = "{self.url}", {fields} }}')
         path = self.dir / "Cargo.toml"
         path.write_text(CARGO.format(dependencies="\n".join(lines), version=version))
+        first = pins[0] if pins else {}
+        self.release = first.get("tag") or self.tags.get(first.get("rev"), "v1.2.3")
+        return path
+
+    def plugin(self, release=None, *, base=None, drop=()):
+        path = self.dir / "core-release.json"
+        pin = {
+            "release": release or self.release,
+            "assetBaseUrl": base or self.release_base(),
+            "targets": [{"platform": "linux", "arch": "x64", "archive": "a.tar.gz", "sha256": "0" * 64}],
+        }
+        path.write_text(json.dumps({key: value for key, value in pin.items() if key not in drop}))
+        return path
+
+    def workflow(self, *releases):
+        """The launchers job with one `POHUNEK_RELEASE` line per release given."""
+        path = self.dir / "ci.yml"
+        lines = "".join(f"      POHUNEK_RELEASE: {release}\n" for release in releases)
+        path.write_text(WORKFLOW_HEAD + lines + WORKFLOW_TAIL)
         return path
 
     def web(self, rev, *, version="0.0.0-core.test", base=LOCAL_BASE, repo="https://github.com/zajca/pohunek", **extra):
@@ -93,9 +126,13 @@ class CorePinTest(unittest.TestCase):
     def release_base(self, repo="zajca/pohunek"):
         return f"https://github.com/{repo}/releases/download"
 
-    def pin(self, *args):
+    def pin(self, *args, plugin=None, workflow=None):
+        # Both files are always passed: the defaults are relative to the working
+        # directory and would read the repository's own pins.
+        plugin = plugin if plugin is not None else self.plugin()
+        workflow = workflow if workflow is not None else self.workflow(self.release)
         result = subprocess.run(
-            [str(CORE_PIN), *map(str, args)],
+            [str(CORE_PIN), *map(str, args), "--plugin", str(plugin), "--ci-workflow", str(workflow)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -232,8 +269,94 @@ class CorePinTest(unittest.TestCase):
         self.assertEqual(bad.returncode, 1)
         self.assertIn("is 0.2.0, but the release is 0.3.0", bad.stderr)
 
+    def test_a_plugin_release_tag_agrees_with_the_native_commit_it_points_at(self):
+        # v1.2.3 is annotated (peeled to its commit), v1.2.4 is lightweight.
+        for commit, tag in ((self.first, "v1.2.3"), (self.second, "v1.2.4")):
+            native = self.native(pins=[{"rev": commit}] * 3)
+            result, values = self.pin(
+                "--native", native, "--web", self.dir / "absent.json",
+                plugin=self.plugin(tag), workflow=self.workflow(tag),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(values, {"core_ref": commit, "core_rev": commit, "native_version": "0.1.0"})
+
+    def test_a_plugin_release_that_differs_from_the_native_pin_fails(self):
+        plugin = self.dir / "core-release.json"
+        cases = (
+            ([{"tag": "v1.2.3"}] * 3, f"{plugin} pins core v1.2.4, native pins core v1.2.3"),
+            ([{"rev": self.first}] * 3, f"{plugin} pins core v1.2.4 = {self.second}, native pins core commit {self.first}"),
+        )
+        for pins, message in cases:
+            native = self.native(pins=pins)
+            result, _ = self.pin("--native", native, "--web", self.web(self.first), plugin=self.plugin("v1.2.4"))
+            self.assertEqual(result.returncode, 1, message)
+            self.assertIn(message, result.stderr)
+
+    def test_a_launchers_release_that_differs_from_the_native_pin_fails(self):
+        workflow = self.dir / "ci.yml"
+        cases = (
+            ([{"tag": "v1.2.3"}] * 3, f"{workflow} POHUNEK_RELEASE pins core v1.2.4, native pins core v1.2.3"),
+            ([{"rev": self.first}] * 3, f"{workflow} POHUNEK_RELEASE pins core v1.2.4 = {self.second}, native pins core commit {self.first}"),
+        )
+        for pins, message in cases:
+            native = self.native(pins=pins)
+            result, _ = self.pin("--native", native, "--web", self.web(self.first), workflow=self.workflow("v1.2.4"))
+            self.assertEqual(result.returncode, 1, message)
+            self.assertIn(message, result.stderr)
+
+    def test_a_release_missing_from_core_fails_against_a_native_commit(self):
+        result, _ = self.pin("--native", self.native(), "--web", self.dir / "absent.json", plugin=self.plugin("v9.9.9"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("core tag v9.9.9 does not exist", result.stderr)
+
+    def test_a_malformed_plugin_pin_fails(self):
+        plugin = self.dir / "core-release.json"
+        for make, message in (
+            (lambda: self.plugin("1.2.3"), "release must look like vX.Y.Z: 1.2.3"),
+            (lambda: self.plugin(base=LOCAL_BASE), "assetBaseUrl must be https://github.com/"),
+            (lambda: self.plugin(drop=("release",)), "release must be a non-empty string"),
+            (lambda: self.plugin(drop=("assetBaseUrl",)), "assetBaseUrl must be a non-empty string"),
+            (lambda: self.dir / "absent-plugin.json", f"cannot read {self.dir / 'absent-plugin.json'}"),
+        ):
+            result, _ = self.pin("--native", self.native(), "--web", self.dir / "absent.json", plugin=make())
+            self.assertEqual(result.returncode, 1, message)
+            self.assertIn(message, result.stderr)
+        plugin.write_text("[]")
+        result, _ = self.pin("--native", self.native(), "--web", self.dir / "absent.json", plugin=plugin)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("must be an object", result.stderr)
+
+    def test_the_plugin_pin_must_download_from_the_core_repository(self):
+        path = self.dir / "Cargo.toml"
+        lines = "\n".join(
+            f'pohunek-{crate} = {{ git = "https://github.com/zajca/pohunek.git", tag = "v1.2.3" }}'
+            for crate in CRATES
+        )
+        path.write_text(CARGO.format(dependencies=lines, version="0.1.0"))
+        plugin = self.plugin(base=self.release_base("other/repo"))
+        result, _ = self.pin("--native", path, "--web", self.dir / "absent.json", plugin=plugin)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("assetBaseUrl comes from other/repo, not the core repository zajca/pohunek", result.stderr)
+
+    def test_the_workflow_must_set_one_launchers_release(self):
+        for make, message in (
+            (lambda: self.workflow(), "must set POHUNEK_RELEASE on exactly one line, found 0"),
+            (lambda: self.workflow("v1.2.3", "v1.2.3"), "must set POHUNEK_RELEASE on exactly one line, found 2"),
+            (lambda: self.workflow("latest"), "POHUNEK_RELEASE must look like vX.Y.Z: 'latest'"),
+            (lambda: self.dir / "absent-ci.yml", f"cannot read {self.dir / 'absent-ci.yml'}"),
+        ):
+            result, _ = self.pin("--native", self.native(), "--web", self.dir / "absent.json", workflow=make())
+            self.assertEqual(result.returncode, 1, message)
+            self.assertIn(message, result.stderr)
+
     def test_the_repository_pins_resolve(self):
-        result, values = self.pin("--native", ROOT / "native" / "Cargo.toml", "--web", ROOT / "web" / "core-sdk.json")
+        result, values = self.pin(
+            "--native", ROOT / "native" / "Cargo.toml",
+            "--web", ROOT / "web" / "core-sdk.json",
+            "--require-web",
+            plugin=ROOT / "plugin" / "core-release.json",
+            workflow=ROOT / ".github" / "workflows" / "ci.yml",
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(values["native_version"], r"^\d+\.\d+\.\d+$")
 

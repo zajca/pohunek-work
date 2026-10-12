@@ -20,8 +20,9 @@ Releasing needs the owner's explicit request; `deliver-issue` never releases.
 - The `main` CI run of the commit being released is green.
 - The tag does not exist yet.
 - The core pin is consistent: `packaging/core-pin --require-web` passes; a
-  release of any surface fails while `native/Cargo.toml` and `web/core-sdk.json`
-  disagree.
+  release of any surface fails while `web/core-sdk.json`,
+  `plugin/core-release.json` or the launchers job's `POHUNEK_RELEASE` in
+  `.github/workflows/ci.yml` disagrees with `native/Cargo.toml`.
 
 ## Steps
 

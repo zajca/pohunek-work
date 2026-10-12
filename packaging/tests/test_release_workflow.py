@@ -523,7 +523,7 @@ class SurfaceSelectionTest(unittest.TestCase):
 
 class CiFilterTest(unittest.TestCase):
     def test_the_packaging_job_and_filter_cover_the_shared_paths(self):
-        block = CI.split("            packaging:\n", 1)[1].split("\n\n", 1)[0]
+        block = CI.split("            packaging:\n", 1)[1].split("            macos_package:\n", 1)[0]
         for path in (
             "packaging/**",
             "native/packaging/**",
@@ -533,6 +533,9 @@ class CiFilterTest(unittest.TestCase):
             ".github/workflows/**",
             "plugin/**",
             "launchers/**",
+            # test_core_pin runs packaging/core-pin on the repository pins.
+            "native/Cargo.toml",
+            "web/core-sdk.json",
         ):
             self.assertIn("- '%s'" % path, block)
         native = CI.split("            native:\n", 1)[1].split("            packaging:\n", 1)[0]
@@ -541,8 +544,9 @@ class CiFilterTest(unittest.TestCase):
 
     def test_the_macos_package_job_signs_for_real_and_verifies_adhoc(self):
         job = jobs(CI)["macos-package"]
-        block = CI.split("            macos_package:\n", 1)[1].split("\n\n", 1)[0]
-        for path in ("packaging/**", "native/packaging/**", "web/packaging/**", "web/release/**"):
+        block = CI.split("            macos_package:\n", 1)[1].split("            ci_reporter:\n", 1)[0]
+        # The job runs packaging/core-pin, which reads the plugin pin.
+        for path in ("packaging/**", "native/packaging/**", "web/packaging/**", "web/release/**", "plugin/core-release.json"):
             self.assertIn("- '%s'" % path, block)
         self.assertIn("macos_package: ${{ steps.filter.outputs.macos_package }}", CI)
         self.assertIn("needs.changes.outputs.macos_package == 'true'", job)
