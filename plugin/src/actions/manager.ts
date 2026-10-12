@@ -74,7 +74,7 @@ export async function workdirProblem(workdir: string): Promise<string | null> {
   }
 }
 
-/** The real path when it can be resolved; the absolute path otherwise (a checkout that no longer exists). */
+/** The real path when it can be resolved; the absolute path otherwise (a checkout that does not exist). */
 async function realOrResolved(path: string): Promise<string> {
   try {
     return await realpath(path);
