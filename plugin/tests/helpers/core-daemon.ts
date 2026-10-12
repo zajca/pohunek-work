@@ -18,6 +18,10 @@ const FIXTURE_CONFIG = new URL("../fixtures/config/", import.meta.url).pathname;
 const PROJECT_TEMPLATE = "widgets";
 const DAEMON_READY_TIMEOUT_MS = 15_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
+/** Time `stop()` allows for removing the daemon's directories after the process ended. */
+const DIR_REMOVAL_MARGIN_MS = 5_000;
+/** Upper bound of `CoreDaemon.stop()`; a test hook that stops a daemon needs at least this as its timeout. */
+export const DAEMON_STOP_HOOK_TIMEOUT_MS = DAEMON_STOP_TIMEOUT_MS + DIR_REMOVAL_MARGIN_MS;
 const POLL_INTERVAL_MS = 50;
 const CLI_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 10_000;

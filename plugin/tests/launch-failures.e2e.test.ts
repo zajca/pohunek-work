@@ -9,6 +9,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  DAEMON_STOP_HOOK_TIMEOUT_MS,
   installAgentProfile,
   runPlugin,
   startCoreDaemon,
@@ -31,11 +32,12 @@ const SILENT_PROFILE = "silent";
 /** How long the silent agent sleeps; longer than any scenario, the daemon's stop ends it. */
 const SILENT_SLEEP_SECS = 3600;
 /**
- * `[actions] launch_timeout_ms` of the timed-out scenarios. Core keeps `session new` open until a silent
- * agent is input-ready or a startup grace of at least 500 ms has passed, so the CLI's own deadline of
- * 100 ms always fires before the daemon answers.
+ * `[actions] launch_timeout_ms` of the timed-out scenarios. With `--input-stdin` the CLI asks for the extended
+ * input-ready wait, so core keeps `session new` open for a silent agent until its startup grace of 5 s passes
+ * (core's `DEFAULT_INPUT_TIMING`). One second leaves the CLI ample time to connect and send the request on a
+ * loaded host, and its own deadline still fires long before the daemon answers.
  */
-const SHORT_LAUNCH_TIMEOUT_MS = 100;
+const SHORT_LAUNCH_TIMEOUT_MS = 1000;
 const ISSUE: GithubIssue = { repo: "acme/widgets", number: 7, title: "Cache widgets", body: "Cache the widgets." };
 const ISSUE_KEY = `${ISSUE.repo}#${String(ISSUE.number)}`;
 const ROW_KEY = `github-issue:${ISSUE_KEY}`;
@@ -54,7 +56,7 @@ afterEach(async () => {
     await daemon?.stop();
     daemon = null;
   }
-});
+}, DAEMON_STOP_HOOK_TIMEOUT_MS);
 
 function quoted(path: string): string {
   return `'${path.replaceAll("'", "'\\''")}'`;
