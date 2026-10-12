@@ -4,10 +4,11 @@
 // registered with an origin that does not resolve to its configured repository. The managers run
 // agent `shell`, which reaches activity `working` once the prompt arrives on stdin.
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   runPlugin,
+  spawnPluginInTerminal,
   startCoreDaemon,
   workersBelow,
   writePluginConfig,
@@ -20,17 +21,22 @@ import {
 const PROCESS_TIMEOUT_MS = 60_000;
 const SCENARIO_TIMEOUT_MS = 120_000;
 const SCREEN_TIMEOUT_MS = 10_000;
+const CONFIRMATION_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 50;
 const EXIT_ERROR = 2;
 /** `list` printed rows while at least one source was unavailable. */
 const EXIT_PARTIAL = 3;
 /** `doctor` exit code of a `[manager] workdir` that is not an existing directory. */
 const EXIT_MANAGER_WORKDIR = 20;
+/** `doctor` exit code of a `[manager] workdir` inside a registered project checkout. */
+const EXIT_MANAGER_WORKDIR_IN_PROJECT = 21;
 /** `[actions] launch_timeout_ms` of the fixture configuration. */
 const FIXTURE_LAUNCH_TIMEOUT_MS = "120000";
-/** Last line of plugin/prompts/work-manager.tmpl; short enough to stay on one screen row. */
+/** Last line of plugin/prompts/work-manager.tmpl; the `shell` agent runs it as the command `Start`. */
 const PROMPT_MARKER = "Start now: run pohunek-work manager guide";
 const MANAGER_GUIDE = new URL("../prompts/manager-guide.md", import.meta.url).pathname;
+/** The prompt line that tells the manager which flag every `do` carries. */
+const DO_SCOPE_LINE = "Every `pohunek-work do` you run carries --project followed by the label of the project its row belongs to.";
 /** Guide lines shorter than this are headings, table rules or fragments a prompt may share by chance. */
 const GUIDE_LINE_MIN_LENGTH = 30;
 
@@ -92,6 +98,7 @@ interface StartOk {
   readonly plan: {
     readonly all: boolean;
     readonly projects: readonly string[];
+    readonly skipped: readonly { readonly project: string; readonly reason: string }[];
     readonly profile: string;
     readonly cwd: string;
     readonly name: string;
@@ -119,15 +126,26 @@ function start(fixture: PluginFixture, args: readonly string[]): Promise<CliResu
   return runPlugin(fixture, ["manager", "start", ...args], PROCESS_TIMEOUT_MS);
 }
 
-/** The visible screen of a session, polled until it shows `needle` or the deadline passes. */
-async function waitForScreen(core: CoreDaemon, sessionId: string, needle: string): Promise<string> {
+/**
+ * Waits until the `shell` agent has executed the last line of the prompt, which it reports as a command it
+ * cannot find: bash `sh: Start: command not found`, dash `/bin/sh: <n>: Start: not found`. Only the shell
+ * writes that text, and it runs its input in order; the terminal echo of the typed prompt ("Start now: ...")
+ * interleaves with the shell's output and is never matched. Interactive bash prints no line number and dash's
+ * does not follow the prompt's lines, so no number is matched. Rows are joined without breaks, so a wrapped
+ * message still matches.
+ */
+async function waitForPromptExecuted(core: CoreDaemon, sessionId: string, prompt: string): Promise<void> {
+  const command = prompt.trimEnd().split("\n").at(-1)?.split(" ")[0] ?? "";
+  if (!/^[A-Za-z]+$/.test(command)) throw new Error(`the last prompt line does not start with a plain command word: ${JSON.stringify(command)}`);
+  const executed = new RegExp(`(^|[^A-Za-z])${command}: (command )?not found`);
   const deadline = Date.now() + SCREEN_TIMEOUT_MS;
   for (;;) {
     const screen = await core.pohunek(["session", "screen", sessionId, "--json"]);
     const lines = (JSON.parse(screen.stdout) as { ok?: { visible_lines?: string[] } }).ok?.visible_lines ?? [];
-    const text = lines.join("\n");
-    if (text.includes(needle)) return text;
-    if (Date.now() > deadline) throw new Error(`the screen of ${sessionId} did not show ${JSON.stringify(needle)} within ${String(SCREEN_TIMEOUT_MS)} ms:\n${text}`);
+    if (executed.test(lines.join(""))) return;
+    if (Date.now() > deadline) {
+      throw new Error(`the screen of ${sessionId} did not show the last prompt line (${command}) executed within ${String(SCREEN_TIMEOUT_MS)} ms:\n${lines.join("\n")}`);
+    }
     await Bun.sleep(POLL_INTERVAL_MS);
   }
 }
@@ -173,11 +191,15 @@ test("manager start --project launches one verified manager in the workdir with 
   expect(listed[0]).toMatchObject({ id, name: "manager:widgets", cwd: workdir, state: "running" });
   expect(listed[0]?.metadata).toEqual({ "work.role": "manager", "work.manager.projects": "widgets" });
 
-  // The prompt went to the session's stdin: the shell echoes its last line.
+  // The prompt went to the session's stdin: the shell ran it up to its last line.
   expect(ok.plan.prompt.trimEnd().split("\n").at(-1)).toBe(PROMPT_MARKER);
-  await waitForScreen(core, id, PROMPT_MARKER);
+  await waitForPromptExecuted(core, id, ok.plan.prompt);
   expect(ok.plan.prompt).toContain("`pohunek-work manager guide`");
   expect(ok.plan.prompt).toContain("pohunek-work list --mine --json --project widgets\n");
+  expect(ok.plan.prompt).toContain("pohunek-work list --json --project widgets\n");
+  expect(ok.plan.prompt).toContain("Every `pohunek-work list` you run carries exactly these flags: --project widgets\n");
+  expect(ok.plan.prompt).toContain(DO_SCOPE_LINE);
+  expect(ok.plan.skipped).toEqual([]);
   const guide = await readFile(MANAGER_GUIDE, "utf8");
   const restated = guide.split("\n").map((line) => line.trim()).filter((line) => line.length >= GUIDE_LINE_MIN_LENGTH && ok.plan.prompt.includes(line));
   expect(restated).toEqual([]);
@@ -202,10 +224,13 @@ test("manager start with several projects sorts and joins the labels, a duplicat
   expect(ok.plan.argv).toEqual(expectedArgv(core, workdir, "manager:gadgets,widgets", "gadgets,widgets"));
   expect(ok.plan.projects).toEqual(["gadgets", "widgets"]);
   expect(ok.plan.prompt).toContain("pohunek-work list --mine --json --project gadgets --project widgets\n");
+  expect(ok.plan.prompt).toContain("pohunek-work list --json --project gadgets --project widgets\n");
+  expect(ok.plan.prompt).toContain("Every `pohunek-work list` you run carries exactly these flags: --project gadgets --project widgets\n");
+  expect(ok.plan.prompt).toContain(DO_SCOPE_LINE);
   const listed = await sessions(core);
   expect(listed).toHaveLength(1);
   expect(listed[0]?.metadata).toEqual({ "work.role": "manager", "work.manager.projects": "gadgets,widgets" });
-  await waitForScreen(core, listed[0]?.id ?? "", PROMPT_MARKER);
+  await waitForPromptExecuted(core, listed[0]?.id ?? "", ok.plan.prompt);
 }, SCENARIO_TIMEOUT_MS);
 
 test("manager start --all covers every project with *, lists without --project and names the skipped projects", async () => {
@@ -216,7 +241,13 @@ test("manager start --all covers every project with *, lists without --project a
   expect(ok.plan.projects).toEqual(["gadgets", "widgets"]);
   expect(ok.plan.argv).toEqual(expectedArgv(core, workdir, "manager:*", "*"));
   expect(ok.plan.prompt).toContain("pohunek-work list --mine --json\n");
+  expect(ok.plan.prompt).toContain("pohunek-work list --json\n");
+  expect(ok.plan.prompt).toContain("need no project flag");
   expect(ok.plan.prompt).not.toContain("--project");
+  expect(ok.plan.skipped).toEqual([
+    { project: "bolts", reason: "origin_url does not resolve to acme/bolts" },
+    { project: "sprockets", reason: "no pohunek project with this label" },
+  ]);
   expect(result.err).toContain("project sprockets: no pohunek project with this label");
   expect(result.err).toContain("project bolts: origin_url does not resolve to acme/bolts");
   const listed = await sessions(core);
@@ -255,21 +286,62 @@ test("an overlapping live manager is refused with already_running and its attach
   expect((await sessions(core)).filter((session) => session.state === "running")).toHaveLength(2);
 }, SCENARIO_TIMEOUT_MS);
 
-test("a live manager without a project set, or with *, overlaps every project", async () => {
-  const { daemon: core, fixture, workdir } = await setUp();
-  const created = await core.pohunek(["session", "new", "--agent", "shell", "--cwd", workdir, "--name", "hand", "--meta", "work.role=manager", "--json"]);
-  const hand = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
-  if (hand === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
-  const refused = errOf(await start(fixture, ["--project", "gadgets", "--yes", "--json"]));
-  expect(refused.code).toBe("already_running");
-  expect(refused.msg).toContain(`pohunek attach ${hand}`);
+/** Collects a stream into `sink.text` until it ends. */
+async function collect(stream: ReadableStream<Uint8Array>, sink: { text: string }): Promise<void> {
+  const decoder = new TextDecoder();
+  for await (const chunk of stream) sink.text += decoder.decode(chunk, { stream: true });
+}
 
-  expect((await core.pohunek(["session", "stop", hand, "--json"])).exitCode).toBe(0);
+test("a confirmation does not authorize a plan that changed while the owner was asked", async () => {
+  const { daemon: core, fixture, workdir } = await setUp();
+  const child = spawnPluginInTerminal(fixture, ["manager", "start", "--project", "widgets", "--json"]);
+  const output = { text: "" };
+  const reading = collect(child.stdout, output);
+  let rival: string | undefined;
+  try {
+    const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS;
+    while (!output.text.includes("Run this command?")) {
+      if (child.exitCode !== null) throw new Error(`manager start exited before asking (${String(child.exitCode)}):\n${output.text}`);
+      if (Date.now() > deadline) throw new Error(`no confirmation question within ${String(CONFIRMATION_TIMEOUT_MS)} ms:\n${output.text}`);
+      await Bun.sleep(POLL_INTERVAL_MS);
+    }
+    expect(await sessions(core)).toEqual([]);
+    // Another terminal starts a manager for the same project while the owner reads the plan.
+    const created = await core.pohunek(["session", "new", "--agent", "shell", "--cwd", workdir, "--name", "rival", "--meta", "work.role=manager", "--meta", "work.manager.projects=widgets", "--json"]);
+    rival = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
+    if (rival === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
+    await child.stdin.write("y\n");
+    await child.stdin.flush();
+    expect(await child.exited).toBe(EXIT_ERROR);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.stdin.end();
+  }
+  await reading;
+  expect(output.text).toContain('"code": "already_running"');
+  expect(output.text).toContain(`pohunek attach ${rival}`);
+  expect((await sessions(core)).map((session) => session.id)).toEqual([rival]);
+}, SCENARIO_TIMEOUT_MS);
+
+test("a live manager without a readable project set, or with *, overlaps every project", async () => {
+  const { daemon: core, fixture, workdir } = await setUp();
+  // No key, an empty value and a value with an empty element cannot be read as a set; none of them names gadgets.
+  for (const meta of [[], ["--meta", "work.manager.projects="], ["--meta", "work.manager.projects=bolts,,sprockets"]]) {
+    const created = await core.pohunek(["session", "new", "--agent", "shell", "--cwd", workdir, "--name", "hand", "--meta", "work.role=manager", ...meta, "--json"]);
+    const hand = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
+    if (hand === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
+    const refused = errOf(await start(fixture, ["--project", "gadgets", "--yes", "--json"]));
+    expect(refused.code).toBe("already_running");
+    expect(refused.msg).toContain(`pohunek attach ${hand}`);
+    expect((await core.pohunek(["session", "stop", hand, "--json"])).exitCode).toBe(0);
+  }
+  const hands = (await sessions(core)).map((session) => session.id);
+
   const everything = okOf(await start(fixture, ["--all", "--yes", "--json"])).result?.session_id ?? "";
   const byStar = errOf(await start(fixture, ["--project", "widgets", "--yes", "--json"]));
   expect(byStar.code).toBe("already_running");
   expect(byStar.msg).toContain(`pohunek attach ${everything}`);
-  expect(byStar.msg).not.toContain(hand);
+  for (const hand of hands) expect(byStar.msg).not.toContain(hand);
   expect((await sessions(core)).filter((session) => session.state === "running").map((session) => session.id)).toEqual([everything]);
 }, SCENARIO_TIMEOUT_MS);
 
@@ -328,6 +400,28 @@ test("without [manager] only manager start refuses; a bad table fails at load; a
   expect(await sessions(core)).toEqual([]);
 }, SCENARIO_TIMEOUT_MS);
 
+test("a workdir equal to or below a registered project checkout is refused, also through a symlink, and doctor reports it", async () => {
+  const { daemon: core } = await setUp();
+  const checkout = join(core.root, "repos", "widgets");
+  const below = join(checkout, "manager");
+  await mkdir(below);
+  const link = join(core.root, "link");
+  await symlink(below, link);
+  for (const [index, workdir] of [checkout, below, link].entries()) {
+    const inside = await writePluginConfig(core, CONFIGURED, { name: `inside${String(index)}`, extraGlobal: managerTable("shell", workdir) });
+    const refused = errOf(await runPlugin(inside, ["manager", "start", "--project", "gadgets", "--dry-run", "--json"], PROCESS_TIMEOUT_MS));
+    expect(refused.code).toBe("precondition_failed");
+    expect(refused.msg).toContain(`inside the checkout of pohunek project widgets (${checkout})`);
+  }
+  expect(await sessions(core)).toEqual([]);
+
+  // Only registered, matching projects, so the placement check is the first one that fails.
+  const placed = await writePluginConfig(core, [{ label: "widgets", repo: "acme/widgets" }], { name: "placed", extraGlobal: managerTable("shell", link) });
+  const doctor = await runPlugin(placed, ["doctor"], PROCESS_TIMEOUT_MS);
+  expect(doctor.code).toBe(EXIT_MANAGER_WORKDIR_IN_PROJECT);
+  expect(doctor.out).toContain("FAIL manager_workdir_in_project manager workdir placement:");
+}, SCENARIO_TIMEOUT_MS);
+
 test("--profile overrides [manager] profile and is validated like do", async () => {
   const { daemon: core, fixture } = await setUp({ profile: "no-such-profile" });
   const invalid = errOf(await start(fixture, ["--project", "widgets", "--profile=-x", "--yes", "--json"]));
@@ -355,6 +449,7 @@ test("--dry-run prints the plan with argv and prompt and launches nothing", asyn
 
   const doctor = await runPlugin(fixture, ["doctor"], PROCESS_TIMEOUT_MS);
   expect(doctor.out).toContain(`ok   ok manager workdir: ${workdir} is a directory`);
+  expect(doctor.out).toContain(`ok   ok manager workdir placement: ${workdir} lies outside every registered project checkout`);
   expect(doctor.code).not.toBe(EXIT_MANAGER_WORKDIR);
 }, SCENARIO_TIMEOUT_MS);
 

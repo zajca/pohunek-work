@@ -3,20 +3,9 @@
 import { executeCleanup, planCleanup, type CleanupPlan, type CleanupResult } from "../actions/cleanup.ts";
 import { resolveRow } from "../actions/resolve.ts";
 import { ActionError, DO_CONTRACT_VERSION } from "../actions/types.ts";
-import { toAsciiLines } from "../output/sanitize.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { DoDeps, DoOptions, DoOutput } from "./do.ts";
-
-const SAFE_ARG = /^[A-Za-z0-9_./:=@%+,-]+$/;
-
-function commandLine(argv: readonly string[]): string {
-  return argv.map((arg) => (SAFE_ARG.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`)).join(" ");
-}
-
-/** Terminal text in strict ASCII: file names, branches and session ids are provider text. */
-function display(text: string): string {
-  return toAsciiLines(text).join("\n");
-}
+import { commandLine, display, envelope } from "./plan-output.ts";
 
 /** Provider text in the text output, escaped so a newline cannot forge a plan line. */
 function esc(value: string | null): string {
@@ -83,10 +72,6 @@ function resultJson(result: CleanupResult): Record<string, unknown> {
   };
 }
 
-function envelope(cliVersion: string, ok: Record<string, unknown>): string {
-  return JSON.stringify({ cli_version: cliVersion, protocol: { minimum: DO_CONTRACT_VERSION, maximum: DO_CONTRACT_VERSION }, ok }, null, 2);
-}
-
 /** There is no interactive confirmation: the owner reviews `--dry-run`, then passes `--yes`. */
 export async function runCleanup(config: PluginConfig, options: DoOptions, deps: DoDeps): Promise<DoOutput> {
   const { logger } = deps;
@@ -110,7 +95,7 @@ export async function runCleanup(config: PluginConfig, options: DoOptions, deps:
 
   if (options.dryRun) {
     const stdout = options.json
-      ? envelope(deps.cliVersion, { dry_run: true, plan: planJson(plan) })
+      ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, { dry_run: true, plan: planJson(plan) })
       : display(`dry run: nothing was executed\n${planText(plan)}`);
     return { stdout, warnings };
   }
@@ -124,7 +109,7 @@ export async function runCleanup(config: PluginConfig, options: DoOptions, deps:
     worktrees_removed: result.worktreesRemoved,
   });
   const stdout = options.json
-    ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan), result: resultJson(result) })
+    ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, { dry_run: false, plan: planJson(plan), result: resultJson(result) })
     : display(
         result.worktreesRemoved === 0
           ? `removed session ${result.sessionId}; no worktree was removed; it is no longer listed`

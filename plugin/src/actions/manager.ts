@@ -1,11 +1,12 @@
 // `pohunek-work manager start`: plans one manager session for a set of
 // configured projects from fresh pohunek data. Every refusal happens here,
 // before anything runs, so a dry run refuses exactly like a real run.
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { selectProjects } from "../commands/list.ts";
 import { isLiveSession, ROLE_KEY, type PohunekClient } from "../sources/pohunek.ts";
-import type { ManagerConfig, PluginConfig } from "../types/config.ts";
-import type { PohunekSession, SourceFailure } from "../types/sources.ts";
+import type { ManagerConfig, PluginConfig, ProjectConfig } from "../types/config.ts";
+import type { PohunekProject, PohunekSession, SourceFailure } from "../types/sources.ts";
 import { metaArgs, requireProfileName, type SessionLaunch } from "./launch.ts";
 import { readTemplate, renderTemplate } from "./prompt.ts";
 import { ActionError } from "./types.ts";
@@ -32,6 +33,12 @@ export interface ManagerStartOptions {
   readonly profile: string | null;
 }
 
+/** A configured project that `--all` leaves out, and why. */
+export interface SkippedProject {
+  readonly project: string;
+  readonly reason: string;
+}
+
 /** Everything one manager launch will do, computed before anything runs. */
 export interface ManagerPlan extends SessionLaunch {
   readonly all: boolean;
@@ -40,8 +47,8 @@ export interface ManagerPlan extends SessionLaunch {
   readonly profile: string;
   readonly cwd: string;
   readonly name: string;
-  /** One line per configured project `all` leaves out. */
-  readonly warnings: readonly string[];
+  /** Configured projects `all` leaves out; empty for an explicit project set. */
+  readonly skipped: readonly SkippedProject[];
 }
 
 /** The projects of a plan in words, for the prompt and the terminal. */
@@ -67,6 +74,40 @@ export async function workdirProblem(workdir: string): Promise<string | null> {
   }
 }
 
+/** The real path when it can be resolved; the absolute path otherwise (a checkout that no longer exists). */
+async function realOrResolved(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (errorCode(error) === null) throw error;
+    return resolve(path);
+  }
+}
+
+function isWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * Null when the workdir lies outside the checkout of every registered pohunek project, otherwise why not.
+ * Real paths are compared, so a symlink cannot hide a checkout. `doctor` reports the same finding.
+ */
+export async function workdirPlacementProblem(workdir: string, registered: readonly PohunekProject[]): Promise<string | null> {
+  const unknown = registered.filter((project) => project.repoRoot === null).map((project) => project.label);
+  if (unknown.length > 0) {
+    return `[manager] workdir ${workdir} cannot be checked against pohunek project ${unknown.join(", ")}: pohunek reports no repo_root`;
+  }
+  const real = await realOrResolved(workdir);
+  const holders: string[] = [];
+  for (const project of registered) {
+    const root = project.repoRoot ?? "";
+    if (isWithin(await realOrResolved(root), real)) holders.push(`${project.label} (${root})`);
+  }
+  if (holders.length === 0) return null;
+  return `[manager] workdir ${workdir} lies inside the checkout of pohunek project ${holders.join(", ")}; a manager never runs in a project checkout: choose a directory outside every registered repository`;
+}
+
 function requireLabels(labels: readonly string[]): void {
   const invalid = labels.filter((label) => !MANAGER_LABEL.test(label));
   if (invalid.length > 0) {
@@ -77,10 +118,15 @@ function requireLabels(labels: readonly string[]): void {
   }
 }
 
-/** The labels a live manager covers; null for every project (`*`, or no project set at all). */
+/**
+ * The labels a live manager covers; null for every project. A missing, `*` or hand-written value with an
+ * empty element (`""`, `"a,,b"`) cannot be read as a set, so it covers everything.
+ */
 function coveredBy(session: PohunekSession): readonly string[] | null {
   const value = session.metadata[PROJECTS_KEY];
-  return value === undefined || value === ALL_PROJECTS ? null : value.split(LABEL_SEPARATOR);
+  if (value === undefined || value === ALL_PROJECTS) return null;
+  const labels = value.split(LABEL_SEPARATOR);
+  return labels.includes("") ? null : labels;
 }
 
 function overlaps(a: readonly string[] | null, b: readonly string[] | null): boolean {
@@ -118,6 +164,20 @@ function sessionName(all: boolean, projects: readonly string[]): string {
   return name;
 }
 
+/** Why a configured project, or a label without a project file, does not pass the registration check. */
+function registrationProblem(label: string, project: ProjectConfig | undefined, registered: readonly PohunekProject[]): string {
+  if (project === undefined) return "no project file for this label";
+  if (!registered.some((candidate) => candidate.label === label)) return "no pohunek project with this label";
+  return `origin_url does not resolve to ${project.repo}`;
+}
+
+/** The scope rule of the prompt: which `--project` flags every `list` and `do` of the manager carries. */
+function scopeRule(all: boolean, flags: string): string {
+  if (all) return "You manage every configured project, so `pohunek-work list` and `pohunek-work do` need no project flag.";
+  return `Every \`pohunek-work list\` you run carries exactly these flags: ${flags}\n` +
+    "Every `pohunek-work do` you run carries --project followed by the label of the project its row belongs to.";
+}
+
 /** Builds the plan; throws an `ActionError` and has no side effect otherwise. */
 export async function planManagerStart(
   config: PluginConfig,
@@ -136,30 +196,41 @@ export async function planManagerStart(
   if (!registry.ok) throw unavailable("project list", registry);
   if (!sessions.ok) throw unavailable("session list", sessions);
 
-  const { projects, warnings } = selectProjects(config, registry, requested);
-  const selected = projects.map((project) => project.pohunekLabel).sort();
-  if (requested !== null) {
-    const problems = requested
+  const placement = await workdirPlacementProblem(manager.workdir, registry.data);
+  if (placement !== null) throw new ActionError("precondition_failed", `manager start refused: ${placement}`);
+
+  const selected = selectProjects(config, registry, requested).projects.map((project) => project.pohunekLabel).sort();
+  const failing = (labels: readonly string[]): SkippedProject[] =>
+    labels
       .filter((label) => !selected.includes(label))
-      .map((label) => {
-        const project = config.projects.find((candidate) => candidate.pohunekLabel === label);
-        if (project === undefined) return `${label}: no project file for this label`;
-        if (!registry.data.some((registered) => registered.label === label)) return `${label}: no pohunek project with this label`;
-        return `${label}: origin_url does not resolve to ${project.repo}`;
-      });
+      .map((label) => ({ project: label, reason: registrationProblem(label, config.projects.find((project) => project.pohunekLabel === label), registry.data) }));
+  const skipped = requested === null ? failing(config.projects.map((project) => project.pohunekLabel)) : [];
+  if (requested !== null) {
+    const problems = failing(requested);
     if (problems.length > 0) {
-      throw new ActionError("precondition_failed", `manager start refused: ${problems.join("; ")} (run doctor); nothing was launched`);
+      throw new ActionError(
+        "precondition_failed",
+        `manager start refused: ${problems.map((problem) => `${problem.project}: ${problem.reason}`).join("; ")} (run doctor); nothing was launched`,
+      );
     }
   } else if (selected.length === 0) {
-    throw new ActionError("precondition_failed", `manager start refused: no configured project is registered with pohunek under its label and origin (run doctor)${warnings.length > 0 ? `: ${warnings.join("; ")}` : ""}`);
+    throw new ActionError(
+      "precondition_failed",
+      `manager start refused: no configured project is registered with pohunek under its label and origin (run doctor): ${skipped.map((problem) => `${problem.project}: ${problem.reason}`).join("; ")}`,
+    );
   }
   requireNoOverlappingManager(sessions.data, requested);
 
   const all = requested === null;
   const name = sessionName(all, selected);
   const metadata = { [ROLE_KEY]: MANAGER_ROLE, [PROJECTS_KEY]: all ? ALL_PROJECTS : selected.join(LABEL_SEPARATOR) };
-  const listCommand = ["pohunek-work", "list", "--mine", "--json", ...(all ? [] : selected.flatMap((label) => ["--project", label]))].join(" ");
-  const prompt = renderTemplate(await readTemplate("work-manager"), { scope: scopeOf({ all, projects: selected }), list_command: listCommand });
+  const flags = all ? [] : selected.flatMap((label) => ["--project", label]);
+  const prompt = renderTemplate(await readTemplate("work-manager"), {
+    scope: scopeOf({ all, projects: selected }),
+    list_mine_command: ["pohunek-work", "list", "--mine", "--json", ...flags].join(" "),
+    list_command: ["pohunek-work", "list", "--json", ...flags].join(" "),
+    scope_rule: scopeRule(all, flags.join(" ")),
+  });
   return {
     all,
     projects: selected,
@@ -176,6 +247,6 @@ export async function planManagerStart(
       "--request-timeout-ms", String(config.global.actions.launchTimeoutMs),
     ],
     prompt,
-    warnings: all ? warnings : [],
+    skipped,
   };
 }

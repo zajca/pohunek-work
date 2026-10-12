@@ -299,6 +299,23 @@ export async function runPlugin(fixture: PluginFixture, args: readonly string[],
   return { code: result.exitCode, out: result.stdout, err: result.stderr };
 }
 
+/** Display-safe single-quoting for one word of a `sh -c` command line. */
+function shellWord(word: string): string {
+  return `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Starts `pohunek-work <args>` on a pseudo-terminal through util-linux `script`, so the
+ * plugin sees a terminal on stdin and stdout; what is written to the returned process's
+ * stdin reaches the terminal, and its stdout carries everything the terminal shows.
+ */
+export function spawnPluginInTerminal(fixture: PluginFixture, args: readonly string[]): Bun.Subprocess<"pipe", "pipe", "pipe"> {
+  const script = Bun.which("script");
+  if (script === null) throw new Error("util-linux script is not on PATH; the terminal scenarios need it");
+  const command = [process.execPath, MAIN, ...args].map(shellWord).join(" ");
+  return Bun.spawn([script, "-qec", command, "/dev/null"], { env: { ...fixture.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+}
+
 /** Starts a long-running `pohunek-work <args>` (such as `watch`) with the fixture's environment. */
 export function spawnPlugin(fixture: PluginFixture, args: readonly string[]): Bun.Subprocess<"ignore", "pipe", "pipe"> {
   return Bun.spawn([process.execPath, MAIN, ...args], { env: { ...fixture.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });

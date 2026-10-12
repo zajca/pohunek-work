@@ -305,6 +305,7 @@ function parseProject(raw: unknown, path: string): PohunekProject {
     label: reqString(obj, "label", path),
     originUrl: optString(obj, "origin_url", path),
     defaultBaseBranch: optString(obj, "default_base_branch", path),
+    repoRoot: optString(obj, "repo_root", path),
   };
 }
 

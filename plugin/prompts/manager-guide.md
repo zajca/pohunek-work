@@ -22,6 +22,10 @@ names the issue and when to remove or update the rule.
 | `pohunek session inspect <id> --json` | state, activity, branch, `worktree_path` and `metadata` (`work.role`, `work.rev`, `work.link.*`) of one session |
 | `pohunek session screen <id> --json` | the rendered terminal of one session |
 
+When the start prompt of `pohunek-work manager start` names projects, every
+`list` carries exactly those `--project` flags and every `do` carries
+`--project` with the label of the row's project.
+
 Rules for the agent:
 
 - Run `--dry-run` first, show the plan, and add `--yes` only after the owner

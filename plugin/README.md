@@ -160,26 +160,34 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   --agent <profile> --meta work.role=manager --meta work.manager.projects=<labels> --input-stdin`,
   where `<labels>` are the requested labels sorted and joined by `,` (a duplicate is dropped)
   and `*` for `--all`. The prompt on stdin is [prompts/work-manager.tmpl](prompts/work-manager.tmpl)
-  with the project set and the matching `list --mine --json` command; it sends the agent to
-  `manager guide` and does not restate the rules. It needs the optional global table
+  with the project set, the matching `list --mine --json` and `list --json` commands and the
+  scope rule (every `list` carries exactly those `--project` flags, every `do` the row's
+  `--project`; none for `--all`); it sends the agent to `manager guide` and does not restate
+  the rules. It needs the optional global table
   `[manager]` with the required keys `profile` (agent profile name; `--profile` overrides it)
   and `workdir` (absolute path of an existing directory, never created by the plugin);
   without the table only `manager start` refuses (`config_invalid`), and `doctor` fails with
   `manager_workdir_missing` (exit 20, checked right after the configuration) when the
-  workdir is not a directory. Neither `--project` nor `--all`, both together, or
+  workdir is not a directory, and with `manager_workdir_in_project` (exit 21, after the
+  project checks) when its real path equals or lies below the `repo_root` of a registered
+  pohunek project. Neither `--project` nor `--all`, both together, or
   `--dry-run --yes` are usage errors. Refusals: `invalid_value` (a label outside
   letters, digits, `.`, `_` and `-`, an invalid profile name, or a session name over the
   daemon's 128 bytes), `precondition_failed` (a label without a project file, without a
   pohunek project or with an origin that does not resolve to its `repo`, each one named;
-  `--all` with no project passing that check; a missing workdir), `source_unavailable`
+  `--all` with no project passing that check; a missing workdir or one inside a registered
+  project checkout; a plan that changed between the confirmation and the launch: every real
+  run plans again from fresh reads and launches only the argv and prompt that were shown),
+  `source_unavailable`
   (the project or session list cannot be read), `already_running` (a live
-  `work.role=manager` session whose project set overlaps; `*` or no
-  `work.manager.projects` overlaps everything; the message names `pohunek attach <id>`).
-  `--all` leaves out the projects that fail the check with a warning on stderr. As in `do`,
+  `work.role=manager` session whose project set overlaps; `*`, no
+  `work.manager.projects`, or a value with an empty element overlaps everything; the message
+  names `pohunek attach <id>`). `--all` leaves out the projects that fail the check, with a
+  warning on stderr and one `plan.skipped` entry (`project`, `reason`) each. As in `do`,
   `--dry-run` prints the argv and the prompt and launches nothing, a real run asks for
   confirmation unless `--yes` (`confirmation_required` without a terminal), and the launch
   is verified (`launch_failed`, `launch_timed_out`, `setup_failed`, `launch_unverified`).
-  JSON: `{dry_run, plan: {all, projects, profile, cwd, name, metadata, argv, prompt}, result:
+  JSON: `{dry_run, plan: {all, projects, skipped, profile, cwd, name, metadata, argv, prompt}, result:
   {session_id, name, metadata, warnings?}}` in the envelope with protocol version 1. See
   [docs/watch-and-agents.md](docs/watch-and-agents.md#where-the-manager-prompt-comes-from).
 

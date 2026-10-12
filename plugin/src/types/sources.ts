@@ -229,6 +229,8 @@ export interface PohunekProject {
   readonly label: string;
   readonly originUrl: string | null;
   readonly defaultBaseBranch: string | null;
+  /** Checkout the project was registered from; null when pohunek omits it. */
+  readonly repoRoot: string | null;
 }
 
 /** Everything the rules need from pohunek. */

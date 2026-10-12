@@ -43,6 +43,7 @@ function planJson(plan: ManagerPlan, argv: readonly string[]): Record<string, un
   return {
     all: plan.all,
     projects: plan.projects,
+    skipped: plan.skipped,
     profile: plan.profile,
     cwd: plan.cwd,
     name: plan.name,
@@ -61,6 +62,33 @@ function resultJson(result: ActionResult): Record<string, unknown> {
   };
 }
 
+function skippedWarnings(plan: ManagerPlan): string[] {
+  return plan.skipped.map((skipped) => `project ${skipped.project}: ${skipped.reason}; left out (run doctor)`);
+}
+
+/**
+ * Plans again from fresh reads right before the launch: a confirmation may have waited long enough for
+ * another terminal to start a manager, so it authorizes only the exact argv and prompt that were shown.
+ */
+async function requireUnchangedPlan(
+  config: PluginConfig,
+  manager: ManagerConfig,
+  options: ManagerStartCommandOptions,
+  deps: ManagerDeps,
+  shown: { readonly argv: readonly string[]; readonly prompt: string },
+): Promise<ManagerPlan> {
+  const fresh = await planManagerStart(config, manager, options, deps.pohunek);
+  const argv = displayArgv(config.global.pohunek.bin, fresh);
+  const changes = [
+    ...(commandLine(argv) === commandLine(shown.argv) ? [] : [`the command is now ${commandLine(argv)} instead of ${commandLine(shown.argv)}`]),
+    ...(fresh.prompt === shown.prompt ? [] : ["the prompt differs from the one shown"]),
+  ];
+  if (changes.length > 0) {
+    throw new ActionError("precondition_failed", `manager start refused: the plan changed after it was shown (${changes.join("; ")}); nothing was launched, review the plan again`);
+  }
+  return fresh;
+}
+
 async function start(config: PluginConfig, manager: ManagerConfig, options: ManagerStartCommandOptions, deps: ManagerDeps): Promise<ManagerOutput> {
   const { logger } = deps;
   const plan = await planManagerStart(config, manager, options, deps.pohunek);
@@ -70,15 +98,16 @@ async function start(config: PluginConfig, manager: ManagerConfig, options: Mana
     const stdout = options.json
       ? envelope(deps.cliVersion, MANAGER_CONTRACT_VERSION, { dry_run: true, plan: planJson(plan, argv) })
       : display(`dry run: nothing was executed\n${planText(plan, argv)}`);
-    return { stdout, warnings: plan.warnings };
+    return { stdout, warnings: skippedWarnings(plan) };
   }
   await confirmPlan(options.yes, deps.confirm, planText(plan, argv));
-  const result = await launchVerified(plan, deps.pohunek, config);
+  const confirmed = await requireUnchangedPlan(config, manager, options, deps, { argv, prompt: plan.prompt });
+  const result = await launchVerified(confirmed, deps.pohunek, config);
   logger.info("manager_done", { all: plan.all, projects: [...plan.projects], profile: plan.profile, session_id: result.sessionId, warnings: [...result.warnings] });
   const stdout = options.json
     ? envelope(deps.cliVersion, MANAGER_CONTRACT_VERSION, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
     : display(`started session ${result.sessionId} (${result.name ?? plan.name}) for ${scopeOf(plan)}; attach with: pohunek attach ${result.sessionId}`);
-  return { stdout, warnings: [...plan.warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`)] };
+  return { stdout, warnings: [...skippedWarnings(plan), ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`)] };
 }
 
 /** Throws `ActionError` for every refusal; returns the text for stdout otherwise. */
