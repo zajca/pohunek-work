@@ -74,13 +74,18 @@ export async function workdirProblem(workdir: string): Promise<string | null> {
   }
 }
 
-/** The real path when it can be resolved; the absolute path otherwise (a checkout that does not exist). */
-async function realOrResolved(path: string): Promise<string> {
+/**
+ * The real path, or the absolute path when it does not exist (a checkout removed since its registration);
+ * the error code when it exists but cannot be resolved, since a lexical comparison could then miss a symlink.
+ */
+async function realPathOf(path: string): Promise<{ readonly path: string } | { readonly code: string }> {
   try {
-    return await realpath(path);
+    return { path: await realpath(path) };
   } catch (error) {
-    if (errorCode(error) === null) throw error;
-    return resolve(path);
+    const code = errorCode(error);
+    if (code === null) throw error;
+    if (code === "ENOENT" || code === "ENOTDIR") return { path: resolve(path) };
+    return { code };
   }
 }
 
@@ -94,15 +99,23 @@ function isWithin(root: string, path: string): boolean {
  * Real paths are compared, so a symlink cannot hide a checkout. `doctor` reports the same finding.
  */
 export async function workdirPlacementProblem(workdir: string, registered: readonly PohunekProject[]): Promise<string | null> {
-  const unknown = registered.filter((project) => project.repoRoot === null).map((project) => project.label);
-  if (unknown.length > 0) {
-    return `[manager] workdir ${workdir} cannot be checked against pohunek project ${unknown.join(", ")}: pohunek reports no repo_root`;
+  // An empty or relative root would resolve against the process's working directory.
+  const unusable = registered.filter((project) => project.repoRoot === null || !isAbsolute(project.repoRoot)).map((project) => project.label);
+  if (unusable.length > 0) {
+    return `[manager] workdir ${workdir} cannot be checked against pohunek project ${unusable.join(", ")}: pohunek reports no usable (absolute) repo_root`;
   }
-  const real = await realOrResolved(workdir);
+  const real = await realPathOf(workdir);
+  if ("code" in real) return `[manager] cannot resolve ${workdir} (${real.code})`;
   const holders: string[] = [];
+  const unresolved: string[] = [];
   for (const project of registered) {
     const root = project.repoRoot ?? "";
-    if (isWithin(await realOrResolved(root), real)) holders.push(`${project.label} (${root})`);
+    const resolved = await realPathOf(root);
+    if ("code" in resolved) unresolved.push(`${root}, the repo_root of pohunek project ${project.label} (${resolved.code})`);
+    else if (isWithin(resolved.path, real.path)) holders.push(`${project.label} (${root})`);
+  }
+  if (unresolved.length > 0) {
+    return `[manager] cannot resolve ${unresolved.join("; ")}, so workdir ${workdir} cannot be shown to lie outside every project checkout`;
   }
   if (holders.length === 0) return null;
   return `[manager] workdir ${workdir} lies inside the checkout of pohunek project ${holders.join(", ")}; a manager never runs in a project checkout: choose a directory outside every registered repository`;
@@ -120,13 +133,13 @@ function requireLabels(labels: readonly string[]): void {
 
 /**
  * The labels a live manager covers; null for every project. A missing, `*` or hand-written value with an
- * empty element (`""`, `"a,,b"`) cannot be read as a set, so it covers everything.
+ * element that is not a manager label (`""`, `"a,,b"`, `"a, b"`) cannot be read as a set, so it covers everything.
  */
 function coveredBy(session: PohunekSession): readonly string[] | null {
   const value = session.metadata[PROJECTS_KEY];
   if (value === undefined || value === ALL_PROJECTS) return null;
   const labels = value.split(LABEL_SEPARATOR);
-  return labels.includes("") ? null : labels;
+  return labels.every((label) => MANAGER_LABEL.test(label)) ? labels : null;
 }
 
 function overlaps(a: readonly string[] | null, b: readonly string[] | null): boolean {

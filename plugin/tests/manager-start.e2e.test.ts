@@ -4,7 +4,7 @@
 // registered with an origin that does not resolve to its configured repository. The managers run
 // agent `shell`, which reaches activity `working` once the prompt arrives on stdin.
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   runPlugin,
@@ -325,8 +325,8 @@ test("a confirmation does not authorize a plan that changed while the owner was 
 
 test("a live manager without a readable project set, or with *, overlaps every project", async () => {
   const { daemon: core, fixture, workdir } = await setUp();
-  // No key, an empty value and a value with an empty element cannot be read as a set; none of them names gadgets.
-  for (const meta of [[], ["--meta", "work.manager.projects="], ["--meta", "work.manager.projects=bolts,,sprockets"]]) {
+  // No key, an empty value, an empty element and an element that is no label cannot be read as a set; none names gadgets.
+  for (const meta of [[], ["--meta", "work.manager.projects="], ["--meta", "work.manager.projects=bolts,,sprockets"], ["--meta", "work.manager.projects=bolts, sprockets"]]) {
     const created = await core.pohunek(["session", "new", "--agent", "shell", "--cwd", workdir, "--name", "hand", "--meta", "work.role=manager", ...meta, "--json"]);
     const hand = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
     if (hand === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
@@ -420,6 +420,40 @@ test("a workdir equal to or below a registered project checkout is refused, also
   const doctor = await runPlugin(placed, ["doctor"], PROCESS_TIMEOUT_MS);
   expect(doctor.code).toBe(EXIT_MANAGER_WORKDIR_IN_PROJECT);
   expect(doctor.out).toContain("FAIL manager_workdir_in_project manager workdir placement:");
+}, SCENARIO_TIMEOUT_MS);
+
+test("a path that exists but cannot be resolved fails the placement check closed, in manager start and in doctor", async () => {
+  const { daemon: core, workdir } = await setUp();
+  const repos = join(core.root, "repos");
+  const locked = join(core.root, "locked");
+  const lockedWorkdir = join(locked, "manager");
+  await mkdir(lockedWorkdir, { recursive: true });
+  const outside = await writePluginConfig(core, [{ label: "widgets", repo: "acme/widgets" }], { name: "outside", extraGlobal: managerTable("shell", workdir) });
+  const hidden = await writePluginConfig(core, [{ label: "widgets", repo: "acme/widgets" }], { name: "hidden", extraGlobal: managerTable("shell", lockedWorkdir) });
+  // Without search permission on the parent, realpath of every repo_root fails with EACCES, and so does stat of the workdir.
+  await chmod(repos, 0o000);
+  await chmod(locked, 0o000);
+  try {
+    const unresolved = errOf(await runPlugin(outside, ["manager", "start", "--project", "widgets", "--dry-run", "--json"], PROCESS_TIMEOUT_MS));
+    expect(unresolved.code).toBe("precondition_failed");
+    for (const label of ["bolts", "gadgets", "widgets"]) expect(unresolved.msg).toContain(`${join(repos, label)}, the repo_root of pohunek project ${label} (EACCES)`);
+    const doctor = await runPlugin(outside, ["doctor"], PROCESS_TIMEOUT_MS);
+    expect(doctor.code).toBe(EXIT_MANAGER_WORKDIR_IN_PROJECT);
+    expect(doctor.out).toContain("FAIL manager_workdir_in_project manager workdir placement: [manager] cannot resolve ");
+    expect(doctor.out).toContain(`${join(repos, "widgets")}, the repo_root of pohunek project widgets (EACCES)`);
+    expect(doctor.out).not.toContain("lies outside every registered project checkout");
+
+    const unreadable = errOf(await runPlugin(hidden, ["manager", "start", "--project", "widgets", "--dry-run", "--json"], PROCESS_TIMEOUT_MS));
+    expect(unreadable.code).toBe("precondition_failed");
+    expect(unreadable.msg).toContain(`[manager] workdir ${lockedWorkdir} cannot be read (EACCES)`);
+    const hiddenDoctor = await runPlugin(hidden, ["doctor"], PROCESS_TIMEOUT_MS);
+    expect(hiddenDoctor.code).toBe(EXIT_MANAGER_WORKDIR);
+    expect(hiddenDoctor.out).toContain(`FAIL manager_workdir_missing manager workdir: [manager] workdir ${lockedWorkdir} cannot be read (EACCES)`);
+  } finally {
+    await chmod(repos, 0o700);
+    await chmod(locked, 0o700);
+  }
+  expect(await sessions(core)).toEqual([]);
 }, SCENARIO_TIMEOUT_MS);
 
 test("--profile overrides [manager] profile and is validated like do", async () => {

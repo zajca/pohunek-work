@@ -124,14 +124,20 @@ installed binary without a source tree.
 ### Where the manager prompt comes from
 
 `pohunek-work manager start (--project <label>... | --all)` launches the manager.
-Its prompt is `plugin/prompts/work-manager.tmpl`, rendered with the project set
-and the matching `pohunek-work list --mine --json [--project <label>]...`
-command. The prompt tells the agent to run `pohunek-work manager guide` first
-and does not restate the guide's rules, so the two cannot contradict each
+Its prompt is `plugin/prompts/work-manager.tmpl`, rendered with the project set,
+the two matching commands `pohunek-work list --mine --json [--project <label>]...`
+and `pohunek-work list --json [--project <label>]...`, and the scope rule: every
+`list` the agent runs carries exactly those `--project` flags and every `do`
+carries `--project` with the label of the row's project; for `--all` neither
+needs a flag. The prompt tells the agent to run `pohunek-work manager guide`
+first and does not restate the guide's rules, so the two cannot contradict each
 other; a change to the rules goes into the guide only. The session runs in the
-configured `[manager] workdir`, never in a project checkout, and carries
-`work.role=manager` and `work.manager.projects` (the sorted labels joined by
-`,`, or `*` for `--all`). The prompts that `do` sends to the sessions it
+configured `[manager] workdir` and carries `work.role=manager` and
+`work.manager.projects` (the sorted labels joined by `,`, or `*` for `--all`).
+`manager start` refuses a workdir whose real path equals or lies below the
+`repo_root` of a registered pohunek project, or that cannot be checked because a
+path does not resolve, and `pohunek-work doctor` reports the same finding as
+`manager_workdir_in_project` (exit 21). The prompts that `do` sends to the sessions it
 launches are different: they live in the other `plugin/prompts/*.tmpl` files.
 
 [#81](https://github.com/zajca/pohunek-work/issues/81) tracks the GUI and TUI

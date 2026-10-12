@@ -170,18 +170,20 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   `manager_workdir_missing` (exit 20, checked right after the configuration) when the
   workdir is not a directory, and with `manager_workdir_in_project` (exit 21, after the
   project checks) when its real path equals or lies below the `repo_root` of a registered
-  pohunek project. Neither `--project` nor `--all`, both together, or
+  pohunek project, or when that cannot be checked (an existing path that does not resolve, or a
+  project without an absolute `repo_root`). Neither `--project` nor `--all`, both together, or
   `--dry-run --yes` are usage errors. Refusals: `invalid_value` (a label outside
   letters, digits, `.`, `_` and `-`, an invalid profile name, or a session name over the
   daemon's 128 bytes), `precondition_failed` (a label without a project file, without a
   pohunek project or with an origin that does not resolve to its `repo`, each one named;
-  `--all` with no project passing that check; a missing workdir or one inside a registered
-  project checkout; a plan that changed between the confirmation and the launch: every real
+  `--all` with no project passing that check; a missing workdir, one inside a registered
+  project checkout, or one whose placement cannot be checked; a plan that changed between the confirmation and the launch: every real
   run plans again from fresh reads and launches only the argv and prompt that were shown),
   `source_unavailable`
   (the project or session list cannot be read), `already_running` (a live
   `work.role=manager` session whose project set overlaps; `*`, no
-  `work.manager.projects`, or a value with an empty element overlaps everything; the message
+  `work.manager.projects`, or a value with an element that is not a label (empty, or with a
+  space) overlaps everything; the message
   names `pohunek attach <id>`). `--all` leaves out the projects that fail the check, with a
   warning on stderr and one `plan.skipped` entry (`project`, `reason`) each. As in `do`,
   `--dry-run` prints the argv and the prompt and launches nothing, a real run asks for
