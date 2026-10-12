@@ -5,6 +5,12 @@ declare module "*.tmpl" {
   export default text;
 }
 
+// The manager guide (prompts/manager-guide.md):
+declare module "*.md" {
+  const text: string;
+  export default text;
+}
+
 // Launcher assets under launchers/: shell library, config template, and the
 // extensionless scripts.
 declare module "*.sh" {

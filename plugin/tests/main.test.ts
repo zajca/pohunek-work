@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../src/util/exec.ts";
 
 const MAIN = new URL("../src/main.ts", import.meta.url).pathname;
+const MANAGER_GUIDE = new URL("../prompts/manager-guide.md", import.meta.url).pathname;
 const tempDirs: string[] = [];
 
 async function tempDir(): Promise<string> {
@@ -218,4 +219,44 @@ test("--include-ignored is a usage error for commands that do not take it", asyn
   const result = await run(["doctor", "--include-ignored"], dir);
   expect(result.code).toBe(2);
   expect(result.err).toContain("usage:");
+});
+
+test("manager guide prints the embedded guide unchanged and reads no config", async () => {
+  const dir = await tempDir();
+  const guide = await readFile(MANAGER_GUIDE, "utf8");
+  const withoutConfig = await run(["manager", "guide"], dir);
+  expect(withoutConfig.code).toBe(0);
+  expect(withoutConfig.out).toBe(guide);
+  expect(withoutConfig.err).toBe("");
+
+  // run() points the config dir at <dir>/missing; a config there that cannot be parsed must not matter.
+  await mkdir(join(dir, "missing"));
+  await writeFile(join(dir, "missing", "config.toml"), "this is = = not toml\n");
+  const broken = await run(["list", "--json"], dir);
+  expect((JSON.parse(broken.out) as { err: { code: string } }).err.code).toBe("config_invalid");
+  const withBrokenConfig = await run(["manager", "guide"], dir);
+  expect(withBrokenConfig.code).toBe(0);
+  expect(withBrokenConfig.out).toBe(guide);
+  expect(withBrokenConfig.err).toBe("");
+});
+
+test("manager without a known subcommand, or guide with arguments, is a usage error before reading the config", async () => {
+  const dir = await tempDir();
+  const cases: readonly (readonly string[])[] = [
+    ["manager"],
+    ["manager", "bogus"],
+    ["manager", "guide", "extra"],
+    ["manager", "guide", "--all"],
+  ];
+  for (const args of cases) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    expect(result.out).toBe("");
+    expect(result.err).toContain("usage:");
+    expect(result.err).toContain("pohunek-work manager guide");
+    expect(result.err).not.toContain("config.toml");
+  }
+  const json = await run(["manager", "guide", "--json"], dir);
+  expect(json.code).toBe(2);
+  expect((JSON.parse(json.out) as { err: { class: string } }).err.class).toBe("usage");
 });

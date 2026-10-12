@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// A compiled binary has no prompts/ directory beside it; the templates must be in the bundle.
-test("the bundled program contains every prompt template", async () => {
+// A compiled binary has no prompts/ directory beside it; the templates and the manager guide must be in the bundle.
+test("the bundled program contains every prompt template and the manager guide", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pohunek-work-bundle-"));
   try {
     const outfile = join(dir, "main.js");
@@ -19,6 +19,7 @@ test("the bundled program contains every prompt template", async () => {
       "You are fixing the failing CI checks",
       "You are resolving the merge conflict",
       "You are reviewing pull request",
+      "The manager starts, verifies and reports sessions.",
     ]) {
       expect(bundle).toContain(marker);
     }
