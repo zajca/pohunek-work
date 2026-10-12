@@ -11,7 +11,7 @@ import { LIST_CONTRACT_VERSION } from "./types/item.ts";
 import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
-import { runWatch, unknownProject } from "./commands/watch.ts";
+import { runWatch, unknownProjects } from "./commands/watch.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
@@ -27,7 +27,7 @@ import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `usage:
-  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--json] [--project <label>]
+  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--json] [--project <label>]...
   pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
@@ -38,8 +38,9 @@ const USAGE = `usage:
   pohunek-work setup config [--force] [--json]
   pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project> --issue-source <linear|github>] [--issue-keybind <key>] [--json]
   pohunek-work tui
-  pohunek-work watch [--project <label>]
+  pohunek-work watch [--project <label>]...
 
+--project on list and watch repeats to select several projects; do takes one.
 merge is not an action: merging stays manual.
 exit codes: 0 ok, 2 error, 3 list printed with at least one source unavailable;
 doctor exits with the code of its first failed check (see doctor output)`;
@@ -62,7 +63,12 @@ function parseFinishedHours(value: string | undefined, mine: boolean): number | 
   return Number(value);
 }
 
-function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; json: boolean; project: string | null } {
+/** The labels of every `--project`, without duplicates; null when none was given. */
+function projectSelection(labels: readonly string[] | undefined): string[] | null {
+  return labels === undefined ? null : [...new Set(labels)];
+}
+
+function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; json: boolean; projects: string[] | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
@@ -72,13 +78,13 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
         "finished-hours": { type: "string" },
         "include-ignored": { type: "boolean", default: false },
         json: { type: "boolean", default: false },
-        project: { type: "string" },
+        project: { type: "string", multiple: true },
       },
       allowPositionals: true,
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], json: values.json, project: values.project ?? null };
+    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], json: values.json, projects: projectSelection(values.project) };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
@@ -350,16 +356,16 @@ async function tuiCommand(argv: readonly string[]): Promise<number> {
   }
 }
 
-function parseWatchArgs(argv: readonly string[]): { project: string | null } {
+function parseWatchArgs(argv: readonly string[]): { projects: string[] | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
-      options: { project: { type: "string" } },
+      options: { project: { type: "string", multiple: true } },
       allowPositionals: true,
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { project: values.project ?? null };
+    return { projects: projectSelection(values.project) };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
@@ -375,9 +381,10 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
     if (!(error instanceof ConfigError)) throw error;
     return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
   }
-  const unknown = unknownProject(config, options.project);
-  if (unknown !== null) {
-    return reportError(false, LIST_CONTRACT_VERSION, "usage", "unknown_project", `no project file for label ${JSON.stringify(unknown)}`);
+  const unknown = unknownProjects(config, options.projects);
+  if (unknown.length > 0) {
+    const labels = unknown.map((label) => JSON.stringify(label)).join(", ");
+    return reportError(false, LIST_CONTRACT_VERSION, "usage", "unknown_project", `no project file for ${unknown.length === 1 ? "label" : "labels"} ${labels}`);
   }
   const logger = createLogger({
     logDir: resolveLogDir(),

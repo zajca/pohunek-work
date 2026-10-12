@@ -9,8 +9,8 @@ import { SpawnError, type Exec } from "../util/exec.ts";
 import { collectRows, type ListDeps } from "./list.ts";
 
 export interface WatchOptions {
-  /** Pohunek project label to restrict the watch to; null for every project. */
-  readonly project: string | null;
+  /** Pohunek project labels to restrict the watch to, without duplicates; null for every project. */
+  readonly projects: readonly string[] | null;
 }
 
 export interface WatchDeps extends Omit<ListDeps, "cliVersion" | "now"> {
@@ -40,10 +40,9 @@ export function notificationArgv(notify: NotifyConfig, item: ListItem): readonly
   return [notify.command, `--app-name=${APP_NAME}`, "--", summary, body];
 }
 
-/** Label of a project the watch is restricted to that no project file defines; null when it is known. */
-export function unknownProject(config: PluginConfig, project: string | null): string | null {
-  if (project === null) return null;
-  return config.projects.some((p) => p.pohunekLabel === project) ? null : project;
+/** Labels the watch is restricted to that no project file defines, in the given order. */
+export function unknownProjects(config: PluginConfig, projects: readonly string[] | null): readonly string[] {
+  return (projects ?? []).filter((label) => !config.projects.some((p) => p.pohunekLabel === label));
 }
 
 async function notify(config: PluginConfig, item: ListItem, deps: WatchDeps): Promise<void> {
@@ -75,7 +74,7 @@ export async function watchTick(
   signal: AbortSignal,
 ): Promise<TickResult> {
   const { logger } = deps;
-  const collected = await collectRows(config, options.project, deps);
+  const collected = await collectRows(config, options.projects, deps);
   for (const warning of collected.warnings) logger.error("watch_warning", { warning });
   // Ignored rows never stay in the baseline, even on a partial poll, so a row that loses the label while it is the owner's turn is new to it and notifies once.
   const listed = collected.rows.map((row) => row.listItem);

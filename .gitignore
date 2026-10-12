@@ -8,3 +8,4 @@ logs/
 !.claude/skills/
 native/target/
 __pycache__/
+plugin/.core-binaries/

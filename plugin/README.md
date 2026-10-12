@@ -79,7 +79,10 @@ an explicit policy.
 
 ## Status
 
-M0 and M1 are merged: `pohunek-work list` and `doctor`. M2a and M2b are in
+M0 and M1 are merged: `pohunek-work list` and `doctor`. `list --project <label>`
+restricts the listing to that pohunek project label and repeats to select several
+(a duplicate is ignored; each label without a project file prints a warning on
+stderr). M2a and M2b are in
 progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 
 - `pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--dry-run]`
@@ -140,7 +143,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.
-- `pohunek-work watch [--project <label>]` polls the same pipeline every
+- `pohunek-work watch [--project <label>]...` (repeat `--project` to watch several
+  projects; each label without a project file is refused) polls the same pipeline every
   `[watch] poll_interval_secs` and sends one desktop notification (key and
   reason, no titles) through `[notify] command` when a row becomes the owner's
   turn. The previous turn of each row lives in memory only: a restart, or a

@@ -43,8 +43,8 @@ export interface ListOptions {
   /** With `mine`, also keeps rows whose agent work finished within this many hours; null keeps none. */
   readonly finishedHours: number | null;
   readonly json: boolean;
-  /** Pohunek project label to restrict the listing to; null for every project. */
-  readonly project: string | null;
+  /** Pohunek project labels to restrict the listing to, without duplicates; null for every project. */
+  readonly projects: readonly string[] | null;
   /** Lists rows carrying the project's ignore label; they are hidden otherwise. */
   readonly includeIgnored: boolean;
 }
@@ -102,12 +102,12 @@ function pohunekStatus(...results: readonly SourceResult<unknown>[]): SourceStat
 export function selectProjects(
   config: PluginConfig,
   registry: SourceResult<readonly PohunekProject[]>,
-  only: string | null,
+  only: readonly string[] | null,
 ): { projects: ProjectConfig[]; warnings: string[] } {
   const warnings: string[] = [];
   const projects: ProjectConfig[] = [];
   for (const project of config.projects) {
-    if (only !== null && project.pohunekLabel !== only) continue;
+    if (only !== null && !only.includes(project.pohunekLabel)) continue;
     if (registry.ok) {
       const registered = registry.data.find((p) => p.label === project.pohunekLabel);
       if (registered === undefined) {
@@ -145,7 +145,7 @@ export interface Collected {
 /** Fetches every source once per selected project, joins and evaluates the rules. */
 export async function collectRows(
   config: PluginConfig,
-  onlyProject: string | null,
+  onlyProjects: readonly string[] | null,
   deps: Omit<ListDeps, "cliVersion">,
 ): Promise<Collected> {
   const { logger } = deps;
@@ -163,10 +163,12 @@ export async function collectRows(
   const sessions: readonly PohunekSession[] = sessionsResult.ok ? sessionsResult.data : [];
   const notifications: readonly PohunekNotification[] = notificationsResult.ok ? notificationsResult.data : [];
 
-  const { projects, warnings } = selectProjects(config, registry, onlyProject);
+  const { projects, warnings } = selectProjects(config, registry, onlyProjects);
   for (const warning of warnings) logger.info("project_skipped", { warning });
-  if (onlyProject !== null && projects.length === 0 && warnings.length === 0) {
-    warnings.push(`project ${onlyProject}: no configuration file for this label`);
+  for (const label of onlyProjects ?? []) {
+    if (!config.projects.some((project) => project.pohunekLabel === label)) {
+      warnings.push(`project ${label}: no configuration file for this label`);
+    }
   }
 
   const rows: CollectedRow[] = [];
@@ -233,7 +235,7 @@ export async function runList(
   deps: ListDeps,
 ): Promise<ListOutput> {
   const { logger } = deps;
-  const collected = await collectRows(config, options.project, deps);
+  const collected = await collectRows(config, options.projects, deps);
   const { orphans, unlinked, projectStatuses, warnings, sourceFailures } = collected;
   const items = collected.rows.map((row) => row.listItem);
 
