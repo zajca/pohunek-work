@@ -7,6 +7,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  DAEMON_STOP_HOOK_TIMEOUT_MS,
   runPlugin,
   spawnPluginInTerminal,
   startCoreDaemon,
@@ -52,7 +53,7 @@ let daemon: CoreDaemon | null = null;
 afterEach(async () => {
   await daemon?.stop();
   daemon = null;
-});
+}, DAEMON_STOP_HOOK_TIMEOUT_MS);
 
 interface Setup {
   readonly daemon: CoreDaemon;

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  DAEMON_STOP_HOOK_TIMEOUT_MS,
   runPlugin,
   spawnPlugin,
   startCoreDaemon,
@@ -40,7 +41,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await daemon?.stop();
-});
+}, DAEMON_STOP_HOOK_TIMEOUT_MS);
 
 function requireFixture(): PluginFixture {
   if (fixture === null) throw new Error("the real-daemon fixture did not start");
