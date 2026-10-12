@@ -107,7 +107,7 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   failed checks and the dirty or untracked entries (at most `[actions]
   holder_entries_listed`, each string cut at `holder_entry_max_length`; both
   required) otherwise, and "switch that checkout yourself" for a holder no pohunek
-  session owns ([docs/watch-and-agents.md](docs/watch-and-agents.md#a-branch-that-is-already-checked-out));
+  session owns ([prompts/manager-guide.md](prompts/manager-guide.md#a-branch-that-is-already-checked-out));
 - `pohunek-work do <key> ready [--dry-run]` runs `gh pr ready` on the owner's
   draft and re-reads the pull request to confirm it is no longer a draft;
 - `pohunek-work do <key> attach` attaches the terminal to the one live linked
@@ -130,7 +130,7 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   may be gone, check `pohunek session list` and the disk. It needs the `[actions]` keys `git_bin` (absolute path),
   `git_timeout_ms`, `cleanup_remote` (one safe ref segment) and
   `cleanup_timeout_ms`; `list` does not advertise it. Checks, JSON shape and
-  refusal codes: [docs/watch-and-agents.md](docs/watch-and-agents.md#finished-sessions)
+  refusal codes: [prompts/manager-guide.md](prompts/manager-guide.md#finished-sessions)
   and [docs/rfc.md](docs/rfc.md);
 - `pohunek-work setup [scripts|config|sway] [--force] [--json]` installs the
   rofi/sway launcher scripts, the starter `launcher.conf` and prompt templates,
@@ -152,6 +152,9 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   owner's turn. It does not use `pohunek notifications watch` yet (spike S4);
   the systemd unit (c.3) is installed from machine-management. Usage and logs:
   [docs/watch-and-agents.md](docs/watch-and-agents.md).
+- `pohunek-work manager guide` prints the rules for an agent that drives
+  pohunek work ([prompts/manager-guide.md](prompts/manager-guide.md), embedded
+  in the program); it takes no arguments and reads no configuration.
 
 Every action plans from fresh data and refuses with a typed code when its rule
 no longer holds; every write action asks for confirmation unless `--yes` is
@@ -182,7 +185,8 @@ given.
 | --- | --- |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | The complete plan before the next pohunek release: verified pohunek CLI surface, decisions, architecture, configuration, milestones M0–M3 with definitions of done, testing, risks |
 | [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md) | Refined plan for M2 (links and actions): decisions, verified pohunek facts, spikes, steps M2a-M2d with definitions of done, risks |
-| [docs/watch-and-agents.md](docs/watch-and-agents.md) | How to run `watch` (configuration, what is and is not notified, logs) and how an agent drives pohunek work without growing context or spinning |
+| [docs/watch-and-agents.md](docs/watch-and-agents.md) | How to run `watch` (configuration, what is and is not notified, logs), where the manager prompt comes from and why there is no skill |
+| [prompts/manager-guide.md](prompts/manager-guide.md) | The rules for an agent that drives pohunek work (the manager): commands, verification after a launch, following delegated work, collisions, what it may read, finished sessions, keeping context flat; embedded in the program and printed by `pohunek-work manager guide` |
 | [docs/rfc.md](docs/rfc.md) | Target design: joining rules, the `on_turn` rules, interfaces, actions, storage, per-project configuration, autonomy levels, full 28-step roadmap including the pohunek release, task layer and relay stages |
 | [docs/work-overview.html](docs/work-overview.html) | Visual summary with diagrams (open in a browser) |
 

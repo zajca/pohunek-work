@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Command line entry point: `pohunek-work list`, `do`, `doctor`, `setup`, `tui` and `watch`.
+// Command line entry point: `pohunek-work list`, `do`, `doctor`, `manager`, `setup`, `tui` and `watch`.
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAction } from "./actions/types.ts";
@@ -25,6 +25,8 @@ import { exec } from "./util/exec.ts";
 import { sleep } from "./util/sleep.ts";
 import { toAscii } from "./output/sanitize.ts";
 import pkg from "../package.json" with { type: "json" };
+// Bundled into the program text, so a compiled binary prints the guide without a source tree.
+import managerGuide from "../prompts/manager-guide.md" with { type: "text" };
 
 const USAGE = `usage:
   pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--json] [--project <label>]...
@@ -33,6 +35,7 @@ const USAGE = `usage:
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
   pohunek-work do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work doctor
+  pohunek-work manager guide
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]
   pohunek-work setup config [--force] [--json]
@@ -310,6 +313,14 @@ async function doctorCommand(argv: readonly string[]): Promise<number> {
   return report.exitCode;
 }
 
+function managerCommand(argv: readonly string[]): number {
+  const [sub, ...extra] = argv;
+  if (sub !== "guide") throw new UsageError(sub === undefined ? "manager needs a subcommand (known: guide)" : `unknown manager subcommand: ${sub} (known: guide)`);
+  if (extra.length > 0) throw new UsageError(`manager guide takes no arguments: ${extra.join(" ")}`);
+  process.stdout.write(managerGuide);
+  return 0;
+}
+
 async function tuiCommand(argv: readonly string[]): Promise<number> {
   if (argv.length > 0) throw new UsageError(`tui takes no arguments: ${argv.join(" ")}`);
   let config;
@@ -434,6 +445,8 @@ async function main(argv: readonly string[]): Promise<number> {
         return await doCommand(rest);
       case "doctor":
         return await doctorCommand(rest);
+      case "manager":
+        return managerCommand(rest);
       case "setup":
         return await setupCommand(rest);
       case "tui":
