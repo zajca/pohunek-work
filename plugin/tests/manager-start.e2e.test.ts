@@ -215,7 +215,7 @@ test("manager start --project launches one verified manager in the workdir with 
   expect(text.out.trim()).toBe(`started session ${gadgets.id} (manager:gadgets) for project gadgets; attach with: pohunek attach ${gadgets.id}`);
 
   await core.stop();
-  expect(await workersBelow(core.root)).toEqual([]);
+  expect(await workersBelow(core.runtimeDir)).toEqual([]);
 }, SCENARIO_TIMEOUT_MS);
 
 test("manager start with several projects sorts and joins the labels, a duplicate is dropped", async () => {

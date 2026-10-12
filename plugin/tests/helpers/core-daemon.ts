@@ -1,10 +1,12 @@
 // A real, isolated `pohunekd` from the pinned core release (plugin/core-release.json)
 // for behavioral scenarios, plus a plugin configuration and runner pointed at it.
 // Every directory the daemon, the pohunek CLI and the plugin use lives under one
-// private root that `stop()` removes. Child environments are built from scratch, so
-// no host `POHUNEK_*` variable and no host daemon can leak into a scenario.
+// private root, except XDG_RUNTIME_DIR, which holds the length-limited sockets and
+// lives in a short private directory below /tmp; `stop()` removes both. Child
+// environments are built from scratch, so no host `POHUNEK_*` variable and no host
+// daemon can leak into a scenario.
 import { closeSync, openSync } from "node:fs";
-import { access, chmod, constants, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, constants, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CORE_BINARIES, CORE_DIR_ENV } from "../../scripts/core-binaries.ts";
@@ -25,9 +27,12 @@ const SUN_PATH_SIZE: Readonly<Partial<Record<NodeJS.Platform, number>>> = { linu
 const SESSION_ULID_LENGTH = 26;
 /** A session id of the longest form, for the worst-case socket path. */
 const LONGEST_SESSION_ID = `s-${"0".repeat(SESSION_ULID_LENGTH)}`;
-/** XDG_RUNTIME_DIR below the root; one letter because the socket paths under it are length-limited. */
-const RUNTIME_DIR = "r";
-const PRIVATE_DIRS = [RUNTIME_DIR, "data", "state", "cache", "config", "home", "bin", "tmp", "repos"] as const;
+/**
+ * Base of XDG_RUNTIME_DIR: the shortest temporary directory Linux and macOS both
+ * provide, because TMPDIR (on macOS `/var/folders/...`) leaves no room for a worker socket.
+ */
+const SOCKET_BASE = "/tmp";
+const PRIVATE_DIRS = ["data", "state", "cache", "config", "home", "bin", "tmp", "repos"] as const;
 
 export interface CliResult {
   readonly code: number | null;
@@ -36,8 +41,10 @@ export interface CliResult {
 }
 
 export interface CoreDaemon {
-  /** Private root of every directory of this daemon and its clients. */
+  /** Private root of every directory of this daemon and its clients except the runtime directory. */
   readonly root: string;
+  /** XDG_RUNTIME_DIR of the daemon and its clients: the daemon socket and the worker sockets live below it. */
+  readonly runtimeDir: string;
   /** Directory holding `pohunekd`, `pohunek-sessiond` and `pohunek`. */
   readonly coreDir: string;
   /** Path of the longest socket the daemon may bind (a session worker's), checked against the platform limit. */
@@ -85,15 +92,15 @@ function parseOk(stdout: string): Record<string, unknown> | null {
   }
 }
 
-/** Fails before the daemon starts when a session worker could not bind its socket below this TMPDIR. */
+/** Fails before the daemon starts when a session worker could not bind its socket below the runtime directory. */
 function checkSocketPathLength(path: string): void {
   const size = SUN_PATH_SIZE[process.platform];
   if (size === undefined) throw new Error(`no unix socket path limit is known for platform ${process.platform}`);
   const length = Buffer.byteLength(path);
   if (length >= size) {
     throw new Error(
-      `TMPDIR ${tmpdir()} is too long for the daemon's sockets: a session worker socket would be ${path} ` +
-        `(${String(length)} bytes, the ${process.platform} limit is ${String(size - 1)}); set TMPDIR to a shorter directory`,
+      `the runtime directory below ${SOCKET_BASE} is too long for the daemon's sockets: a session worker socket would be ${path} ` +
+        `(${String(length)} bytes, the ${process.platform} limit is ${String(size - 1)})`,
     );
   }
 }
@@ -109,11 +116,20 @@ function workerSocketPath(runtimeDir: string, sessionId: string): string {
 export async function startCoreDaemon(): Promise<CoreDaemon> {
   const coreDir = await requireCoreDir();
   const git = requireGit();
-  const root = await mkdtemp(join(tmpdir(), "pw-"));
+  // Real paths: the daemon refuses a directory with a symlink component (macOS /tmp and /var are symlinks).
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pw-")));
+  let runtimeDir: string | null = null;
   const dir = (name: (typeof PRIVATE_DIRS)[number]): string => join(root, name);
+  const removeDirs = async (): Promise<void> => {
+    await rm(root, { recursive: true, force: true });
+    if (runtimeDir !== null) await rm(runtimeDir, { recursive: true, force: true });
+  };
   let daemon: Bun.Subprocess | null = null;
   try {
-    const longestSocketPath = workerSocketPath(dir(RUNTIME_DIR), LONGEST_SESSION_ID);
+    const runtime = await realpath(await mkdtemp(join(await realpath(SOCKET_BASE), "pw-")));
+    runtimeDir = runtime;
+    await chmod(runtime, 0o700);
+    const longestSocketPath = workerSocketPath(runtime, LONGEST_SESSION_ID);
     checkSocketPathLength(longestSocketPath);
     for (const name of PRIVATE_DIRS) await mkdir(dir(name), { mode: 0o700 });
     // The daemon's PATH holds only this directory; it runs git for project and worktree work.
@@ -121,7 +137,7 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
     await chmod(join(dir("bin"), "git"), 0o755);
 
     const clientEnv: Record<string, string> = {
-      XDG_RUNTIME_DIR: dir(RUNTIME_DIR),
+      XDG_RUNTIME_DIR: runtime,
       XDG_DATA_HOME: dir("data"),
       XDG_STATE_HOME: dir("state"),
       XDG_CACHE_HOME: dir("cache"),
@@ -169,9 +185,10 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
     let stopped = false;
     return {
       root,
+      runtimeDir: runtime,
       coreDir,
       longestSocketPath,
-      workerSocketPath: (sessionId) => workerSocketPath(dir(RUNTIME_DIR), sessionId),
+      workerSocketPath: (sessionId) => workerSocketPath(runtime, sessionId),
       clientEnv,
       pohunek,
       async registerProject(label, repo) {
@@ -188,7 +205,7 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
         try {
           await stopProcess(child);
         } finally {
-          await rm(root, { recursive: true, force: true });
+          await removeDirs();
         }
       },
     };
@@ -196,7 +213,7 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
     try {
       if (daemon !== null) await stopProcess(daemon);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeDirs();
     }
     throw error;
   }
@@ -283,9 +300,9 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
 const PGREP_NO_MATCH = 1;
 const PGREP_TIMEOUT_MS = 10_000;
 
-/** Pids of the session workers whose command line names a path below `root`. */
-export async function workersBelow(root: string): Promise<string[]> {
-  const pattern = `pohunek-sessiond .*${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`;
+/** Pids of the session workers whose command line names a path below `dir` (a daemon's runtime directory). */
+export async function workersBelow(dir: string): Promise<string[]> {
+  const pattern = `pohunek-sessiond .*${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`;
   const result = await exec(["pgrep", "-f", pattern], { timeoutMs: PGREP_TIMEOUT_MS });
   if (result.exitCode === PGREP_NO_MATCH) return [];
   if (result.exitCode !== 0) throw new Error(`pgrep failed (${String(result.exitCode)}): ${result.stderr}`);
@@ -305,15 +322,17 @@ function shellWord(word: string): string {
 }
 
 /**
- * Starts `pohunek-work <args>` on a pseudo-terminal through util-linux `script`, so the
+ * Starts `pohunek-work <args>` on a pseudo-terminal through `script`, so the
  * plugin sees a terminal on stdin and stdout; what is written to the returned process's
  * stdin reaches the terminal, and its stdout carries everything the terminal shows.
  */
 export function spawnPluginInTerminal(fixture: PluginFixture, args: readonly string[]): Bun.Subprocess<"pipe", "pipe", "pipe"> {
   const script = Bun.which("script");
-  if (script === null) throw new Error("util-linux script is not on PATH; the terminal scenarios need it");
+  if (script === null) throw new Error("script is not on PATH; the terminal scenarios need it");
   const command = [process.execPath, MAIN, ...args].map(shellWord).join(" ");
-  return Bun.spawn([script, "-qec", command, "/dev/null"], { env: { ...fixture.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  // util-linux takes the command as one string and needs -e for the child's exit status; BSD script (macOS) takes argv and returns it.
+  const argv = process.platform === "darwin" ? [script, "-q", "/dev/null", "/bin/sh", "-c", command] : [script, "-qec", command, "/dev/null"];
+  return Bun.spawn(argv, { env: { ...fixture.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
 }
 
 /** Starts a long-running `pohunek-work <args>` (such as `watch`) with the fixture's environment. */

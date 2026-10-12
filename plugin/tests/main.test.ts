@@ -201,7 +201,13 @@ test("doctor reports the launcher requirements as warnings next to the config fa
   const result = await run(["doctor"], dir);
   expect(result.code).toBe(10);
   expect(result.out).toContain("FAIL config_invalid config");
-  expect(result.out).toMatch(/^warn warn launcher_scripts: not installed; run 'pohunek-work setup scripts'$/m);
+  // The rofi/sway launcher is Linux-only: on macOS doctor checks the terminal and nothing else.
+  if (process.platform === "darwin") {
+    expect(result.out).not.toContain("launcher_scripts");
+    expect(result.out).toMatch(/^(ok {2}|warn) \S+ terminal: /m);
+  } else {
+    expect(result.out).toMatch(/^warn warn launcher_scripts: not installed; run 'pohunek-work setup scripts'$/m);
+  }
 });
 
 test("--include-ignored is accepted by list and do (parsing passes, the missing config is the next error)", async () => {
