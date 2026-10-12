@@ -316,23 +316,49 @@ export async function runPlugin(fixture: PluginFixture, args: readonly string[],
   return { code: result.exitCode, out: result.stdout, err: result.stderr };
 }
 
-/** Display-safe single-quoting for one word of a `sh -c` command line. */
-function shellWord(word: string): string {
-  return `'${word.replaceAll("'", "'\\''")}'`;
+/** A `pohunek-work` process on a pseudo-terminal: what it shows accumulates in `output.text`. */
+export interface TerminalRun {
+  readonly process: Bun.Subprocess;
+  readonly output: { text: string };
+  /** Settles when the terminal reaches end of file, after the process's last output arrived. */
+  readonly ended: Promise<void>;
+  /** Types `text` into the terminal. */
+  write(text: string): void;
+  close(): void;
 }
 
 /**
- * Starts `pohunek-work <args>` on a pseudo-terminal through `script`, so the
- * plugin sees a terminal on stdin and stdout; what is written to the returned process's
- * stdin reaches the terminal, and its stdout carries everything the terminal shows.
+ * Starts `pohunek-work <args>` on a pseudo-terminal of Bun's own, so the plugin sees a
+ * terminal on stdin and stdout on every platform without an external `script`.
  */
-export function spawnPluginInTerminal(fixture: PluginFixture, args: readonly string[]): Bun.Subprocess<"pipe", "pipe", "pipe"> {
-  const script = Bun.which("script");
-  if (script === null) throw new Error("script is not on PATH; the terminal scenarios need it");
-  const command = [process.execPath, MAIN, ...args].map(shellWord).join(" ");
-  // util-linux takes the command as one string and needs -e for the child's exit status; BSD script (macOS) takes argv and returns it.
-  const argv = process.platform === "darwin" ? [script, "-q", "/dev/null", "/bin/sh", "-c", command] : [script, "-qec", command, "/dev/null"];
-  return Bun.spawn(argv, { env: { ...fixture.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+export function spawnPluginInTerminal(fixture: PluginFixture, args: readonly string[]): TerminalRun {
+  const output = { text: "" };
+  const decoder = new TextDecoder();
+  const { promise: ended, resolve: end } = Promise.withResolvers<undefined>();
+  const child = Bun.spawn([process.execPath, MAIN, ...args], {
+    env: { ...fixture.env },
+    terminal: {
+      data: (_terminal, data) => {
+        output.text += decoder.decode(data, { stream: true });
+      },
+      exit: () => {
+        end(undefined);
+      },
+    },
+  });
+  const { terminal } = child;
+  if (terminal === undefined) throw new Error("Bun did not attach a terminal to the spawned process");
+  return {
+    process: child,
+    output,
+    ended,
+    write: (text) => {
+      terminal.write(text);
+    },
+    close: () => {
+      terminal.close();
+    },
+  };
 }
 
 /** Starts a long-running `pohunek-work <args>` (such as `watch`) with the fixture's environment. */

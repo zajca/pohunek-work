@@ -286,23 +286,15 @@ test("an overlapping live manager is refused with already_running and its attach
   expect((await sessions(core)).filter((session) => session.state === "running")).toHaveLength(2);
 }, SCENARIO_TIMEOUT_MS);
 
-/** Collects a stream into `sink.text` until it ends. */
-async function collect(stream: ReadableStream<Uint8Array>, sink: { text: string }): Promise<void> {
-  const decoder = new TextDecoder();
-  for await (const chunk of stream) sink.text += decoder.decode(chunk, { stream: true });
-}
-
 test("a confirmation does not authorize a plan that changed while the owner was asked", async () => {
   const { daemon: core, fixture, workdir } = await setUp();
-  const child = spawnPluginInTerminal(fixture, ["manager", "start", "--project", "widgets", "--json"]);
-  const output = { text: "" };
-  const errors = { text: "" };
-  const reading = Promise.all([collect(child.stdout, output), collect(child.stderr, errors)]);
+  const run = spawnPluginInTerminal(fixture, ["manager", "start", "--project", "widgets", "--json"]);
+  const { process: child, output } = run;
   let rival: string | undefined;
   try {
     const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS;
     while (!output.text.includes("Run this command?")) {
-      if (child.exitCode !== null) throw new Error(`manager start exited before asking (${String(child.exitCode)}):\n${output.text}\nstderr:\n${errors.text}`);
+      if (child.exitCode !== null) throw new Error(`manager start exited before asking (${String(child.exitCode)}):\n${output.text}`);
       if (Date.now() > deadline) throw new Error(`no confirmation question within ${String(CONFIRMATION_TIMEOUT_MS)} ms:\n${output.text}`);
       await Bun.sleep(POLL_INTERVAL_MS);
     }
@@ -311,14 +303,13 @@ test("a confirmation does not authorize a plan that changed while the owner was 
     const created = await core.pohunek(["session", "new", "--agent", "shell", "--cwd", workdir, "--name", "rival", "--meta", "work.role=manager", "--meta", "work.manager.projects=widgets", "--json"]);
     rival = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
     if (rival === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
-    await child.stdin.write("y\n");
-    await child.stdin.flush();
+    run.write("y\r");
     expect(await child.exited).toBe(EXIT_ERROR);
+    await run.ended;
   } finally {
     if (child.exitCode === null) child.kill("SIGKILL");
-    await child.stdin.end();
+    run.close();
   }
-  await reading;
   expect(output.text).toContain('"code": "already_running"');
   expect(output.text).toContain(`pohunek attach ${rival}`);
   expect((await sessions(core)).map((session) => session.id)).toEqual([rival]);
