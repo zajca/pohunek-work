@@ -19,6 +19,7 @@ test("the bundled program contains every prompt template and the manager guide",
       "You are fixing the failing CI checks",
       "You are resolving the merge conflict",
       "You are reviewing pull request",
+      "You are the pohunek work manager for",
       "The manager starts, verifies and reports sessions.",
     ]) {
       expect(bundle).toContain(marker);

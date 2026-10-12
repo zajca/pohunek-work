@@ -15,10 +15,10 @@ import {
   type ReadyPlan,
 } from "../actions/types.ts";
 import type { Logger } from "../log.ts";
-import { toAsciiLines } from "../output/sanitize.ts";
 import type { Exec } from "../util/exec.ts";
 import { runCleanup } from "./do-cleanup.ts";
 import type { ListDeps } from "./list.ts";
+import { commandLine, confirmPlan, display, envelope, type Confirm } from "./plan-output.ts";
 import type { PluginConfig } from "../types/config.ts";
 
 export interface DoOptions {
@@ -37,7 +37,7 @@ export interface DoOptions {
 export interface DoDeps extends Omit<ListDeps, "cliVersion"> {
   readonly cliVersion: string;
   /** Asks the owner to confirm the shown command; absent when there is no terminal. */
-  readonly confirm: ((question: string) => Promise<boolean>) | null;
+  readonly confirm: Confirm;
   /** Runs non-pohunek commands (`gh`). */
   readonly exec: Exec;
   /** Stdin and stdout are a terminal, so `attach` can hand it over. */
@@ -47,17 +47,6 @@ export interface DoDeps extends Omit<ListDeps, "cliVersion"> {
 export interface DoOutput {
   readonly stdout: string;
   readonly warnings: readonly string[];
-}
-
-const SAFE_ARG = /^[A-Za-z0-9_./:=@%+,-]+$/;
-
-/** Display only: quotes elements that a shell would split or interpret. */
-function quote(arg: string): string {
-  return SAFE_ARG.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`;
-}
-
-function commandLine(argv: readonly string[]): string {
-  return argv.map(quote).join(" ");
 }
 
 function planText(plan: ActionPlan, argv: readonly string[]): string {
@@ -74,15 +63,6 @@ function planText(plan: ActionPlan, argv: readonly string[]): string {
     "prompt (stdin):",
     ...plan.prompt.split("\n").map((line) => `  ${line}`),
   ].join("\n");
-}
-
-/**
- * Text for the terminal in strict ASCII: the plan carries provider text (titles
- * in the prompt, branch names, session names). JSON output and the prompt sent
- * on stdin stay unchanged.
- */
-function display(text: string): string {
-  return toAsciiLines(text).join("\n");
 }
 
 function planJson(plan: ActionPlan, argv: readonly string[]): Record<string, unknown> {
@@ -120,14 +100,6 @@ function resultJson(result: ActionResult): Record<string, unknown> {
   };
 }
 
-function envelope(cliVersion: string, ok: Record<string, unknown>): string {
-  return JSON.stringify(
-    { cli_version: cliVersion, protocol: { minimum: DO_CONTRACT_VERSION, maximum: DO_CONTRACT_VERSION }, ok },
-    null,
-    2,
-  );
-}
-
 async function logged<T>(logger: Logger, options: DoOptions, body: () => Promise<T>): Promise<T> {
   logger.info("do_start", {
     key: options.key,
@@ -145,18 +117,6 @@ async function logged<T>(logger: Logger, options: DoOptions, body: () => Promise
   }
 }
 
-/** Shows the plan and asks unless `--yes`; refuses without a terminal or an explicit yes. */
-async function confirmPlan(options: DoOptions, deps: DoDeps, text: string): Promise<void> {
-  if (options.yes) return;
-  if (deps.confirm === null) {
-    throw new ActionError("confirmation_required", "no terminal to confirm on: pass --yes after reviewing --dry-run");
-  }
-  console.error(display(text));
-  if (!(await deps.confirm("Run this command?"))) {
-    throw new ActionError("confirmation_required", "not confirmed; nothing was executed");
-  }
-}
-
 async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps, action: ActionPlan["action"]): Promise<DoOutput> {
   const { logger } = deps;
   const { row, warnings, sessions } = await resolveRow(config, options.key, options.project, options.includeIgnored, deps);
@@ -166,15 +126,15 @@ async function runLaunch(config: PluginConfig, options: DoOptions, deps: DoDeps,
 
   if (options.dryRun) {
     const stdout = options.json
-      ? envelope(deps.cliVersion, { dry_run: true, plan: planJson(plan, argv) })
+      ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, { dry_run: true, plan: planJson(plan, argv) })
       : display(`dry run: nothing was executed\n${planText(plan, argv)}`);
     return { stdout, warnings };
   }
-  await confirmPlan(options, deps, planText(plan, argv));
+  await confirmPlan(options.yes, deps.confirm, planText(plan, argv));
   const result = await executePlan(plan, deps.pohunek, config);
   logger.info("do_done", { key: plan.key, action: plan.action, profile: plan.profile, session_id: result.sessionId, warnings: [...result.warnings] });
   const stdout = options.json
-    ? envelope(deps.cliVersion, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
+    ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, { dry_run: false, plan: planJson(plan, argv), result: resultJson(result) })
     : display(`started session ${result.sessionId} (${result.name ?? plan.name}) for ${plan.key}`);
   const mismatch = result.headMismatch === null ? [] : [headMismatchWarning(result.sessionId, result.headMismatch)];
   return { stdout, warnings: [...warnings, ...result.warnings.map((kind) => `pohunek launch warning: ${kind}`), ...mismatch] };
@@ -209,15 +169,15 @@ async function runReady(config: PluginConfig, options: DoOptions, deps: DoDeps):
   logger.info("do_plan", { key: plan.key, action: plan.action, argv: [...plan.argv], verify_argv: [...plan.verifyArgv] });
   if (options.dryRun) {
     const stdout = options.json
-      ? envelope(deps.cliVersion, { dry_run: true, plan: readyJson(plan) })
+      ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, { dry_run: true, plan: readyJson(plan) })
       : display(`dry run: nothing was executed\n${readyText(plan)}`);
     return { stdout, warnings };
   }
-  await confirmPlan(options, deps, readyText(plan));
+  await confirmPlan(options.yes, deps.confirm, readyText(plan));
   await executeReady(plan, deps.exec, config);
   logger.info("do_done", { key: plan.key, action: plan.action, pull_request: plan.pullRequest, is_draft: false });
   const stdout = options.json
-    ? envelope(deps.cliVersion, { dry_run: false, plan: readyJson(plan), result: { pull_request: plan.pullRequest, is_draft: false } })
+    ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, { dry_run: false, plan: readyJson(plan), result: { pull_request: plan.pullRequest, is_draft: false } })
     : display(`${plan.pullRequest} is ready for review (re-read: not a draft)`);
   return { stdout, warnings };
 }
@@ -240,7 +200,7 @@ async function runAttach(config: PluginConfig, options: DoOptions, deps: DoDeps)
   logger.info("do_plan", { key: plan.key, action: plan.action, session_id: plan.sessionId, argv: [...plan.argv] });
   if (options.dryRun) {
     const stdout = options.json
-      ? envelope(deps.cliVersion, {
+      ? envelope(deps.cliVersion, DO_CONTRACT_VERSION, {
           dry_run: true,
           plan: { action: plan.action, key: plan.key, project: plan.project, session_id: plan.sessionId, argv: plan.argv },
         })

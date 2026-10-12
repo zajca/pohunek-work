@@ -155,6 +155,43 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 - `pohunek-work manager guide` prints the rules for an agent that drives
   pohunek work ([prompts/manager-guide.md](prompts/manager-guide.md), embedded
   in the program); it takes no arguments and reads no configuration.
+- `pohunek-work manager start (--project <label>... | --all) [--profile <name>] [--dry-run] [--yes] [--json]`
+  starts one manager session: `session new --cwd <[manager] workdir> --name manager:<labels>
+  --agent <profile> --meta work.role=manager --meta work.manager.projects=<labels> --input-stdin`,
+  where `<labels>` are the requested labels sorted and joined by `,` (a duplicate is dropped)
+  and `*` for `--all`. The prompt on stdin is [prompts/work-manager.tmpl](prompts/work-manager.tmpl)
+  with the project set, the matching `list --mine --json` and `list --json` commands and the
+  scope rule (every `list` carries exactly those `--project` flags, every `do` the row's
+  `--project`; none for `--all`); it sends the agent to `manager guide` and does not restate
+  the rules. It needs the optional global table
+  `[manager]` with the required keys `profile` (agent profile name; `--profile` overrides it)
+  and `workdir` (absolute path of an existing directory, never created by the plugin);
+  without the table only `manager start` refuses (`config_invalid`), and `doctor` fails with
+  `manager_workdir_missing` (exit 20, checked right after the configuration) when the
+  workdir is not a directory, and with `manager_workdir_in_project` (exit 21, after the
+  project checks) when its real path equals or lies below the `repo_root` of a registered
+  pohunek project, or when that cannot be checked (an existing path that does not resolve, or a
+  project without an absolute `repo_root`). Neither `--project` nor `--all`, both together, or
+  `--dry-run --yes` are usage errors. Refusals: `invalid_value` (a label outside
+  letters, digits, `.`, `_` and `-`, an invalid profile name, or a session name over the
+  daemon's 128 bytes), `precondition_failed` (a label without a project file, without a
+  pohunek project or with an origin that does not resolve to its `repo`, each one named;
+  `--all` with no project passing that check; a missing workdir, one inside a registered
+  project checkout, or one whose placement cannot be checked; a plan that changed between the confirmation and the launch: every real
+  run plans again from fresh reads and launches only the argv and prompt that were shown),
+  `source_unavailable`
+  (the project or session list cannot be read), `already_running` (a live
+  `work.role=manager` session whose project set overlaps; `*`, no
+  `work.manager.projects`, or a value with an element that is not a label (empty, or with a
+  space) overlaps everything; the message
+  names `pohunek attach <id>`). `--all` leaves out the projects that fail the check, with a
+  warning on stderr and one `plan.skipped` entry (`project`, `reason`) each. As in `do`,
+  `--dry-run` prints the argv and the prompt and launches nothing, a real run asks for
+  confirmation unless `--yes` (`confirmation_required` without a terminal), and the launch
+  is verified (`launch_failed`, `launch_timed_out`, `setup_failed`, `launch_unverified`).
+  JSON: `{dry_run, plan: {all, projects, skipped, profile, cwd, name, metadata, argv, prompt}, result:
+  {session_id, name, metadata, warnings?}}` in the envelope with protocol version 1. See
+  [docs/watch-and-agents.md](docs/watch-and-agents.md#where-the-manager-prompt-comes-from).
 
 Every action plans from fresh data and refuses with a typed code when its rule
 no longer holds; every write action asks for confirmation unless `--yes` is
@@ -185,7 +222,7 @@ given.
 | --- | --- |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | The complete plan before the next pohunek release: verified pohunek CLI surface, decisions, architecture, configuration, milestones M0–M3 with definitions of done, testing, risks |
 | [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md) | Refined plan for M2 (links and actions): decisions, verified pohunek facts, spikes, steps M2a-M2d with definitions of done, risks |
-| [docs/watch-and-agents.md](docs/watch-and-agents.md) | How to run `watch` (configuration, what is and is not notified, logs), where the manager prompt comes from and why there is no skill |
+| [docs/watch-and-agents.md](docs/watch-and-agents.md) | How to run `watch` (configuration, what is and is not notified, logs), how `manager start` builds the manager prompt and why there is no skill |
 | [prompts/manager-guide.md](prompts/manager-guide.md) | The rules for an agent that drives pohunek work (the manager): commands, verification after a launch, following delegated work, collisions, what it may read, finished sessions, keeping context flat; embedded in the program and printed by `pohunek-work manager guide` |
 | [docs/rfc.md](docs/rfc.md) | Target design: joining rules, the `on_turn` rules, interfaces, actions, storage, per-project configuration, autonomy levels, full 28-step roadmap including the pohunek release, task layer and relay stages |
 | [docs/work-overview.html](docs/work-overview.html) | Visual summary with diagrams (open in a browser) |

@@ -123,17 +123,25 @@ installed binary without a source tree.
 
 ### Where the manager prompt comes from
 
-No file in this repository holds the prompt of a manager session, and
-`~/.config/pohunek/prompts` holds only core's `issue.tmpl` and `pr.tmpl`. Today the owner starts the manager by hand, for example
-`pohunek session new --agent claude --project <p> --meta work.role=manager
---input <prompt>`. That prompt must tell the agent to run
-`pohunek-work manager guide` and must not restate its rules, so the two cannot
-contradict each other. The prompts that `do` sends to the sessions it launches
-are different: they live in `plugin/prompts/*.tmpl`.
+`pohunek-work manager start (--project <label>... | --all)` launches the manager.
+Its prompt is `plugin/prompts/work-manager.tmpl`, rendered with the project set,
+the two matching commands `pohunek-work list --mine --json [--project <label>]...`
+and `pohunek-work list --json [--project <label>]...`, and the scope rule: every
+`list` the agent runs carries exactly those `--project` flags and every `do`
+carries `--project` with the label of the row's project; for `--all` neither
+needs a flag. The prompt tells the agent to run `pohunek-work manager guide`
+first and does not restate the guide's rules, so the two cannot contradict each
+other; a change to the rules goes into the guide only. The session runs in the
+configured `[manager] workdir` and carries `work.role=manager` and
+`work.manager.projects` (the sorted labels joined by `,`, or `*` for `--all`).
+`manager start` refuses a workdir whose real path equals or lies below the
+`repo_root` of a registered pohunek project, or that cannot be checked because a
+path does not resolve, and `pohunek-work doctor` reports the same finding as
+`manager_workdir_in_project` (exit 21). The prompts that `do` sends to the sessions it
+launches are different: they live in the other `plugin/prompts/*.tmpl` files.
 
-[#81](https://github.com/zajca/pohunek-work/issues/81) will generate the manager
-start from a `pohunek-work` action; that prompt must point at the guide the
-same way.
+[#81](https://github.com/zajca/pohunek-work/issues/81) tracks the GUI and TUI
+entry points that will run `manager start` and so reuse its prompt.
 
 ### Why there is no skill
 

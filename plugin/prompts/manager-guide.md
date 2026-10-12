@@ -1,8 +1,10 @@
 # Driving pohunek work from an agent
 
 This guide is the single source of the rules for an agent that drives pohunek
-work (the "manager"). This repository ships no skill and no MCP server for it,
-and no manager start prompt; the interface is the CLI.
+work (the "manager"). `pohunek-work manager start` launches the manager with the
+prompt from `plugin/prompts/work-manager.tmpl`, which points here and does not
+restate these rules. This repository ships no skill and no MCP server for it;
+the interface is the CLI.
 
 Rules marked **temporary** exist because an open issue has not landed. Each
 names the issue and when to remove or update the rule.
@@ -19,6 +21,10 @@ names the issue and when to remove or update the rule.
 | `pohunek-work doctor` | setup problems; the exit code names the first failed check |
 | `pohunek session inspect <id> --json` | state, activity, branch, `worktree_path` and `metadata` (`work.role`, `work.rev`, `work.link.*`) of one session |
 | `pohunek session screen <id> --json` | the rendered terminal of one session |
+
+When the start prompt of `pohunek-work manager start` names projects, every
+`list` carries exactly those `--project` flags and every `do` carries
+`--project` with the label of the row's project.
 
 Rules for the agent:
 

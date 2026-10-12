@@ -3,15 +3,11 @@
 // starts, and stopping the fixture leaves no session worker running below its root.
 import { afterEach, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
-import { exec } from "../src/util/exec.ts";
-import { startCoreDaemon, type CoreDaemon } from "./helpers/core-daemon.ts";
+import { startCoreDaemon, workersBelow, type CoreDaemon } from "./helpers/core-daemon.ts";
 
 const SCENARIO_TIMEOUT_MS = 60_000;
-const PGREP_TIMEOUT_MS = 10_000;
 const SOCKET_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 50;
-/** pgrep exit status when no process matched. */
-const PGREP_NO_MATCH = 1;
 
 let daemon: CoreDaemon | null = null;
 
@@ -19,15 +15,6 @@ afterEach(async () => {
   await daemon?.stop();
   daemon = null;
 });
-
-/** Pids of the session workers whose command line names a path below `root`. */
-async function workersBelow(root: string): Promise<string[]> {
-  const pattern = `pohunek-sessiond .*${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`;
-  const result = await exec(["pgrep", "-f", pattern], { timeoutMs: PGREP_TIMEOUT_MS });
-  if (result.exitCode === PGREP_NO_MATCH) return [];
-  if (result.exitCode !== 0) throw new Error(`pgrep failed (${String(result.exitCode)}): ${result.stderr}`);
-  return result.stdout.split("\n").filter((line) => line !== "");
-}
 
 async function waitForSocket(path: string): Promise<void> {
   const deadline = Date.now() + SOCKET_TIMEOUT_MS;

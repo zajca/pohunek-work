@@ -229,6 +229,14 @@ export interface PluginProject {
   readonly repo: string;
 }
 
+/** Options of `writePluginConfig`. */
+export interface PluginConfigOptions {
+  /** Directory name of this configuration below the root, so one daemon can serve several configurations. */
+  readonly name?: string;
+  /** TOML appended to the global file, for optional tables such as `[manager]`. */
+  readonly extraGlobal?: string;
+}
+
 export interface PluginFixture {
   readonly configDir: string;
   readonly stateDir: string;
@@ -250,9 +258,10 @@ function setValue(text: string, key: string, value: string): string {
  * that do not exist, so the GitHub and Linear sources fail at once without any
  * network access. One project file is written per entry of `projects`.
  */
-export async function writePluginConfig(daemon: CoreDaemon, projects: readonly PluginProject[]): Promise<PluginFixture> {
-  const configDir = join(daemon.root, "plugin-config");
-  const stateDir = join(daemon.root, "plugin-state");
+export async function writePluginConfig(daemon: CoreDaemon, projects: readonly PluginProject[], options: PluginConfigOptions = {}): Promise<PluginFixture> {
+  const name = options.name ?? "plugin";
+  const configDir = join(daemon.root, `${name}-config`);
+  const stateDir = join(daemon.root, `${name}-state`);
   const missing = join(daemon.root, "missing");
   await mkdir(join(configDir, "projects"), { recursive: true, mode: 0o700 });
   let global = await readFile(join(FIXTURE_CONFIG, "config.toml"), "utf8");
@@ -260,7 +269,7 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
   global = setValue(global, "gh_bin", join(missing, "gh"));
   global = setValue(global, "secret_tool_bin", join(missing, "secret-tool"));
   global = setValue(global, "command", join(missing, "notify-send"));
-  await writeFile(join(configDir, "config.toml"), global);
+  await writeFile(join(configDir, "config.toml"), `${global}${options.extraGlobal ?? ""}`);
   const template = await readFile(join(FIXTURE_CONFIG, "projects", `${PROJECT_TEMPLATE}.toml`), "utf8");
   for (const project of projects) {
     const text = setValue(setValue(template, "pohunek_label", project.label), "repo", project.repo);
@@ -270,11 +279,41 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
   return { configDir, stateDir, env };
 }
 
+/** pgrep exit status when no process matched. */
+const PGREP_NO_MATCH = 1;
+const PGREP_TIMEOUT_MS = 10_000;
+
+/** Pids of the session workers whose command line names a path below `root`. */
+export async function workersBelow(root: string): Promise<string[]> {
+  const pattern = `pohunek-sessiond .*${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`;
+  const result = await exec(["pgrep", "-f", pattern], { timeoutMs: PGREP_TIMEOUT_MS });
+  if (result.exitCode === PGREP_NO_MATCH) return [];
+  if (result.exitCode !== 0) throw new Error(`pgrep failed (${String(result.exitCode)}): ${result.stderr}`);
+  return result.stdout.split("\n").filter((line) => line !== "");
+}
+
 /** Runs `pohunek-work <args>` to completion with the fixture's environment. */
 export async function runPlugin(fixture: PluginFixture, args: readonly string[], timeoutMs: number): Promise<CliResult> {
   const result = await exec([process.execPath, MAIN, ...args], { timeoutMs, env: fixture.env });
   if (result.timedOut) throw new Error(`pohunek-work ${args.join(" ")} did not finish within ${String(timeoutMs)} ms:\n${result.stderr}`);
   return { code: result.exitCode, out: result.stdout, err: result.stderr };
+}
+
+/** Display-safe single-quoting for one word of a `sh -c` command line. */
+function shellWord(word: string): string {
+  return `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Starts `pohunek-work <args>` on a pseudo-terminal through util-linux `script`, so the
+ * plugin sees a terminal on stdin and stdout; what is written to the returned process's
+ * stdin reaches the terminal, and its stdout carries everything the terminal shows.
+ */
+export function spawnPluginInTerminal(fixture: PluginFixture, args: readonly string[]): Bun.Subprocess<"pipe", "pipe", "pipe"> {
+  const script = Bun.which("script");
+  if (script === null) throw new Error("util-linux script is not on PATH; the terminal scenarios need it");
+  const command = [process.execPath, MAIN, ...args].map(shellWord).join(" ");
+  return Bun.spawn([script, "-qec", command, "/dev/null"], { env: { ...fixture.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
 }
 
 /** Starts a long-running `pohunek-work <args>` (such as `watch`) with the fixture's environment. */
