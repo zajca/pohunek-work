@@ -23,6 +23,8 @@
   },
   "packageManager": "bun@1.4.2",
   "dependencies": {
+    "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-protocol-0.34.2.tgz",
+    "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-sdk-0.34.2.tgz",
     "ink": "7.1.1",
     "react": "19.2.4",
     "react-devtools-core": "7.0.1"

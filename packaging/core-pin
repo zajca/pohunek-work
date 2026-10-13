@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve the pohunek core version every surface is pinned to.
 
-usage: core-pin [--web PATH] [--plugin PATH] [--ci-workflow PATH]
+usage: core-pin [--web PATH] [--plugin PATH] [--plugin-package PATH] [--ci-workflow PATH]
 
 The single source of the pin is web/core-sdk.json. It must exist, be valid, and
 be internally consistent (the same rules as `web/scripts/core-sdk.ts`). The
@@ -22,7 +22,9 @@ release), no tag is named and no network step runs.
 
 plugin/core-release.json (see plugin/scripts/core-binaries.ts) holds `release`
 and `assetBaseUrl`; its `targets` are validated by core-binaries.ts. The
-workflow is not parsed as YAML: its single `POHUNEK_RELEASE:` line is read.
+plugin's `@pohunek/protocol` and `@pohunek/sdk` dependencies in
+plugin/package.json must be the tarballs of that same release. The workflow is
+not parsed as YAML: its single `POHUNEK_RELEASE:` line is read.
 
 The pin is refused, with exit status 1, when
   - web/core-sdk.json is missing or malformed,
@@ -32,6 +34,7 @@ The pin is refused, with exit status 1, when
   - plugin/core-release.json or the workflow is missing or unreadable, or the
     plugin release or the launchers release is not the web pin: the web release
     tag when the web pin names one, otherwise a tag whose commit is `coreRev`;
+  - a plugin SDK dependency is not the tarball of the plugin release;
   - the pinned core repository cannot be listed with `git ls-remote`.
 
 Python 3.8 or newer, standard library only.
@@ -53,6 +56,8 @@ SDK_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 WEB_KEYS = ("coreRepository", "coreRev", "sdkVersion", "assetBaseUrl")
 PLUGIN_KEYS = ("release", "assetBaseUrl")
+# Plugin dependency name and the release asset that carries its package.
+PLUGIN_SDK_PACKAGES = {"@pohunek/protocol": "pohunek-ts-protocol", "@pohunek/sdk": "pohunek-ts-sdk"}
 RELEASE_DOWNLOAD_PATH = "/releases/download"
 LOOPBACK_HOST = "127.0.0.1"
 RELEASE_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download$")
@@ -136,6 +141,22 @@ def read_plugin(path: Path, core_repo: str) -> str:
     return pin["release"]
 
 
+def read_plugin_sdk(path: Path, core_repo: str, release: str) -> None:
+    """Fails unless the plugin's SDK dependencies are the tarballs of the plugin's core release."""
+    try:
+        package = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise PinError(f"cannot read {path}: {error}") from error
+    dependencies = package.get("dependencies") if isinstance(package, dict) else None
+    if not isinstance(dependencies, dict):
+        raise PinError(f"{path} must declare dependencies")
+    for name, asset in PLUGIN_SDK_PACKAGES.items():
+        url = dependencies.get(name)
+        expected = f"https://github.com/{core_repo}/releases/download/{release}/{asset}-{release[1:]}.tgz"
+        if url != expected:
+            raise PinError(f"{path}: {name} must be {expected}, got {url!r}")
+
+
 def read_launchers(path: Path) -> str:
     """Returns the core release tag of the launchers job's `POHUNEK_RELEASE`."""
     try:
@@ -197,11 +218,12 @@ def read_web_version(path: Path) -> str:
     return version
 
 
-def resolve(web: Path, plugin: Path, ci_workflow: Path) -> dict[str, str]:
+def resolve(web: Path, plugin: Path, plugin_package: Path, ci_workflow: Path) -> dict[str, str]:
     rev, tag, repository = read_web(web)
     version = read_web_version(web.parent / "package.json")
     # Every file is validated before any tag is resolved over the network.
     plugin_release = read_plugin(plugin, repository)
+    read_plugin_sdk(plugin_package, repo_slug(repository) or "", plugin_release)
     launchers_release = read_launchers(ci_workflow)
     if tag is not None:
         resolved = resolve_tag(repository, tag)
@@ -216,10 +238,11 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--web", type=Path, default=Path("web/core-sdk.json"))
     parser.add_argument("--plugin", type=Path, default=Path("plugin/core-release.json"))
+    parser.add_argument("--plugin-package", type=Path, default=Path("plugin/package.json"))
     parser.add_argument("--ci-workflow", type=Path, default=Path(".github/workflows/ci.yml"))
     args = parser.parse_args(argv)
     try:
-        pin = resolve(args.web, args.plugin, args.ci_workflow)
+        pin = resolve(args.web, args.plugin, args.plugin_package, args.ci_workflow)
     except PinError as error:
         print(f"core-pin: {error}", file=sys.stderr)
         return 1

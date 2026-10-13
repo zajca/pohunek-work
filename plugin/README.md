@@ -243,7 +243,10 @@ which the screen is compact), `list_reserved_rows`, `detail_reserved_rows`,
 limit of a captured action child). `clipboard_command` is optional and must be an absolute executable
 path; without it, the TUI displays branch and path text for manual selection.
 The new session form calls the public core CLI with prompt text on stdin. Core
-and the plugin binary must be installed separately. The plugin release archive
+and the plugin binary must be installed separately. The plugin depends on the
+`@pohunek/protocol` and `@pohunek/sdk` tarballs of its core release
+(`plugin/core-release.json`); `packaging/core-pin` fails when they name another
+release. The plugin release archive
 starts with `bun plugin/pohunek-work.js`.
 
 On Sway, `pohunek-work setup sway` installs `$mod+n` for the standalone form
