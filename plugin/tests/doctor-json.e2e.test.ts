@@ -7,6 +7,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import { toAscii } from "../src/output/sanitize.ts";
 import {
   DAEMON_STOP_HOOK_TIMEOUT_MS,
   runPlugin,
@@ -32,6 +33,13 @@ const GH_TOKEN = "gho_doctorJsonStandInToken0123456789abcdef";
 const KEYRING_SECRET = "lin_api_doctorJsonStandInSecret0123456789abcdef";
 /** `terminal=` of launcher.conf: resolves to no executable, so the terminal check is an advisory warning. */
 const UNRESOLVED_TERMINAL = "no-such-terminal";
+/**
+ * A `terminal=` value carrying an OSC 8 hyperlink (ESC, BEL), a right-to-left override and a Czech letter:
+ * the text report shows it as one strict-ASCII line, the JSON report keeps it escaped.
+ */
+const HOSTILE_TERMINAL = "evil\u001b]8;;https://attacker.example\u0007link\u202eťerm";
+/** `HOSTILE_TERMINAL` as the text report prints it: NFKD without combining marks, every other non-ASCII character `?`. */
+const HOSTILE_TERMINAL_ASCII = "evil?]8;;https://attacker.example?link?term";
 
 interface DoctorJsonCheck {
   readonly name: string;
@@ -73,7 +81,7 @@ function ghStandIn(exitCode: number): string {
   return `if [ "$1" = auth ] && [ "$2" = status ]; then\n  echo "Token: ${GH_TOKEN}"\n  echo "Token: ${GH_TOKEN}" >&2\n  exit ${String(exitCode)}\nfi\nexit 64\n`;
 }
 
-async function setUp(): Promise<Setup> {
+async function setUp(terminal: string = UNRESOLVED_TERMINAL): Promise<Setup> {
   const started = await startCoreDaemon();
   daemon = started;
   await started.registerProject("widgets", "acme/widgets");
@@ -86,7 +94,7 @@ async function setUp(): Promise<Setup> {
   // The launcher reads launcher.conf from the pohunek directory below XDG_CONFIG_HOME.
   const launcherDir = join(started.root, "config", "pohunek");
   await mkdir(launcherDir, { recursive: true, mode: 0o700 });
-  await writeFile(join(launcherDir, "launcher.conf"), `terminal=${UNRESOLVED_TERMINAL}\n`);
+  await writeFile(join(launcherDir, "launcher.conf"), `terminal=${terminal}\n`);
   return { daemon: started, ghOk, ghFailing, secretTool, workdir };
 }
 
@@ -103,10 +111,10 @@ function managerTable(workdir: string): string {
   return `\n[manager]\nprofile = "shell"\nworkdir = ${JSON.stringify(workdir)}\n`;
 }
 
-/** One line of the text report, in its documented format. */
+/** One line of the text report, in its documented format; the name and the message are printed in strict ASCII. */
 function textLine(check: DoctorJsonCheck): string {
   const status = check.ok ? (check.code === "warn" ? "warn" : "ok  ") : "FAIL";
-  return `${status} ${check.code} ${check.name}: ${check.message}`;
+  return `${status} ${check.code} ${toAscii(check.name)}: ${toAscii(check.message)}`;
 }
 
 function checkNamed(document: DoctorDocument, name: string): DoctorJsonCheck {
@@ -188,4 +196,16 @@ test("a failed gh auth status exits 16 and the token gh printed appears in neith
   ]);
   expect(checkNamed(document, "linear keyring")).toMatchObject({ ok: true, code: "ok" });
   expectTerminalWarning(document);
+}, SCENARIO_TIMEOUT_MS);
+
+test("a hostile launcher.conf value reaches the text report as one strict-ASCII line and the JSON report escaped", async () => {
+  const setup = await setUp(HOSTILE_TERMINAL);
+  const fixture = await configure(setup, "hostile", setup.ghOk, managerTable(setup.workdir));
+  const text = await runPlugin(fixture, ["doctor"], PROCESS_TIMEOUT_MS);
+  const line = text.out.split("\n").find((candidate) => candidate.includes(" terminal: "));
+  expect(line).toContain(HOSTILE_TERMINAL_ASCII);
+  expect(text.out).not.toMatch(/[^\x20-\x7e\n]/);
+  const document = await doctor(fixture);
+  expect(checkNamed(document, "terminal")).toMatchObject({ ok: true, code: "warn" });
+  expect(checkNamed(document, "terminal").message).toContain(HOSTILE_TERMINAL);
 }, SCENARIO_TIMEOUT_MS);
