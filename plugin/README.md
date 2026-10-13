@@ -104,8 +104,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   below that width Enter opens the same panel full screen and Esc returns. `←`/`→`
   or `[`/`]` jump between sections, `o` attaches, `x` stops and `D` removes the
   highlighted session after an inline confirmation that names it (a remove names
-  its worktree too), `l` opens its work link, `u` its folder, `b` copies the branch
-  and `c` the path. Session actions through the SDK are stop, remove, resume,
+  its worktree too), `l` opens its work link, `u` its folder, `g` its branch on GitHub (from the project's GitHub
+  origin; the status says so when there is none), `b` copies the branch and `c` the path. Session actions through the SDK are stop, remove, resume,
   rename and metadata; fork still runs through the CLI. Resume, fork and
   attach to a stopped session first show the native conversation the core will
   recover (ID or path, last native activity, or Unknown) and wait for `y`; an

@@ -4,7 +4,7 @@ import { Box, render, Text, useApp, useInput, usePaste, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
-import { checkOpenUrl } from "../tui/actions.ts";
+import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
@@ -670,6 +670,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } catch (error) { setStatus(`Open link: ${defaultStatus(error)}`); }
   }, [options.openCommand, options.openUrlHosts]);
 
+  // The branch page comes from the project's GitHub origin; without one the status says so instead of guessing.
+  const openBranch = useCallback((session: ControlSession): void => {
+    const project = snapshot?.projects.find((entry) => entry.host === session.host && entry.id === session.projectId);
+    const url = githubBranchUrl(project?.originUrl ?? null, session.branch);
+    if (url === null) { setStatus("No GitHub branch page: the session has no branch or its project has no GitHub origin"); return; }
+    openLink(url);
+  }, [openLink, snapshot]);
+
   const openFolder = useCallback(async (session: ControlSession): Promise<void> => {
     if (session.host !== "local") { setStatus("Remote paths can be copied but cannot be opened on this host"); return; }
     const path = session.worktreePath ?? session.cwd;
@@ -938,8 +946,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "p") restartOutput();
       else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
       else if (input === "u") void openFolder(sessionDetail);
-      else if (input === "c") void copyValue(sessionDetail.branch ?? "");
-      else if (input === "C") void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd);
+      else if (input === "g") openBranch(sessionDetail);
+      else if (input === "b") void copyValue(sessionDetail.branch ?? "");
+      else if (input === "c") void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd);
       return;
     }
     if (overlay === "notification") {
@@ -980,6 +989,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "o") void openSelected();
       else if (input === "l" && selectedSession !== null) { const url = sessionLinkUrl(selectedSession); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
       else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
+      else if (input === "g" && selectedSession !== null) openBranch(selectedSession);
       else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
       else if (input === "c" && selectedSession !== null) void copyValue(selectedSession.worktreePath ?? selectedSession.cwd);
       else if (input === "x" && selectedSession !== null) requestConfirm(selectedSession, "stop", "none");
@@ -1055,7 +1065,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     </MouseZone>)}
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab or Shift-Tab and 1–4 switch views.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab or Shift-Tab and 1–4 switch views.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
