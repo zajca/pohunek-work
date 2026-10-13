@@ -140,6 +140,8 @@ export interface Collected {
   readonly warnings: string[];
   readonly sourceFailures: readonly string[];
   readonly sessions: readonly PohunekSession[];
+  /** Instant the sources were read: the clock of `--stale-days` and of every age in the output. */
+  readonly readAtMs: number;
 }
 
 /** Fetches every source once per selected project, joins and evaluates the rules. */
@@ -150,6 +152,7 @@ export async function collectRows(
 ): Promise<Collected> {
   const { logger } = deps;
   const global: GlobalConfig = config.global;
+  const readAtMs = (deps.now ?? Date.now)();
   const [registry, sessionsResult, notificationsResult] = await Promise.all([
     deps.pohunek.listProjects(),
     deps.pohunek.listSessions(),
@@ -212,7 +215,7 @@ export async function collectRows(
     const looked = await lookupUnlistedIssues(project, joined.items, sources, deps);
     if (looked.failure !== null) sourceFailures.push(`${project.pohunekLabel} ${issueSource} lookup: ${looked.failure}`);
     for (const item of looked.items) {
-      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles, sessions }) });
+      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles, sessions, nowMs: readAtMs }) });
     }
     orphans.push(...joined.orphanedSessions);
     unlinked.push(
@@ -226,7 +229,7 @@ export async function collectRows(
     );
   }
   for (const failure of sourceFailures) logger.error("source_failed", { failure });
-  return { rows, orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions };
+  return { rows, orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions, readAtMs };
 }
 
 export async function runList(
@@ -239,11 +242,12 @@ export async function runList(
   const { orphans, unlinked, projectStatuses, warnings, sourceFailures } = collected;
   const items = collected.rows.map((row) => row.listItem);
 
-  const now = (deps.now ?? Date.now)();
+  const now = collected.readAtMs;
   const finishedCut = options.mine && options.finishedHours !== null ? finishedCutoff(now, options.finishedHours) : null;
   const mineRows = options.mine ? filterMine(items, finishedCut) : items;
   const cutoff = options.staleDays === null ? null : staleCutoff(now, options.staleDays);
   const filtered = cutoff === null ? mineRows : mineRows.filter((item) => !isStalePullRequest(item, cutoff));
+  const omittedStale = mineRows.length - filtered.length;
   const shown = options.includeIgnored ? filtered : filtered.filter((item) => !item.ignored);
   const omittedIgnored = filtered.length - shown.length;
   logger.info("list_done", {
@@ -253,6 +257,7 @@ export async function runList(
     stale_days: options.staleDays,
     finished_hours: options.finishedHours,
     include_ignored: options.includeIgnored,
+    omitted_stale: omittedStale,
     omitted_ignored: omittedIgnored,
   });
   const stdout = options.json
@@ -262,12 +267,13 @@ export async function runList(
           options.mine ? [] : orphans,
           options.mine ? [] : unlinked,
           projectStatuses,
-          omittedIgnored,
+          { omittedIgnored, omittedStale, readAtMs: now },
         ), null, 2)
     : renderTable(
         shown,
         options.mine ? [] : orphans,
         options.mine ? [] : unlinked,
-        omittedIgnored);
+        omittedIgnored,
+        omittedStale);
   return { stdout, warnings, items: shown, sourceFailures };
 }

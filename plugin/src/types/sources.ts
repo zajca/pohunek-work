@@ -130,6 +130,11 @@ export interface PullRequest {
   /** The pull request carries the project's `ignore_label`; always false for a project without one. */
   readonly ignored: boolean;
   readonly updatedAt: string;
+  /** ISO-8601 time the pull request was opened. */
+  readonly createdAt: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
 }
 
 /**

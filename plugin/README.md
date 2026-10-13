@@ -54,6 +54,14 @@ JSON `omitted_ignored` counts the hidden rows that `--mine`, `--finished-hours`,
 ignored row fails with `precondition_failed` unless `--include-ignored` is
 passed, also with `--dry-run`.
 
+A pull request row of `list --json` carries, besides its state, `created_at`,
+`base_branch`, `size` (`additions`, `deletions`, `changed_files`), `age_days` (days
+since `created_at`) and `idle_days` (days since `updated_at`). Both ages are fractional
+days measured at the payload's top-level `read_at` (ISO 8601, the instant the sources
+were read), on the same clock `--stale-days N` uses: that flag removes a row when
+`idle_days > N`. The payload's `omitted_stale` counts the rows the flag removed (0
+without it), next to `omitted_ignored`; the table prints the count as well.
+
 Each session of a `list --json` row carries `indicator` (`waiting_input` when a
 blocked notification of the session is open, `lost`, `running`, or the raw state
 such as `stopped` or `done`) and `updated_at` (the session's last change, or

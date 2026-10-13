@@ -45,16 +45,23 @@ export interface GithubIssue {
 }
 
 /**
- * An open pull request of the owner that conflicts with its base and has no checks, reviews or threads: the
- * state that makes `do <key> rebase` act. It is the only pull request the authored search returns.
+ * An open pull request of the owner that conflicts with its base and has no checks, reviews or threads. The
+ * authored search returns every pull request of the fixture, so each one needs its own number.
  */
 export interface GithubPullRequest {
   readonly number: number;
   readonly title: string;
-  /** Head branch; the project's branch pattern has to match it so the pull request joins the issue. */
+  /** Head branch; the project's branch pattern decides whether the pull request joins an issue. */
   readonly headRefName: string;
   /** Login of the author, the owner of the configured identity. */
   readonly authorLogin: string;
+  /** ISO-8601 times and sizes GitHub reports for the pull request. */
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly baseRefName: string;
 }
 
 export interface GithubProvider {
@@ -84,10 +91,14 @@ function pullRequestNode(repo: string, pullRequest: GithubPullRequest): Record<s
     isCrossRepository: false,
     headRefName: pullRequest.headRefName,
     headRefOid: "a".repeat(40),
-    baseRefName: "main",
+    baseRefName: pullRequest.baseRefName,
     reviewDecision: null,
     mergeable: "CONFLICTING",
-    updatedAt: "2026-10-01T00:00:00Z",
+    createdAt: pullRequest.createdAt,
+    updatedAt: pullRequest.updatedAt,
+    additions: pullRequest.additions,
+    deletions: pullRequest.deletions,
+    changedFiles: pullRequest.changedFiles,
     repository: { nameWithOwner: repo },
     author: { __typename: "User", login: pullRequest.authorLogin },
     reviews: empty,
@@ -99,11 +110,11 @@ function pullRequestNode(repo: string, pullRequest: GithubPullRequest): Record<s
   };
 }
 
-/** Answers the plugin's queries for one open, started issue, and for the pull request when one is given. */
+/** Answers the plugin's queries for one open, started issue and for the pull requests of the owner. */
 function graphqlData(
   issue: GithubIssue,
   url: string,
-  pullRequest: GithubPullRequest | null,
+  pullRequests: readonly GithubPullRequest[],
   operation: string,
   variables: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> | null {
@@ -116,8 +127,9 @@ function graphqlData(
         .filter((name) => name.startsWith("q_"))
         .map((name): [string, unknown] => {
           const alias = name.slice(2);
-          if (alias !== "authored" || pullRequest === null) return [alias, empty];
-          return [alias, { issueCount: 1, pageInfo, nodes: [pullRequestNode(issue.repo, pullRequest)] }];
+          if (alias !== "authored") return [alias, empty];
+          const nodes = pullRequests.map((pullRequest) => pullRequestNode(issue.repo, pullRequest));
+          return [alias, { issueCount: nodes.length, pageInfo, nodes }];
         });
       return { rateLimit, ...Object.fromEntries(searches) };
     }
@@ -148,7 +160,11 @@ function graphqlData(
 }
 
 /** Starts the server and writes the certificate and the `gh` script below `dir`, which is created with mode 0700. */
-export async function startGithubProvider(dir: string, issue: GithubIssue, pullRequest: GithubPullRequest | null = null): Promise<GithubProvider> {
+export async function startGithubProvider(
+  dir: string,
+  issue: GithubIssue,
+  pullRequests: readonly GithubPullRequest[] = [],
+): Promise<GithubProvider> {
   const openssl = Bun.which("openssl");
   if (openssl === null) throw new Error("openssl is not on PATH; the local GitHub server needs a self-signed certificate");
   await mkdir(dir, { mode: 0o700 });
@@ -176,7 +192,7 @@ export async function startGithubProvider(dir: string, issue: GithubIssue, pullR
     async fetch(request) {
       const body = (await request.json()) as { query: string; variables: Record<string, unknown> };
       const operation = /query\s+(\w+)/.exec(body.query)?.[1] ?? "";
-      const data = graphqlData(issue, issueUrl, pullRequest, operation, body.variables);
+      const data = graphqlData(issue, issueUrl, pullRequests, operation, body.variables);
       if (data === null) {
         unexpectedOperations.push(operation);
         return Response.json({ errors: [{ message: `unexpected operation ${operation}` }] });

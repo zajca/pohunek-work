@@ -173,6 +173,28 @@ export interface ListPullRequest {
   readonly rerequested: boolean | null;
 }
 
+/** Size of a pull request as GitHub counts it. */
+export interface ListPullRequestSize {
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changed_files: number;
+}
+
+/**
+ * The pull request fields `list --json` adds for reviewing older work. The TUI decodes the
+ * `ListPullRequest` subset only, so the producer fills this superset.
+ */
+export interface ListPullRequestDetails extends ListPullRequest {
+  /** ISO-8601 time the pull request was opened. */
+  readonly created_at: string;
+  readonly base_branch: string;
+  readonly size: ListPullRequestSize;
+  /** Fractional days from `created_at` to the payload's `read_at`; null when the timestamp does not parse. */
+  readonly age_days: number | null;
+  /** Fractional days from `updated_at` to `read_at`; `--stale-days N` removes a row when `idle_days > N`. */
+  readonly idle_days: number | null;
+}
+
 export interface ListSession {
   readonly id: string;
   readonly name: string | null;
@@ -231,6 +253,14 @@ export interface ListPayload {
    * would have listed; 0 with `--include-ignored`.
    */
   readonly omitted_ignored: number;
+}
+
+/** The payload `list --json` writes: `ListPayload` plus the fields only `list` sets. */
+export interface ListOutputPayload extends ListPayload {
+  /** ISO-8601 time the sources were read; `age_days` and `idle_days` are measured at this instant. */
+  readonly read_at: string;
+  /** Rows `--stale-days` left out, counted before the ignored rows are; 0 without the flag. */
+  readonly omitted_stale: number;
 }
 
 export interface ListError {

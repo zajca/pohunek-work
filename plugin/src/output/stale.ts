@@ -9,6 +9,15 @@ export function staleCutoff(nowMs: number, days: number): number {
 }
 
 /**
+ * Fractional days from `timestamp` to `nowMs`, on the same clock as `staleCutoff`; null when the
+ * timestamp does not parse.
+ */
+export function daysBetween(nowMs: number, timestamp: string): number | null {
+  const then = Date.parse(timestamp);
+  return Number.isNaN(then) ? null : (nowMs - then) / MS_PER_DAY;
+}
+
+/**
  * A pull request not updated since `cutoffMs` that nothing runs for (no linked
  * session is running). An unparsable timestamp never hides a row.
  */
