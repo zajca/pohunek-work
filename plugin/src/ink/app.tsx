@@ -30,6 +30,7 @@ export interface InkTuiOptions {
   readonly actionCaptureBytes: number;
   readonly outputWaitMs: number;
   readonly outputMaxBytes: number;
+  readonly reconnectMaxMs: number;
   /** Columns from which the session detail is a panel beside the list. */
   readonly detailMinWidth: number;
   readonly localSocket: string | null;
@@ -193,7 +194,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
   const dispatchMouse = useMouseDispatch();
-  const control = useMemo(() => createControlClient({ binary: options.pohunekBin, timeoutMs: options.timeoutMs, notificationsPageSize: options.notificationsPageSize, localSocket: options.localSocket }), [options.pohunekBin, options.timeoutMs, options.notificationsPageSize]);
+  const control = useMemo(() => createControlClient({ binary: options.pohunekBin, timeoutMs: options.timeoutMs, notificationsPageSize: options.notificationsPageSize, localSocket: options.localSocket, reconnectMaxMs: options.reconnectMaxMs }), [options.pohunekBin, options.timeoutMs, options.notificationsPageSize, options.reconnectMaxMs]);
   const newLauncher = useCallback(() => createSessionLauncher({ bin: options.pohunekBin, queryTimeoutMs: options.timeoutMs, launchTimeoutMs: options.launchTimeoutMs, launchKillMarginMs: options.launchKillMarginMs }), [options.pohunekBin, options.timeoutMs, options.launchTimeoutMs, options.launchKillMarginMs]);
   const [launcher, setLauncher] = useState(newLauncher);
   const [view, setView] = useState<ViewName>("Work");
