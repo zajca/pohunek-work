@@ -516,6 +516,20 @@ function parseIssueSource(table: Table, file: string, path: readonly string[]): 
   };
 }
 
+/** A GitHub login: letters, digits and single hyphens, neither at the start nor at the end. */
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const NO_REVIEW_BOT = "none";
+
+function readReviewBot(table: Table, file: string, path: KeyPath): string | null {
+  const key = "review_bot";
+  const value = readString(table, key, file, path);
+  if (value === NO_REVIEW_BOT) return null;
+  if (!GITHUB_LOGIN.test(value)) {
+    throw fail(file, [...path, key], `must be "${NO_REVIEW_BOT}" or the GitHub login of the review bot (letters, digits and hyphens)`);
+  }
+  return value;
+}
+
 function parseProject(root: Table, name: string): ProjectConfig {
   const file = `${PROJECTS_DIR}/${name}${TOML_SUFFIX}`;
   rejectUnknownKeys(root, ["project", "policy", "profiles", "teardown"], file, []);
@@ -523,7 +537,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "issue_signal", "started_labels", "paused_labels", "status_project_owner", "status_project_number", "status_field", "status_started_options", "status_paused_options", "ignore_label"],
+    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "review_bot", "linear_team", "paused_states", "issue_signal", "started_labels", "paused_labels", "status_project_owner", "status_project_number", "status_field", "status_started_options", "status_paused_options", "ignore_label"],
     file,
     path,
   );
@@ -554,6 +568,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     ignoredChecks,
     policyChecks,
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
+    reviewBot: readReviewBot(table, file, path),
     ignoreLabel: "ignore_label" in table ? readString(table, "ignore_label", file, path) : null,
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,

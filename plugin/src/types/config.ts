@@ -221,6 +221,11 @@ export interface ProjectConfig {
   /** GitHub logins of AI reviewer accounts; compared case-insensitively, `[bot]` suffix ignored. */
   readonly aiReviewers: readonly string[];
   /**
+   * Login of the review bot that is asked again for a review after a force-push (rebase); null when the
+   * project file says `review_bot = "none"`, which turns the request off.
+   */
+  readonly reviewBot: string | null;
+  /**
    * Label that parks a pull request or issue: rows carrying it are hidden from `list` and refused
    * by `do`. Compared case-insensitively. Null when the key is absent, which turns the feature off.
    */

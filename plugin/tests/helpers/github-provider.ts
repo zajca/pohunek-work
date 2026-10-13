@@ -25,6 +25,7 @@ export const GITHUB_ISSUE_PROJECT = `[project]
 pohunek_label = "widgets"
 repo = "acme/widgets"
 reviews = "session"
+review_bot = "none"
 issue_source = "github"
 issue_signal = "labels"
 started_labels = [${JSON.stringify(STARTED_LABEL)}]
@@ -43,6 +44,19 @@ export interface GithubIssue {
   readonly body: string;
 }
 
+/**
+ * An open pull request of the owner that conflicts with its base and has no checks, reviews or threads: the
+ * state that makes `do <key> rebase` act. It is the only pull request the authored search returns.
+ */
+export interface GithubPullRequest {
+  readonly number: number;
+  readonly title: string;
+  /** Head branch; the project's branch pattern has to match it so the pull request joins the issue. */
+  readonly headRefName: string;
+  /** Login of the author, the owner of the configured identity. */
+  readonly authorLogin: string;
+}
+
 export interface GithubProvider {
   /** `[github] endpoint` of the server. */
   readonly endpoint: string;
@@ -57,8 +71,42 @@ export interface GithubProvider {
   stop(): Promise<void>;
 }
 
-/** Answers the plugin's queries for one open, started issue without a pull request. */
-function graphqlData(issue: GithubIssue, url: string, operation: string, variables: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+/** The pull request node of the GraphQL schema, with every connection the plugin selects empty. */
+function pullRequestNode(repo: string, pullRequest: GithubPullRequest): Record<string, unknown> {
+  const pageInfo = { hasNextPage: false, endCursor: "end" };
+  const empty = { nodes: [], pageInfo };
+  return {
+    id: `PR_node_${String(pullRequest.number)}`,
+    number: pullRequest.number,
+    url: `https://github.example/${repo}/pull/${String(pullRequest.number)}`,
+    title: pullRequest.title,
+    isDraft: false,
+    isCrossRepository: false,
+    headRefName: pullRequest.headRefName,
+    headRefOid: "a".repeat(40),
+    baseRefName: "main",
+    reviewDecision: null,
+    mergeable: "CONFLICTING",
+    updatedAt: "2026-10-01T00:00:00Z",
+    repository: { nameWithOwner: repo },
+    author: { __typename: "User", login: pullRequest.authorLogin },
+    reviews: empty,
+    reviewThreads: empty,
+    timelineItems: empty,
+    reviewRequests: empty,
+    closingIssuesReferences: empty,
+    commits: { nodes: [{ commit: { id: "C_head", statusCheckRollup: { contexts: empty } } }] },
+  };
+}
+
+/** Answers the plugin's queries for one open, started issue, and for the pull request when one is given. */
+function graphqlData(
+  issue: GithubIssue,
+  url: string,
+  pullRequest: GithubPullRequest | null,
+  operation: string,
+  variables: Readonly<Record<string, unknown>>,
+): Record<string, unknown> | null {
   const rateLimit = { remaining: RATE_LIMIT_REMAINING };
   const pageInfo = { hasNextPage: false, endCursor: "end" };
   const empty = { issueCount: 0, pageInfo, nodes: [] };
@@ -66,7 +114,11 @@ function graphqlData(issue: GithubIssue, url: string, operation: string, variabl
     case "PohunekWorkPullRequests": {
       const searches = Object.keys(variables)
         .filter((name) => name.startsWith("q_"))
-        .map((name) => [name.slice(2), empty] as const);
+        .map((name): [string, unknown] => {
+          const alias = name.slice(2);
+          if (alias !== "authored" || pullRequest === null) return [alias, empty];
+          return [alias, { issueCount: 1, pageInfo, nodes: [pullRequestNode(issue.repo, pullRequest)] }];
+        });
       return { rateLimit, ...Object.fromEntries(searches) };
     }
     case "PohunekWorkMergedPullRequests":
@@ -96,7 +148,7 @@ function graphqlData(issue: GithubIssue, url: string, operation: string, variabl
 }
 
 /** Starts the server and writes the certificate and the `gh` script below `dir`, which is created with mode 0700. */
-export async function startGithubProvider(dir: string, issue: GithubIssue): Promise<GithubProvider> {
+export async function startGithubProvider(dir: string, issue: GithubIssue, pullRequest: GithubPullRequest | null = null): Promise<GithubProvider> {
   const openssl = Bun.which("openssl");
   if (openssl === null) throw new Error("openssl is not on PATH; the local GitHub server needs a self-signed certificate");
   await mkdir(dir, { mode: 0o700 });
@@ -124,7 +176,7 @@ export async function startGithubProvider(dir: string, issue: GithubIssue): Prom
     async fetch(request) {
       const body = (await request.json()) as { query: string; variables: Record<string, unknown> };
       const operation = /query\s+(\w+)/.exec(body.query)?.[1] ?? "";
-      const data = graphqlData(issue, issueUrl, operation, body.variables);
+      const data = graphqlData(issue, issueUrl, pullRequest, operation, body.variables);
       if (data === null) {
         unexpectedOperations.push(operation);
         return Response.json({ errors: [{ message: `unexpected operation ${operation}` }] });

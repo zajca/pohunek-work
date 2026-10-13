@@ -206,6 +206,7 @@ const PROJECT_CONFIG = `
 pohunek_label = "widgets"
 repo = "acme/widgets"
 reviews = "session"
+review_bot = "none"
 issue_source = "github"
 issue_signal = "labels"
 started_labels = ["in-progress"]
