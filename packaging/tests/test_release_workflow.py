@@ -525,8 +525,6 @@ class CiFilterTest(unittest.TestCase):
             "plugin/**",
             "launchers/**",
             # test_core_pin runs packaging/core-pin on the repository pins.
-            "native/Cargo.toml",
-            "web/core-sdk.json",
         ):
             self.assertIn("- '%s'" % path, block)
         self.assertIn("packaging: ${{ steps.filter.outputs.packaging }}", CI)

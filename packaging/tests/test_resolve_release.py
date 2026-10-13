@@ -50,8 +50,6 @@ class ResolveReleaseTest(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
 
     def test_a_gui_tag_is_an_unknown_surface(self):
-        (self.root / "native").mkdir()
-        (self.root / "native" / "Cargo.toml").write_text('[workspace.package]\nversion = "0.4.0"\n')
         for tag in ("gui-v0.4.0", "gui-v9.9.9"):
             result = resolve(self.root, "--tag", tag)
             self.assertEqual(result.returncode, 1, repr(tag))

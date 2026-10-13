@@ -39,10 +39,10 @@ aligned when bumping core:
   core reference from this pin; see
   [`web/docs/core-sdk.md`](web/docs/core-sdk.md).
 
-`packaging/core-pin` checks every location above against `native/Cargo.toml`
-and fails when one names a different core release: the web pin's commit and
-release tag, the plugin pin's `release` and the launchers job's
-`POHUNEK_RELEASE`. Against a native `rev` it resolves each release tag to its
+`packaging/core-pin` checks the plugin pin's `release` and the launchers job's
+`POHUNEK_RELEASE` against the web pin and fails when either names a different
+core release. When the web pin names no release tag (the loopback pin), the
+plugin and launchers releases are resolved with `git ls-remote` and compared by
 commit. It does not check the archive digests (`POHUNEK_MUSL_SHA256`, the
 plugin's `sha256`) or the lockfiles; the jobs that download an archive verify
 its digest.
