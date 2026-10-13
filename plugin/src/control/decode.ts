@@ -1,6 +1,6 @@
 import type {
   ControlGovernance, ControlHost, ControlHostCapabilities, ControlNotification, ControlProject, ControlProjectDetail,
-  ControlScreen, ControlSession,
+  ControlNativeTarget, ControlScreen, ControlSession,
 } from "./types.ts";
 
 export class InvalidControlResponse extends Error {}
@@ -78,6 +78,18 @@ export function host(raw: unknown, path: string): ControlHost {
   };
 }
 
+/** Core sends at most one native reference; an empty or doubled reference is kept as invalid, not dropped. */
+function nativeTarget(obj: Json, path: string): ControlNativeTarget {
+  const id = nullableString(obj, "native_session_id", path);
+  const file = nullableString(obj, "native_session_path", path);
+  if (id === null && file === null) return { status: "none" };
+  if (id !== null && file !== null) return { status: "invalid", reason: "both native_session_id and native_session_path are set" };
+  const kind = id !== null ? "id" : "path";
+  const value = id ?? file ?? "";
+  if (value === "") return { status: "invalid", reason: `native_session_${kind} is empty` };
+  return { status: "verified", kind, value };
+}
+
 export function session(raw: unknown, path: string, hostRoute: string): ControlSession {
   const obj = object(raw, path);
   const runtime = optionalObject(obj, "runtime", path);
@@ -113,6 +125,7 @@ export function session(raw: unknown, path: string, hostRoute: string): ControlS
     external: obj["external"] === undefined || obj["external"] === null ? false : boolean(obj, "external", path),
     canResume: caps === null ? false : boolean(caps, "resume", `${path}.capabilities`),
     canFork: caps === null ? false : boolean(caps, "fork", `${path}.capabilities`),
+    nativeTarget: nativeTarget(obj, path), nativeLastActivityAt: nullableString(obj, "native_last_activity_at", path),
     metadata, subagents, subagentCount: subagents.length,
   };
 }

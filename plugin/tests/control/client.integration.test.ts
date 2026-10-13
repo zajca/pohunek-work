@@ -169,6 +169,26 @@ describe("control CLI process boundary", () => {
     expect(broken.ok ? null : broken.error.code).toBe("invalid_response");
   });
 
+  test("reports the verified native recovery target and refuses an ambiguous one from the core", async () => {
+    const stub = await cli([
+      { args: ["--host", "local", "session", "inspect", "verified", "--json"], ok: { ...session, id: "verified", native_session_id: "native-1", native_last_activity_at: "2026-10-09T09:00:00Z" } },
+      { args: ["--host", "local", "session", "inspect", "ambiguous", "--json"], ok: { ...session, id: "ambiguous", native_session_id: "native-1", native_session_path: "/conversation.jsonl" } },
+      { args: ["--host", "local", "session", "inspect", "unknown", "--json"], ok: { ...session, id: "unknown", native_session_id: null, native_session_path: null, native_last_activity_at: null } },
+      { args: ["--host", "local", "session", "resume", "ambiguous", "--json"], err: { class: "invalid_state", code: "recovery_target_ambiguous", msg: "two native references" } },
+    ]);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2 });
+    const verified = await client.inspectSession("local", "verified");
+    expect(verified.ok ? verified.data.nativeTarget : null).toEqual({ status: "verified", kind: "id", value: "native-1" });
+    expect(verified.ok ? verified.data.nativeLastActivityAt : null).toBe("2026-10-09T09:00:00Z");
+    const ambiguous = await client.inspectSession("local", "ambiguous");
+    expect(ambiguous.ok ? ambiguous.data.nativeTarget.status : null).toBe("invalid");
+    const unknown = await client.inspectSession("local", "unknown");
+    expect(unknown.ok ? unknown.data.nativeTarget : null).toEqual({ status: "none" });
+    expect(unknown.ok ? unknown.data.nativeLastActivityAt : "set").toBeNull();
+    const refused = await client.act({ kind: "resume", host: "local", sessionId: "ambiguous" });
+    expect(refused.ok ? null : refused.error.cliCode).toBe("recovery_target_ambiguous");
+  });
+
   test("rejects a host-qualified target before it can override the selected host", async () => {
     const stub = await cli([]);
     const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2 });

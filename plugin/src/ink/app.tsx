@@ -13,7 +13,7 @@ import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { layout } from "./config.ts";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
-import { ActivityView, HostsView, orderedSessions, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -34,7 +34,9 @@ export interface InkTuiOptions {
   readonly log?: (event: string, detail?: string) => void;
 }
 
-type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "rename" | "metadata" | "work-detail" | "work-preview" | "help";
+type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help";
+/** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
+interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: Overlay }
 type ConfirmAction = "stop" | "remove";
 const VIEWS: readonly ViewName[] = ["Work", "Sessions", "Hosts", "Activity"];
 const SCOPES: readonly ActivityScope[] = ["Recent", "Unread", "Archived"];
@@ -63,6 +65,11 @@ function nullable(value: string): string | null {
 
 function sameSession(a: ControlSession, b: ControlSession): boolean {
   return a.host === b.host && a.id === b.id && a.state === b.state && a.runtimeState === b.runtimeState && a.updatedAt === b.updatedAt;
+}
+
+/** The native conversation and its last activity, as shown in the recovery confirmation. */
+function sameRecoveryTarget(a: ControlSession, b: ControlSession): boolean {
+  return JSON.stringify(a.nativeTarget) === JSON.stringify(b.nativeTarget) && a.nativeLastActivityAt === b.nativeLastActivityAt;
 }
 
 function retainUnavailable(previous: ControlSnapshot | null, current: ControlSnapshot): ControlSnapshot {
@@ -200,6 +207,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
   const notificationSelectionGeneration = useRef(0);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [recovery, setRecovery] = useState<RecoveryRequest | null>(null);
   const [edit, setEdit] = useState("");
   const [form, setForm] = useState<LaunchForm>(EMPTY_FORM);
   const [launchOptions, setLaunchOptions] = useState<LaunchOptions | null>(null);
@@ -469,28 +477,29 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } catch (error) { setStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);
 
-  const runSessionAction = useCallback(async (action: ControlAction): Promise<void> => {
-    if (sessionDetail === null || busy || stale || snapshot?.errors.some((error) => error.host === sessionDetail.host)) {
+  const runSessionAction = useCallback(async (action: ControlAction, expected: ControlSession | null = sessionDetail, confirmed: ControlSession | null = null): Promise<void> => {
+    if (expected === null || busy || stale || snapshot?.errors.some((error) => error.host === expected.host)) {
       setStatus("Session data is stale or unavailable; refresh before changing it");
       return;
     }
     setBusy(true);
     try {
-      const latest = await control.inspectSession(sessionDetail.host, sessionDetail.id);
+      const latest = await control.inspectSession(expected.host, expected.id);
       if (!latest.ok) { setStatus(latest.error.message); return; }
-      if (!sameSession(sessionDetail, latest.data)) { setSessionDetail(latest.data); setStatus("Session changed; review the new state before acting"); return; }
+      if (!sameSession(expected, latest.data)) { setSessionDetail(latest.data); setStatus("Session changed; review the new state before acting"); return; }
+      if (confirmed !== null && !sameRecoveryTarget(confirmed, latest.data)) { setStatus("Recovery target changed; review it before confirming again"); return; }
       if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) {
         setStatus("This runtime is read-only"); return;
       }
       const outcome = await control.act(action);
       if (!outcome.ok) { setStatus(outcome.error.message); return; }
       if (outcome.data.kind === "remove" && (!outcome.data.removed || outcome.data.worktreesFailed > 0)) {
-        setStatus(`Removal unverified; session ${sessionDetail.host}/${sessionDetail.id} may remain. Inspect before retrying.`);
+        setStatus(`Removal unverified; session ${expected.host}/${expected.id} may remain. Inspect before retrying.`);
         await refresh();
         return;
       }
       if (outcome.data.kind === "stop" && !outcome.data.stopped) {
-        setStatus(`Stop unverified; inspect session ${sessionDetail.host}/${sessionDetail.id}`);
+        setStatus(`Stop unverified; inspect session ${expected.host}/${expected.id}`);
         await refresh();
         return;
       }
@@ -510,35 +519,48 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     finally { setBusy(false); }
   }, [busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
 
+  const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: Overlay): Promise<void> => {
+    if (busy || stale || snapshot?.errors.some((error) => error.host === target.host)) {
+      setStatus("Session data is stale or unavailable; refresh before recovering it"); return;
+    }
+    setBusy(true);
+    try {
+      const latest = await control.inspectSession(target.host, target.id);
+      if (!latest.ok) { setStatus(latest.error.message); return; }
+      if (!sameSession(target, latest.data)) { setStatus("Session changed; review the new state before recovering it"); return; }
+      if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) { setStatus("This runtime is read-only"); return; }
+      if (latest.data.nativeTarget.status === "invalid") { setStatus(`Recovery target unavailable: ${latest.data.nativeTarget.reason}`); return; }
+      if (kind === "fork" ? !latest.data.canFork : !latest.data.canResume) { setStatus(`This session cannot be ${kind === "fork" ? "forked" : "resumed"}`); return; }
+      setRecovery({ kind, session: latest.data, returnTo });
+      setOverlay("recovery");
+    } catch (error) { setStatus(defaultStatus(error)); }
+    finally { setBusy(false); }
+  }, [busy, control, snapshot, stale]);
+
+  const confirmRecovery = useCallback((request: RecoveryRequest): void => {
+    void runSessionAction({ kind: request.kind, host: request.session.host, sessionId: request.session.id }, request.session, request.session);
+  }, [runSessionAction]);
+
   const openSelected = useCallback(async (): Promise<void> => {
     const target = overlay === "session" ? sessionDetail : selectedSession;
     if (target === null) return;
+    if (target.external || ["conflicting", "incompatible", "lost"].includes(target.runtimeState ?? "")) {
+      setStatus("This session cannot be opened from the TUI"); return;
+    }
+    if (target.canResume && target.state !== "running") {
+      await requestRecovery("resume", target, overlay === "session" ? "session" : "none");
+      return;
+    }
     setBusy(true);
     try {
-      let attachHost = target.host;
-      let attachId = target.id;
-      if (target.external || ["conflicting", "incompatible", "lost"].includes(target.runtimeState ?? "")) {
-        setStatus("This session cannot be opened from the TUI"); return;
-      }
-      if (target.canResume && target.state !== "running") {
-        if (stale || snapshot?.errors.some((error) => error.host === target.host)) { setStatus("Session data is stale; refresh before resuming"); return; }
-        const latest = await control.inspectSession(target.host, target.id);
-        if (!latest.ok) { setStatus(latest.error.message); return; }
-        if (!sameSession(target, latest.data)) { setStatus("Session changed; review the new state before resuming"); return; }
-        const resumed = await control.act({ kind: "resume", host: target.host, sessionId: target.id });
-        if (!resumed.ok) { setStatus(resumed.error.message); return; }
-        if (resumed.data.kind !== "resume") { setStatus("Resume returned an unexpected result; inspect the session before attaching"); return; }
-        attachHost = resumed.data.session.host;
-        attachId = resumed.data.session.id;
-      }
       await suspendForChild(async () => {
-        const code = await execInteractive([options.pohunekBin, "attach", "--host", attachHost, "--", attachId]);
+        const code = await execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id]);
         if (code !== 0) throw new Error(`attach exited ${String(code)}`);
       });
       await refresh();
     } catch (error) { setStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
-  }, [control, options.pohunekBin, overlay, refresh, selectedSession, sessionDetail, snapshot, stale, suspendForChild]);
+  }, [options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);
@@ -723,6 +745,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (input.toLowerCase() === "y" && confirm !== null && sessionDetail !== null) void runSessionAction({ kind: confirm, host: sessionDetail.host, sessionId: sessionDetail.id });
       setOverlay("session"); setConfirm(null); return;
     }
+    if (overlay === "recovery") {
+      const request = recovery;
+      setRecovery(null); setOverlay(request?.returnTo ?? "none");
+      if (input.toLowerCase() === "y" && request !== null) confirmRecovery(request);
+      return;
+    }
     if (overlay === "rename" || overlay === "metadata") {
       if (key.escape) { setOverlay("session"); setEdit(""); return; }
       if (key.return && sessionDetail !== null) {
@@ -767,8 +795,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + layout.detailScrollStep)); return; }
       if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - layout.detailScrollStep)); return; }
       if (input === "o" && sessionAttachable) void openSelected();
-      else if (input === "r" && sessionRecoverable) void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id });
-      else if (input === "f" && sessionMutable && sessionDetail.canFork) void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id });
+      else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
+      else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
       else if ((input === "x" && sessionMutable && sessionActive) || (input === "D" && sessionWritable)) { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") void loadScreen();
@@ -856,6 +884,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen}
     offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * layout.detailScrollStep))); }} />;
+  else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm") content = <Message color="red" text={`Confirm ${confirm ?? "action"} of ${sessionDetail?.name ?? sessionDetail?.id ?? "session"}? y/N. Removal may delete its worktree.`} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
   else if (overlay === "host") content = <Box flexDirection="column">
@@ -943,9 +972,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   </Box>;
   else if (overlay === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
     {sessionAttachable && <ActionButton label="Attach" onClick={() => void openSelected()} primary />}
-    {sessionRecoverable && <ActionButton label="Resume" onClick={() => void runSessionAction({ kind: "resume", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
+    {sessionRecoverable && <ActionButton label="Resume" onClick={() => void requestRecovery("resume", sessionDetail, "session")} />}
     <ActionButton label="Screen" onClick={() => void loadScreen()} />
-    {sessionMutable && sessionDetail.canFork && <ActionButton label="Fork" onClick={() => void runSessionAction({ kind: "fork", host: sessionDetail.host, sessionId: sessionDetail.id })} />}
+    {sessionMutable && sessionDetail.canFork && <ActionButton label="Fork" onClick={() => void requestRecovery("fork", sessionDetail, "session")} />}
     {sessionMutable && <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay("rename"); }} />}
     {sessionMutable && <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />}
     {sessionDetail.branch !== null && <ActionButton label="Copy branch" onClick={() => void copyValue(sessionDetail.branch ?? "")} />}
@@ -955,6 +984,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />}
     {sessionWritable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}
     <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
+  </Box>;
+  else if (overlay === "recovery" && recovery !== null) toolbar = <Box gap={1}>
+    <ActionButton label={`Confirm ${recovery.kind}`} onClick={() => { const request = recovery; setRecovery(null); setOverlay(request.returnTo); confirmRecovery(request); }} primary />
+    <ActionButton label="Cancel" onClick={() => { const returnTo = recovery.returnTo; setRecovery(null); setOverlay(returnTo); }} />
   </Box>;
   else if (overlay === "confirm") toolbar = <Box gap={1}>
     <ActionButton label={`Confirm ${confirm ?? "action"}`} onClick={() => { if (confirm !== null && sessionDetail !== null) void runSessionAction({ kind: confirm, host: sessionDetail.host, sessionId: sessionDetail.id }); setConfirm(null); setOverlay("session"); }} primary />

@@ -98,7 +98,11 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   the available keys. The Work view supports
   `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
   pull requests). Session detail exposes attach, resume, fork, stop, remove,
-  rename, metadata, screen, work link, folder and copy actions. Activity has
+  rename, metadata, screen, work link, folder and copy actions. Resume, fork and
+  attach to a stopped session first show the native conversation the core will
+  recover (ID or path, last native activity, or Unknown) and wait for `y`; an
+  ambiguous reference is refused before the confirmation and a core refusal is
+  shown without starting a worker. Activity has
   Recent, Unread and Archived scopes. Partial host failures are shown in the
   interface and block writes on affected hosts;
 - `pohunek-work new-session` opens the session form alone, then attaches in the

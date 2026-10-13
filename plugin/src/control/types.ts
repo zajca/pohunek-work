@@ -11,6 +11,11 @@ export interface ControlHost {
   readonly daemonVersion: string | null;
   readonly address: string | null;
 }
+/** The native conversation a session recovers from. `invalid` keeps core's ambiguous reference for the refusal. */
+export type ControlNativeTarget =
+  | { readonly status: "none" }
+  | { readonly status: "verified"; readonly kind: "id" | "path"; readonly value: string }
+  | { readonly status: "invalid"; readonly reason: string };
 export interface ControlSession {
   readonly host: string; readonly id: string; readonly name: string | null; readonly agent: string;
   readonly cwd: string; readonly state: string; readonly activity: string | null;
@@ -18,6 +23,7 @@ export interface ControlSession {
   readonly projectId: string | null; readonly projectLabel: string | null;
   readonly branch: string | null; readonly worktreePath: string | null;
   readonly external: boolean; readonly canResume: boolean; readonly canFork: boolean;
+  readonly nativeTarget: ControlNativeTarget; readonly nativeLastActivityAt: string | null;
   readonly metadata: Readonly<Record<string, string>>;
   readonly subagents: readonly ControlSubagent[];
   readonly subagentCount: number;

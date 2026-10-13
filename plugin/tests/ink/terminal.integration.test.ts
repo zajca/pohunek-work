@@ -463,7 +463,11 @@ while time.monotonic() < deadline:
         output.clear()
         os.write(master, b"r")
         step = 3
-    elif step == 3 and '"resume","lost-1"' in trace() and '"attach","--host","local","--","lost-1"' in trace() and b"SESSIONS  1" in output:
+    elif step == 3 and b"RECOVERY TARGET" in output:
+        output.clear()
+        os.write(master, b"y")
+        step = 33
+    elif step == 33 and '"resume","lost-1"' in trace() and '"attach","--host","local","--","lost-1"' in trace() and b"SESSIONS  1" in output:
         output.clear()
         next_input = now + 0.5
         step = 31

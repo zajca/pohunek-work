@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { ListItem } from "../types/item.ts";
 import type { DoOutcome } from "../tui/decode.ts";
 import type { ControlHost, ControlNotification, ControlScreen, ControlSession, ControlSnapshot, ControlSubagent } from "../control/types.ts";
-import { MenuRow, Message, safeText, shorten } from "./components.tsx";
+import { MenuRow, Message, safeText, Section, shorten } from "./components.tsx";
 import { MouseZone } from "./mouse.tsx";
 import { isUnresolvedAction } from "./attention.ts";
 
@@ -176,6 +176,19 @@ function sessionDetailLines(session: ControlSession, screen: ControlScreen | nul
 
 export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number): number {
   return Math.max(0, sessionDetailLines(session, screen).length - height);
+}
+
+/** What a resume or fork will recover, as the owner confirms it. An unknown target is shown as such, never guessed. */
+export function RecoveryConfirmation({ action, session }: { readonly action: "resume" | "fork"; readonly session: ControlSession }): ReactNode {
+  const target = session.nativeTarget;
+  const reference = target.status === "verified" ? `${target.kind === "id" ? "ID" : "path"}: ${target.value}` : "Unknown";
+  return <Box flexDirection="column">
+    <Section title="RECOVERY TARGET">
+      <Text wrap="wrap">{safeText(`Native conversation ${reference}`)}</Text>
+      <Text dimColor wrap="wrap">{safeText(`Last native activity: ${session.nativeLastActivityAt ?? "Unknown"}`)}</Text>
+    </Section>
+    <Message color="red" text={safeText(`Confirm ${action} of ${session.name ?? session.id}? y/N`)} />
+  </Box>;
 }
 
 export function SessionDetail({ session, screen, offset, height, onWheel }: {
