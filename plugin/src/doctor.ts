@@ -7,6 +7,7 @@
 
 import { workdirPlacementProblem, workdirProblem } from "./actions/manager.ts";
 import { envelope } from "./commands/plan-output.ts";
+import { toAscii } from "./output/sanitize.ts";
 import { ConfigError, loadConfig as defaultLoadConfig } from "./config/index.ts";
 import {
   createPohunekClient as defaultCreatePohunekClient,
@@ -268,9 +269,13 @@ function finish(checks: readonly DoctorCheck[]): DoctorReport {
   return { checks, exitCode };
 }
 
+/**
+ * The text report, one line per check. Names and messages can carry pohunek text, project labels and
+ * launcher.conf values, so they are printed in strict ASCII like every other terminal output.
+ */
 export function formatDoctorReport(report: DoctorReport): string {
   return report.checks
-    .map((check) => `${check.ok ? (check.code === "warn" ? "warn" : "ok  ") : "FAIL"} ${check.code} ${check.name}: ${check.message}`)
+    .map((check) => `${check.ok ? (check.code === "warn" ? "warn" : "ok  ") : "FAIL"} ${check.code} ${toAscii(check.name)}: ${toAscii(check.message)}`)
     .join("\n");
 }
 
