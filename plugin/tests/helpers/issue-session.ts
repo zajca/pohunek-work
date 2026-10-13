@@ -171,9 +171,9 @@ export async function waitForSession(core: CoreDaemon, sessionId: string, predic
   }
 }
 
-/** Starts a quiet session with `args` after `session new --agent quiet` and returns its id and worktree. */
-export async function startSession(core: CoreDaemon, args: readonly string[]): Promise<{ id: string; worktree: string }> {
-  const created = await core.pohunek(["session", "new", "--agent", QUIET_PROFILE, ...args, "--json"]);
+/** Starts a session of agent profile `agent` (`QUIET_PROFILE` when absent) with `args` and returns its id and worktree. */
+export async function startSession(core: CoreDaemon, args: readonly string[], agent?: string): Promise<{ id: string; worktree: string }> {
+  const created = await core.pohunek(["session", "new", "--agent", agent ?? QUIET_PROFILE, ...args, "--json"]);
   const id = (JSON.parse(created.stdout) as { ok?: { id?: unknown } }).ok?.id;
   if (typeof id !== "string") throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
   const current = await inspect(core, id);
@@ -181,11 +181,14 @@ export async function startSession(core: CoreDaemon, args: readonly string[]): P
   return { id, worktree: current.worktree_path };
 }
 
-/** Starts the issue's shell session in a worktree on `ISSUE_BRANCH`, pushes the branch and records its worktree. */
-export async function startIssueSession(state: Setup): Promise<void> {
+/**
+ * Starts the issue's session in a worktree on `ISSUE_BRANCH`, pushes the branch and records its worktree. The
+ * session runs agent profile `agent`, `QUIET_PROFILE` when absent.
+ */
+export async function startIssueSession(state: Setup, agent?: string): Promise<void> {
   const { id, worktree } = await startSession(state.core, [
     "--project", PROJECT_LABEL, "--branch", ISSUE_BRANCH, "--name", ISSUE_KEY, ...issueMetadata(state.github),
-  ]);
+  ], agent);
   await git(worktree, ["push", "-q", state.origin, `${ISSUE_BRANCH}:${ISSUE_BRANCH}`]);
   state.sessionId = id;
   state.worktree = worktree;
