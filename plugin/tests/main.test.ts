@@ -220,6 +220,25 @@ test("--include-ignored is accepted by list and do (parsing passes, the missing 
   }
 });
 
+test("doctor takes only --json: any other argument is a usage error, an envelope of the doctor contract under --json", async () => {
+  const dir = await tempDir();
+  for (const args of [["doctor", "--json", "--bogus"], ["doctor", "extra", "--json"]]) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toBe("");
+    const envelope = JSON.parse(result.out) as { protocol: { minimum: number; maximum: number }; err: { class: string; code: string; msg: string } };
+    expect(envelope.protocol).toEqual({ minimum: 1, maximum: 1 });
+    expect(envelope.err.class).toBe("usage");
+    expect(envelope.err.code).toBe("usage");
+    expect(envelope.err.msg).toContain("doctor takes only --json");
+    expect(envelope.err.msg).toContain("pohunek-work doctor [--json]");
+  }
+  const text = await run(["doctor", "--bogus"], dir);
+  expect(text.code).toBe(2);
+  expect(text.out).toBe("");
+  expect(text.err).toContain("doctor takes only --json: --bogus");
+});
+
 test("--include-ignored is a usage error for commands that do not take it", async () => {
   const dir = await tempDir();
   const result = await run(["doctor", "--include-ignored"], dir);

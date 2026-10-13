@@ -18,7 +18,7 @@ names the issue and when to remove or update the rule.
 | `pohunek-work do <key> <action> --dry-run --json` | the plan of an action; changes nothing |
 | `pohunek-work do <key> <action> --yes --json` | runs the plan after the owner confirmed it |
 | `pohunek-work do <key> cleanup --dry-run --json` | the cleanup inventory and every check of a finished session; reads only, plus `git fetch` of the configured remote into `refs/remotes/<remote>/<branch>` of the session's repository (this updates the remote-tracking ref and FETCH_HEAD, no work files; git may also run auto-maintenance) |
-| `pohunek-work doctor` | setup problems; the exit code names the first failed check |
+| `pohunek-work doctor --json` | setup problems: `passed` is false when a check failed (a `warn` check is advisory), `checks[].code` names each problem, and `exit_code` (also the process exit code) is the first failed check's code, or 0 |
 | `pohunek session inspect <id> --json` | state, activity, branch, `worktree_path` and `metadata` (`work.role`, `work.rev`, `work.link.*`) of one session |
 | `pohunek session screen <id> --json` | the rendered terminal of one session |
 
