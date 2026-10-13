@@ -379,7 +379,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const generation = ++formGeneration.current;
     formLoadingRef.current = true;
     setFormLoading(true);
-    setForm((previous) => previous.host === host ? previous : { ...previous, host, project: null, action: null, agent: null, choice: 0 });
+    // Host-specific values are cleared with the host so a submission cannot carry them to another host.
+    setForm((previous) => previous.host === host ? previous : { ...previous, host, project: null, action: null, agent: null, prompt: "", branch: "", baseBranch: "", choice: 0 });
     setActions([]);
     try {
       const loaded = await launcher.loadOptions(host);
@@ -388,10 +389,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const eligibleAgents = loaded.agents.filter((agent) => !assistant || agent.assistantCapable);
       setLaunchOptions(loaded);
       setForm((previous) => ({ ...previous, host, project, choice: 0,
-        action: previous.host === host ? previous.action : null,
-        prompt: previous.host === host ? previous.prompt : "",
-        branch: previous.host === host ? previous.branch : "",
-        baseBranch: previous.host === host ? previous.baseBranch : "",
         agent: eligibleAgents.find((agent) => agent.id === previous.agent)?.id ?? eligibleAgents[0]?.id ?? null }));
       const loadedActions = project === null ? [] : await launcher.loadActions(host, project);
       if (generation === formGeneration.current) setActions(loadedActions);
