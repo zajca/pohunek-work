@@ -66,14 +66,17 @@ interface Setup {
   sessionId: string;
 }
 
-let setup: Setup | null = null;
+/** Resources of the running scenario, registered as soon as each one starts so that `afterEach` releases them on failure. */
+let daemon: CoreDaemon | null = null;
+let github: GithubProvider | null = null;
 
 afterEach(async () => {
   try {
-    await setup?.github.stop();
+    await github?.stop();
   } finally {
-    await setup?.core.stop();
-    setup = null;
+    github = null;
+    await daemon?.stop();
+    daemon = null;
   }
 }, DAEMON_STOP_HOOK_TIMEOUT_MS);
 
@@ -86,26 +89,26 @@ async function git(cwd: string, args: readonly string[]): Promise<string> {
 /** A daemon with project widgets whose origin is a local bare repository holding `main`, and the GitHub issue. */
 async function setUp(): Promise<Setup> {
   const core = await startCoreDaemon();
+  daemon = core;
   await core.registerProject("widgets", ISSUE.repo);
   await installQuietAgent(core);
   const repo = join(core.root, "repos", "widgets");
   const origin = join(core.root, "origin.git");
   await git(core.root, ["init", "-q", "--bare", "-b", "main", origin]);
   await git(repo, ["push", "-q", origin, "HEAD:refs/heads/main"]);
-  const github = await startGithubProvider(join(core.root, "github"), ISSUE);
+  const provider = await startGithubProvider(join(core.root, "github"), ISSUE);
+  github = provider;
   const fixture = await writePluginConfig(core, [{ label: "widgets", repo: ISSUE.repo, template: GITHUB_ISSUE_PROJECT }], {
-    overrides: { "github.endpoint": github.endpoint, "github.gh_bin": github.ghBin },
+    overrides: { "github.endpoint": provider.endpoint, "github.gh_bin": provider.ghBin },
   });
-  const started: Setup = {
+  return {
     core,
-    fixture: { ...fixture, env: { ...fixture.env, NODE_EXTRA_CA_CERTS: github.caFile } },
-    github,
+    fixture: { ...fixture, env: { ...fixture.env, NODE_EXTRA_CA_CERTS: provider.caFile } },
+    github: provider,
     origin,
     worktree: "",
     sessionId: "",
   };
-  setup = started;
-  return started;
 }
 
 async function installQuietAgent(core: CoreDaemon): Promise<void> {
