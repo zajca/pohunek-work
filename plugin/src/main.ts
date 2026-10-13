@@ -439,6 +439,7 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       refreshIntervalMs: config.global.tui.refreshIntervalSecs * 1000,
       sessionReconcileMs: config.global.tui.sessionReconcileSecs * 1000,
       actionCaptureBytes: config.global.tui.actionCaptureBytes,
+      detailMinWidth: config.global.tui.detailMinWidth,
       localSocket: resolveLocalSocket(),
       initialView: config.global.tui.initialView,
       stalePrDays: config.global.tui.stalePrDays,

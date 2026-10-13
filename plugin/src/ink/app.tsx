@@ -13,7 +13,7 @@ import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
-import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -27,6 +27,8 @@ export interface InkTuiOptions {
   readonly refreshIntervalMs: number;
   readonly sessionReconcileMs: number;
   readonly actionCaptureBytes: number;
+  /** Columns from which the session detail is a panel beside the list. */
+  readonly detailMinWidth: number;
   readonly localSocket: string | null;
   readonly initialView: "mine" | "all";
   readonly stalePrDays: number;
@@ -218,6 +220,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
   const notificationSelectionGeneration = useRef(0);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [confirmSession, setConfirmSession] = useState<ControlSession | null>(null);
+  const [confirmReturn, setConfirmReturn] = useState<Overlay>("session");
   const [formLoading, setFormLoading] = useState(false);
   const formLoadingRef = useRef(false);
   const formGeneration = useRef(0);
@@ -266,11 +270,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     workDetail !== null && selectedWorkAction !== undefined && workPreview.key === workDetail.key && workPreview.action === selectedWorkAction.name;
   const selectedWorkIndex = selectedWork === null ? 0 : workRows?.indexOf(selectedWork) ?? 0;
   const selectedSession = sessions.find((session) => `${session.host}/${session.id}` === sessionKey) ?? selectedAt(sessions, cursor.Sessions);
+  const split = options.mode === "main" && stdout.columns >= options.detailMinWidth;
   const selectedSessionIndex = selectedSession === null ? 0 : sessions.indexOf(selectedSession);
   const selectedHost = selectedAt(snapshot?.hosts ?? [], cursor.Hosts);
   const selectedRecord = selectedAt(records, cursor.Activity);
   const visibleRows = Math.max(2, Math.floor((stdout.rows - layout.listReservedRows) / 2));
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
+  // The side panel shows the highlighted session; its screen is kept only for that session.
+  const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
+  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight);
+  // The list takes half of a split terminal; the panel takes the rest. Each row keeps a margin of one column.
+  const listWidth = split ? Math.floor(stdout.columns / 2) : stdout.columns;
   const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight);
   const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
   const previewWidth = Math.max(20, stdout.columns - 4);
@@ -280,6 +290,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const sessionActive = sessionDetail !== null && ["running", "working", "starting", "reconnecting", "blocked"].includes(sessionDetail.state);
   const sessionAttachable = sessionMutable && (sessionActive || sessionDetail.canResume);
   const sessionRecoverable = sessionWritable && sessionDetail.canResume && (!sessionActive || sessionDetail.runtimeState === "lost");
+
+  useEffect(() => { setDetailOffset(0); }, [sessionKey]);
 
   useEffect(() => {
     screenGeneration.current += 1;
@@ -704,6 +716,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     finally { setBusy(false); }
   }, [busy, options.listTimeoutMs, options.selfBin, workDetail]);
 
+  /** Asks for a stop or a remove of `target`; the flags are the ones the detail offers. */
+  const requestConfirm = useCallback((target: ControlSession, kind: ConfirmAction, returnTo: Overlay): void => {
+    const writable = !target.external && !["conflicting", "incompatible"].includes(target.runtimeState ?? "");
+    const mutable = writable && target.runtimeState !== "lost";
+    const active = ["running", "working", "starting", "reconnecting", "blocked"].includes(target.state);
+    if (kind === "stop" ? !(mutable && active) : !writable) { setStatus(kind === "stop" ? "Only a live session can be stopped" : "This session cannot be removed"); return; }
+    setConfirmSession(target);
+    setConfirm(kind);
+    setConfirmReturn(returnTo);
+    setOverlay("confirm");
+  }, []);
+
   const selectIndex = useCallback((index: number): void => {
     const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? snapshot?.hosts.length ?? 0 : records.length;
     const next = Math.max(0, Math.min(count - 1, index));
@@ -711,6 +735,20 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (view === "Sessions") { const session = sessions[next]; setSessionKey(session === undefined ? null : `${session.host}/${session.id}`); }
     if (view === "Work") { const item = workRows?.[next]; setWorkKey(item === undefined ? null : rowId(item)); }
   }, [records.length, sessions, snapshot?.hosts.length, view, workRows]);
+
+  /** Moves the Sessions selection to the first row of the next (or the previous) group; the first row of the current group counts as its start. */
+  const jumpSection = useCallback((direction: 1 | -1): void => {
+    if (snapshot === null) return;
+    const starts = sessions.flatMap((session, index) => index === 0 || sessionGroup(session, snapshot.notifications) !== sessionGroup(sessions[index - 1] ?? session, snapshot.notifications) ? [index] : []);
+    const current = selectedSessionIndex;
+    if (direction === 1) {
+      const next = starts.find((start) => start > current);
+      if (next !== undefined) selectIndex(next);
+      return;
+    }
+    const currentStart = starts.filter((start) => start <= current).pop() ?? 0;
+    selectIndex(current === currentStart ? (starts.filter((start) => start < currentStart).pop() ?? 0) : currentStart);
+  }, [selectedSessionIndex, sessions, snapshot]);
 
   const move = useCallback((delta: number): void => {
     const current = view === "Sessions" ? selectedSessionIndex : view === "Work" ? selectedWorkIndex : cursor[view];
@@ -810,8 +848,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     if (overlay === "confirm") {
-      if (input.toLowerCase() === "y" && confirm !== null && sessionDetail !== null) void runSessionAction({ kind: confirm, host: sessionDetail.host, sessionId: sessionDetail.id });
-      setOverlay("session"); setConfirm(null); return;
+      if (input.toLowerCase() === "y" && confirm !== null && confirmSession !== null) void runSessionAction({ kind: confirm, host: confirmSession.host, sessionId: confirmSession.id }, confirmSession);
+      setOverlay(confirmReturn); setConfirm(null); setConfirmSession(null); return;
     }
     if (overlay === "recovery") {
       const request = recovery;
@@ -832,6 +870,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       if (key.backspace || key.delete) setEdit((old) => old.slice(0, -1));
       else if (!key.ctrl && !key.meta) setEdit((old) => old + input);
+      return;
+    }
+    if ((key.tab || input === "\u001b[Z") && !workSearch && overlay !== "help" && options.mode === "main") {
+      const backward = key.shift || input === "\u001b[Z";
+      const direction = backward ? -1 : 1;
+      setOverlay("none");
+      setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
+      return;
+    }
+    if (overlay === "none" && view === "Sessions" && (key.leftArrow || key.rightArrow || input === "[" || input === "]")) {
+      const forward = key.rightArrow || input === "]";
+      jumpSection(forward ? 1 : -1);
       return;
     }
     if ((key.leftArrow || key.rightArrow) && !workSearch && overlay !== "help" && options.mode === "main") {
@@ -865,7 +915,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (input === "o" && sessionAttachable) void openSelected();
       else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
       else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
-      else if ((input === "x" && sessionMutable && sessionActive) || (input === "D" && sessionWritable)) { setConfirm(input === "x" ? "stop" : "remove"); setOverlay("confirm"); }
+      else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") void loadScreen();
       else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
@@ -908,8 +958,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "n") openForm(false);
       else if (input === "s") setView("Sessions");
     } else if (view === "Sessions") {
-      if (key.return) openRow(selectedSessionIndex);
+      if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
       else if (input === "o") void openSelected();
+      else if (input === "x" && selectedSession !== null) requestConfirm(selectedSession, "stop", "none");
+      else if (input === "D" && selectedSession !== null) requestConfirm(selectedSession, "remove", "none");
+      else if (split && (key.pageDown || key.pageUp)) setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1))));
       else if (input === "n") openForm(false);
       else if (input === "a") openForm(true);
       else if (input === "P" && snapshot !== null) { const projects = [...new Set(snapshot.sessions.map((session) => session.projectLabel ?? session.projectId).filter((name): name is string => name !== null))].sort(); const index = projects.indexOf(projectFilter ?? ""); setProjectFilter(projects[index + 1] ?? null); setCursor((old) => ({ ...old, Sessions: 0 })); }
@@ -953,7 +1006,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen}
     offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
-  else if (overlay === "confirm") content = <Message color="red" text={`Confirm ${confirm ?? "action"} of ${sessionDetail?.name ?? sessionDetail?.id ?? "session"}? y/N. Removal may delete its worktree.`} />;
+  else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
   else if (overlay === "host") content = <Box flexDirection="column">
     <Section title="Host capabilities"><Text>{safeText(hostDetail === null ? "Unavailable" : `Daemon ${hostDetail.daemonVersion}; protocol ${hostDetail.protocolVersion}; agents ${hostDetail.supportedAgents.join(", ")}`)}</Text></Section>
@@ -980,9 +1033,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     </MouseZone>)}
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, ←/→ or 1–4 switches views.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab or Shift-Tab and 1–4 switch views.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
-  else if (view === "Sessions") content = <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
+  else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
+    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
+    <Box width={stdout.columns - listWidth} flexDirection="column">
+      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />}
+    </Box>
+  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
   else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
   else content = <ActivityView records={records} selected={cursor.Activity} scope={scope} limit={visibleRows} {...listInteraction} />;
 
@@ -1058,8 +1116,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     <ActionButton label="Cancel" onClick={() => { const returnTo = recovery.returnTo; setRecovery(null); setOverlay(returnTo); }} />
   </Box>;
   else if (overlay === "confirm") toolbar = <Box gap={1}>
-    <ActionButton label={`Confirm ${confirm ?? "action"}`} onClick={() => { if (confirm !== null && sessionDetail !== null) void runSessionAction({ kind: confirm, host: sessionDetail.host, sessionId: sessionDetail.id }); setConfirm(null); setOverlay("session"); }} primary />
-    <ActionButton label="Cancel" onClick={() => { setConfirm(null); setOverlay("session"); }} />
+    <ActionButton label={`Confirm ${confirm ?? "action"}`} onClick={() => { const target = confirmSession; const kind = confirm; const returnTo = confirmReturn; setConfirm(null); setConfirmSession(null); setOverlay(returnTo); if (kind !== null && target !== null) void runSessionAction({ kind, host: target.host, sessionId: target.id }, target); }} primary />
+    <ActionButton label="Cancel" onClick={() => { const returnTo = confirmReturn; setConfirm(null); setConfirmSession(null); setOverlay(returnTo); }} />
   </Box>;
   else if (overlay !== "form" && overlay !== "assistant") toolbar = <Box gap={1}>
     {(overlay === "rename" || overlay === "metadata") && sessionDetail !== null && <ActionButton label="Save" onClick={() => {
@@ -1073,8 +1131,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {...(options.mode === "main" ? { tabs: VIEWS, activeTab: VIEWS.indexOf(view), onTab: (index: number) => { setOverlay("none"); setView(VIEWS[index] ?? "Work"); } } : {})}
     subtitle={subtitle} footer={footer} status={status ?? work?.warning ?? null}>
     {content}
+    {overlay === "confirm" && confirmReturn === "none" && <Message color="red" text={confirmText(confirm, confirmSession)} />}
     {toolbar}
   </ScreenFrame>;
+}
+
+/** The confirmation line for a stop or a remove; a remove names the worktree it may delete. */
+function confirmText(kind: ConfirmAction | null, session: ControlSession | null): string {
+  const name = session === null ? "session" : session.name ?? session.id;
+  return kind === "remove" ? `Confirm remove of ${name}? y/N. Removal may delete its worktree.` : `Confirm ${kind ?? "action"} of ${name}? y/N`;
 }
 
 export async function runInkTui(options: InkTuiOptions): Promise<number> {
