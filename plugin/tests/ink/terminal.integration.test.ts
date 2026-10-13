@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { startEmptySdkStandIn, startSdkStandIn } from "../helpers/sdk-stand-in.ts";
+import { startSdkStandIn } from "../helpers/sdk-stand-in.ts";
+import { daemonLocalSocket, DAEMON_STOP_HOOK_TIMEOUT_MS, startCoreDaemon } from "../helpers/core-daemon.ts";
+import { REAL_SCENARIO_TIMEOUT_MS } from "./support/scenario.ts";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -457,11 +459,11 @@ async function runPty(mode: "main" | "new-session", key: string): Promise<{ exit
   return JSON.parse(stdout) as { exit: number; sent: boolean; alternate: boolean; restored: boolean; screen: boolean };
 }
 
-/** Stand-ins started by a scenario; stopped after it, also when the scenario fails. */
+/** Stand-ins and daemons started by a scenario; stopped after it, also when the scenario fails. */
 const stopLater: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const stop of stopLater.splice(0)) await stop();
-});
+}, DAEMON_STOP_HOOK_TIMEOUT_MS);
 
 test("the Ink process enters and restores the terminal when the owner quits", async () => {
   const result = await runPty("main", "q");
@@ -474,26 +476,26 @@ test("the standalone session form cancels before creating a session", async () =
 }, 20_000);
 
 test("click and horizontal arrows switch tabs and mouse tracking is restored on exit", async () => {
-  const emptyStandIn = await startEmptySdkStandIn();
-  stopLater.push(emptyStandIn.stop);
+  const daemon = await startCoreDaemon();
+  stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(emptyStandIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},sessionReconcileMs:300000,actionCaptureBytes:4194304,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
   expect(JSON.parse(stdout)).toEqual({ exit: 0, clicked: true, switched: true, right_switched: true, left_switched: true, mouse_off: true });
-}, 20_000);
+}, REAL_SCENARIO_TIMEOUT_MS);
 
 test("the standalone session form focuses a text field by click", async () => {
-  const emptyStandIn = await startEmptySdkStandIn();
-  stopLater.push(emptyStandIn.stop);
+  const daemon = await startCoreDaemon();
+  stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(emptyStandIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},sessionReconcileMs:300000,actionCaptureBytes:4194304,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_FORM_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
   expect(JSON.parse(stdout)).toEqual({ exit: 0, clicked: true, edited: true });
-}, 20_000);
+}, REAL_SCENARIO_TIMEOUT_MS);
 
 // The assistant option list and its launch are the release CLI's with a scripted host: the test host has no
 // assistant-capable agent installed, so `host inspect` and `assistant` are answered by this scenario's binary.
@@ -541,13 +543,15 @@ else process.exit(70);
 }, 30_000);
 
 test("a Work item shows its plan before an explicit action is run", async () => {
-  const emptyStandIn = await startEmptySdkStandIn();
-  stopLater.push(emptyStandIn.stop);
+  const daemon = await startCoreDaemon();
+  stopLater.push(() => daemon.stop());
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-work-"));
   try {
     const binary = join(directory, "pohunek-work");
-    const core = join(directory, "pohunek");
+    const core = join(daemon.coreDir, "pohunek");
     const trace = join(directory, "trace.jsonl");
+    // The work sources (GitHub, Linear) are not part of the daemon, so the work list is answered by this
+    // scenario's binary; the core CLI and the local socket are the real daemon's.
     await writeFile(binary, `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -559,18 +563,8 @@ else if (args[0] === "do") { envelope(1, {err:{class:"action",code:"confirmation
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
-    await writeFile(core, `#!/usr/bin/env bun
-const args = process.argv.slice(2);
-const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
-if (args[0] === "host" && args[1] === "discover") ok([]);
-else if (args[2] === "session" && args[3] === "list") ok([]);
-else if (args[2] === "project" && args[3] === "list") ok([]);
-else if (args[2] === "notifications" && args[3] === "list") ok({notifications:[],next_cursor:null});
-else process.exit(70);
-`);
-    await chmod(core, 0o700);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(emptyStandIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},sessionReconcileMs:300000,actionCaptureBytes:4194304,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_WORK_RESULT_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -580,11 +574,12 @@ else process.exit(70);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-}, 20_000);
+}, REAL_SCENARIO_TIMEOUT_MS);
 
-// Shell sessions cannot be lost with resume capability or report a native conversation, and the release CLI
-// cannot make an agent report one. The lost runtime, its resume capability and the native target come from
-// the stand-in relaying this scenario's binary; actions are recorded by the same binary.
+// The lost runtime, the resume capability and the native target come from the stand-in relaying this scenario's
+// binary, because the daemon offers resume only for a profile on an agent base (a `[resume]` table on a shell
+// base is rejected by the daemon, per the core agent-profiles concept), and such a base needs its CLI installed
+// with hooks that report the native conversation, which CI does not have. Actions are recorded by the same binary.
 test("a lost session offers recovery and removal without offering direct attachment", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-lost-"));
   try {

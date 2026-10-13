@@ -91,8 +91,9 @@ print(json.dumps({"exit": child.returncode, "step": step, "shown": shown, "targe
                   "cancel_resumed": cancel_resumed, "confirmed_resumed": confirmed_resumed}))
 `;
 
-// Shell sessions cannot resume and the release CLI cannot make an agent report a native conversation, so the
-// native target and the resume capability come from the stand-in relaying this scenario's binary.
+// The native target and the resume capability come from the stand-in relaying this scenario's binary. A
+// `[resume]` table on a shell base is rejected by the daemon, and an agent base needs its CLI installed with hooks
+// that report the native conversation; CI has neither, so the daemon cannot produce this state there.
 test("a resume waits for the owner to confirm the verified native target", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-recovery-"));
   try {

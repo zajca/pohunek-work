@@ -9,6 +9,7 @@ import { closeSync, openSync } from "node:fs";
 import { access, chmod, constants, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveDaemonSocket } from "@pohunek/sdk";
 import { CORE_BINARIES, CORE_DIR_ENV } from "../../scripts/core-binaries.ts";
 import { exec, type ExecResult } from "../../src/util/exec.ts";
 
@@ -347,6 +348,14 @@ export async function installAgentProfile(daemon: CoreDaemon, name: string, scri
   const agents = join(daemon.root, "config", "pohunek", "agents");
   await mkdir(agents, { recursive: true, mode: 0o700 });
   await writeFile(join(agents, `${name}.toml`), `base = "shell"\nprogram = ${JSON.stringify(program)}\nargs = []\n`, { mode: 0o600 });
+}
+
+/**
+ * The local socket of `daemon` as the plugin resolves it: the SDK route for this user and the daemon's
+ * client environment, so a test passes the socket the TUI would connect to.
+ */
+export function daemonLocalSocket(daemon: CoreDaemon): string {
+  return resolveDaemonSocket({ platform: process.platform === "darwin" ? "macos" : "linux", effectiveUid: process.getuid?.() ?? 0 }, daemon.clientEnv);
 }
 
 /** pgrep exit status when no process matched. */

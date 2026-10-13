@@ -1,9 +1,9 @@
-// A daemon stand-in at the socket boundary for scenarios whose sessions or notifications the real
-// release cannot produce (a resumable agent with a native conversation, notifications from agent
-// reports, a lost runtime with resume). The TUI reads sessions and notifications through the SDK
-// from this socket. The stand-in answers each read by running the scenario's own CLI relay with the
-// same arguments the CLI would take, so the data the scenario defines is what the TUI shows. Every
-// other method is refused.
+// Process-boundary stand-in for the daemon socket, for the scenarios whose condition the pinned release
+// cannot produce in CI: a session with a native conversation that resumes (a resumable agent needs an
+// installed agent CLI with its hooks, which CI does not have). Each read or mutation the TUI sends to the
+// socket runs the scenario's own binary with the CLI's arguments and returns that envelope's payload.
+// Limits: health, session list, notification list, session stop, remove, resume and inspect are answered;
+// `subscribe` is acknowledged and pushes no events; every other method is refused with `stand_in_refused`.
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,29 +100,6 @@ export async function startSdkStandIn(relay: string): Promise<SdkStandIn> {
     stop: async () => {
       child.kill();
       await child.exited;
-      await rm(directory, { recursive: true, force: true });
-    },
-  };
-}
-
-/**
- * A stand-in whose reads are empty: the scenario has no sessions or notifications, and the TUI
- * still needs a daemon socket to read them from.
- */
-export async function startEmptySdkStandIn(): Promise<SdkStandIn> {
-  const directory = await mkdtemp(join(tmpdir(), "pw-empty-relay-"));
-  const relay = join(directory, "relay");
-  await writeFile(relay, `#!${process.execPath}
-const args = process.argv.slice(2);
-const ok = args.includes("notifications") ? { notifications: [], next_cursor: null } : [];
-process.stdout.write(JSON.stringify({ cli_version: "0.34.2", protocol: { minimum: 4, maximum: 4 }, ok }) + "\\n");
-`);
-  await chmod(relay, 0o700);
-  const stand = await startSdkStandIn(relay);
-  return {
-    socket: stand.socket,
-    stop: async () => {
-      await stand.stop();
       await rm(directory, { recursive: true, force: true });
     },
   };

@@ -3,10 +3,9 @@
 // only synthetic condition is a delayed CLI reply, supplied by the CLI proxy, in the one scenario
 // that is about that delay.
 import { afterEach, expect, test } from "bun:test";
-import { createShellSession, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
+import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { keys, type PtyStep } from "./support/pty.ts";
 
-const SCENARIO_TIMEOUT_MS = 120_000;
 const NOTIFICATION_WAIT_MS = 20_000;
 const POLL_MS = 100;
 let scenario: TuiScenario | null = null;
@@ -57,7 +56,7 @@ test("clicking a real notification keeps its message visible until Open session 
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   const calls = await scenario.proxy.calls();
   expect(calls.filter((call) => call.includes("inspect")).length).toBeGreaterThan(0);
-}, SCENARIO_TIMEOUT_MS);
+}, REAL_SCENARIO_TIMEOUT_MS);
 
 test("a wheel and a row click select the session the owner picks, which then attaches", async () => {
   scenario = await startTuiScenario({ rules: [{ match: ["attach"], replaceWith: [Bun.which("sleep") ?? "/bin/sleep", "1"] }] });
@@ -79,7 +78,7 @@ test("a wheel and a row click select the session the owner picks, which then att
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   const attached = (await scenario.proxy.calls()).filter((call) => call.includes("attach")).map((call) => call.at(-1));
   expect(attached).toEqual([ids[1]]);
-}, SCENARIO_TIMEOUT_MS);
+}, REAL_SCENARIO_TIMEOUT_MS);
 
 test("an older notification read response cannot replace the newer detail the owner opened", async () => {
   scenario = await startTuiScenario({ rules: [] });
@@ -111,4 +110,4 @@ test("an older notification read response cannot replace the newer detail the ow
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   // The late answer for the newest notification must not be the last detail shown.
   expect(result.output.lastIndexOf(older.body)).toBeGreaterThan(result.output.lastIndexOf(newest.body));
-}, SCENARIO_TIMEOUT_MS);
+}, REAL_SCENARIO_TIMEOUT_MS);

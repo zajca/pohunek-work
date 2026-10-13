@@ -47,3 +47,40 @@ test("a submission during a host switch waits for that host's options and create
   const creations = (await scenario.proxy.calls()).filter((call) => call.includes("session") && call.includes("new"));
   expect(creations.map((call) => call.includes(ROUTE)), result.output.slice(-900)).toEqual([true]);
 }, SCENARIO_TIMEOUT_MS);
+
+// Regression: switching the launch form to another host must clear the branch fields typed for the previous host,
+// so a submission on the new host carries no argument from the old one.
+test("switching hosts clears branch fields typed for the previous host", async () => {
+  scenario = await startTuiScenario({
+    rules: [
+      { match: ["host", "list"], appendOk: [{ name: PEER, fqdn: "delayed.netbird.example", address: "100.64.0.9", port: 18722, overlay: "netbird", peer_id: PEER, classification: "reachable_daemon", daemon_version: "0.34.2" }] },
+      { match: [ROUTE], delayMs: 4000 },
+      { match: [], aliasPrefix: { from: "netbird:", to: "local" } },
+    ],
+  });
+  const tabs = (count: number): PtyStep[] => Array.from({ length: count }, (): PtyStep => ({ send: "09", settle: 100 }));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "No sessions" },
+    keys("n"),
+    { expect: "NEW SESSION" },
+    { pause: 1500 },
+    ...tabs(5),
+    keys("stale-branch"),
+    ...tabs(1),
+    keys("stale-base"),
+    ...tabs(2),
+    { expect: "Hosts: Local" },
+    keys(RIGHT),
+    { pause: 12000 },
+    ...tabs(8),
+    keys("\r"),
+    { pause: 2000 },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+  const creations = (await scenario.proxy.calls()).filter((call) => call.includes("session") && call.includes("new"));
+  expect(creations.map((call) => call.includes(ROUTE)), result.output.slice(-900)).toEqual([true]);
+  expect(creations.some((call) => call.some((arg) => arg.includes("stale-"))), result.output.slice(-900)).toBe(false);
+}, SCENARIO_TIMEOUT_MS);
