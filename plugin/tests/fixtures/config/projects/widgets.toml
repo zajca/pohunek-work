@@ -2,6 +2,7 @@
 pohunek_label = "widgets"
 repo = "acme/widgets"
 reviews = "session"
+review_bot = "review-bot"
 issue_source = "linear"
 linear_team = "ABC"
 branch_pattern = "^alice/(?P<key>ABC-[0-9]+)/"

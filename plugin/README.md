@@ -30,6 +30,14 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
+Each project file also sets the required key `review_bot`: the GitHub login of the
+review bot (letters, digits and hyphens, for example `copilot-pull-request-reviewer`)
+or `none`. After `do <key> rebase` force-pushes a new head, the rebase session asks
+that bot to review the head again through the GraphQL mutation `requestReviewsByLogin`
+and checks the request in `reviewRequests`, because REST `requested_reviewers` lists
+users only; the session's summary says whether the request was confirmed. With `none`
+the prompt asks for no review. A value that is neither stops every command with the key named.
+
 A project file may set the optional table `[teardown]` with the required keys `argv`
 (an array whose first element is an absolute program path; no shell, no placeholders) and
 `timeout_ms` (positive integer). `do <key> cleanup` runs that command in the session worktree

@@ -286,6 +286,8 @@ interface WorktreeSpec {
   readonly precondition: (row: CollectedRow, pr: PullRequest) => void;
   /** Provider fields for the prompt's data block besides id and title. */
   readonly fields: (row: CollectedRow, pr: PullRequest) => Readonly<Record<string, string>>;
+  /** Template variables that depend on the project or the pull request, for placeholders beyond the common ones. */
+  readonly variables?: (row: CollectedRow, pr: PullRequest) => Promise<Readonly<Record<string, string>>>;
 }
 
 const WORKTREE_SPECS: Readonly<Record<Exclude<LaunchAction, "implement" | "review">, WorktreeSpec>> = {
@@ -322,8 +324,16 @@ const WORKTREE_SPECS: Readonly<Record<Exclude<LaunchAction, "implement" | "revie
       }
     },
     fields: (_row, pr) => ({ base_branch: pr.baseRefName }),
+    variables: async (row, pr) => ({ review_request: await reviewRequestSection(row.project.reviewBot, pr) }),
   },
 };
+
+/** The review bot's re-request after a force-push, or nothing when the project has no review bot. */
+async function reviewRequestSection(reviewBot: string | null, pr: PullRequest): Promise<string> {
+  if (reviewBot === null) return "";
+  const section = renderTemplate(await readTemplate("work-rebase-review"), { pr_url: pr.url, review_bot: reviewBot });
+  return `${section}\n`;
+}
 
 function rowScope(options: PlanOptions): RowScope {
   return { project: options.project, includeIgnored: options.includeIgnored };
@@ -411,6 +421,7 @@ async function planInWorktree(
     pr_url: pr.url,
     head_check: headCheck,
     pr_block: dataBlock("github", { id: pr.id, title: pr.title, ...spec.fields(row, pr) }),
+    ...(spec.variables === undefined ? {} : await spec.variables(row, pr)),
   });
   const placement = cwd === null
     ? ["--project", row.project.pohunekLabel, "--branch", pr.headRefName, "--base-branch", pr.headRefName]
