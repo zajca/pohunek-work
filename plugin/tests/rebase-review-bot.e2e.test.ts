@@ -63,7 +63,7 @@ test("rebase asks the project's review bot for the new head and verifies the req
 
   expect(github?.unexpectedOperations).toEqual([]);
   expect(prompt).toContain("## Review bot");
-  expect(prompt).toContain(`botLogins: ["${BOT_LOGIN}"]`);
+  expect(prompt).toContain(`botLogins: ["${BOT_LOGIN}[bot]"]`);
   expect(prompt).toContain(`reviewRequests`);
   expect(prompt).toContain(`Verify the request`);
   // The request follows the push, so a failed push never asks the bot.
