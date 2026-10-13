@@ -106,7 +106,9 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   highlighted session after an inline confirmation that names it (a remove names
   its worktree too), `l` opens its work link, `u` its folder, `g` its branch on GitHub (from the project's GitHub
   origin; the status says so when there is none), `b` copies the branch and `c` the path. Session actions through the SDK are stop, remove, resume,
-  rename and metadata; fork still runs through the CLI. Resume, fork and
+  rename, metadata and fork; notifications are read, acknowledged and archived
+  through the SDK too. Fork and resume ask for confirmation after the session is
+  inspected again. Resume, fork and
   attach to a stopped session first show the native conversation the core will
   recover (ID or path, last native activity, or Unknown) and wait for `y`; an
   ambiguous reference is refused before the confirmation and a core refusal is

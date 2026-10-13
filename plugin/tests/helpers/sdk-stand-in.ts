@@ -2,7 +2,7 @@
 // cannot produce in CI: a session with a native conversation that resumes (a resumable agent needs an
 // installed agent CLI with its hooks, which CI does not have). Each read or mutation the TUI sends to the
 // socket runs the scenario's own binary with the CLI's arguments and returns that envelope's payload.
-// Limits: health, session list, notification list, session stop, remove, resume and inspect are answered;
+// Limits: health, session list, notification list, notification update, session stop, remove, resume, fork and inspect are answered;
 // `subscribe` is acknowledged and pushes no events; every other method is refused with `stand_in_refused`.
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -31,6 +31,12 @@ function outcome(envelope) {
 // Session mutations take the CLI's argv: the relay is the scenario's CLI, which records them.
 function mutationArgs(request) {
   const params = request.params;
+  if (request.method === "notification.update") {
+    const verbs = { read: "read", acknowledged: "ack", archived: "archive" };
+    const verb = verbs[params.status];
+    return verb === undefined ? null : ["--host", "local", "notifications", verb, params.id, "--json"];
+  }
+  if (request.method === "session.fork") return ["--host", "local", "session", "fork", params.session_id, "--json"];
   const id = typeof params === "string" ? params : params && params.session_id;
   if (request.method === "session.stop") return ["--host", "local", "session", "stop", id, "--json"];
   if (request.method === "session.remove") return ["--host", "local", "session", "rm", id, "--json"];

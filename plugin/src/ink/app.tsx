@@ -639,7 +639,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [busy, control, snapshot, stale]);
 
   const confirmRecovery = useCallback((request: RecoveryRequest): void => {
-    void runSessionAction({ kind: request.kind, host: request.session.host, sessionId: request.session.id }, request.session, request.session);
+    // A fork opens its terminal at the size of this one, so the forked session starts with the owner's dimensions.
+    const action: ControlAction = request.kind === "fork"
+      ? { kind: "fork", host: request.session.host, sessionId: request.session.id, cols: stdout.columns, rows: stdout.rows }
+      : { kind: "resume", host: request.session.host, sessionId: request.session.id };
+    void runSessionAction(action, request.session, request.session);
   }, [runSessionAction]);
 
   const openSelected = useCallback(async (): Promise<void> => {

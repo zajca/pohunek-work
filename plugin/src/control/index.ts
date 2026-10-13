@@ -222,7 +222,8 @@ export function createControlClient(options: ControlClientOptions): ControlClien
 
   /** Session mutations go through the SDK of the pinned release; a live session is stopped before it is removed, as the CLI does. */
   async function sdkAct(action: ControlAction): Promise<ControlResult<ControlActionOutcome> | null> {
-    if (!("sessionId" in action) || action.kind === "fork") return null;
+    if ("notificationId" in action) return notificationAct(action);
+    if (!("sessionId" in action)) return null;
     const host = action.host;
     const link = linkFor(host);
     const sessionId = action.sessionId;
@@ -259,6 +260,13 @@ export function createControlClient(options: ControlClientOptions): ControlClien
           worktreesRemoved: count(payload, "worktrees_removed", "$"), worktreesFailed: count(payload, "worktrees_failed", "$") } };
       }
       case "resume": return sessionReply(await link.request("session.resume", sessionId), "resume");
+      case "fork": {
+        // The fork reply is the forked session itself, not an envelope around it.
+        const forked = await link.request("session.fork", {
+          session_id: sessionId, cwd_mode: "same", cols: action.cols, rows: action.rows, ...(action.name === undefined ? {} : { name: action.name }),
+        });
+        return forked.ok ? { ok: true, data: { kind: "fork", session: session(forked.data, "$", host) } } : forked;
+      }
       case "rename": return sessionReply(await link.request("session.rename", action.name === null ? { session_id: sessionId } : { session_id: sessionId, name: action.name }), "rename");
       case "metadata": {
         const set = Object.entries(action.set ?? {});
@@ -274,6 +282,16 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     }
   }
 
+  /** Notification reads and acknowledgements go through the SDK's update method, one notification per call. */
+  async function notificationAct(action: Extract<ControlAction, { readonly notificationId: string }>): Promise<ControlResult<ControlActionOutcome>> {
+    const status = { read: "read", ack: "acknowledged", archive: "archived" } as const;
+    const link = linkFor(action.host);
+    const result = await link.request("notification.update", { id: action.notificationId, status: status[action.kind] });
+    if (!result.ok) return result;
+    const record = object(result.data, "$")["record"];
+    return { ok: true, data: { kind: action.kind, notification: notification(record, "$.record", action.host) } };
+  }
+
   async function act(action: ControlAction): Promise<ControlResult<ControlActionOutcome>> {
     const host = action.host;
     if (host.startsWith("undialable:")) { return failure("unavailable", "the selected host has no dialable identity"); }
@@ -282,11 +300,6 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     const viaSdk = await sdkAct(action);
     if (viaSdk !== null) return viaSdk;
     switch (action.kind) {
-      case "fork": return read(onHost(host, ["session", "fork", action.sessionId,
-        ...(action.name === undefined ? [] : [`--name=${action.name}`])]), raw =>
-        ({ kind: "fork", session: session(raw, "$.ok", host) }));
-      case "read": case "ack": case "archive": return read(onHost(host, ["notifications", action.kind, action.notificationId]), raw =>
-        ({ kind: action.kind, notification: notification(object(raw, "$.ok")["record"], "$.ok.record", host) }));
       default: return failure("command_failed", `${action.kind} is handled over the SDK`);
     }
   }

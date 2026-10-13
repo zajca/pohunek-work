@@ -71,16 +71,27 @@ describe("control CLI process boundary", () => {
     expect((await client.inspectGovernance("local")).ok).toBe(true);
   });
 
-  test("executes notification mutations through the CLI without cleanup acceptance", async () => {
+  test("executes notification mutations through the daemon socket without cleanup acceptance", async () => {
     const rules: Rule[] = [
       ...(["read", "ack", "archive"] as const).map(kind => ({ args: ["--host", "local", "notifications", kind, "n1", "--json"], ok: { record: notification } })),
     ];
     const stub = await cli(rules);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: null });
+    standIn = await startSdkStandIn(stub.binary);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
     for (const kind of ["read", "ack", "archive"] as const) {
       expect((await client.act({ kind, host: "local", notificationId: "n1" })).ok).toBe(true);
     }
     expect((await stub.calls()).flat().includes("--accept-unconfirmed-cleanup")).toBe(false);
+  });
+
+  test("forks a session through the daemon socket and returns the forked session", async () => {
+    const forked = { ...session, id: "s2", name: "Fork" };
+    const stub = await cli([{ args: ["--host", "local", "session", "fork", "s1", "--json"], ok: forked }]);
+    standIn = await startSdkStandIn(stub.binary);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
+    const result = await client.act({ kind: "fork", host: "local", sessionId: "s1", cols: 100, rows: 30 });
+    expect(result.ok ? result.data.kind : null).toBe("fork");
+    expect(result.ok && result.data.kind === "fork" ? result.data.session.id : null).toBe("s2");
   });
 
   test("classifies CLI errors, protocol mismatch and malformed payloads", async () => {
