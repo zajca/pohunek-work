@@ -355,6 +355,8 @@ function parseTui(root: Table, file: string): TuiConfig {
       "detail_min_width",
       "session_reconcile_secs",
       "action_capture_bytes",
+      "output_wait_ms",
+      "output_max_bytes",
     ],
     file,
     path,
@@ -378,6 +380,8 @@ function parseTui(root: Table, file: string): TuiConfig {
     detailMinWidth: readPositiveInt(table, "detail_min_width", file, path),
     sessionReconcileSecs: readTimerValue(table, "session_reconcile_secs", MS_PER_SECOND, file, path),
     actionCaptureBytes: readPositiveInt(table, "action_capture_bytes", file, path),
+    outputWaitMs: readTimerValue(table, "output_wait_ms", 1, file, path),
+    outputMaxBytes: readPositiveInt(table, "output_max_bytes", file, path),
   };
 }
 

@@ -203,7 +203,7 @@ export function sessionDetailLines(session: ControlSession, screen: ControlScree
     { text: `SUBAGENTS  ${session.subagents.length} (${String(running)} running)`, heading: true },
     ...subagentRows(session.subagents).map(({ agent, depth }) => ({ text: `${"  ".repeat(depth)}${agent.provider} ${agent.agentType ?? "agent"} ${agent.lifecycle} ${agent.activity ?? ""}` })),
     { text: "OUTPUT", heading: true },
-    ...(screen === null ? [{ text: "  p loads the terminal screen" }] : screen.visibleLines.map((line) => ({ text: line }))),
+    ...(screen === null ? [{ text: "  no output yet; p restarts the read" }] : screen.visibleLines.map((line) => ({ text: line }))),
   ];
 }
 

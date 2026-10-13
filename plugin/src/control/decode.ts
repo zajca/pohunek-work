@@ -1,6 +1,6 @@
 import type {
   ControlGovernance, ControlHost, ControlHostCapabilities, ControlNotification, ControlProject, ControlProjectDetail,
-  ControlNativeTarget, ControlScreen, ControlSession,
+  ControlNativeTarget, ControlOutput, ControlScreen, ControlSession,
 } from "./types.ts";
 
 export class InvalidControlResponse extends Error {}
@@ -200,4 +200,18 @@ export function screen(raw: unknown, path: string): ControlScreen {
   const obj = object(raw, path);
   return { sessionId: string(obj, "session_id", path), title: nullableString(obj, "title", path),
     progress: nullableString(obj, "progress", path), visibleLines: stringArray(obj["visible_lines"], `${path}.visible_lines`) };
+}
+export function sessionOutput(raw: unknown, path: string): ControlOutput {
+  const obj = object(raw, path);
+  const encoded = string(obj, "data_base64", path);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) invalid(`${path}.data_base64`, "standard base64");
+  return {
+    sessionId: string(obj, "session_id", path),
+    bytes: new Uint8Array(Buffer.from(encoded, "base64")),
+    nextOffset: string(obj, "next_offset", path),
+    runtimeEndOffset: string(obj, "runtime_end_offset", path),
+    gap: obj["gap"] !== undefined && obj["gap"] !== null,
+    hasMore: boolean(obj, "has_more", path),
+    timedOut: boolean(obj, "timed_out", path),
+  };
 }

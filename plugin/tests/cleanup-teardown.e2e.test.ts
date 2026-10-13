@@ -201,6 +201,8 @@ stderr_max_lines = 10
 detail_min_width = 120
 session_reconcile_secs = 300
 action_capture_bytes = 4194304
+output_wait_ms = 1000
+output_max_bytes = 65536
 `;
 
 const PROJECT_CONFIG = `

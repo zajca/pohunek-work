@@ -132,6 +132,10 @@ export interface TuiConfig {
   readonly sessionReconcileSecs: number;
   /** Output limit of a captured action child, in bytes. */
   readonly actionCaptureBytes: number;
+  /** Longest wait of one live output read at the end of a session's output, in milliseconds. */
+  readonly outputWaitMs: number;
+  /** Bytes of a session's retained output requested per live read. */
+  readonly outputMaxBytes: number;
 }
 
 

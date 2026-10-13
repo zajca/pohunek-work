@@ -3,14 +3,18 @@
 // event asks the client to read the link again. The link never reports a failed read as empty.
 import { ClientError, Client, nextRequestId, SUPPORTED_PROTOCOL_VERSIONS, type Subscription } from "@pohunek/sdk";
 import type { NotificationStatus } from "@pohunek/protocol";
-import { array, notification, object, session, InvalidControlResponse } from "./decode.ts";
-import type { ControlError, ControlNotification, ControlResult, ControlSession } from "./types.ts";
+import { array, notification, object, session, sessionOutput, InvalidControlResponse } from "./decode.ts";
+import type { ControlError, ControlNotification, ControlOutput, ControlOutputRequest, ControlResult, ControlSession } from "./types.ts";
 
 /** Notification statuses the overview shows; every one is read on each listing. */
 export const VISIBLE_NOTIFICATION_STATUSES: readonly NotificationStatus[] = ["unread", "read", "acknowledged", "archived"];
 
+/** A daemon call or connection that did not complete within its bound; the outcome of the call is unknown. */
+export class SdkTimeoutError extends Error {}
+
 /** A daemon refusal or a failed connection, as the control client reports it. */
 export function sdkFailure(error: unknown): ControlError {
+  if (error instanceof SdkTimeoutError) return { code: "timeout", message: error.message };
   if (error instanceof ClientError) return { code: "command_failed", message: error.message, cliCode: error.code, cliClass: error.errorClass };
   if (error instanceof InvalidControlResponse) return { code: "invalid_response", message: error.message };
   const message = error instanceof Error ? error.message : "daemon connection failed";
@@ -28,6 +32,7 @@ export class SdkLink {
     public readonly route: string,
     private readonly connect: () => Promise<Client>,
     private readonly onEvent: () => void,
+    private readonly timeoutMs: number,
   ) {}
 
   /** The connected client; connects, checks the daemon's health and starts the event stream on first use. */
@@ -96,15 +101,30 @@ export class SdkLink {
     await Promise.all([client?.close(), subscriptionClient?.close()].map(async (closing) => { await closing?.catch(() => undefined); }));
   }
 
-  /** Calls a daemon method; a failed connection is reset so the next call reconnects. */
-  public async call<T>(method: string, params: unknown): Promise<T> {
-    const client = await this.ready();
+  /**
+   * Calls a daemon method within `timeoutMs`; a timed-out or failed connection is reset so the next call reconnects.
+   * A timed-out call is not retried here, because its effect on the daemon is unknown.
+   */
+  public async call<T>(method: string, params: unknown, timeoutMs: number = this.timeoutMs): Promise<T> {
     try {
-      return await (client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params);
+      const client = await this.bounded(this.ready(), timeoutMs);
+      return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), timeoutMs);
     } catch (error) {
       if (error instanceof ClientError) throw error;
       await this.drop();
       throw error;
+    }
+  }
+
+  private async bounded<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { reject(new SdkTimeoutError(`no daemon response within ${String(timeoutMs)} ms`)); }, timeoutMs);
+    });
+    try {
+      return await Promise.race([work, expired]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -137,6 +157,22 @@ export class SdkLink {
         } while (cursor !== null);
       }
       return { ok: true, data: records };
+    } catch (error) {
+      return { ok: false, error: sdkFailure(error) };
+    }
+  }
+
+  /** One replay of retained output; without a cursor it returns the newest tail, and with one it waits up to `waitMs` at the end. */
+  public async output(sessionId: string, request: ControlOutputRequest): Promise<ControlResult<ControlOutput>> {
+    const params = {
+      session_id: sessionId,
+      max_bytes: request.maxBytes,
+      ...(request.after === null ? {} : { after_offset: request.after }),
+      ...(request.after === null ? {} : { wait_ms: request.waitMs }),
+    };
+    try {
+      // The daemon holds the reply for up to `waitMs` at the end of the output, so the bound includes that wait.
+      return { ok: true, data: sessionOutput(await this.call<unknown>("session.output", params, this.timeoutMs + request.waitMs), "$") };
     } catch (error) {
       return { ok: false, error: sdkFailure(error) };
     }

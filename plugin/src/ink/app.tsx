@@ -13,6 +13,7 @@ import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
+import { LiveOutput } from "./live-output.ts";
 import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workLinkOf, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
@@ -27,6 +28,8 @@ export interface InkTuiOptions {
   readonly refreshIntervalMs: number;
   readonly sessionReconcileMs: number;
   readonly actionCaptureBytes: number;
+  readonly outputWaitMs: number;
+  readonly outputMaxBytes: number;
   /** Columns from which the session detail is a panel beside the list. */
   readonly detailMinWidth: number;
   readonly localSocket: string | null;
@@ -213,7 +216,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [sessionDetail, setSessionDetail] = useState<ControlSession | null>(null);
   const [detailOffset, setDetailOffset] = useState(0);
   const [screen, setScreen] = useState<ControlScreen | null>(null);
-  const screenGeneration = useRef(0);
+  // The panel and the session overlay follow the newest output until the owner scrolls away from its end.
+  const [followOutput, setFollowOutput] = useState(true);
+  const [liveRound, setLiveRound] = useState(0);
   const [hostDetail, setHostDetail] = useState<ControlHostCapabilities | null>(null);
   const [governance, setGovernance] = useState<ControlGovernance | null>(null);
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
@@ -278,9 +283,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   // The side panel shows the highlighted session; its screen is kept only for that session.
   const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
   const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? []);
+  // Following the output keeps the end of the text in view; a scroll that reaches the end resumes following.
+  const panelOffset = followOutput ? panelMaxOffset : Math.min(detailOffset, panelMaxOffset);
   // The list takes half of a split terminal; the panel takes the rest. Each row keeps a margin of one column.
   const listWidth = split ? Math.floor(stdout.columns / 2) : stdout.columns;
   const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? []);
+  const overlayOffset = followOutput ? detailMaxOffset : Math.min(detailOffset, detailMaxOffset);
+  const scrollDetail = (next: number, max: number): void => {
+    const clamped = Math.max(0, Math.min(max, next));
+    setDetailOffset(clamped);
+    setFollowOutput(clamped >= max);
+  };
   const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
   const previewWidth = Math.max(20, stdout.columns - 4);
   const previewMaxOffset = workPreview === null ? 0 : workPreviewMaxOffset(workPreview, previewWidth, previewHeight);
@@ -290,26 +303,34 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const sessionAttachable = sessionMutable && (sessionActive || sessionDetail.canResume);
   const sessionRecoverable = sessionWritable && sessionDetail.canResume && (!sessionActive || sessionDetail.runtimeState === "lost");
 
-  useEffect(() => { setDetailOffset(0); }, [sessionKey]);
+  useEffect(() => { setDetailOffset(0); setFollowOutput(true); }, [sessionKey]);
 
+  // The session shown beside the list or in the overlay is read live; a read for a session the owner has left is dropped.
+  const liveSession = overlay === "session" ? sessionDetail : split && view === "Sessions" ? selectedSession : null;
+  const liveHost = liveSession?.host ?? null;
+  const liveId = liveSession?.id ?? null;
   useEffect(() => {
-    screenGeneration.current += 1;
     setScreen(null);
-  }, [sessionDetail?.host, sessionDetail?.id]);
-
-  const loadScreen = useCallback(async (): Promise<void> => {
-    if (sessionDetail === null) return;
-    const generation = screenGeneration.current;
-    try {
-      const result = await control.screen(sessionDetail.host, sessionDetail.id);
-      // A response for a session the owner has since left is not shown under another session.
-      if (generation !== screenGeneration.current) return;
-      if (result.ok) {
-        setScreen(result.data);
-        setDetailOffset(sessionDetailMaxOffset(sessionDetail, result.data, detailHeight, snapshot?.notifications ?? []));
-      } else setStatus(result.error.message);
-    } catch (error) { setStatus(defaultStatus(error)); }
-  }, [control, detailHeight, sessionDetail]);
+    if (liveHost === null || liveId === null) return;
+    let active = true;
+    const live = new LiveOutput(options.outputMaxBytes);
+    const read = async (): Promise<void> => {
+      let after: string | null = null;
+      for (;;) {
+        const result = await control.output(liveHost, liveId, { after, maxBytes: options.outputMaxBytes, waitMs: options.outputWaitMs });
+        if (!active) return;
+        if (!result.ok) { setStatus(`Live output stopped: ${result.error.message}; press p to retry`); return; }
+        after = result.data.nextOffset;
+        if (result.data.gap) live.markGap();
+        if (result.data.bytes.length === 0 && !result.data.gap) continue;
+        live.append(result.data.bytes);
+        setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: live.lines() });
+      }
+    };
+    read().catch((error: unknown) => { if (active) setStatus(`Live output stopped: ${defaultStatus(error)}; press p to retry`); });
+    return () => { active = false; };
+  }, [control, liveHost, liveId, liveRound, options.outputMaxBytes, options.outputWaitMs]);
+  const restartOutput = useCallback((): void => { setLiveRound((round) => round + 1); }, []);
 
   // Snapshots from the reconcile and from the daemon's event stream share one path.
   const applySnapshot = useCallback((next: ControlSnapshot): void => {
@@ -494,6 +515,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (!result.ok) { setStatus(result.error.message); return; }
       setSessionDetail(result.data);
       setDetailOffset(0);
+      setFollowOutput(true);
       setSessionKey(`${host}/${id}`);
       setView("Sessions");
       setScreen(null);
@@ -906,14 +928,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (overlay === "session") {
       if (key.escape) { setOverlay("none"); return; }
       if (sessionDetail === null) return;
-      if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + Math.max(1, detailHeight - 1))); return; }
-      if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - Math.max(1, detailHeight - 1))); return; }
+      if (key.pageDown || key.downArrow) { scrollDetail(overlayOffset + Math.max(1, detailHeight - 1), detailMaxOffset); return; }
+      if (key.pageUp || key.upArrow) { scrollDetail(overlayOffset - Math.max(1, detailHeight - 1), detailMaxOffset); return; }
       if (input === "o" && sessionAttachable) void openSelected();
       else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
       else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
       else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
-      else if (input === "p") void loadScreen();
+      else if (input === "p") restartOutput();
       else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
       else if (input === "u") void openFolder(sessionDetail);
       else if (input === "c") void copyValue(sessionDetail.branch ?? "");
@@ -962,7 +984,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "c" && selectedSession !== null) void copyValue(selectedSession.worktreePath ?? selectedSession.cwd);
       else if (input === "x" && selectedSession !== null) requestConfirm(selectedSession, "stop", "none");
       else if (input === "D" && selectedSession !== null) requestConfirm(selectedSession, "remove", "none");
-      else if (split && (key.pageDown || key.pageUp)) setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1))));
+      else if (split && (key.pageDown || key.pageUp)) scrollDetail(panelOffset + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1), panelMaxOffset);
       else if (input === "n") openForm(false);
       else if (input === "a") openForm(true);
       else if (input === "P" && snapshot !== null) { const projects = [...new Set(snapshot.sessions.map((session) => session.projectLabel ?? session.projectId).filter((name): name is string => name !== null))].sort(); const index = projects.indexOf(projectFilter ?? ""); setProjectFilter(projects[index + 1] ?? null); setCursor((old) => ({ ...old, Sessions: 0 })); }
@@ -1004,7 +1026,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []}
-    offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />;
+    offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
@@ -1038,7 +1060,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
-      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />}
+      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} offset={panelOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} />}
     </Box>
   </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
   else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
@@ -1099,7 +1121,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
     {sessionAttachable && <ActionButton label="Attach" onClick={() => void openSelected()} primary />}
     {sessionRecoverable && <ActionButton label="Resume" onClick={() => void requestRecovery("resume", sessionDetail, "session")} />}
-    <ActionButton label="Screen" onClick={() => void loadScreen()} />
+    <ActionButton label="Refresh output" onClick={restartOutput} />
     {sessionMutable && sessionDetail.canFork && <ActionButton label="Fork" onClick={() => void requestRecovery("fork", sessionDetail, "session")} />}
     {sessionMutable && <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay("rename"); }} />}
     {sessionMutable && <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />}

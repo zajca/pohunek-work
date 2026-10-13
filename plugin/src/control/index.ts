@@ -130,7 +130,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       }
       if (record.address === null || record.port === null) return Promise.reject(new Error(`host ${route} has no address`));
       return connectTcp(route, { host: record.address, port: record.port });
-    }, () => { scheduleRead(route); });
+    }, () => { scheduleRead(route); }, options.timeoutMs);
     links.set(route, link);
     return link;
   }
@@ -297,6 +297,12 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       const invalidTarget = bareIdError(id);
       return invalidTarget === null ? read(onHost(host, ["session", "screen", id]), raw => screen(raw, "$.ok"))
         : Promise.resolve({ ok: false, error: invalidTarget });
+    },
+    output: (host, id, request) => {
+      const invalidTarget = bareIdError(id);
+      if (invalidTarget !== null) return Promise.resolve({ ok: false, error: invalidTarget });
+      if (host.startsWith("undialable:")) return Promise.resolve(failure("unavailable", "the selected host has no dialable identity"));
+      return linkFor(host).output(id, request);
     },
     showProject: (host, reference) => read(onHost(host, ["project", "show", reference]), raw => projectDetail(raw, "$.ok", host)),
     act,

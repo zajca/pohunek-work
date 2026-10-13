@@ -21,8 +21,12 @@ async function runRelay(args) {
   const text = await new Response(child.stdout).text();
   await child.exited;
   const envelope = JSON.parse(text);
-  if (!("ok" in envelope)) throw new Error("relay returned an error envelope");
-  return envelope.ok;
+  if (!("ok" in envelope) && !("err" in envelope)) throw new Error("relay returned no envelope");
+  return envelope;
+}
+// The daemon's reply carries the relay's envelope as it is: a refusal stays a refusal with its code.
+function outcome(envelope) {
+  return "ok" in envelope ? { ok: envelope.ok } : { err: envelope.err };
 }
 // Session mutations take the CLI's argv: the relay is the scenario's CLI, which records them.
 function mutationArgs(request) {
@@ -38,15 +42,16 @@ async function answer(socket, request) {
   const reply = (body) => socket.write(JSON.stringify({ v: 4, id: request.id, ...body }) + "\\n");
   try {
     if (request.method === "daemon.health") return reply({ ok: { status: "ok", daemon_version: "0.34.2", protocol_version: 4 } });
-    if (request.method === "session.list") return reply({ ok: await runRelay(["--host", "local", "session", "list", "--json"]) });
+    if (request.method === "session.list") return reply(outcome(await runRelay(["--host", "local", "session", "list", "--json"])));
     if (request.method === "notification.list") {
       const status = request.params && request.params.status;
       const page = await runRelay(["--host", "local", "notifications", "list", "--limit", "100", ...(status ? ["--status", status] : []), "--json"]);
-      return reply({ ok: { notifications: page.notifications, next_cursor: null } });
+      if (!("ok" in page)) return reply({ err: page.err });
+      return reply({ ok: { notifications: page.ok.notifications, next_cursor: null } });
     }
     if (request.method === "subscribe") return reply({ ok: null });
     const mutation = mutationArgs(request);
-    if (mutation !== null) return reply({ ok: await runRelay(mutation) });
+    if (mutation !== null) return reply(outcome(await runRelay(mutation)));
     return reply({ err: { class: "unsupported", code: "stand_in_refused", msg: "the stand-in serves the scenario reads and mutations only: " + request.method, recover: "use the CLI" } });
   } catch (error) {
     return reply({ err: { class: "unavailable", code: "stand_in_relay_failed", msg: String(error), recover: "fix the scenario relay" } });

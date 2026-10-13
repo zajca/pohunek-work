@@ -3,6 +3,11 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createControlClient } from "../../src/control/index.ts";
+import { startSdkStandIn, type SdkStandIn } from "../helpers/sdk-stand-in.ts";
+
+// Session mutations go through the daemon socket, so these tests run the socket stand-in relaying the CLI stub.
+let standIn: SdkStandIn | null = null;
+afterEach(async () => { await standIn?.stop(); standIn = null; });
 
 interface Rule { readonly args: readonly string[]; readonly ok?: unknown; readonly err?: unknown; readonly stdout?: string; readonly exit?: number; readonly delayMs?: number }
 const tempDirs: string[] = [];
@@ -100,7 +105,8 @@ describe("control CLI process boundary", () => {
       { args: ["--host", "local", "session", "inspect", "unknown", "--json"], ok: { ...session, id: "unknown", native_session_id: null, native_session_path: null, native_last_activity_at: null } },
       { args: ["--host", "local", "session", "resume", "ambiguous", "--json"], err: { class: "invalid_state", code: "recovery_target_ambiguous", msg: "two native references" } },
     ]);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: null });
+    standIn = await startSdkStandIn(stub.binary);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: standIn.socket });
     const verified = await client.inspectSession("local", "verified");
     expect(verified.ok ? verified.data.nativeTarget : null).toEqual({ status: "verified", kind: "id", value: "native-1" });
     expect(verified.ok ? verified.data.nativeLastActivityAt : null).toBe("2026-10-09T09:00:00Z");
@@ -127,10 +133,15 @@ describe("control CLI process boundary", () => {
 
   test("does not retry a timed-out removal whose outcome is unknown", async () => {
     const args = ["--host", "local", "session", "rm", "s1", "--json"];
-    const stub = await cli([{ args, ok: { removed: true, stopped: true, worktrees_removed: 0, worktrees_failed: 0 }, delayMs: 200 }]);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 30, notificationsPageSize: 2, localSocket: null });
+    const inspect = ["--host", "local", "session", "inspect", "s1", "--json"];
+    const stub = await cli([
+      { args: inspect, ok: { ...session, state: "exited" } },
+      { args, ok: { removed: true, stopped: true, worktrees_removed: 0, worktrees_failed: 0 }, delayMs: 3_000 },
+    ]);
+    standIn = await startSdkStandIn(stub.binary);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, localSocket: standIn.socket });
     const result = await client.act({ kind: "remove", host: "local", sessionId: "s1" });
     expect(result.ok ? null : result.error.code).toBe("timeout");
-    expect(await stub.calls()).toEqual([args]);
+    expect((await stub.calls()).filter((call) => call.includes("rm"))).toEqual([args]);
   });
 });

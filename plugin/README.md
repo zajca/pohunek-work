@@ -244,7 +244,9 @@ hosts. Its TUI keys are all required, with no built-in fallbacks:
 `refresh_interval_secs` (Work list), `session_reconcile_secs` (session and
 notification reconcile), `detail_min_width` (columns from which the session detail
 sits beside the list; narrower terminals show it full screen) and
-`action_capture_bytes` (output limit of a captured action child). Layout sizes
+`action_capture_bytes` (output limit of a captured action child), `output_wait_ms`
+(longest wait of one live output read at the end of a session's output) and
+`output_max_bytes` (bytes of a session's output requested per live read). Layout sizes
 (compact and full tab rows, reserved rows, visible choices, scroll steps) are not
 configured: they derive from the rendered chrome and the terminal size. `clipboard_command` is optional and must be an absolute executable
 path; without it, the TUI displays branch and path text for manual selection.

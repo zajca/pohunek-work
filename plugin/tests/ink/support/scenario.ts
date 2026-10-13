@@ -1,5 +1,6 @@
 // Shared setup of the TUI scenarios: a real daemon, the plugin configuration pointed at it,
 // and the TUI process started from the sources with the daemon's environment.
+import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startCoreDaemon, writePluginConfig, type CoreDaemon, type PluginFixture } from "../../helpers/core-daemon.ts";
 import { startCliProxy, type CliProxy, type ProxyRule } from "./cli-proxy.ts";
@@ -31,7 +32,7 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
     proxy = await startCliProxy(join(daemon.coreDir, "pohunek"), options.rules ?? []);
     const started = proxy;
     const fixture = await writePluginConfig(daemon, [{ label: PROJECT, repo: "acme/widgets" }], {
-      overrides: { "pohunek.bin": started.binary, ...(options.overrides ?? {}) },
+      overrides: { "pohunek.bin": started.binary, "tui.self_bin": await workSourceStub(daemon.root), ...(options.overrides ?? {}) },
       ...(options.extraGlobal === undefined ? {} : { extraGlobal: options.extraGlobal }),
     });
     const env: Record<string, string> = { ...fixture.env, TERM: "xterm-256color", CI: "true" };
@@ -58,6 +59,22 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
     await daemon.stop();
     throw error;
   }
+}
+
+/**
+ * The work source of a scenario that does not test work items: GitHub and Linear are not part of the daemon,
+ * so `list --json` answers an empty work list and every other command is refused.
+ */
+async function workSourceStub(root: string): Promise<string> {
+  const path = join(root, "work-source");
+  await writeFile(path, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === "list" && args[1] === "--json") {
+  console.log(JSON.stringify({ cli_version: "0.5.0", protocol: { minimum: 4, maximum: 4 }, ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [], omitted_ignored: 0 } }));
+} else process.exit(70);
+`);
+  await chmod(path, 0o700);
+  return path;
 }
 
 /** Creates a running shell session through the release CLI and returns its id. */
