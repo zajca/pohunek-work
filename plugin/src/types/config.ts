@@ -126,8 +126,24 @@ export interface TuiConfig {
   readonly openUrlHosts: readonly string[];
   /** Child stderr lines kept for display. */
   readonly stderrMaxLines: number;
-  /** Columns below which the detail pane is shown full screen on Tab. */
+  /** Columns from which the session detail sits beside the list; narrower terminals show it full screen. */
   readonly detailMinWidth: number;
+  /** Interval of the full session and notification reconcile, in seconds. */
+  readonly sessionReconcileSecs: number;
+  readonly layout: TuiLayoutConfig;
+}
+
+/** Sizes of the TUI layout, all required in `[tui]` so no screen falls back to a literal. */
+export interface TuiLayoutConfig {
+  readonly compactColumns: number;
+  readonly fullTabsColumns: number;
+  readonly compactRows: number;
+  readonly listReservedRows: number;
+  readonly detailReservedRows: number;
+  readonly previewReservedRows: number;
+  readonly detailScrollStep: number;
+  readonly visibleChoices: number;
+  readonly actionCaptureBytes: number;
 }
 
 /** `pohunek-work manager start`: where the manager session runs and which agent it starts. */

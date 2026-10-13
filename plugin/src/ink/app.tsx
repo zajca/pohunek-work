@@ -11,7 +11,7 @@ import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
-import { layout } from "./config.ts";
+import { LayoutProvider, useLayout, type TuiLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
@@ -25,6 +25,8 @@ export interface InkTuiOptions {
   readonly launchKillMarginMs: number;
   readonly notificationsPageSize: number;
   readonly refreshIntervalMs: number;
+  readonly sessionReconcileMs: number;
+  readonly layout: TuiLayout;
   readonly initialView: "mine" | "all";
   readonly stalePrDays: number;
   readonly openUrlHosts: readonly string[];
@@ -129,6 +131,7 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
   readonly onCancel: () => void;
 }): ReactNode {
   const { stdout } = useStdout();
+  const layout = useLayout();
   const compact = stdout.rows < layout.compactRows || stdout.columns < layout.compactColumns;
   const hostChoices = options?.hosts.map((host) => host.label) ?? [];
   const projectChoices = options?.projects.filter((project) => `${project.id} ${project.label}`.toLowerCase().includes(form.search.toLowerCase())).map((project) => project.label) ?? [];
@@ -181,6 +184,7 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
 }
 
 function InkApplication({ options, setExitCode }: { readonly options: InkTuiOptions; readonly setExitCode: (code: number) => void }): ReactNode {
+  const layout = useLayout();
   const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
   const dispatchMouse = useMouseDispatch();
@@ -223,7 +227,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [actions, setActions] = useState<readonly ActionChoice[]>([]);
   const [created, setCreated] = useState<CreatedSession | null>(null);
   const [workChoice, setWorkChoice] = useState(0);
-  const refreshBusy = useRef(false);
+  const controlBusy = useRef(false);
+  const workBusy = useRef(false);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -294,15 +299,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } catch (error) { setStatus(defaultStatus(error)); }
   }, [control, detailHeight, sessionDetail]);
 
-  const refresh = useCallback(async (): Promise<void> => {
-    if (refreshBusy.current) return;
-    refreshBusy.current = true;
+  // Sessions and the work list refresh on their own intervals; a manual refresh runs both.
+  const refreshControl = useCallback(async (): Promise<void> => {
+    if (controlBusy.current) return;
+    controlBusy.current = true;
     try {
-      const [nextControl, nextWork] = await Promise.allSettled([
-        control.refresh(), options.mode === "main" ? loadWork(options.selfBin, options.listTimeoutMs) : Promise.resolve(null),
-      ]);
+      const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
       if (!alive.current) return;
-      if (nextControl.status === "fulfilled") {
+      if (nextControl.ok) {
         setSnapshot((previous) => retainUnavailable(previous, nextControl.value));
         try { options.onSnapshot?.(nextControl.value); }
         catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
@@ -312,26 +316,43 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         setStale(true);
         setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
       }
-      if (nextWork.status === "fulfilled" && nextWork.value !== null) {
+    } finally {
+      controlBusy.current = false;
+    }
+  }, [control, options.onSnapshot, options.log]);
+
+  const refreshWork = useCallback(async (): Promise<void> => {
+    if (options.mode !== "main" || workBusy.current) return;
+    workBusy.current = true;
+    try {
+      const nextWork = await loadWork(options.selfBin, options.listTimeoutMs).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
+      if (!alive.current) return;
+      if (nextWork.ok) {
         const latest = nextWork.value;
         setWork((previous) => latest.payload === null && previous?.payload !== null && previous !== null ?
           { ...previous, partial: true, warning: latest.warning ?? "Work refresh unavailable; showing last good rows" } : latest);
-      } else if (nextWork.status === "rejected") {
+      } else {
         const warning = `Work refresh failed: ${defaultStatus(nextWork.reason)}`;
         setWork((previous) => previous === null ? null : { ...previous, partial: true, warning });
         setStatus(warning);
       }
     } finally {
-      refreshBusy.current = false;
+      workBusy.current = false;
     }
-  }, [control, options.listTimeoutMs, options.mode, options.onSnapshot, options.selfBin]);
+  }, [options.listTimeoutMs, options.mode, options.selfBin]);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    await Promise.all([refreshControl(), refreshWork()]);
+  }, [refreshControl, refreshWork]);
 
   useEffect(() => {
     alive.current = true;
-    void refresh();
-    const timer = setInterval(() => { void refresh(); }, options.refreshIntervalMs);
-    return () => { alive.current = false; clearInterval(timer); };
-  }, [options.refreshIntervalMs, refresh]);
+    void refreshControl();
+    void refreshWork();
+    const controlTimer = setInterval(() => { void refreshControl(); }, options.sessionReconcileMs);
+    const workTimer = setInterval(() => { void refreshWork(); }, options.refreshIntervalMs);
+    return () => { alive.current = false; clearInterval(controlTimer); clearInterval(workTimer); };
+  }, [options.refreshIntervalMs, options.sessionReconcileMs, refreshControl, refreshWork]);
 
   const loadForm = useCallback(async (host: string, preferredProject: string | null = null, assistant = false): Promise<void> => {
     // The form targets the requested host at once; a response for an earlier request is dropped.
@@ -1049,7 +1070,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
 export async function runInkTui(options: InkTuiOptions): Promise<number> {
   let exitCode = 0;
-  const instance = render(<MouseProvider><InkApplication options={options} setExitCode={(code) => { exitCode = code; }} /></MouseProvider>, { alternateScreen: true, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const instance = render(<LayoutProvider value={options.layout}><MouseProvider><InkApplication options={options} setExitCode={(code) => { exitCode = code; }} /></MouseProvider></LayoutProvider>, { alternateScreen: true, interactive: true, exitOnCtrlC: false, patchConsole: false });
   try {
     await instance.waitUntilExit();
     return exitCode;

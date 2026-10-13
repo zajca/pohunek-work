@@ -111,7 +111,7 @@ else process.exit(70);
 `);
     await chmod(binary, 0o700);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"all",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open"});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"all",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_RECOVERY_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);

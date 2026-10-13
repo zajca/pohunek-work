@@ -1,7 +1,7 @@
 import { Box, Text, useStdout } from "ink";
 import type { ReactNode } from "react";
 import { MouseZone } from "./mouse.tsx";
-import { layout } from "./config.ts";
+import { useLayout } from "./layout.tsx";
 
 /** Keep terminal control bytes and bidi overrides out of text supplied by external systems. */
 export function safeText(value: string): string {
@@ -33,6 +33,7 @@ export interface ScreenFrameProps {
 
 export function ScreenFrame({ title, tabs, activeTab, onTab, subtitle, footer, status, children }: ScreenFrameProps): ReactNode {
   const { stdout } = useStdout();
+  const layout = useLayout();
   return (
     <Box flexDirection="column" width="100%" height={stdout.rows} paddingX={1}>
       <Box justifyContent="space-between">
