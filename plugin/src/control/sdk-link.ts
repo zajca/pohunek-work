@@ -9,8 +9,9 @@ import type { ControlError, ControlNotification, ControlResult, ControlSession }
 /** Notification statuses the overview shows; every one is read on each listing. */
 export const VISIBLE_NOTIFICATION_STATUSES: readonly NotificationStatus[] = ["unread", "read", "acknowledged", "archived"];
 
+/** A daemon refusal or a failed connection, as the control client reports it. */
 export function sdkFailure(error: unknown): ControlError {
-  if (error instanceof ClientError) return { code: "unavailable", message: error.message, cliCode: error.code };
+  if (error instanceof ClientError) return { code: "command_failed", message: error.message, cliCode: error.code, cliClass: error.errorClass };
   if (error instanceof InvalidControlResponse) return { code: "invalid_response", message: error.message };
   const message = error instanceof Error ? error.message : "daemon connection failed";
   return { code: "unavailable", message };
@@ -95,10 +96,11 @@ export class SdkLink {
     await Promise.all([client?.close(), subscriptionClient?.close()].map(async (closing) => { await closing?.catch(() => undefined); }));
   }
 
-  private async call<T>(method: "session.list" | "notification.list", params: unknown): Promise<T> {
+  /** Calls a daemon method; a failed connection is reset so the next call reconnects. */
+  public async call<T>(method: string, params: unknown): Promise<T> {
     const client = await this.ready();
     try {
-      return await (client.call as (m: string, p: unknown) => Promise<T>)(method, params);
+      return await (client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params);
     } catch (error) {
       if (error instanceof ClientError) throw error;
       await this.drop();
@@ -135,6 +137,15 @@ export class SdkLink {
         } while (cursor !== null);
       }
       return { ok: true, data: records };
+    } catch (error) {
+      return { ok: false, error: sdkFailure(error) };
+    }
+  }
+
+  /** Runs a method and maps the reply or the failure to the control client's result. */
+  public async request(method: string, params: unknown): Promise<ControlResult<unknown>> {
+    try {
+      return { ok: true, data: await this.call<unknown>(method, params) };
     } catch (error) {
       return { ok: false, error: sdkFailure(error) };
     }

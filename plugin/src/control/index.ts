@@ -201,44 +201,74 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     return assemble();
   }
 
+  /** Session mutations go through the SDK of the pinned release; a live session is stopped before it is removed, as the CLI does. */
+  async function sdkAct(action: ControlAction): Promise<ControlResult<ControlActionOutcome> | null> {
+    if (!("sessionId" in action) || action.kind === "fork") return null;
+    const host = action.host;
+    const link = linkFor(host);
+    const sessionId = action.sessionId;
+    const stopped = async (): Promise<ControlResult<boolean>> => {
+      const result = await link.request("session.stop", sessionId);
+      if (!result.ok) return result;
+      return { ok: true, data: boolean(object(result.data, "$"), "stopped", "$") };
+    };
+    const sessionReply = (result: ControlResult<unknown>, kind: "resume" | "rename" | "metadata"): ControlResult<ControlActionOutcome> => {
+      if (!result.ok) return result;
+      const payload = object(result.data, "$");
+      return { ok: true, data: { kind, session: session(payload["session"], "$.session", host) } as ControlActionOutcome };
+    };
+    switch (action.kind) {
+      case "stop": {
+        const result = await stopped();
+        return result.ok ? { ok: true, data: { kind: "stop", stopped: result.data } } : result;
+      }
+      case "remove": {
+        const inspected = await link.request("session.inspect", sessionId);
+        if (!inspected.ok) return inspected;
+        const state = string(object(inspected.data, "$"), "state", "$");
+        const live = ["running", "working", "starting", "reconnecting", "blocked"].includes(state);
+        let wasStopped = false;
+        if (live) {
+          const result = await stopped();
+          if (!result.ok) return result;
+          wasStopped = result.data;
+        }
+        const removed = await link.request("session.remove", sessionId);
+        if (!removed.ok) return removed;
+        const payload = object(removed.data, "$");
+        return { ok: true, data: { kind: "remove", removed: boolean(payload, "removed", "$"), stopped: wasStopped || boolean(payload, "stopped", "$"),
+          worktreesRemoved: count(payload, "worktrees_removed", "$"), worktreesFailed: count(payload, "worktrees_failed", "$") } };
+      }
+      case "resume": return sessionReply(await link.request("session.resume", sessionId), "resume");
+      case "rename": return sessionReply(await link.request("session.rename", action.name === null ? { session_id: sessionId } : { session_id: sessionId, name: action.name }), "rename");
+      case "metadata": {
+        const set = Object.entries(action.set ?? {});
+        const clear = action.clear ?? [];
+        if (set.length === 0 && clear.length === 0) return failure("command_failed", "metadata action requires at least one set or clear entry");
+        if (set.some(([key]) => key === "" || key.includes("=")) || clear.some(key => key === "" || key.includes("="))) {
+          return failure("command_failed", "metadata keys must be non-empty and cannot contain '='");
+        }
+        const metadata: Record<string, string | null> = { ...Object.fromEntries(set), ...Object.fromEntries(clear.map(key => [key, null])) };
+        return sessionReply(await link.request("session.set_metadata", { session_id: sessionId, metadata }), "metadata");
+      }
+      default: return null;
+    }
+  }
+
   async function act(action: ControlAction): Promise<ControlResult<ControlActionOutcome>> {
     const host = action.host;
     if (host.startsWith("undialable:")) { return failure("unavailable", "the selected host has no dialable identity"); }
     const invalidTarget = bareIdError("sessionId" in action ? action.sessionId : action.notificationId);
     if (invalidTarget !== null) { return { ok: false, error: invalidTarget }; }
+    const viaSdk = await sdkAct(action);
+    if (viaSdk !== null) return viaSdk;
     switch (action.kind) {
-      case "stop": return read(onHost(host, ["session", "stop", action.sessionId]), raw =>
-        ({ kind: "stop", stopped: boolean(object(raw, "$.ok"), "stopped", "$.ok") }));
-      case "remove": return read(onHost(host, ["session", "rm", action.sessionId]), raw => {
-        const obj = object(raw, "$.ok");
-        return { kind: "remove", removed: boolean(obj, "removed", "$.ok"), stopped: boolean(obj, "stopped", "$.ok"),
-          worktreesRemoved: count(obj, "worktrees_removed", "$.ok"), worktreesFailed: count(obj, "worktrees_failed", "$.ok") };
-      });
-      case "resume": return read(onHost(host, ["session", "resume", action.sessionId]), raw =>
-        ({ kind: "resume", session: session(object(raw, "$.ok")["session"], "$.ok.session", host) }));
-      case "rename": return read(action.name === null
-        ? onHost(host, ["session", "rename", action.sessionId, "--clear"])
-        : ["--host", host, "session", "rename", action.sessionId, "--json", "--", action.name], raw =>
-        ({ kind: "rename", session: session(object(raw, "$.ok")["session"], "$.ok.session", host) }));
       case "fork": return read(onHost(host, ["session", "fork", action.sessionId,
         ...(action.name === undefined ? [] : [`--name=${action.name}`])]), raw =>
         ({ kind: "fork", session: session(raw, "$.ok", host) }));
-      case "metadata": {
-        const set = Object.entries(action.set ?? {});
-        const clear = action.clear ?? [];
-        if (set.length === 0 && clear.length === 0) {
-          return failure("command_failed", "metadata action requires at least one set or clear entry");
-        }
-        if (set.some(([key]) => key === "" || key.includes("=")) || clear.some(key => key === "" || key.includes("="))) {
-          return failure("command_failed", "metadata keys must be non-empty and cannot contain '='");
-        }
-        const args = ["session", "metadata", action.sessionId,
-          ...set.map(([key, value]) => `--set=${key}=${value}`), ...clear.map(key => `--clear=${key}`)];
-        return read(onHost(host, args), raw =>
-          ({ kind: "metadata", session: session(object(raw, "$.ok")["session"], "$.ok.session", host) }));
-      }
       case "read": case "ack": case "archive": return read(onHost(host, ["notifications", action.kind, action.notificationId]), raw =>
         ({ kind: action.kind, notification: notification(object(raw, "$.ok")["record"], "$.ok.record", host) }));
+      default: return failure("command_failed", `${action.kind} is handled over the SDK`);
     }
   }
 

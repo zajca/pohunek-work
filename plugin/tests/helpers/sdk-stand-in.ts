@@ -3,7 +3,7 @@
 // reports, a lost runtime with resume). The TUI reads sessions and notifications through the SDK
 // from this socket. The stand-in answers each read by running the scenario's own CLI relay with the
 // same arguments the CLI would take, so the data the scenario defines is what the TUI shows. Every
-// other method is refused, which keeps mutations on the real CLI path.
+// other method is refused.
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,16 @@ async function runRelay(args) {
   if (!("ok" in envelope)) throw new Error("relay returned an error envelope");
   return envelope.ok;
 }
+// Session mutations take the CLI's argv: the relay is the scenario's CLI, which records them.
+function mutationArgs(request) {
+  const params = request.params;
+  const id = typeof params === "string" ? params : params && params.session_id;
+  if (request.method === "session.stop") return ["--host", "local", "session", "stop", id, "--json"];
+  if (request.method === "session.remove") return ["--host", "local", "session", "rm", id, "--json"];
+  if (request.method === "session.resume") return ["--host", "local", "session", "resume", id, "--json"];
+  if (request.method === "session.inspect") return ["--host", "local", "session", "inspect", id, "--json"];
+  return null;
+}
 async function answer(socket, request) {
   const reply = (body) => socket.write(JSON.stringify({ v: 4, id: request.id, ...body }) + "\\n");
   try {
@@ -35,7 +45,9 @@ async function answer(socket, request) {
       return reply({ ok: { notifications: page.notifications, next_cursor: null } });
     }
     if (request.method === "subscribe") return reply({ ok: null });
-    return reply({ err: { class: "unsupported", code: "stand_in_read_only", msg: "the stand-in serves the scenario reads only: " + request.method, recover: "use the CLI" } });
+    const mutation = mutationArgs(request);
+    if (mutation !== null) return reply({ ok: await runRelay(mutation) });
+    return reply({ err: { class: "unsupported", code: "stand_in_refused", msg: "the stand-in serves the scenario reads and mutations only: " + request.method, recover: "use the CLI" } });
   } catch (error) {
     return reply({ err: { class: "unavailable", code: "stand_in_relay_failed", msg: String(error), recover: "fix the scenario relay" } });
   }

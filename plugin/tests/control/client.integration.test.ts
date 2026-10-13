@@ -66,26 +66,12 @@ describe("control CLI process boundary", () => {
     expect((await client.inspectGovernance("local")).ok).toBe(true);
   });
 
-  test("executes safe lifecycle and notification mutations without cleanup acceptance", async () => {
+  test("executes notification mutations through the CLI without cleanup acceptance", async () => {
     const rules: Rule[] = [
-      { args: ["--host", "local", "session", "stop", "s1", "--json"], ok: { stopped: true } },
-      { args: ["--host", "local", "session", "rm", "s1", "--json"], ok: { removed: true, stopped: false, worktrees_removed: 1, worktrees_failed: 0 } },
-      { args: ["--host", "local", "session", "resume", "s1", "--json"], ok: { session } },
-      { args: ["--host", "local", "session", "rename", "s1", "--json", "--", "-new"], ok: { session } },
-      { args: ["--host", "local", "session", "rename", "s1", "--clear", "--json"], ok: { session } },
-      { args: ["--host", "local", "session", "fork", "s1", "--name=fork", "--json"], ok: session },
-      { args: ["--host", "local", "session", "metadata", "s1", "--set=work.url=https://example.test", "--clear=old", "--json"], ok: { session } },
       ...(["read", "ack", "archive"] as const).map(kind => ({ args: ["--host", "local", "notifications", kind, "n1", "--json"], ok: { record: notification } })),
     ];
     const stub = await cli(rules);
     const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: null });
-    for (const kind of ["stop", "remove", "resume"] as const) {
-      expect((await client.act({ kind, host: "local", sessionId: "s1" })).ok).toBe(true);
-    }
-    expect((await client.act({ kind: "rename", host: "local", sessionId: "s1", name: "-new" })).ok).toBe(true);
-    expect((await client.act({ kind: "rename", host: "local", sessionId: "s1", name: null })).ok).toBe(true);
-    expect((await client.act({ kind: "fork", host: "local", sessionId: "s1", name: "fork" })).ok).toBe(true);
-    expect((await client.act({ kind: "metadata", host: "local", sessionId: "s1", set: { "work.url": "https://example.test" }, clear: ["old"] })).ok).toBe(true);
     for (const kind of ["read", "ack", "archive"] as const) {
       expect((await client.act({ kind, host: "local", notificationId: "n1" })).ok).toBe(true);
     }

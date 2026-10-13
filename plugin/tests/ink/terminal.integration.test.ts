@@ -889,6 +889,7 @@ if (args[0] === "host" && args[1] === "discover") ok([]);
 else if (args[2] === "session" && args[3] === "list") ok([session]);
 else if (args[2] === "session" && args[3] === "inspect") ok(session);
 else if (args[2] === "session" && args[3] === "resume") ok({session:{...session,runtime:{state:"active"}}});
+else if (args[2] === "session" && args[3] === "stop") ok({stopped:true});
 else if (args[2] === "session" && args[3] === "rm") ok({removed:true,stopped:false,worktrees_removed:0,worktrees_failed:0});
 else if (args[2] === "project" && args[3] === "list") ok([]);
 else if (args[2] === "notifications" && args[3] === "list") ok({notifications:[],next_cursor:null});

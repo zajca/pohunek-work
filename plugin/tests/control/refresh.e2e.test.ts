@@ -61,3 +61,25 @@ test("a daemon that cannot be reached is an error of its sessions, never an empt
   const sessions = snapshot.errors.find((error) => error.host === "local" && error.scope === "sessions");
   expect(sessions?.error.message).toContain("cannot be resolved");
 }, SCENARIO_TIMEOUT_MS);
+
+test("session mutations run through the SDK on the real daemon", async () => {
+  daemon = await startCoreDaemon();
+  const created = await daemon.pohunek(["session", "new", "--agent", "shell", "--cwd", daemon.root, "--name", "to-mutate", "--json"]);
+  const id = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
+  if (id === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
+  control = clientFor(daemon, join(daemon.runtimeDir, "pohunek", "daemon.sock"));
+
+  const renamed = await control.act({ kind: "rename", host: "local", sessionId: id, name: "renamed-by-sdk" });
+  expect(renamed.ok ? renamed.data : null).toMatchObject({ kind: "rename", session: { id, name: "renamed-by-sdk" } });
+
+  const tagged = await control.act({ kind: "metadata", host: "local", sessionId: id, set: { "work.url": "https://github.com/zajca/pohunek/issues/1" } });
+  expect(tagged.ok ? tagged.data : null).toMatchObject({ kind: "metadata", session: { id } });
+
+  const stopped = await control.act({ kind: "stop", host: "local", sessionId: id });
+  expect(stopped.ok ? stopped.data : null).toEqual({ kind: "stop", stopped: true });
+
+  const removed = await control.act({ kind: "remove", host: "local", sessionId: id });
+  expect(removed.ok ? removed.data : null).toMatchObject({ kind: "remove", removed: true });
+  const listed = await daemon.pohunek(["session", "list", "--json"]);
+  expect(listed.stdout).not.toContain(id);
+}, SCENARIO_TIMEOUT_MS);
