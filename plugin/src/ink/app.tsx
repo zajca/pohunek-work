@@ -14,7 +14,7 @@ import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDi
 import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workLinkOf, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workLinkOf, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -43,7 +43,7 @@ export interface InkTuiOptions {
   readonly log?: (event: string, detail?: string) => void;
 }
 
-type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help";
+type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help" | "projects";
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: Overlay }
 type ConfirmAction = "stop" | "remove";
@@ -213,6 +213,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const [pick, setPick] = useState({ index: 0, search: "", filtering: false });
   const [scope, setScope] = useState<ActivityScope>("Recent");
   const [sessionDetail, setSessionDetail] = useState<ControlSession | null>(null);
   const [detailOffset, setDetailOffset] = useState(0);
@@ -266,6 +267,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [suspendTerminal]);
 
   const sessions = useMemo(() => snapshot === null ? [] : orderedSessions(snapshot, projectFilter), [snapshot, projectFilter]);
+  const pickChoices = useMemo(() => projectChoices(snapshot?.sessions ?? [], pick.search), [snapshot, pick.search]);
   const records = useMemo(() => snapshot === null ? [] : activityRecords(snapshot, scope), [snapshot, scope]);
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
   const selectedWork = workRows?.find((item) => rowId(item) === workKey) ?? selectedAt(workRows ?? [], cursor.Work);
@@ -679,6 +681,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     openLink(url);
   }, [openLink, snapshot]);
 
+  // The picker opens on the current project filter with its full list, so a stale search cannot hide that project.
+  const openProjectPicker = useCallback((): void => {
+    const index = projectChoices(snapshot?.sessions ?? [], "").findIndex((choice) => choice.label === projectFilter);
+    setPick({ index: Math.max(0, index), search: "", filtering: false });
+    setOverlay("projects");
+  }, [projectFilter, snapshot]);
+
   const openFolder = useCallback(async (session: ControlSession): Promise<void> => {
     if (session.host !== "local") { setStatus("Remote paths can be copied but cannot be opened on this host"); return; }
     const path = session.worktreePath ?? session.cwd;
@@ -918,6 +927,24 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     if (overlay === "help") { if (key.escape || input === "?" || input === "q") setOverlay("none"); return; }
+    if (overlay === "projects") {
+      if (pick.filtering) {
+        if (key.escape || key.return) setPick((old) => ({ ...old, filtering: false }));
+        else if (key.backspace || key.delete) setPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
+        else if (input !== "" && !key.ctrl && !key.meta && !key.tab) setPick((old) => ({ ...old, search: old.search + input, index: 0 }));
+        return;
+      }
+      if (key.escape) setOverlay("none");
+      else if (key.upArrow) setPick((old) => ({ ...old, index: Math.max(0, old.index - 1) }));
+      else if (key.downArrow) setPick((old) => ({ ...old, index: Math.min(pickChoices.length - 1, old.index + 1) }));
+      else if (input === "/") setPick((old) => ({ ...old, filtering: true }));
+      else if (key.return) {
+        const choice = pickChoices[pick.index];
+        if (choice !== undefined) { setProjectFilter(choice.label); setCursor((old) => ({ ...old, Sessions: 0 })); }
+        setOverlay("none");
+      }
+      return;
+    }
     if (overlay === "work-preview") {
       if (key.escape) setOverlay("work-detail");
       else if (key.pageDown || key.downArrow) setPreviewOffset((old) => Math.min(previewMaxOffset, old + Math.max(1, previewHeight - 1)));
@@ -998,7 +1025,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (split && (key.pageDown || key.pageUp)) scrollDetail(panelOffset + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1), panelMaxOffset);
       else if (input === "n") openForm(false);
       else if (input === "a") openForm(true);
-      else if (input === "P" && snapshot !== null) { const projects = [...new Set(snapshot.sessions.map((session) => session.projectLabel ?? session.projectId).filter((name): name is string => name !== null))].sort(); const index = projects.indexOf(projectFilter ?? ""); setProjectFilter(projects[index + 1] ?? null); setCursor((old) => ({ ...old, Sessions: 0 })); }
+      else if (input === "P" && snapshot !== null) openProjectPicker();
     } else if (view === "Hosts") {
       if (key.return) openRow(cursor.Hosts);
     } else {
@@ -1010,7 +1037,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "←→ views · ↑↓ select · Enter/click open · ? help" : MAIN_FOOTER :
     overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
-        overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
+        overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
   const listInteraction = { onOpen: openRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
 
@@ -1066,6 +1093,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     </MouseZone>)}
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
+  else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
   else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab or Shift-Tab and 1–4 switch views.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
@@ -1098,13 +1126,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       {selectedSession !== null && <ActionButton label="Open session" onClick={() => { openRow(selectedSessionIndex); }} primary />}
       <ActionButton label="New session" onClick={() => { openForm(false); }} />
       <ActionButton label="Assistant" onClick={() => { openForm(true); }} />
-      <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => {
-        if (snapshot === null) return;
-        const projects = [...new Set(snapshot.sessions.map((session) => session.projectLabel ?? session.projectId).filter((name): name is string => name !== null))].sort();
-        const index = projects.indexOf(projectFilter ?? "");
-        setProjectFilter(projects[index + 1] ?? null);
-        setCursor((old) => ({ ...old, Sessions: 0 }));
-      }} />
+      <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => { if (snapshot !== null) openProjectPicker(); }} />
       <ActionButton label="Refresh" onClick={() => void refresh()} />
       <ActionButton label="Help ?" onClick={() => { setOverlay("help"); }} />
     </Box>;

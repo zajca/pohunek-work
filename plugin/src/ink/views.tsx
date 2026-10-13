@@ -237,3 +237,31 @@ export function SessionDetail({ session, screen, notifications, offset, height, 
     {lines.length > height && <Text dimColor>{`${start + 1}–${Math.min(start + height, lines.length)} / ${lines.length}  ·  scroll with wheel or PageUp/PageDown`}</Text>}
   </MouseZone>;
 }
+
+export interface ProjectChoice { readonly label: string | null; readonly count: number }
+
+/** The projects the sessions belong to with their session counts, `all` first; `search` keeps the labels that contain it. */
+export function projectChoices(sessions: readonly ControlSession[], search: string): ProjectChoice[] {
+  const counts = new Map<string, number>();
+  for (const session of sessions) {
+    const label = session.projectLabel ?? session.projectId ?? "unassigned";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const needle = search.toLowerCase();
+  const projects = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([label, count]) => ({ label, count }));
+  return [{ label: null, count: sessions.length }, ...projects].filter((choice) => choice.label === null || choice.label.toLowerCase().includes(needle));
+}
+
+export function ProjectPicker({ choices, selected, search, filtering, limit }: {
+  readonly choices: readonly ProjectChoice[]; readonly selected: number; readonly search: string; readonly filtering: boolean; readonly limit: number;
+}): ReactNode {
+  if (choices.length === 0) return <EmptyState title="No project matches" hint="Backspace edits the filter, Esc leaves it." />;
+  const start = Math.max(0, Math.min(selected - Math.floor(limit / 2), choices.length - limit));
+  return <Box flexDirection="column">
+    <Text bold>{`PROJECTS  ${filtering ? "filter" : "search"}: ${search === "" ? "none" : search}${filtering ? "_" : ""}`}</Text>
+    {choices.slice(start, start + limit).map((choice, offset) => {
+      const index = start + offset;
+      return <Text key={choice.label ?? "all"} inverse={index === selected}>{`${index === selected ? "› " : "  "}${choice.label ?? "all projects"}  ${String(choice.count)} sessions`}</Text>;
+    })}
+  </Box>;
+}
