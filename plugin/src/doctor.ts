@@ -1,10 +1,12 @@
 // `pohunek-work doctor`: verifies configuration, the manager workdir, pohunek,
 // project matching, GitHub authentication and the Linear keyring entry. Every
 // failure mode has a distinct code and exit code. The optional launcher requirements are reported
-// as advisory `warn` lines that never change the exit code. No secret value is
-// read, kept or printed.
+// as advisory `warn` lines that never change the exit code. No check message
+// carries a secret value: the GitHub check reports only the exit status of
+// `gh auth status`, and the Linear check only whether the keyring entry exists.
 
 import { workdirPlacementProblem, workdirProblem } from "./actions/manager.ts";
+import { envelope } from "./commands/plan-output.ts";
 import { ConfigError, loadConfig as defaultLoadConfig } from "./config/index.ts";
 import {
   createPohunekClient as defaultCreatePohunekClient,
@@ -15,6 +17,9 @@ import { runLauncherChecks, type LauncherProbe } from "./launcher-doctor.ts";
 import type { LinearConfig, PluginConfig, ProjectConfig } from "./types/config.ts";
 import type { PohunekProject } from "./types/sources.ts";
 import { exec as defaultExec, SpawnError, type Exec } from "./util/exec.ts";
+
+/** Version of the `doctor --json` envelope. */
+export const DOCTOR_CONTRACT_VERSION = 1;
 
 export const DOCTOR_EXIT_CODES = {
   config_invalid: 10,
@@ -267,4 +272,16 @@ export function formatDoctorReport(report: DoctorReport): string {
   return report.checks
     .map((check) => `${check.ok ? (check.code === "warn" ? "warn" : "ok  ") : "FAIL"} ${check.code} ${check.name}: ${check.message}`)
     .join("\n");
+}
+
+/**
+ * The `doctor --json` document: every check and the report's exit code. `passed`
+ * is false when a check failed; a `warn` check counts as passed.
+ */
+export function formatDoctorJson(report: DoctorReport, cliVersion: string): string {
+  return envelope(cliVersion, DOCTOR_CONTRACT_VERSION, {
+    passed: report.checks.every((check) => check.ok),
+    exit_code: report.exitCode,
+    checks: report.checks.map(({ name, ok, code, message }) => ({ name, ok, code, message })),
+  });
 }

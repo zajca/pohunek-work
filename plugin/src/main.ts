@@ -14,7 +14,7 @@ import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
 import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
 import { runWatch, unknownProjects } from "./commands/watch.ts";
-import { formatDoctorReport, runDoctor } from "./doctor.ts";
+import { DOCTOR_CONTRACT_VERSION, formatDoctorJson, formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
 import { createLogger } from "./log.ts";
@@ -36,7 +36,7 @@ const USAGE = `usage:
   pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
   pohunek-work do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
-  pohunek-work doctor
+  pohunek-work doctor [--json]
   pohunek-work manager guide
   pohunek-work manager start (--project <label>... | --all) [--profile <name>] [--dry-run] [--yes] [--json]
   pohunek-work setup [--force] [--json]
@@ -310,9 +310,10 @@ async function setupCommand(argv: readonly string[]): Promise<number> {
 }
 
 async function doctorCommand(argv: readonly string[]): Promise<number> {
-  if (argv.length > 0) throw new UsageError(`doctor takes no arguments: ${argv.join(" ")}`);
+  const unexpected = argv.filter((arg) => arg !== "--json");
+  if (unexpected.length > 0) throw new UsageError(`doctor takes only --json: ${unexpected.join(" ")}`);
   const report = await runDoctor({ configDir: resolveConfigDir(), launcher: { env: process.env, platform: process.platform } });
-  console.log(formatDoctorReport(report));
+  console.log(argv.includes("--json") ? formatDoctorJson(report, pkg.version) : formatDoctorReport(report));
   return report.exitCode;
 }
 
@@ -512,6 +513,7 @@ async function main(argv: readonly string[]): Promise<number> {
     command === "do" ? DO_CONTRACT_VERSION
     : command === "manager" ? MANAGER_CONTRACT_VERSION
     : command === "setup" ? SETUP_CONTRACT_VERSION
+    : command === "doctor" ? DOCTOR_CONTRACT_VERSION
     : LIST_CONTRACT_VERSION;
   try {
     switch (command) {

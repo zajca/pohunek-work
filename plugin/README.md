@@ -148,7 +148,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   `pohunek-work doctor` reports the launcher requirements (rofi, swaymsg,
   python3, terminal, installed scripts, sway include, and `pohunek_work_bin` for a
   GitHub issue project) as advisory `warn` lines
-  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
+  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md)), and
+  `doctor --json` prints the same checks and the exit code as one JSON envelope;
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.
 - `pohunek-work watch [--project <label>]...` (repeat `--project` to watch several
