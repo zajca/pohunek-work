@@ -138,16 +138,10 @@ A manager that launched sessions follows them to the end and reports without
 being asked. It does this by subscribing to events, not by polling, and it acts
 only on events that are new.
 
-**1. Baseline at subscribe time.** Before the first event, read the current
-state of every session the manager launched: `pohunek session inspect <id>
---json` (`state`, `activity`) and the pull request of each row (`pohunek-work
-list --json`). This is the starting point, not an event. The stream does not
-replay what happened before it started, and old notifications are never
-reported as new.
-
-**2. Subscribe to the notification stream.** Run `pohunek notifications watch
---json` in the background, with its output delivered to the agent line by line.
-Each line is one JSON object:
+**1. Subscribe first.** Start `pohunek notifications watch --json` in the
+background, before anything else is read, with its output delivered to the agent
+line by line. The stream does not replay, so a subscription started later can
+miss an event that happened in between. Each line is one JSON object:
 
 - `{"event":"notification_created","record":{...}}` and `notification_updated`
   carry the notification `record` (`id`, `kind`, `status`, `session_id`,
@@ -161,7 +155,7 @@ has no `--session`, `--kind` or `--status` option on `watch`, so filter the line
 with `jq`:
 
 ```bash
-pohunek notifications watch --json | jq -c --argjson ids '["<session id>"]' '
+pohunek notifications watch --json | jq --unbuffered -c --argjson ids '["<session id>"]' '
   select(.event == "notification_created" and .record.status == "unread"
     and ((.record.kind as $k | ["turn_completed","agent_blocked","approval_required"] | index($k)) != null)
     and (.record.session_id as $s | $ids | index($s)) != null)'
@@ -171,6 +165,14 @@ A `notification_updated` line is the status change of an older record: when new
 input reaches a session, its previous `turn_completed` becomes `acknowledged`,
 which is not a new finish. Ignore it.
 
+**2. Baseline after subscribing.** Once the subscription runs, read the current
+state of every launched session: `pohunek session inspect <id> --json` (`state`,
+`activity`) and the pull request of each row (`pohunek-work list --json`). Events
+that arrived since step 1 are kept and processed; the baseline does not discard
+them. An event whose change the baseline already shows is still reported once,
+because the owner has not heard of it yet. Old notifications that were already
+acknowledged are never reported as new.
+
 `turn_completed` is off in the default notification policy, so a finished turn
 then produces no line at all. Read `pohunek notifications policy get` at subscribe
 time. When `turn_completed` is off for the session's provider, detect a finished
@@ -179,8 +181,10 @@ from `working` to `idle`. Report that the policy is off; enabling it is the
 owner's decision.
 
 **3. Poll the pull requests, reporting changes only.** Every five minutes, read
-`pohunek-work list --json` for the rows of the launched sessions and `gh pr view
-<n> --json headRefOid,statusCheckRollup,reviews` for their pull requests. Keep
+`pohunek-work list --json` for the rows of the launched sessions and, for each of
+their pull requests, `gh pr view <url> --json headRefOid,statusCheckRollup,reviews`
+with the `pull_request.url` of the row. The URL names the repository, so the call
+works from the manager's own directory, which is outside every project checkout. Keep
 the last values (head commit, check state, and the latest review by a bot, with
 the commit it reviewed) and report only a change. A review of an older commit
 does not count as a review of the current head.
@@ -202,7 +206,7 @@ capped at 8000 ms, so they cannot carry a wait of minutes; use the stream above.
 Core [zajca/pohunek#858](https://github.com/zajca/pohunek/issues/858) proposes an
 edge-triggered wait over several sessions for turn events. It is the planned
 primitive for this step; this section does not depend on it. When a pinned core
-release ships it, replace step 2 with that command and keep steps 1, 3 and 5.
+release ships it, replace step 1 with that command and keep steps 2, 3 and 5.
 
 ## A branch that is already checked out
 
