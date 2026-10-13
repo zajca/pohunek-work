@@ -76,8 +76,9 @@ function bareIdError(id: string): ControlError | null {
 
 export function createControlClient(options: ControlClientOptions): ControlClient {
   if (!options.binary || !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 ||
-      !Number.isSafeInteger(options.notificationsPageSize) || options.notificationsPageSize < 1) {
-    throw new TypeError("control client requires binary, positive timeoutMs and positive notificationsPageSize");
+      !Number.isSafeInteger(options.notificationsPageSize) || options.notificationsPageSize < 1 ||
+      !Number.isSafeInteger(options.reconnectMaxMs) || options.reconnectMaxMs < 1) {
+    throw new TypeError("control client requires binary, positive timeoutMs, positive notificationsPageSize and positive reconnectMaxMs");
   }
 
   async function call(args: readonly string[]): Promise<ControlResult<unknown>> {
@@ -111,7 +112,12 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   // host discovery, projects and every mutation.
   const hostRecords = new Map<string, ControlHost>([["local", LOCAL_HOST]]);
   const links = new Map<string, SdkLink>();
-  const reads = new Map<string, { sessions: ControlResult<readonly ControlSession[]>; notifications: ControlResult<readonly ControlNotification[]> }>();
+  const reads = new Map<string, {
+    sessions: ControlResult<readonly ControlSession[]>;
+    notifications: ControlResult<readonly ControlNotification[]>;
+    lastSessions: readonly ControlSession[];
+    lastNotifications: readonly ControlNotification[];
+  }>();
   const projectReads = new Map<string, ControlResult<readonly ControlProject[]>>();
   const settling = new Map<string, ReturnType<typeof setTimeout>>();
   const listeners = new Set<(snapshot: ControlSnapshot) => void>();
@@ -130,7 +136,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       }
       if (record.address === null || record.port === null) return Promise.reject(new Error(`host ${route} has no address`));
       return connectTcp(route, { host: record.address, port: record.port });
-    }, () => { scheduleRead(route); }, options.timeoutMs);
+    }, () => { scheduleRead(route); }, options.timeoutMs, options.reconnectMaxMs);
     links.set(route, link);
     return link;
   }
@@ -144,10 +150,17 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     for (const host of hosts) {
       const row = reads.get(host.route);
       if (row !== undefined) {
+        // A failed read reports its error and keeps the records of the last successful read of that scope.
         if (row.sessions.ok) sessions.push(...row.sessions.data);
-        else errors.push({ host: host.route, scope: "sessions", error: row.sessions.error });
+        else {
+          sessions.push(...row.lastSessions);
+          errors.push({ host: host.route, scope: "sessions", error: row.sessions.error });
+        }
         if (row.notifications.ok) notifications.push(...row.notifications.data);
-        else errors.push({ host: host.route, scope: "notifications", error: row.notifications.error });
+        else {
+          notifications.push(...row.lastNotifications);
+          errors.push({ host: host.route, scope: "notifications", error: row.notifications.error });
+        }
       }
       const projectRead = projectReads.get(host.route);
       if (projectRead !== undefined) {
@@ -166,7 +179,13 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   async function readHost(route: string): Promise<void> {
     const link = linkFor(route);
     const [sessions, notifications] = await Promise.all([link.sessions(), link.notifications(options.notificationsPageSize)]);
-    reads.set(route, { sessions, notifications });
+    const previous = reads.get(route);
+    reads.set(route, {
+      sessions,
+      notifications,
+      lastSessions: sessions.ok ? sessions.data : previous?.lastSessions ?? [],
+      lastNotifications: notifications.ok ? notifications.data : previous?.lastNotifications ?? [],
+    });
   }
 
   function scheduleRead(route: string): void {

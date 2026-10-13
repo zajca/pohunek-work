@@ -130,6 +130,8 @@ export interface TuiConfig {
   readonly detailMinWidth: number;
   /** Interval of the full session and notification reconcile, in seconds. */
   readonly sessionReconcileSecs: number;
+  /** Cap of the retry backoff after the daemon event subscription drops, in seconds. */
+  readonly reconnectMaxSecs: number;
   /** Output limit of a captured action child, in bytes. */
   readonly actionCaptureBytes: number;
   /** Longest wait of one live output read at the end of a session's output, in milliseconds. */

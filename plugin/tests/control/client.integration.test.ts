@@ -63,7 +63,7 @@ describe("control CLI process boundary", () => {
         quarantine: null, approval_key_reference: "approval_key_opaque",
       } },
     ]);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: null });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: null });
     expect((await client.inspectSession("local", "s1")).ok).toBe(true);
     expect((await client.screen("local", "s1")).ok).toBe(true);
     expect((await client.showProject("local", "p1")).ok).toBe(true);
@@ -76,7 +76,7 @@ describe("control CLI process boundary", () => {
       ...(["read", "ack", "archive"] as const).map(kind => ({ args: ["--host", "local", "notifications", kind, "n1", "--json"], ok: { record: notification } })),
     ];
     const stub = await cli(rules);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: null });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: null });
     for (const kind of ["read", "ack", "archive"] as const) {
       expect((await client.act({ kind, host: "local", notificationId: "n1" })).ok).toBe(true);
     }
@@ -89,7 +89,7 @@ describe("control CLI process boundary", () => {
       { args: ["--host", "local", "session", "inspect", "mismatch", "--json"], stdout: JSON.stringify({ cli_version: "future", protocol: { minimum: 5, maximum: 6 }, ok: session }) },
       { args: ["--host", "local", "session", "inspect", "broken", "--json"], ok: { ...session, state: 42 } },
     ]);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: null });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: null });
     const timeout = await client.inspectSession("local", "timeout");
     const mismatch = await client.inspectSession("local", "mismatch");
     const broken = await client.inspectSession("local", "broken");
@@ -106,7 +106,7 @@ describe("control CLI process boundary", () => {
       { args: ["--host", "local", "session", "resume", "ambiguous", "--json"], err: { class: "invalid_state", code: "recovery_target_ambiguous", msg: "two native references" } },
     ]);
     standIn = await startSdkStandIn(stub.binary);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: standIn.socket });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
     const verified = await client.inspectSession("local", "verified");
     expect(verified.ok ? verified.data.nativeTarget : null).toEqual({ status: "verified", kind: "id", value: "native-1" });
     expect(verified.ok ? verified.data.nativeLastActivityAt : null).toBe("2026-10-09T09:00:00Z");
@@ -121,7 +121,7 @@ describe("control CLI process boundary", () => {
 
   test("rejects a host-qualified target before it can override the selected host", async () => {
     const stub = await cli([]);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, localSocket: null });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: null });
     const action = await client.act({ kind: "remove", host: "local", sessionId: "remote/s1" });
     const detail = await client.inspectSession("local", "remote/s1");
     expect(action.ok ? null : action.error.code).toBe("command_failed");
@@ -139,7 +139,7 @@ describe("control CLI process boundary", () => {
       { args, ok: { removed: true, stopped: true, worktrees_removed: 0, worktrees_failed: 0 }, delayMs: 3_000 },
     ]);
     standIn = await startSdkStandIn(stub.binary);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, localSocket: standIn.socket });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
     const result = await client.act({ kind: "remove", host: "local", sessionId: "s1" });
     expect(result.ok ? null : result.error.code).toBe("timeout");
     expect((await stub.calls()).filter((call) => call.includes("rm"))).toEqual([args]);

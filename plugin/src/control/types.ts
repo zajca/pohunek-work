@@ -90,6 +90,8 @@ export interface ControlClientOptions {
   readonly binary: string;
   readonly timeoutMs: number;
   readonly notificationsPageSize: number;
+  /** Cap of the retry delay after the daemon event stream drops, in milliseconds. */
+  readonly reconnectMaxMs: number;
   /** Socket of the local daemon for the SDK; null when the runtime directory cannot be resolved. */
   readonly localSocket: string | null;
   /** Environment of the CLI children; the process environment when absent. */

@@ -21,18 +21,29 @@ export function sdkFailure(error: unknown): ControlError {
   return { code: "unavailable", message };
 }
 
+/**
+ * Doublings of the retry delay before it reaches the cap: the first retry waits `cap / 2^steps`. The base is
+ * derived from the cap, so `reconnect_max_secs` is the only timing value of the reconnect.
+ */
+const RECONNECT_BACKOFF_STEPS = 6;
+
 export class SdkLink {
   private client: Client | null = null;
   private subscriptionClient: Client | null = null;
   private pending: Promise<Client> | null = null;
   private subscription: Subscription | null = null;
   private closed = false;
+  /** True from the loss of the event stream until a retry connects; calls fail at once meanwhile. */
+  private reconnecting = false;
+  private retry: ReturnType<typeof setTimeout> | null = null;
+  private attempt = 0;
 
   public constructor(
     public readonly route: string,
     private readonly connect: () => Promise<Client>,
     private readonly onEvent: () => void,
     private readonly timeoutMs: number,
+    private readonly reconnectMaxMs: number,
   ) {}
 
   /** The connected client; connects, checks the daemon's health and starts the event stream on first use. */
@@ -88,7 +99,50 @@ export class SdkLink {
     } catch {
       // A broken stream ends the link; the next listing reconnects and reports the cause.
     }
-    if (this.subscription === subscription) await this.drop();
+    if (this.subscription === subscription) {
+      await this.drop();
+      this.startReconnect();
+    }
+  }
+
+  /**
+   * Starts the retry loop once per outage. The first event asks the client to read the link, and that read
+   * fails at once with "reconnecting to the daemon", so the snapshot shows the outage while the list is kept.
+   */
+  private startReconnect(): void {
+    if (this.closed || this.reconnecting) return;
+    this.reconnecting = true;
+    this.attempt = 0;
+    this.onEvent();
+    this.scheduleAttempt();
+  }
+
+  private scheduleAttempt(): void {
+    const delay = this.reconnectMaxMs / 2 ** Math.max(0, RECONNECT_BACKOFF_STEPS - this.attempt);
+    this.attempt += 1;
+    this.retry = setTimeout(() => {
+      this.retry = null;
+      void this.retryConnect();
+    }, delay);
+  }
+
+  /** One reconnect attempt; a connected link reconciles through the same read an event triggers. */
+  private async retryConnect(): Promise<void> {
+    try {
+      await this.ready();
+    } catch {
+      if (!this.closed) this.scheduleAttempt();
+      return;
+    }
+    if (this.closed) return;
+    // The stream can end while the attempt awaits its connection; that end was not started as a new loop.
+    if (this.subscription === null) {
+      this.scheduleAttempt();
+      return;
+    }
+    this.reconnecting = false;
+    this.attempt = 0;
+    this.onEvent();
   }
 
   /** Forgets a connection that ended, so the next read reconnects. */
@@ -106,12 +160,15 @@ export class SdkLink {
    * A timed-out call is not retried here, because its effect on the daemon is unknown.
    */
   public async call<T>(method: string, params: unknown, timeoutMs: number = this.timeoutMs): Promise<T> {
+    // Commands are not queued during an outage: they fail now and the caller reports them as unavailable.
+    if (this.reconnecting) throw new Error("reconnecting to the daemon");
     try {
       const client = await this.bounded(this.ready(), timeoutMs);
       return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), timeoutMs);
     } catch (error) {
       if (error instanceof ClientError) throw error;
       await this.drop();
+      this.startReconnect();
       throw error;
     }
   }
@@ -189,6 +246,8 @@ export class SdkLink {
 
   public async close(): Promise<void> {
     this.closed = true;
+    if (this.retry !== null) clearTimeout(this.retry);
+    this.retry = null;
     await this.drop();
   }
 }

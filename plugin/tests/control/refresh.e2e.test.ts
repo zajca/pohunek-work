@@ -21,7 +21,7 @@ afterEach(async () => {
 /** The client runs the release CLI in the daemon's environment, so no other daemon's hosts are listed. */
 function clientFor(fixture: CoreDaemon, localSocket: string | null): ControlClient {
   return createControlClient({
-    binary: join(fixture.coreDir, "pohunek"), timeoutMs: 10_000, notificationsPageSize: 25, localSocket, env: fixture.clientEnv,
+    binary: join(fixture.coreDir, "pohunek"), timeoutMs: 10_000, notificationsPageSize: 25, reconnectMaxMs: 1_000, localSocket, env: fixture.clientEnv,
   });
 }
 

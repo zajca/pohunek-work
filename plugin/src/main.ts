@@ -436,6 +436,7 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       launchTimeoutMs: config.global.actions.launchTimeoutMs,
       launchKillMarginMs: config.global.actions.launchKillMarginMs,
       notificationsPageSize: config.global.pohunek.notificationsPageSize,
+      reconnectMaxMs: config.global.tui.reconnectMaxSecs * 1000,
       refreshIntervalMs: config.global.tui.refreshIntervalSecs * 1000,
       sessionReconcileMs: config.global.tui.sessionReconcileSecs * 1000,
       actionCaptureBytes: config.global.tui.actionCaptureBytes,

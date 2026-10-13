@@ -64,6 +64,10 @@ export interface CoreDaemon {
   registerProject(label: string, repo: string): Promise<void>;
   /** Stops the daemon (SIGTERM, then SIGKILL after a deadline) and removes the root; safe to call twice. */
   stop(): Promise<void>;
+  /** Stops the daemon process and keeps the root, so `restart()` can bring it back on the same state and socket. */
+  interrupt(): Promise<void>;
+  /** Starts the daemon again on the root after `interrupt()` and waits until it reports healthy. */
+  restart(): Promise<void>;
 }
 
 /** The core binaries directory, or an error that names how to install it. */
@@ -133,7 +137,6 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
       if (runtimeDir !== null) await rm(runtimeDir, { recursive: true, force: true });
     }
   };
-  let daemon: Bun.Subprocess | null = null;
   try {
     const runtime = await realpath(await mkdtemp(join(await realpath(SOCKET_BASE), "pw-")));
     runtimeDir = runtime;
@@ -162,32 +165,42 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
       LANG: "C.UTF-8",
     };
     const logPath = join(root, "daemon.log");
-    // One append descriptor for both streams keeps the daemon's lines in order; the child holds its own copy.
-    const logFd = openSync(logPath, "a", 0o600);
-    try {
-      daemon = Bun.spawn([join(coreDir, "pohunekd")], {
-        env: { ...clientEnv, POHUNEK_WORKER_LAUNCHER: "subprocess", POHUNEK_WORKER_BIN: join(coreDir, "pohunek-sessiond") },
-        stdin: "ignore",
-        stdout: logFd,
-        stderr: logFd,
-      });
-    } finally {
-      closeSync(logFd);
-    }
-    const child = daemon;
     const pohunek = (args: readonly string[]): Promise<ExecResult> =>
       exec([join(coreDir, "pohunek"), ...args], { timeoutMs: CLI_TIMEOUT_MS, env: clientEnv });
-
-    const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS;
-    for (;;) {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`pohunekd exited during start (${String(child.exitCode ?? child.signalCode)}):\n${await readFile(logPath, "utf8")}`);
+    // A launch reads the same root and socket every time, so a restart after `interrupt()` finds the state it left.
+    const launch = async (): Promise<Bun.Subprocess> => {
+      // One append descriptor for both streams keeps the daemon's lines in order; the child holds its own copy.
+      const logFd = openSync(logPath, "a", 0o600);
+      let started: Bun.Subprocess;
+      try {
+        started = Bun.spawn([join(coreDir, "pohunekd")], {
+          env: { ...clientEnv, POHUNEK_WORKER_LAUNCHER: "subprocess", POHUNEK_WORKER_BIN: join(coreDir, "pohunek-sessiond") },
+          stdin: "ignore",
+          stdout: logFd,
+          stderr: logFd,
+        });
+      } finally {
+        closeSync(logFd);
       }
-      const health = parseOk((await pohunek(["health", "--json"])).stdout);
-      if (health?.["status"] === "ok") break;
-      if (Date.now() > deadline) throw new Error(`pohunekd did not report healthy within ${String(DAEMON_READY_TIMEOUT_MS)} ms:\n${await readFile(logPath, "utf8")}`);
-      await Bun.sleep(POLL_INTERVAL_MS);
-    }
+      const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS;
+      try {
+        for (;;) {
+          if (started.exitCode !== null || started.signalCode !== null) {
+            throw new Error(`pohunekd exited during start (${String(started.exitCode ?? started.signalCode)}):\n${await readFile(logPath, "utf8")}`);
+          }
+          const health = parseOk((await pohunek(["health", "--json"])).stdout);
+          if (health?.["status"] === "ok") break;
+          if (Date.now() > deadline) throw new Error(`pohunekd did not report healthy within ${String(DAEMON_READY_TIMEOUT_MS)} ms:\n${await readFile(logPath, "utf8")}`);
+          await Bun.sleep(POLL_INTERVAL_MS);
+        }
+      } catch (error) {
+        // The start error is the one reported; a daemon that cannot be stopped does not replace it.
+        await stopProcess(started).catch(() => undefined);
+        throw error;
+      }
+      return started;
+    };
+    let child = await launch();
 
     const gitEnv = { ...clientEnv, GIT_CONFIG_NOSYSTEM: "1" };
     const runGit = async (args: readonly string[]): Promise<void> => {
@@ -221,13 +234,17 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
           await removeDirs();
         }
       },
+      async interrupt() {
+        await stopProcess(child);
+      },
+      async restart() {
+        if (stopped) throw new Error("the daemon was stopped; its root is gone");
+        if (child.exitCode === null && child.signalCode === null) throw new Error("the daemon is running; interrupt it before restart");
+        child = await launch();
+      },
     };
   } catch (error) {
-    try {
-      if (daemon !== null) await stopProcess(daemon);
-    } finally {
-      await removeDirs();
-    }
+    await removeDirs();
     throw error;
   }
 }

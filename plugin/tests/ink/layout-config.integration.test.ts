@@ -35,3 +35,15 @@ test("a zero session reconcile interval stops the TUI before it draws", async ()
   expect(result.exit).toBe(2);
   expect(result.stderr).toContain("session_reconcile_secs");
 }, SCENARIO_TIMEOUT_MS);
+
+test("a missing reconnect cap stops the TUI before it draws", async () => {
+  const result = await startWithConfig((text) => text.replace(/^reconnect_max_secs = .*\n/m, ""));
+  expect(result.exit).toBe(2);
+  expect(result.stderr).toContain("reconnect_max_secs");
+}, SCENARIO_TIMEOUT_MS);
+
+test("a zero reconnect cap stops the TUI before it draws", async () => {
+  const result = await startWithConfig((text) => text.replace(/^reconnect_max_secs = .*$/m, "reconnect_max_secs = 0"));
+  expect(result.exit).toBe(2);
+  expect(result.stderr).toContain("reconnect_max_secs");
+}, SCENARIO_TIMEOUT_MS);

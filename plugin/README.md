@@ -242,7 +242,10 @@ The required `[tui]` table in `config.toml` controls `self_bin`, refresh and
 list timeouts, initial Work view, stale pull-request days, URL opener and allowed
 hosts. Its TUI keys are all required, with no built-in fallbacks:
 `refresh_interval_secs` (Work list), `session_reconcile_secs` (session and
-notification reconcile), `detail_min_width` (columns from which the session detail
+notification reconcile), `reconnect_max_secs` (cap of the retry backoff after the
+daemon event stream drops; while it is down the session list shows the last
+sessions with a "reconnecting to the daemon" error and commands fail as
+unavailable), `detail_min_width` (columns from which the session detail
 sits beside the list; narrower terminals show it full screen) and
 `action_capture_bytes` (output limit of a captured action child), `output_wait_ms`
 (longest wait of one live output read at the end of a session's output) and
