@@ -10,6 +10,8 @@ export const FORM_FOOTER = "Tab next field  ·  Ctrl+Enter create  ·  Esc back"
 export const FRAME_LINES = 7;
 /** Lines the Sessions list renders above its rows: title, state counts and project chips. */
 export const LIST_HEADER_LINES = 3;
+/** Heading lines of the Sessions list: one per section, the four sections of the list. */
+export const SECTION_HEADING_LINES = 4;
 /** Lines of a session or activity row (MenuRow: primary and secondary text). */
 export const LIST_ROW_LINES = 2;
 /** Lines of the action toolbar under a detail or a preview. */
@@ -57,7 +59,7 @@ export function deriveLayout(rows: number, staticLayout: LayoutStatic): TuiLayou
     compactColumns: MAIN_FOOTER.length + FRAME_PADDING_COLUMNS,
     fullTabsColumns: tabRowColumns(staticLayout.tabLabels),
     compactRows: formRows,
-    listReservedRows: FRAME_LINES + LIST_HEADER_LINES,
+    listReservedRows: FRAME_LINES + LIST_HEADER_LINES + SECTION_HEADING_LINES,
     detailReservedRows: FRAME_LINES + TOOLBAR_LINES,
     previewReservedRows: FRAME_LINES + TOOLBAR_LINES,
     visibleChoices: Math.max(1, rows - formRows),

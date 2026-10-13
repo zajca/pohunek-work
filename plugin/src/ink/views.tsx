@@ -83,18 +83,28 @@ export function SessionsView({ snapshot, sessions, selected, limit, project, onO
 } & ListInteraction): ReactNode {
   if (snapshot === null) return <Message text="Loading sessions…" />;
   if (sessions.length === 0) return <EmptyState title="No sessions" hint={project === null ? "Create a session to get started." : "Change the project filter or create a session."} />;
-  const counts = GROUPS.map((group) => `${group} ${sessions.filter((session) => sessionGroup(session, snapshot.notifications) === group).length}`).join("  ");
+  const groupOf = (session: ControlSession): string => sessionGroup(session, snapshot.notifications);
+  const counts = GROUPS.map((group) => `${group} ${sessions.filter((session) => groupOf(session) === group).length}`).join("  ");
   const start = Math.max(0, selected - Math.floor(limit / 2));
+  const visible = sessions.slice(start, start + limit);
   return <Box flexDirection="column">
     <Text bold>{`SESSIONS  ${sessions.length}`}</Text>
     <Text dimColor wrap="truncate-end">{safeText(counts)}</Text>
     <Text dimColor wrap="truncate-end">{safeText(`Projects  ${projectChips(snapshot, project)}   P cycles`)}</Text>
-    {sessions.slice(start, start + limit).map((session, index) => <MenuRow key={`${session.host}/${session.id}`}
-      onClick={() => { onOpen(start + index); }} onWheel={onWheel} width={width}
-      selected={start + index === selected}
-      primary={`${session.projectLabel ?? session.projectId ?? "unassigned"}  ${session.name ?? session.id}`}
-      badge={sessionGroup(session, snapshot.notifications)}
-      secondary={`${session.host} · ${session.agent} · ${session.activity ?? session.state}${session.subagentCount > 0 ? ` · ${session.subagentCount} subagents` : ""}`} />)}
+    {visible.map((session, index) => {
+      const absolute = start + index;
+      // The first visible row of each section carries the section's heading.
+      const heading = absolute === 0 || groupOf(sessions[absolute - 1] ?? session) !== groupOf(session) || index === 0;
+      const count = sessions.filter((item) => groupOf(item) === groupOf(session)).length;
+      return <Box key={`${session.host}/${session.id}`} flexDirection="column">
+        {heading && <Text bold color={groupOf(session) === "Needs you" ? "yellow" : "cyan"}>{safeText(`${groupOf(session).toUpperCase()}  ${String(count)}`)}</Text>}
+        <MenuRow onClick={() => { onOpen(absolute); }} onWheel={onWheel} width={width}
+          selected={absolute === selected}
+          primary={`${session.projectLabel ?? session.projectId ?? "unassigned"}  ${session.name ?? session.id}${workLinkOf(session) === null ? "" : "  ⎘"}`}
+          badge={session.branch}
+          secondary={`${session.host} · ${session.agent} · ${session.activity ?? session.state}${session.subagentCount > 0 ? ` · ${String(session.subagentCount)} subagents` : ""}`} />
+      </Box>;
+    })}
   </Box>;
 }
 
