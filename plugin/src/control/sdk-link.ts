@@ -1,0 +1,147 @@
+// One daemon connection of the control client, on the public TypeScript SDK of the pinned core
+// release. A link lists sessions and notifications and follows the daemon's event stream; any
+// event asks the client to read the link again. The link never reports a failed read as empty.
+import { ClientError, Client, nextRequestId, SUPPORTED_PROTOCOL_VERSIONS, type Subscription } from "@pohunek/sdk";
+import type { NotificationStatus } from "@pohunek/protocol";
+import { array, notification, object, session, InvalidControlResponse } from "./decode.ts";
+import type { ControlError, ControlNotification, ControlResult, ControlSession } from "./types.ts";
+
+/** Notification statuses the overview shows; every one is read on each listing. */
+export const VISIBLE_NOTIFICATION_STATUSES: readonly NotificationStatus[] = ["unread", "read", "acknowledged", "archived"];
+
+export function sdkFailure(error: unknown): ControlError {
+  if (error instanceof ClientError) return { code: "unavailable", message: error.message, cliCode: error.code };
+  if (error instanceof InvalidControlResponse) return { code: "invalid_response", message: error.message };
+  const message = error instanceof Error ? error.message : "daemon connection failed";
+  return { code: "unavailable", message };
+}
+
+export class SdkLink {
+  private client: Client | null = null;
+  private subscriptionClient: Client | null = null;
+  private pending: Promise<Client> | null = null;
+  private subscription: Subscription | null = null;
+  private closed = false;
+
+  public constructor(
+    public readonly route: string,
+    private readonly connect: () => Promise<Client>,
+    private readonly onEvent: () => void,
+  ) {}
+
+  /** The connected client; connects, checks the daemon's health and starts the event stream on first use. */
+  private async ready(): Promise<Client> {
+    if (this.client !== null) return this.client;
+    this.pending ??= this.open();
+    try {
+      return await this.pending;
+    } finally {
+      this.pending = null;
+    }
+  }
+
+  /** A subscription consumes its connection, so reads and the event stream use two connections, as the web client does. */
+  private async open(): Promise<Client> {
+    const client = await this.healthy();
+    let subscriptionClient: Client | null = null;
+    try {
+      subscriptionClient = await this.healthy();
+      const subscription = await subscriptionClient.subscribe({ v: SUPPORTED_PROTOCOL_VERSIONS, id: nextRequestId("subscribe"), method: "subscribe", params: null });
+      if (this.closed) throw new Error("the link was closed while it connected");
+      this.client = client;
+      this.subscriptionClient = subscriptionClient;
+      this.subscription = subscription;
+      void this.follow(subscription);
+      return client;
+    } catch (error) {
+      await subscriptionClient?.close().catch(() => undefined);
+      await client.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async healthy(): Promise<Client> {
+    const client = await this.connect();
+    try {
+      const health = await client.call("daemon.health", null);
+      if (health.status !== "ok") throw new InvalidControlResponse(`daemon reports status ${health.status}`);
+      return client;
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async follow(subscription: Subscription): Promise<void> {
+    try {
+      for (;;) {
+        const event = await subscription.nextEvent();
+        if (event === null) break;
+        if (!this.closed) this.onEvent();
+      }
+    } catch {
+      // A broken stream ends the link; the next listing reconnects and reports the cause.
+    }
+    if (this.subscription === subscription) await this.drop();
+  }
+
+  /** Forgets a connection that ended, so the next read reconnects. */
+  private async drop(): Promise<void> {
+    const client = this.client;
+    const subscriptionClient = this.subscriptionClient;
+    this.client = null;
+    this.subscriptionClient = null;
+    this.subscription = null;
+    await Promise.all([client?.close(), subscriptionClient?.close()].map(async (closing) => { await closing?.catch(() => undefined); }));
+  }
+
+  private async call<T>(method: "session.list" | "notification.list", params: unknown): Promise<T> {
+    const client = await this.ready();
+    try {
+      return await (client.call as (m: string, p: unknown) => Promise<T>)(method, params);
+    } catch (error) {
+      if (error instanceof ClientError) throw error;
+      await this.drop();
+      throw error;
+    }
+  }
+
+  public async sessions(): Promise<ControlResult<readonly ControlSession[]>> {
+    try {
+      const raw = await this.call<unknown>("session.list", {});
+      return { ok: true, data: array(raw, "$").map((item, index) => session(item, `$[${String(index)}]`, this.route)) };
+    } catch (error) {
+      return { ok: false, error: sdkFailure(error) };
+    }
+  }
+
+  public async notifications(pageSize: number): Promise<ControlResult<readonly ControlNotification[]>> {
+    const records: ControlNotification[] = [];
+    try {
+      for (const status of VISIBLE_NOTIFICATION_STATUSES) {
+        let cursor: string | null = null;
+        const seen = new Set<string>();
+        do {
+          const page: unknown = await this.call<unknown>("notification.list", { status, limit: pageSize, ...(cursor === null ? {} : { cursor }) });
+          const obj = object(page, "$");
+          records.push(...array(obj["notifications"], "$.notifications").map((item, index) => notification(item, `$.notifications[${String(index)}]`, this.route)));
+          const next = obj["next_cursor"];
+          if (next !== undefined && next !== null && (typeof next !== "string" || next === "")) {
+            throw new InvalidControlResponse("$.next_cursor: expected a non-empty string");
+          }
+          cursor = typeof next === "string" ? next : null;
+          if (cursor !== null && seen.has(cursor)) throw new InvalidControlResponse("daemon returned a repeated notifications cursor");
+          if (cursor !== null) seen.add(cursor);
+        } while (cursor !== null);
+      }
+      return { ok: true, data: records };
+    } catch (error) {
+      return { ok: false, error: sdkFailure(error) };
+    }
+  }
+
+  public async close(): Promise<void> {
+    this.closed = true;
+    await this.drop();
+  }
+}

@@ -140,6 +140,10 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
     const longestSocketPath = workerSocketPath(runtime, LONGEST_SESSION_ID);
     checkSocketPathLength(longestSocketPath);
     for (const name of PRIVATE_DIRS) await mkdir(dir(name), { mode: 0o700 });
+    // `pohunek host discover` creates this directory with the umask's mode (zajca/pohunek#962), and the
+    // daemon refuses a worker start while it is not private; the fixture creates it private before any client runs.
+    await mkdir(join(dir("cache"), "pohunek"), { mode: 0o700 });
+    await chmod(join(dir("cache"), "pohunek"), 0o700);
     // The daemon's PATH holds only this directory; it runs git for project and worktree work.
     await writeFile(join(dir("bin"), "git"), `#!/bin/sh\nexec '${git.replaceAll("'", "'\\''")}' "$@"\n`);
     await chmod(join(dir("bin"), "git"), 0o755);

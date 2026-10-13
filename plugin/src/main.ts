@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Command line entry point: `pohunek-work list`, `do`, `doctor`, `manager`, `setup`, `tui` and `watch`.
+import { resolveDaemonSocket } from "@pohunek/sdk";
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAction } from "./actions/types.ts";
@@ -394,6 +395,17 @@ async function managerCommand(argv: readonly string[]): Promise<number> {
   process.stdout.write(managerGuide);
   return 0;
 }
+/** Socket of the local daemon: POHUNEK_SOCKET_PATH when the environment names one, else the runtime directory's. */
+function resolveLocalSocket(): string | null {
+  const named = process.env["POHUNEK_SOCKET_PATH"];
+  if (named !== undefined && named !== "") return named;
+  try {
+    return resolveDaemonSocket({ platform: process.platform === "darwin" ? "macos" : "linux", effectiveUid: process.getuid?.() ?? 0 }, process.env);
+  } catch {
+    return null;
+  }
+}
+
 async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly string[]): Promise<number> {
   const command = mode === "main" ? "tui" : "new-session";
   if (argv.length > 0) throw new UsageError(`${command} takes no arguments: ${argv.join(" ")}`);
@@ -426,7 +438,8 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       notificationsPageSize: config.global.pohunek.notificationsPageSize,
       refreshIntervalMs: config.global.tui.refreshIntervalSecs * 1000,
       sessionReconcileMs: config.global.tui.sessionReconcileSecs * 1000,
-      layout: config.global.tui.layout,
+      actionCaptureBytes: config.global.tui.actionCaptureBytes,
+      localSocket: resolveLocalSocket(),
       initialView: config.global.tui.initialView,
       stalePrDays: config.global.tui.stalePrDays,
       openUrlHosts: config.global.tui.openUrlHosts,

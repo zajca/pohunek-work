@@ -11,7 +11,7 @@ import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
-import { LayoutProvider, useLayout, type TuiLayout } from "./layout.tsx";
+import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
@@ -26,7 +26,8 @@ export interface InkTuiOptions {
   readonly notificationsPageSize: number;
   readonly refreshIntervalMs: number;
   readonly sessionReconcileMs: number;
-  readonly layout: TuiLayout;
+  readonly actionCaptureBytes: number;
+  readonly localSocket: string | null;
   readonly initialView: "mine" | "all";
   readonly stalePrDays: number;
   readonly openUrlHosts: readonly string[];
@@ -188,7 +189,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
   const dispatchMouse = useMouseDispatch();
-  const control = useMemo(() => createControlClient({ binary: options.pohunekBin, timeoutMs: options.timeoutMs, notificationsPageSize: options.notificationsPageSize }), [options.pohunekBin, options.timeoutMs, options.notificationsPageSize]);
+  const control = useMemo(() => createControlClient({ binary: options.pohunekBin, timeoutMs: options.timeoutMs, notificationsPageSize: options.notificationsPageSize, localSocket: options.localSocket }), [options.pohunekBin, options.timeoutMs, options.notificationsPageSize]);
   const newLauncher = useCallback(() => createSessionLauncher({ bin: options.pohunekBin, queryTimeoutMs: options.timeoutMs, launchTimeoutMs: options.launchTimeoutMs, launchKillMarginMs: options.launchKillMarginMs }), [options.pohunekBin, options.timeoutMs, options.launchTimeoutMs, options.launchKillMarginMs]);
   const [launcher, setLauncher] = useState(newLauncher);
   const [view, setView] = useState<ViewName>("Work");
@@ -299,6 +300,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } catch (error) { setStatus(defaultStatus(error)); }
   }, [control, detailHeight, sessionDetail]);
 
+  // Snapshots from the reconcile and from the daemon's event stream share one path.
+  const applySnapshot = useCallback((next: ControlSnapshot): void => {
+    setSnapshot((previous) => retainUnavailable(previous, next));
+    try { options.onSnapshot?.(next); }
+    catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
+    setStale(false);
+    if (next.errors.length > 0) setStatus(`${next.errors.length} source(s) unavailable; mutating actions are paused`);
+  }, [options.log, options.onSnapshot]);
+
+  useEffect(() => control.subscribe((next) => { if (alive.current) applySnapshot(next); }), [applySnapshot, control]);
+  useEffect(() => () => { void control.close(); }, [control]);
+
   // Sessions and the work list refresh on their own intervals; a manual refresh runs both.
   const refreshControl = useCallback(async (): Promise<void> => {
     if (controlBusy.current) return;
@@ -307,11 +320,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
       if (!alive.current) return;
       if (nextControl.ok) {
-        setSnapshot((previous) => retainUnavailable(previous, nextControl.value));
-        try { options.onSnapshot?.(nextControl.value); }
-        catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
-        setStale(false);
-        if (nextControl.value.errors.length > 0) setStatus(`${nextControl.value.errors.length} source(s) unavailable; mutating actions are paused`);
+        applySnapshot(nextControl.value);
       } else {
         setStale(true);
         setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
@@ -319,7 +328,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } finally {
       controlBusy.current = false;
     }
-  }, [control, options.onSnapshot, options.log]);
+  }, [applySnapshot, control]);
 
   const refreshWork = useCallback(async (): Promise<void> => {
     if (options.mode !== "main" || workBusy.current) return;
@@ -834,8 +843,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (overlay === "help") { if (key.escape || input === "?" || input === "q") setOverlay("none"); return; }
     if (overlay === "work-preview") {
       if (key.escape) setOverlay("work-detail");
-      else if (key.pageDown || key.downArrow) setPreviewOffset((old) => Math.min(previewMaxOffset, old + layout.detailScrollStep));
-      else if (key.pageUp || key.upArrow) setPreviewOffset((old) => Math.max(0, old - layout.detailScrollStep));
+      else if (key.pageDown || key.downArrow) setPreviewOffset((old) => Math.min(previewMaxOffset, old + Math.max(1, previewHeight - 1)));
+      else if (key.pageUp || key.upArrow) setPreviewOffset((old) => Math.max(0, old - Math.max(1, previewHeight - 1)));
       else if ((key.return || input === "r") && previewMatchesSelection) void workHandover(selectedWorkAction.name);
       return;
     }
@@ -851,8 +860,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (overlay === "session") {
       if (key.escape) { setOverlay("none"); return; }
       if (sessionDetail === null) return;
-      if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + layout.detailScrollStep)); return; }
-      if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - layout.detailScrollStep)); return; }
+      if (key.pageDown || key.downArrow) { setDetailOffset((old) => Math.min(detailMaxOffset, old + Math.max(1, detailHeight - 1))); return; }
+      if (key.pageUp || key.upArrow) { setDetailOffset((old) => Math.max(0, old - Math.max(1, detailHeight - 1))); return; }
       if (input === "o" && sessionAttachable) void openSelected();
       else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
       else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
@@ -912,8 +921,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   });
 
-  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "←→ views · ↑↓ select · Enter/click open · ? help" : "←→ or 1–4 views  ·  ↑↓ select  ·  Enter or click opens  ·  ? help  ·  q quit" :
-    overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : "Tab next field  ·  Ctrl+Enter create  ·  Esc back" :
+  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "←→ views · ↑↓ select · Enter/click open · ? help" : MAIN_FOOTER :
+    overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
         overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
@@ -942,7 +951,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen}
-    offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * layout.detailScrollStep))); }} />;
+    offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm") content = <Message color="red" text={`Confirm ${confirm ?? "action"} of ${sessionDetail?.name ?? sessionDetail?.id ?? "session"}? y/N. Removal may delete its worktree.`} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
@@ -958,7 +967,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     </Section>
     <Text dimColor>{notificationDetail.sessionId === null ? "No linked session" : `Linked session: ${safeText(notificationDetail.sessionId)}`}</Text>
   </Box>;
-  else if (overlay === "work-preview" && workPreview !== null) content = <WorkPreview preview={workPreview} width={previewWidth} height={previewHeight} offset={previewOffset} onWheel={(direction) => { setPreviewOffset((old) => Math.max(0, Math.min(previewMaxOffset, old + direction * layout.detailScrollStep))); }} />;
+  else if (overlay === "work-preview" && workPreview !== null) content = <WorkPreview preview={workPreview} width={previewWidth} height={previewHeight} offset={previewOffset} onWheel={(direction) => { setPreviewOffset((old) => Math.max(0, Math.min(previewMaxOffset, old + direction * Math.max(1, previewHeight - 1)))); }} />;
   else if (overlay === "work-detail") content = workDetail === null ? <Message text="This work item is no longer available. Go back and refresh." /> : <Box flexDirection="column">
     <Text bold color="cyan">WORK ITEM</Text>
     <Text bold wrap="truncate-end">{safeText(workDetail.issue?.title ?? workDetail.pull_request?.title ?? workDetail.key)}</Text>
@@ -1070,7 +1079,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
 export async function runInkTui(options: InkTuiOptions): Promise<number> {
   let exitCode = 0;
-  const instance = render(<LayoutProvider value={options.layout}><MouseProvider><InkApplication options={options} setExitCode={(code) => { exitCode = code; }} /></MouseProvider></LayoutProvider>, { alternateScreen: true, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const instance = render(<LayoutProvider value={{ actionCaptureBytes: options.actionCaptureBytes, tabLabels: VIEWS }}><MouseProvider><InkApplication options={options} setExitCode={(code) => { exitCode = code; }} /></MouseProvider></LayoutProvider>, { alternateScreen: true, interactive: true, exitOnCtrlC: false, patchConsole: false });
   try {
     await instance.waitUntilExit();
     return exitCode;

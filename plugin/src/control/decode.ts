@@ -75,6 +75,7 @@ export function host(raw: unknown, path: string): ControlHost {
     classification: classification as ControlHost["classification"],
     daemonVersion: nullableString(obj, "daemon_version", path),
     address,
+    port,
   };
 }
 

@@ -130,21 +130,10 @@ export interface TuiConfig {
   readonly detailMinWidth: number;
   /** Interval of the full session and notification reconcile, in seconds. */
   readonly sessionReconcileSecs: number;
-  readonly layout: TuiLayoutConfig;
-}
-
-/** Sizes of the TUI layout, all required in `[tui]` so no screen falls back to a literal. */
-export interface TuiLayoutConfig {
-  readonly compactColumns: number;
-  readonly fullTabsColumns: number;
-  readonly compactRows: number;
-  readonly listReservedRows: number;
-  readonly detailReservedRows: number;
-  readonly previewReservedRows: number;
-  readonly detailScrollStep: number;
-  readonly visibleChoices: number;
+  /** Output limit of a captured action child, in bytes. */
   readonly actionCaptureBytes: number;
 }
+
 
 /** `pohunek-work manager start`: where the manager session runs and which agent it starts. */
 export interface ManagerConfig {

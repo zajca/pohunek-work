@@ -200,14 +200,6 @@ open_url_hosts = ["github.com"]
 stderr_max_lines = 10
 detail_min_width = 120
 session_reconcile_secs = 300
-compact_columns = 60
-full_tabs_columns = 48
-compact_rows = 24
-list_reserved_rows = 11
-detail_reserved_rows = 13
-preview_reserved_rows = 10
-detail_scroll_step = 3
-visible_choices = 4
 action_capture_bytes = 4194304
 `;
 

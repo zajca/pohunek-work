@@ -24,10 +24,10 @@ async function startWithConfig(edit: (text: string) => string): Promise<{ exit: 
   return { exit, stderr };
 }
 
-test("a missing layout value stops the TUI before it draws", async () => {
-  const result = await startWithConfig((text) => text.replace(/^compact_columns = .*\n/m, ""));
+test("a missing action capture limit stops the TUI before it draws", async () => {
+  const result = await startWithConfig((text) => text.replace(/^action_capture_bytes = .*\n/m, ""));
   expect(result.exit).toBe(2);
-  expect(result.stderr).toContain("compact_columns");
+  expect(result.stderr).toContain("action_capture_bytes");
 }, SCENARIO_TIMEOUT_MS);
 
 test("a zero session reconcile interval stops the TUI before it draws", async () => {

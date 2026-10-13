@@ -10,6 +10,7 @@ export interface ControlHost {
   readonly classification: "local" | "reachable_daemon" | "version_mismatch" | "unreachable" | "candidate";
   readonly daemonVersion: string | null;
   readonly address: string | null;
+  readonly port: number | null;
 }
 /** The native conversation a session recovers from. `invalid` keeps core's ambiguous reference for the refusal. */
 export type ControlNativeTarget =
@@ -77,9 +78,21 @@ export type ControlActionOutcome =
   | { readonly kind: "resume" | "rename" | "fork"; readonly session: ControlSession }
   | { readonly kind: "metadata"; readonly session: ControlSession }
   | { readonly kind: "read" | "ack" | "archive"; readonly notification: ControlNotification };
-export interface ControlClientOptions { readonly binary: string; readonly timeoutMs: number; readonly notificationsPageSize: number }
+export interface ControlClientOptions {
+  readonly binary: string;
+  readonly timeoutMs: number;
+  readonly notificationsPageSize: number;
+  /** Socket of the local daemon for the SDK; null when the runtime directory cannot be resolved. */
+  readonly localSocket: string | null;
+  /** Environment of the CLI children; the process environment when absent. */
+  readonly env?: Readonly<Record<string, string>>;
+}
 export interface ControlClient {
   refresh(): Promise<ControlSnapshot>;
+  /** Calls the listener with each snapshot the event stream produces; returns the unsubscribe. */
+  subscribe(listener: (snapshot: ControlSnapshot) => void): () => void;
+  /** Closes the daemon connections. */
+  close(): Promise<void>;
   inspectHost(host: string): Promise<ControlResult<ControlHostCapabilities>>;
   inspectGovernance(host: string): Promise<ControlResult<ControlGovernance>>;
   inspectSession(host: string, id: string): Promise<ControlResult<ControlSession>>;

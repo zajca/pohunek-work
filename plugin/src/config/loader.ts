@@ -354,14 +354,6 @@ function parseTui(root: Table, file: string): TuiConfig {
       "stderr_max_lines",
       "detail_min_width",
       "session_reconcile_secs",
-      "compact_columns",
-      "full_tabs_columns",
-      "compact_rows",
-      "list_reserved_rows",
-      "detail_reserved_rows",
-      "preview_reserved_rows",
-      "detail_scroll_step",
-      "visible_choices",
       "action_capture_bytes",
     ],
     file,
@@ -385,17 +377,7 @@ function parseTui(root: Table, file: string): TuiConfig {
     stderrMaxLines: readPositiveInt(table, "stderr_max_lines", file, path),
     detailMinWidth: readPositiveInt(table, "detail_min_width", file, path),
     sessionReconcileSecs: readTimerValue(table, "session_reconcile_secs", MS_PER_SECOND, file, path),
-    layout: {
-      compactColumns: readPositiveInt(table, "compact_columns", file, path),
-      fullTabsColumns: readPositiveInt(table, "full_tabs_columns", file, path),
-      compactRows: readPositiveInt(table, "compact_rows", file, path),
-      listReservedRows: readPositiveInt(table, "list_reserved_rows", file, path),
-      detailReservedRows: readPositiveInt(table, "detail_reserved_rows", file, path),
-      previewReservedRows: readPositiveInt(table, "preview_reserved_rows", file, path),
-      detailScrollStep: readPositiveInt(table, "detail_scroll_step", file, path),
-      visibleChoices: readPositiveInt(table, "visible_choices", file, path),
-      actionCaptureBytes: readPositiveInt(table, "action_capture_bytes", file, path),
-    },
+    actionCaptureBytes: readPositiveInt(table, "action_capture_bytes", file, path),
   };
 }
 

@@ -232,15 +232,13 @@ given.
 
 The required `[tui]` table in `config.toml` controls `self_bin`, refresh and
 list timeouts, initial Work view, stale pull-request days, URL opener and allowed
-hosts. Its layout and refresh values are all required, with no built-in
-fallbacks: `refresh_interval_secs` (Work list), `session_reconcile_secs` (session
-and notification reconcile), `detail_min_width` (columns from which the session
-detail sits beside the list; narrower terminals show it full screen),
-`compact_columns`, `full_tabs_columns`, `compact_rows` (columns and rows below
-which the screen is compact), `list_reserved_rows`, `detail_reserved_rows`,
-`preview_reserved_rows` (rows kept for chrome), `detail_scroll_step`,
-`visible_choices` (choices shown in a form), and `action_capture_bytes` (output
-limit of a captured action child). `clipboard_command` is optional and must be an absolute executable
+hosts. Its TUI keys are all required, with no built-in fallbacks:
+`refresh_interval_secs` (Work list), `session_reconcile_secs` (session and
+notification reconcile), `detail_min_width` (columns from which the session detail
+sits beside the list; narrower terminals show it full screen) and
+`action_capture_bytes` (output limit of a captured action child). Layout sizes
+(compact and full tab rows, reserved rows, visible choices, scroll steps) are not
+configured: they derive from the rendered chrome and the terminal size. `clipboard_command` is optional and must be an absolute executable
 path; without it, the TUI displays branch and path text for manual selection.
 The new session form calls the public core CLI with prompt text on stdin. Core
 and the plugin binary must be installed separately. The plugin depends on the

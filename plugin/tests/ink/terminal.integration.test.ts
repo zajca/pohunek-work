@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { startEmptySdkStandIn, startSdkStandIn } from "../helpers/sdk-stand-in.ts";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -673,12 +674,18 @@ print(json.dumps({"exit": child.returncode, "step": step, **({"trace": trace()} 
 
 async function runPty(mode: "main" | "new-session", key: string): Promise<{ exit: number; sent: boolean; alternate: boolean; restored: boolean; screen: boolean }> {
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_PTY, Bun.which("bun") ?? "bun", source, mode === "main" ? "pohunek-work" : "pohunek-work new-session", Buffer.from(key).toString("hex")], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
   return JSON.parse(stdout) as { exit: number; sent: boolean; alternate: boolean; restored: boolean; screen: boolean };
 }
+
+/** Stand-ins started by a scenario; stopped after it, also when the scenario fails. */
+const stopLater: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const stop of stopLater.splice(0)) await stop();
+});
 
 test("the Ink process enters and restores the terminal when the owner quits", async () => {
   const result = await runPty("main", "q");
@@ -691,8 +698,10 @@ test("the standalone session form cancels before creating a session", async () =
 }, 20_000);
 
 test("click and horizontal arrows switch tabs and mouse tracking is restored on exit", async () => {
+  const emptyStandIn = await startEmptySdkStandIn();
+  stopLater.push(emptyStandIn.stop);
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(emptyStandIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -700,8 +709,10 @@ test("click and horizontal arrows switch tabs and mouse tracking is restored on 
 }, 20_000);
 
 test("the standalone session form focuses a text field by click", async () => {
+  const emptyStandIn = await startEmptySdkStandIn();
+  stopLater.push(emptyStandIn.stop);
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(emptyStandIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_FORM_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -729,8 +740,10 @@ else if (args[0] === "attach") process.exit(0);
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_LIST_MOUSE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -766,8 +779,10 @@ else if (args[0] === "attach") process.exit(0);
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_TWO_FORMS_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -784,6 +799,8 @@ else process.exit(70);
 }, 30_000);
 
 test("a Work item shows its plan before an explicit action is run", async () => {
+  const emptyStandIn = await startEmptySdkStandIn();
+  stopLater.push(emptyStandIn.stop);
   const directory = await mkdtemp(join(tmpdir(), "pohunek-ink-work-"));
   try {
     const binary = join(directory, "pohunek-work");
@@ -811,7 +828,7 @@ else process.exit(70);
 `);
     await chmod(core, 0o700);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(emptyStandIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_WORK_RESULT_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -843,8 +860,10 @@ else if (args[2] === "notifications" && args[3] === "list") ok({notifications:ar
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_NOTIFICATION_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -877,8 +896,10 @@ else if (args[0] === "attach") process.exit(0);
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_LOST_SESSION_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -920,8 +941,10 @@ else if (args[2] === "notifications" && args[3] === "read") {
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_NOTIFICATION_RACE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -956,8 +979,10 @@ else if (args[0] === "attach") process.exit(0);
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_TEMPLATE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -997,8 +1022,10 @@ else if (args[0] === "attach") process.exit(0);
 else process.exit(70);
 `);
     await chmod(binary, 0o700);
+    const standIn = await startSdkStandIn(binary);
+    stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,layout:{compactColumns:60,fullTabsColumns:48,compactRows:24,listReservedRows:11,detailReservedRows:13,previewReservedRows:10,detailScrollStep:3,visibleChoices:4,actionCaptureBytes:4194304}});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_FOCUSED_CHOICE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
