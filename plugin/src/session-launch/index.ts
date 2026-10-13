@@ -74,7 +74,7 @@ export interface AttachResult {
   readonly exitCode: number | null;
 }
 
-export type LaunchErrorCode = "invalid_request" | "cli_unavailable" | "cli_failed" | "invalid_response" | "creation_unknown" | "not_created" | "attach_failed";
+export type LaunchErrorCode = "invalid_request" | "cli_unavailable" | "cli_failed" | "protocol_mismatch" | "invalid_response" | "creation_unknown" | "not_created" | "attach_failed";
 
 export class LaunchError extends Error {
   public constructor(public readonly code: LaunchErrorCode, message: string) {
@@ -139,7 +139,8 @@ function envelope(stdout: string, exitCode: number | null): unknown {
     throw new LaunchError("invalid_response", "pohunek returned an invalid protocol range");
   }
   if (SUPPORTED_PROTOCOL_VERSION < minimum || SUPPORTED_PROTOCOL_VERSION > maximum) {
-    throw new LaunchError("cli_failed", `pohunek protocol ${String(minimum)}-${String(maximum)} does not support ${String(SUPPORTED_PROTOCOL_VERSION)}`);
+    // A success envelope in this range proves nothing about the create, so the caller must not treat it as a refusal.
+    throw new LaunchError("protocol_mismatch", `pohunek protocol ${String(minimum)}-${String(maximum)} does not support ${String(SUPPORTED_PROTOCOL_VERSION)}`);
   }
   if (("ok" in root) === ("err" in root)) {
     throw new LaunchError("invalid_response", "pohunek response must contain exactly one of ok and err");

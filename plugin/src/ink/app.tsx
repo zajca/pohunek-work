@@ -63,6 +63,11 @@ function nullable(value: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+/** Whether the last refresh could not read this host's sessions; a discovery failure leaves them readable. */
+function sessionsUnreadable(snapshot: ControlSnapshot | null, host: string): boolean {
+  return snapshot?.errors.some((error) => error.host === host && error.scope === "sessions") ?? false;
+}
+
 function sameSession(a: ControlSession, b: ControlSession): boolean {
   return a.host === b.host && a.id === b.id && a.state === b.state && a.runtimeState === b.runtimeState && a.updatedAt === b.updatedAt;
 }
@@ -114,9 +119,9 @@ function changeTextField(form: LaunchForm, input: string, assistant: boolean, er
   return { ...form, [field]: erase ? value.slice(0, -1) : value + clean };
 }
 
-function FormView({ form, options, actions, assistant, created, busy, onFocus, onPickChoice, onScrollChoices, onSubmit, onCancel }: {
+function FormView({ form, options, actions, assistant, created, busy, loading, onFocus, onPickChoice, onScrollChoices, onSubmit, onCancel }: {
   readonly form: LaunchForm; readonly options: LaunchOptions | null; readonly actions: readonly ActionChoice[]; readonly assistant: boolean;
-  readonly created: CreatedSession | null; readonly busy: boolean;
+  readonly created: CreatedSession | null; readonly busy: boolean; readonly loading: boolean;
   readonly onFocus: (index: number) => void;
   readonly onPickChoice: (index: number) => void;
   readonly onScrollChoices: (direction: -1 | 1, max: number) => void;
@@ -148,7 +153,7 @@ function FormView({ form, options, actions, assistant, created, busy, onFocus, o
   ];
   return <Box flexDirection="column">
     <Text bold color="cyan">{assistant ? "NEW ASSISTANT" : "NEW SESSION"}</Text>
-    {created === null && !compact && choices.length === 0 && <Text dimColor>Click a field to edit it. Tab moves to the next field.</Text>}
+    {created === null && !compact && choices.length === 0 && <Text dimColor>{loading ? `Loading ${form.host} options…` : "Click a field to edit it. Tab moves to the next field."}</Text>}
     {created !== null && <Message color="green" text={`Created ${created.host}/${created.sessionId}. Creation is locked.`} />}
     {created?.warnings.map((warning, index) => <Message key={index} text={`Launch warning: ${warning}`} />)}
     {created === null && options?.warning !== null && options?.warning !== undefined && <Text color="yellow" wrap="truncate-end">{safeText(options.warning)}</Text>}
@@ -202,11 +207,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [sessionDetail, setSessionDetail] = useState<ControlSession | null>(null);
   const [detailOffset, setDetailOffset] = useState(0);
   const [screen, setScreen] = useState<ControlScreen | null>(null);
+  const screenGeneration = useRef(0);
   const [hostDetail, setHostDetail] = useState<ControlHostCapabilities | null>(null);
   const [governance, setGovernance] = useState<ControlGovernance | null>(null);
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
   const notificationSelectionGeneration = useRef(0);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [formLoading, setFormLoading] = useState(false);
+  const formLoadingRef = useRef(false);
+  const formGeneration = useRef(0);
   const [recovery, setRecovery] = useState<RecoveryRequest | null>(null);
   const [edit, setEdit] = useState("");
   const [form, setForm] = useState<LaunchForm>(EMPTY_FORM);
@@ -226,12 +235,19 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const suspendForChild = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
     setMouseTracking(false);
+    // The child shares the foreground group, so Ctrl-C while the terminal is cooked also
+    // signals this process; the handler keeps the TUI alive and the child still receives it.
+    const ignoreInterrupt = (): void => undefined;
+    process.on("SIGINT", ignoreInterrupt);
     let result!: T;
     try {
       await suspendTerminal(async () => { result = await action(); });
       return result;
     }
-    finally { if (alive.current) setMouseTracking(true); }
+    finally {
+      process.off("SIGINT", ignoreInterrupt);
+      if (alive.current) setMouseTracking(true);
+    }
   }, [suspendTerminal]);
 
   const sessions = useMemo(() => snapshot === null ? [] : orderedSessions(snapshot, projectFilter), [snapshot, projectFilter]);
@@ -259,10 +275,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const sessionAttachable = sessionMutable && (sessionActive || sessionDetail.canResume);
   const sessionRecoverable = sessionWritable && sessionDetail.canResume && (!sessionActive || sessionDetail.runtimeState === "lost");
 
+  useEffect(() => {
+    screenGeneration.current += 1;
+    setScreen(null);
+  }, [sessionDetail?.host, sessionDetail?.id]);
+
   const loadScreen = useCallback(async (): Promise<void> => {
     if (sessionDetail === null) return;
+    const generation = screenGeneration.current;
     try {
       const result = await control.screen(sessionDetail.host, sessionDetail.id);
+      // A response for a session the owner has since left is not shown under another session.
+      if (generation !== screenGeneration.current) return;
       if (result.ok) {
         setScreen(result.data);
         setDetailOffset(sessionDetailMaxOffset(sessionDetail, result.data, detailHeight));
@@ -310,8 +334,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [options.refreshIntervalMs, refresh]);
 
   const loadForm = useCallback(async (host: string, preferredProject: string | null = null, assistant = false): Promise<void> => {
+    // The form targets the requested host at once; a response for an earlier request is dropped.
+    const generation = ++formGeneration.current;
+    formLoadingRef.current = true;
+    setFormLoading(true);
+    setForm((previous) => previous.host === host ? previous : { ...previous, host, project: null, action: null, agent: null, choice: 0 });
+    setActions([]);
     try {
       const loaded = await launcher.loadOptions(host);
+      if (generation !== formGeneration.current) return;
       const project = loaded.projects.find((entry) => entry.id === preferredProject || entry.label === preferredProject)?.id ?? loaded.projects[0]?.id ?? null;
       const eligibleAgents = loaded.agents.filter((agent) => !assistant || agent.assistantCapable);
       setLaunchOptions(loaded);
@@ -321,9 +352,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         branch: previous.host === host ? previous.branch : "",
         baseBranch: previous.host === host ? previous.baseBranch : "",
         agent: eligibleAgents.find((agent) => agent.id === previous.agent)?.id ?? eligibleAgents[0]?.id ?? null }));
-      setActions(project === null ? [] : await launcher.loadActions(host, project));
+      const loadedActions = project === null ? [] : await launcher.loadActions(host, project);
+      if (generation === formGeneration.current) setActions(loadedActions);
     } catch (error) {
-      setStatus(`Launch options: ${defaultStatus(error)}`);
+      if (generation === formGeneration.current) setStatus(`Launch options: ${defaultStatus(error)}`);
+    } finally {
+      if (generation === formGeneration.current) {
+        formLoadingRef.current = false;
+        setFormLoading(false);
+      }
     }
   }, [launcher]);
 
@@ -375,6 +412,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [busy, created, exit, launcher, options.mode, refresh, setExitCode, suspendForChild]);
 
   const submitForm = useCallback(async (): Promise<void> => {
+    if (formLoadingRef.current) { setStatus("Host options are still loading; submit when they finish"); return; }
     if (busy || created !== null) return;
     setBusy(true);
     try {
@@ -478,7 +516,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [control, refresh, snapshot, stale]);
 
   const runSessionAction = useCallback(async (action: ControlAction, expected: ControlSession | null = sessionDetail, confirmed: ControlSession | null = null): Promise<void> => {
-    if (expected === null || busy || stale || snapshot?.errors.some((error) => error.host === expected.host)) {
+    if (expected === null || busy || stale || sessionsUnreadable(snapshot, expected.host)) {
       setStatus("Session data is stale or unavailable; refresh before changing it");
       return;
     }
@@ -520,7 +558,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
 
   const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: Overlay): Promise<void> => {
-    if (busy || stale || snapshot?.errors.some((error) => error.host === target.host)) {
+    if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
       setStatus("Session data is stale or unavailable; refresh before recovering it"); return;
     }
     setBusy(true);
@@ -861,7 +899,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const listInteraction = { onOpen: openRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
 
   let content: ReactNode;
-  if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy}
+  if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy} loading={formLoading}
     onFocus={(focus) => { setForm((old) => ({ ...old, focus, choice: 0 })); }}
     onPickChoice={(index) => {
       if (form.focus === 3 && overlay === "assistant") {
