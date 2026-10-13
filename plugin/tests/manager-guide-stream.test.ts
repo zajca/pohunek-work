@@ -73,7 +73,8 @@ test("the guide's stream command passes only new unread events of a launched ses
 test("the guide's stream command delivers a matching line while the producer is still open", async () => {
   const dir = await shimDir([event("turn_completed", "unread", SESSION_ID)], HOLD_OPEN_SECS);
   const started = Date.now();
-  const child = Bun.spawn(["/bin/sh", "-c", await streamBlock()], {
+  // setsid makes the shell a process-group leader, so cleanup can end the shim, sleep and jq as well.
+  const child = Bun.spawn(["setsid", "/bin/sh", "-c", await streamBlock()], {
     env: { PATH: `${dir}:${process.env["PATH"] ?? ""}` },
     stdout: "pipe",
     stderr: "pipe",
@@ -93,7 +94,7 @@ test("the guide's stream command delivers a matching line while the producer is 
     // The line arrived before the producer's hold ended, so the pipeline did not wait for the producer to exit.
     expect(Date.now() - started).toBeLessThan(HOLD_OPEN_SECS * 1000);
   } finally {
-    child.kill();
+    process.kill(-child.pid, "SIGKILL");
     await child.exited;
   }
 }, PROCESS_TIMEOUT_MS);
