@@ -97,8 +97,16 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   to move through lists and click labeled actions in each detail. Press `?` for
   the available keys. The Work view supports
   `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
-  pull requests). Session detail exposes attach, resume, fork, stop, remove,
-  rename, metadata, screen, work link, folder and copy actions. Resume, fork and
+  pull requests). Tab and Shift-Tab cycle the views; 1–4 jump to one. The Sessions
+  view lists sections (Needs you, Running, Ready, Unavailable) with their counts.
+  At or above `detail_min_width` columns the highlighted session's flat panel sits
+  beside the list and follows the selection (PgUp/PgDn or the wheel scroll it);
+  below that width Enter opens the same panel full screen and Esc returns. `←`/`→`
+  or `[`/`]` jump between sections, `o` attaches, `x` stops and `D` removes the
+  highlighted session after an inline confirmation that names it (a remove names
+  its worktree too), `l` opens its work link, `u` its folder, `b` copies the branch
+  and `c` the path. Session actions through the SDK are stop, remove, resume,
+  rename and metadata; fork still runs through the CLI. Resume, fork and
   attach to a stopped session first show the native conversation the core will
   recover (ID or path, last native activity, or Unknown) and wait for `y`; an
   ambiguous reference is refused before the confirmation and a core refusal is
