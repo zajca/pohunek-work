@@ -66,6 +66,17 @@ export function WorkView({ rows, selected, limit, filter, warning, searchActive,
   </Box>;
 }
 
+/** Project chips of the Sessions header: every project with its session count; the active filter is bracketed. */
+export function projectChips(snapshot: ControlSnapshot, project: string | null): string {
+  const counts = new Map<string, number>();
+  for (const session of snapshot.sessions) {
+    const label = session.projectLabel ?? session.projectId ?? "unassigned";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const chips = [...counts.keys()].sort().map((label) => `${label === project ? "[" : ""}${label} ${String(counts.get(label) ?? 0)}${label === project ? "]" : ""}`);
+  return [`${project === null ? "[all]" : "all"} ${String(snapshot.sessions.length)}`, ...chips].join("  ");
+}
+
 export function SessionsView({ snapshot, sessions, selected, limit, project, onOpen, onWheel, width }: {
   readonly snapshot: ControlSnapshot | null; readonly sessions: readonly ControlSession[]; readonly selected: number;
   readonly limit: number; readonly project: string | null;
@@ -76,7 +87,8 @@ export function SessionsView({ snapshot, sessions, selected, limit, project, onO
   const start = Math.max(0, selected - Math.floor(limit / 2));
   return <Box flexDirection="column">
     <Text bold>{`SESSIONS  ${sessions.length}`}</Text>
-    <Text dimColor>{safeText(`${counts}${project === null ? "" : `  project: ${project}`}`)}</Text>
+    <Text dimColor wrap="truncate-end">{safeText(counts)}</Text>
+    <Text dimColor wrap="truncate-end">{safeText(`Projects  ${projectChips(snapshot, project)}   P cycles`)}</Text>
     {sessions.slice(start, start + limit).map((session, index) => <MenuRow key={`${session.host}/${session.id}`}
       onClick={() => { onOpen(start + index); }} onWheel={onWheel} width={width}
       selected={start + index === selected}
@@ -157,25 +169,38 @@ function subagentRows(agents: readonly ControlSubagent[]): { agent: ControlSubag
   return rows;
 }
 
-function sessionDetailLines(session: ControlSession, screen: ControlScreen | null): { text: string; heading?: boolean }[] {
-  const metadata = Object.entries(session.metadata);
+/** The work item a session is linked to, from the metadata the plugin and the launch flows write. */
+export function workLinkOf(session: ControlSession): string | null {
+  return session.metadata["work.link.id"] !== undefined ? session.metadata["work.link.url"] ?? null : session.metadata["link.url"] ?? null;
+}
+
+/** One flat panel: status and attention, location, work link, recent activity, output and subagents. */
+export function sessionDetailLines(session: ControlSession, screen: ControlScreen | null, notifications: readonly ControlNotification[]): { text: string; heading?: boolean }[] {
+  const records = notifications.filter((record) => record.host === session.host && record.sessionId === session.id);
+  const attention = records.filter(isUnresolvedAction);
+  const recent = records.filter((record) => record.status !== "archived").sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, RECENT_ACTIVITY_ROWS);
+  const link = workLinkOf(session);
+  const running = session.subagents.filter((agent) => agent.lifecycle === "running").length;
   return [
-    { text: "SESSION", heading: true },
-    { text: `${session.name ?? session.id} · ${session.host} · ${session.agent}` },
-    { text: `State  ${session.state} / ${session.activity ?? "unknown"} / ${session.runtimeState ?? "unknown"}` },
+    { text: `${session.name ?? session.id} · ${session.host} · ${session.agent}`, heading: true },
+    { text: `Status  ${session.state} · ${session.activity ?? "unknown"} · ${session.runtimeState ?? "unknown"}` },
+    { text: attention.length === 0 ? "Attention  none" : `Attention  ${attention[0]?.title ?? ""}${attention.length > 1 ? ` (+${String(attention.length - 1)})` : ""}` },
     { text: `Project  ${session.projectLabel ?? session.projectId ?? "unassigned"}   Branch  ${session.branch ?? "none"}` },
     { text: `Path  ${session.worktreePath ?? session.cwd}` },
-    { text: `SUBAGENTS  ${session.subagents.length}`, heading: true },
+    { text: `Work  ${link ?? "none"}${link === null ? "" : "   l opens"}` },
+    { text: "RECENT ACTIVITY", heading: true },
+    ...(recent.length === 0 ? [{ text: "  none" }] : recent.map((record) => ({ text: `  ${record.createdAt}  ${record.title}` }))),
+    { text: `SUBAGENTS  ${session.subagents.length} (${String(running)} running)`, heading: true },
     ...subagentRows(session.subagents).map(({ agent, depth }) => ({ text: `${"  ".repeat(depth)}${agent.provider} ${agent.agentType ?? "agent"} ${agent.lifecycle} ${agent.activity ?? ""}` })),
-    { text: `LINKS AND METADATA  ${metadata.length}`, heading: true },
-    ...metadata.map(([key, value]) => ({ text: `${key}: ${value}` })),
-    { text: "TERMINAL SCREEN", heading: true },
-    ...(screen === null ? [{ text: "Press p or click Screen to load" }] : screen.visibleLines.map((line) => ({ text: line }))),
+    { text: "OUTPUT", heading: true },
+    ...(screen === null ? [{ text: "  p loads the terminal screen" }] : screen.visibleLines.map((line) => ({ text: line }))),
   ];
 }
 
-export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number): number {
-  return Math.max(0, sessionDetailLines(session, screen).length - height);
+const RECENT_ACTIVITY_ROWS = 3;
+
+export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[]): number {
+  return Math.max(0, sessionDetailLines(session, screen, notifications).length - height);
 }
 
 /** What a resume or fork will recover, as the owner confirms it. An unknown target is shown as such, never guessed. */
@@ -191,11 +216,11 @@ export function RecoveryConfirmation({ action, session }: { readonly action: "re
   </Box>;
 }
 
-export function SessionDetail({ session, screen, offset, height, onWheel }: {
-  readonly session: ControlSession; readonly screen: ControlScreen | null; readonly offset: number; readonly height: number;
-  readonly onWheel: (direction: -1 | 1) => void;
+export function SessionDetail({ session, screen, notifications, offset, height, onWheel }: {
+  readonly session: ControlSession; readonly screen: ControlScreen | null; readonly notifications: readonly ControlNotification[];
+  readonly offset: number; readonly height: number; readonly onWheel: (direction: -1 | 1) => void;
 }): ReactNode {
-  const lines = sessionDetailLines(session, screen);
+  const lines = sessionDetailLines(session, screen, notifications);
   const start = Math.max(0, Math.min(offset, Math.max(0, lines.length - height)));
   return <MouseZone flexDirection="column" width="100%" onWheel={onWheel}>
     {lines.slice(start, start + height).map((line, index) => <Text key={start + index} bold={line.heading === true} color={line.heading ? "cyan" : "white"} wrap="truncate-end">{safeText(line.text)}</Text>)}

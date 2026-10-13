@@ -8,8 +8,8 @@ export const FORM_FOOTER = "Tab next field  ·  Ctrl+Enter create  ·  Esc back"
 
 /** Lines ScreenFrame renders around its children: header, tab row with its top margin, divider, reserved subtitle, reserved status and footer. */
 export const FRAME_LINES = 7;
-/** Lines the Sessions and Activity lists render above their rows: title and counts. */
-export const LIST_HEADER_LINES = 2;
+/** Lines the Sessions list renders above its rows: title, state counts and project chips. */
+export const LIST_HEADER_LINES = 3;
 /** Lines of a session or activity row (MenuRow: primary and secondary text). */
 export const LIST_ROW_LINES = 2;
 /** Lines of the action toolbar under a detail or a preview. */

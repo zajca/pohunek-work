@@ -13,7 +13,7 @@ import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
-import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, orderedSessions, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workLinkOf, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -106,8 +106,7 @@ function selectedAt<T>(items: readonly T[], index: number): T | null {
 }
 
 function sessionLinkUrl(session: ControlSession): string | null {
-  const metadata = session.metadata;
-  return metadata["work.link.id"] !== undefined ? metadata["work.link.url"] ?? null : metadata["link.url"] ?? null;
+  return workLinkOf(session);
 }
 
 function formFieldLabel(assistant: boolean, index: number): string {
@@ -278,10 +277,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
   // The side panel shows the highlighted session; its screen is kept only for that session.
   const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
-  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight);
+  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? []);
   // The list takes half of a split terminal; the panel takes the rest. Each row keeps a margin of one column.
   const listWidth = split ? Math.floor(stdout.columns / 2) : stdout.columns;
-  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight);
+  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? []);
   const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
   const previewWidth = Math.max(20, stdout.columns - 4);
   const previewMaxOffset = workPreview === null ? 0 : workPreviewMaxOffset(workPreview, previewWidth, previewHeight);
@@ -307,7 +306,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (generation !== screenGeneration.current) return;
       if (result.ok) {
         setScreen(result.data);
-        setDetailOffset(sessionDetailMaxOffset(sessionDetail, result.data, detailHeight));
+        setDetailOffset(sessionDetailMaxOffset(sessionDetail, result.data, detailHeight, snapshot?.notifications ?? []));
       } else setStatus(result.error.message);
     } catch (error) { setStatus(defaultStatus(error)); }
   }, [control, detailHeight, sessionDetail]);
@@ -960,6 +959,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } else if (view === "Sessions") {
       if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
       else if (input === "o") void openSelected();
+      else if (input === "l" && selectedSession !== null) { const url = sessionLinkUrl(selectedSession); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
+      else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
+      else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
+      else if (input === "c" && selectedSession !== null) void copyValue(selectedSession.worktreePath ?? selectedSession.cwd);
       else if (input === "x" && selectedSession !== null) requestConfirm(selectedSession, "stop", "none");
       else if (input === "D" && selectedSession !== null) requestConfirm(selectedSession, "remove", "none");
       else if (split && (key.pageDown || key.pageUp)) setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1))));
@@ -1003,7 +1006,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onScrollChoices={(direction, max) => { setForm((old) => ({ ...old, choice: Math.max(0, Math.min(Math.max(0, max), old.choice + direction)) })); }}
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
-  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen}
+  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []}
     offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(detailMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
@@ -1038,7 +1041,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
-      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />}
+      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} offset={detailOffset} height={detailHeight} onWheel={(direction) => { setDetailOffset((old) => Math.max(0, Math.min(panelMaxOffset, old + direction * Math.max(1, detailHeight - 1)))); }} />}
     </Box>
   </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
   else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
