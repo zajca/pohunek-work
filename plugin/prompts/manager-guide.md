@@ -226,18 +226,19 @@ above (never send input to a `blocked` session). A session that finished its tur
 is not a finished task: the pull request decides, as in the previous section.
 
 **5. Re-arm until nothing is still going.** Keep the subscription and the poll until
-no launched session is still going (`pohunek session list --json` and `session inspect`)
-and every event and change has been reported. A session is still going when it is
-live (`state` is `running` and `runtime.state` is not `lost`, the same rule the plugin
-uses) and its `activity` is `working`. A live session that is `idle` has finished its
-turn, and a finished turn is not a finished task (step 4), but it no longer holds the
-wait. A `blocked` session waits for the owner, so report it and do not hold the wait
-for it. A session whose runtime is `lost` emits no events, so report it to the owner
-at once as a lost worker. A launched session missing from the list is reported as
-unknown, not as finished. A failed `session list` means the state is unknown, so the
-manager keeps watching and says so. Then stop the background watch and send one final
-report: each session with its outcome, each pull request with its
-head and checks, and what needs the owner.
+every event and change has been reported and no launched session holds the wait. A
+session releases the wait only when one of these is read from `pohunek session list
+--json` and `pohunek session inspect <id> --json`: it is live (`state` is `running` and
+`runtime.state` is not `lost`, the same rule the plugin uses) and its `activity` is
+`idle`, so its turn has finished and its pull request outcome goes into the final
+report (a finished turn is not a finished task, step 4); its `activity` is `blocked`,
+so it is reported and the owner must act; or its `state` is `stopped`, `done` or
+`failed`; or its `runtime.state` is `lost`, which emits no events, so it is reported to
+the owner at once as a lost worker. Any other reading holds the wait and is reported as state unknown: a null or unrecognised
+`activity`, a failed or unparsable `session list` or `session inspect`, and a launched
+session missing from the list (it is not read as finished). Then stop the background
+watch and send one final report: each session with its outcome, each pull request with
+its head and checks, and what needs the owner.
 
 Two limits. `pohunek session wait` and `pohunek session input --timeout` are
 capped at 8000 ms, so they cannot carry a wait of minutes; use the stream above.
