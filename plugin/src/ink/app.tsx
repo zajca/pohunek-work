@@ -629,6 +629,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [control, refresh, snapshot, stale]);
 
   const updateNotification = useCallback(async (record: ControlNotification, kind: "ack" | "archive"): Promise<void> => {
+    const generation = notificationSelectionGeneration.current;
     if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
       bumpStatus("Notification data is stale; refresh before changing it"); return;
     }
@@ -638,8 +639,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else {
         bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
         await refresh();
-        // Closes after the list is read, and only if this overlay is still open: the owner may have opened another one meanwhile.
-        setOverlay((current) => current === "notification" ? "none" : current);
+        // Closes after the list is read, and only if this notification is still the one open: the owner may have
+        // left it and opened another, which has the same overlay name.
+        if (notificationSelectionGeneration.current === generation) setOverlay((current) => current === "notification" ? "none" : current);
       }
     } catch (error) { bumpStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);

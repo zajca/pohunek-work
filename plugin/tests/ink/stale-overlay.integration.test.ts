@@ -68,3 +68,32 @@ test("a notification acknowledged during a delayed refresh does not close the ov
   const result = await scenario.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, SCENARIO_TIMEOUT_MS);
+
+test("a notification opened during an acknowledgement's delayed refresh stays open when that refresh ends", async () => {
+  scenario = await startTuiScenario({ rules: [{ match: ["host", "discover"], delayMs: REFRESH_DELAY_MS }] });
+  const id = await createShellSession(scenario.daemon, "reopen-session");
+  await failSession(scenario, id);
+  const record = await notificationOf(scenario, id);
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    { pause: REFRESH_DELAY_MS * 2 },
+    keys("4"),
+    { expect: record.title },
+    keys("\r"),
+    { expect: record.body },
+    { pause: REFRESH_DELAY_MS * 2 },
+    keys("a"),
+    { expect: "Notification acknowledged" },
+    // Leave the acknowledged notification and open the notification again while its list read is pending.
+    { send: ESCAPE, settle: 300 },
+    keys("\r"),
+    { expect: "Acknowledge" },
+    // The read finishes during this pause. The reopened notification has its own footer; the main footer
+    // must not be drawn in this window, because that would mean the read closed it.
+    { clear: true },
+    { absent: "Tab views", pause: REFRESH_DELAY_MS * 3 },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
