@@ -181,7 +181,11 @@ export class SdkLink {
     return run;
   }
 
-  /** Runs one request; calls on a link are queued in `call`, because the SDK pairs each reply with the request in flight. */
+  /**
+   * Runs one request. Calls on a link are queued in `call`: the SDK's exchange reads the next reply and only checks
+   * its id, so overlapping calls depend on the daemon answering in order. The SDK README does not document this,
+   * and the web client queues its calls on one connection the same way (web/client-core/src/host-connection.ts).
+   */
   private async exchange<T>(method: string, params: unknown, deadline: number, generation: number): Promise<T> {
     const remaining = deadline - Date.now();
     // A call whose bound ran out while queued is not sent, so the daemon never runs it after its caller gave up.
