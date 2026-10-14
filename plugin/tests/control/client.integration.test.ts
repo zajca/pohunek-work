@@ -203,6 +203,23 @@ describe("control CLI process boundary", () => {
     });
   });
 
+  // A client inheriting one half of the origin pair must not send a stop over the SDK without the origin: the
+  // daemon could then not refuse a stop of the session that hosts the TUI.
+  test("a half-set origin pair refuses a stop on the socket instead of sending it without the origin", async () => {
+    const stub = await cli([
+      { args: ["host", "discover", "--json"], ok: [] },
+      { args: ["--host", "local", "session", "list", "--json"], ok: [session] },
+      { args: ["--host", "local", "project", "list", "--json"], ok: [project] },
+      { args: ["--host", "local", "session", "stop", session.id, "--json"], ok: { stopped: true } },
+    ]);
+    standIn = await startSdkStandIn(stub.binary);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket, env: { POHUNEK_SESSION_ID: "half" } });
+    const outcome = await client.act({ kind: "stop", host: "local", sessionId: session.id });
+    expect(outcome.ok).toBe(false);
+    expect((await stub.calls()).some((call) => call.includes("stop"))).toBe(false);
+    await client.close();
+  });
+
   // Calls on one link run one at a time. A mutation queued behind a read that stalls must not run after the link
   // has entered its outage: the stand-in never answers the read, the read times out, and the mutation is refused.
   test("a mutation queued behind a stalled read is refused, not sent, once the link reconnects", async () => {

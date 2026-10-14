@@ -54,23 +54,27 @@ function parseEnvelope(stdout: string, exitCode: number | null): ControlResult<u
   }
 }
 
+const ORIGIN_ENVIRONMENT_MESSAGE = "Set both POHUNEK_SESSION_ID and POHUNEK_DAEMON_ID, or unset both.";
+
 function originError(env: Readonly<Record<string, string | undefined>>): ControlError | null {
   const session = env["POHUNEK_SESSION_ID"] !== undefined;
   const daemon = env["POHUNEK_DAEMON_ID"] !== undefined;
   return session === daemon ? null : {
     code: "origin_environment",
-    message: "Set both POHUNEK_SESSION_ID and POHUNEK_DAEMON_ID, or unset both.",
+    message: ORIGIN_ENVIRONMENT_MESSAGE,
   };
 }
 
 /**
  * Connect options that carry the origin of a TUI hosted in a managed session, so the daemon refuses mutations
- * aimed at that session. The SDK does not read these variables itself. Callers check the pair with originError first.
+ * aimed at that session. The SDK does not read these variables itself. A half-set pair fails the connection,
+ * because a connection without the origin would let the TUI mutate its own session.
  */
 function connectOptions(env: Readonly<Record<string, string | undefined>>): ConnectOptions {
   const sessionId = env["POHUNEK_SESSION_ID"];
   const daemonId = env["POHUNEK_DAEMON_ID"];
-  if (sessionId === undefined || daemonId === undefined) return {};
+  if (sessionId === undefined && daemonId === undefined) return {};
+  if (sessionId === undefined || daemonId === undefined) throw new Error(ORIGIN_ENVIRONMENT_MESSAGE);
   return { origin: resolveRequestOrigin({ sessionId, daemonId }) };
 }
 
