@@ -81,6 +81,11 @@ export class SdkLink {
   private async open(): Promise<Client> {
     const client = await this.healthy();
     if (!this.subscribes) {
+      // A link closed while it connected must not keep the connection it just opened.
+      if (this.closed) {
+        await client.close().catch(() => undefined);
+        throw new Error("the link was closed while it connected");
+      }
       this.client = client;
       return client;
     }
