@@ -191,6 +191,13 @@ every request carries `--limit`; the page size keeps one response small. Report 
 records whose kind is one of the three and whose `id` and `kind` pair has not been
 reported yet. Run this list after every subscription start and every reconnect.
 
+A read in this step that fails, prints no output or does not parse is a failed read:
+retry it once, and if it still fails report that the recovery is unknown. A failure
+on any page makes the whole recovery unknown, never an empty result, and the manager
+keeps the subscription running until the last page has been read. A failed
+`notifications policy get` counts as policy off, so the `activity` poll of step 3
+covers finished turns.
+
 `turn_completed` is off in the default notification policy, so a finished turn
 then produces no line at all. Read `pohunek notifications policy get` at subscribe
 time. When `turn_completed` is off for the session's provider, detect a finished
@@ -216,9 +223,13 @@ is not a finished task: the pull request decides, as in the previous section.
 
 **5. Re-arm until nothing is running.** Keep the subscription and the poll until
 no session the manager launched is still running (`pohunek session list --json`)
-and every event and change has been reported. A failed `session list` means the
-state is unknown, so the manager keeps watching and says so. Then stop the background watch and
-send one final report: each session with its outcome, each pull request with its
+and every event and change has been reported. A session is still running when its
+`state` is `running` and its `runtime.state` is not `lost`; the plugin reads it the same
+way. A session whose runtime is `lost` emits no events, so report it to the owner at
+once as a lost worker, and stop waiting for it. A launched session missing from the
+list is reported as unknown, not as finished. A failed `session list` means the state
+is unknown, so the manager keeps watching and says so. Then stop the background watch
+and send one final report: each session with its outcome, each pull request with its
 head and checks, and what needs the owner.
 
 Two limits. `pohunek session wait` and `pohunek session input --timeout` are
