@@ -43,6 +43,8 @@ export class SdkLink {
   private reconnecting = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
+  /** The last queued call; the next call starts after it settles. */
+  private inFlight: Promise<void> = Promise.resolve();
 
   public constructor(
     public readonly route: string,
@@ -168,6 +170,13 @@ export class SdkLink {
   public async call<T>(method: string, params: unknown, timeoutMs: number = this.timeoutMs): Promise<T> {
     // Commands are not queued during an outage: they fail now and the caller reports them as unavailable.
     if (this.reconnecting) throw new Error("reconnecting to the daemon");
+    const run = this.inFlight.then(() => this.exchange<T>(method, params, timeoutMs));
+    this.inFlight = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** Runs one request; calls on a link are queued in `call`, because the SDK pairs each reply with the request in flight. */
+  private async exchange<T>(method: string, params: unknown, timeoutMs: number): Promise<T> {
     try {
       const client = await this.bounded(this.ready(), timeoutMs);
       return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), timeoutMs);

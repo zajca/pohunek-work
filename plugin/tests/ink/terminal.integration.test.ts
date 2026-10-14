@@ -235,14 +235,49 @@ previewed = False
 mouse_action_previewed = False
 deadline = time.monotonic() + 15
 last_data = time.monotonic()
+def screen_rows(raw, rows=24, cols=80):
+    # Replays the cursor and erase sequences Ink writes, so the grid is what the terminal shows now.
+    grid = [[" "] * cols for _ in range(rows)]
+    row = col = 0
+    i = 0
+    text = raw.decode(errors="replace")
+    while i < len(text):
+        ch = text[i]
+        if ch == "\x1b" and i + 1 < len(text) and text[i + 1] == "[":
+            m = re.match(r"\x1b\[([0-9;?]*)([A-Za-z])", text[i:])
+            if m is None:
+                i += 1
+                continue
+            args, op = m.group(1).lstrip("?"), m.group(2)
+            n = int(args) if args.isdigit() else 1
+            if op == "A": row = max(0, row - n)
+            elif op == "B": row = min(rows - 1, row + n)
+            elif op == "C": col = min(cols - 1, col + n)
+            elif op == "D": col = max(0, col - n)
+            elif op == "G": col = 0
+            elif op == "H": row, col = 0, 0
+            elif op == "K": grid[row][col:] = [" "] * (cols - col)
+            elif op == "J":
+                for r in range(row + 1, rows): grid[r] = [" "] * cols
+                grid[row][col:] = [" "] * (cols - col)
+            i += len(m.group(0))
+            continue
+        if ch == "\x1b":
+            i += 2
+            continue
+        if ch == "\n":
+            row = min(rows - 1, row + 1)
+        elif ch == "\r":
+            col = 0
+        elif ch >= " ":
+            if col < cols: grid[row][col] = ch
+            col += 1
+        i += 1
+    return ["".join(line).rstrip() for line in grid]
 def button_cell(raw, label):
-    # The latest drawn work-item screen gives the cell: its header starts the frame, and the button is drawn below it.
-    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw.decode(errors="replace"))
-    lines = text.replace("\r", "").split("\n")
-    header = max(index for index, line in enumerate(lines) if "WORK ITEM" in line)
-    for index in range(header, len(lines)):
-        if label in lines[index]:
-            return index + 1, lines[index].index(label) + 2
+    for index, line in enumerate(screen_rows(raw)):
+        if label in line:
+            return index + 1, line.index(label) + 2
     raise SystemExit("button not drawn")
 def trace():
     return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""

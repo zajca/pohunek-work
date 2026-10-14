@@ -47,6 +47,8 @@ type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistan
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: Overlay }
 type ConfirmAction = "stop" | "remove";
+/** Status line text for input refused while an action is still running. */
+export const BUSY_REFUSAL = "Still working on the last action; input was not applied, try again when it finishes";
 const VIEWS: readonly ViewName[] = ["Work", "Sessions", "Hosts", "Activity"];
 const SCOPES: readonly ActivityScope[] = ["Recent", "Unread", "Archived"];
 
@@ -323,7 +325,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       for (;;) {
         const result = await control.output(liveHost, liveId, { after: cursor?.after ?? null, runtime: cursor?.runtime ?? null, maxBytes: options.outputMaxBytes, waitMs: options.outputWaitMs });
         if (!active) return;
-        if (!result.ok) { setStatus(`Live output stopped: ${result.error.message}; press p to retry`); return; }
+        // The output block says why nothing is shown; the status line stays free for actions.
+        if (!result.ok) { setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: [`output unavailable: ${result.error.message}`] }); return; }
         // A new worker instance or generation starts a new output history, so the output before it is a gap.
         if (cursor !== null && (cursor.runtime.workerInstanceId !== result.data.runtime.workerInstanceId || cursor.runtime.runtimeGeneration !== result.data.runtime.runtimeGeneration)) live.markGap();
         cursor = { after: result.data.nextOffset, runtime: result.data.runtime };
@@ -333,7 +336,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: live.lines() });
       }
     };
-    read().catch((error: unknown) => { if (active) setStatus(`Live output stopped: ${defaultStatus(error)}; press p to retry`); });
+    read().catch((error: unknown) => { if (active) setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: [`output unavailable: ${defaultStatus(error)}`] }); });
     return () => { active = false; };
   }, [control, liveHost, liveId, liveRound, options.outputMaxBytes, options.outputWaitMs]);
   const restartOutput = useCallback((): void => { setLiveRound((round) => round + 1); }, []);
@@ -857,9 +860,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   useInput((input, key) => {
     const mouse = parseMouseEvent(input);
-    if (mouse !== null) { if (!busy) dispatchMouse(mouse); return; }
+    // Input that arrives while an action runs is refused on the status line, so the owner sees why nothing happened.
+    if (busy && (mouse !== null || !input.startsWith("[<"))) { setStatus(BUSY_REFUSAL); return; }
+    if (mouse !== null) { dispatchMouse(mouse); return; }
     if (input.startsWith("[<")) return;
-    if (busy) return;
     if (overlay === "form" || overlay === "assistant") {
       if (created !== null) { if (key.return) void attachCreated(); else if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay("none"); } return; }
       if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay("none"); return; }
