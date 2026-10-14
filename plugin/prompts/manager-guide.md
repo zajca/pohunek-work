@@ -205,15 +205,19 @@ turn in the poll of step 3 instead: `activity` of `pohunek session inspect` goin
 from `working` to `idle`. Report that the policy is off; enabling it is the
 owner's decision.
 
-**3. Poll the pull requests, reporting changes only.** Every five minutes, read
+**3. Poll the sessions and the pull requests, reporting changes only.** Every five
+minutes, read `pohunek session list --json` (`state` and `runtime.state` of each
+launched session) and `pohunek session inspect <id> --json` (`activity`), then
 `pohunek-work list --json` for the rows of the launched sessions and, for each of
 their pull requests, `gh pr view <url> --json headRefOid,statusCheckRollup,reviews`
 with the `pull_request.url` of the row. The URL names the repository, so the call
 works from the manager's own directory, which is outside every project checkout. Keep
-the last values (head commit, check state, and the latest review by a bot, with
-the commit it reviewed) and report only a change. A read that fails or returns no
-output is reported as a failed read; it is never compared as a value. A review of an older commit
-does not count as a review of the current head.
+the last values (session state, runtime state, activity, head commit, check state,
+and the latest review by a bot, with the commit it reviewed) and report only a change.
+A `runtime.state` that becomes `lost` is reported at once, and an `activity` that goes
+from `working` to `idle` is a finished turn when the policy is off (step 2). A read
+that fails or returns no output is reported as a failed read; it is never compared as
+a value. A review of an older commit does not count as a review of the current head.
 
 **4. On each event, act and report.** For a new `turn_completed` or
 `agent_blocked`, `approval_required`, or a changed pull request state, read the
