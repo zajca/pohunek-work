@@ -264,7 +264,9 @@ argument; `$VAR`, `~` and globs stay literal, and `{id}` must appear. The owner'
 native line works unchanged:
 `attach_command = "/usr/bin/alacritty -e {bin} --host={host} attach -- {id}"`.
 `pohunek-work tui --attach inline|window` and `new-session --attach` override the mode
-for one run; `--attach window` without `attach_command` fails at startup. On macOS
+for one run; `--attach window` without `attach_command` fails at startup. A new-session
+in window mode exits once its session is open in a window and prints
+`opened <id> in a new window`. On macOS
 window mode needs a terminal that takes a command as arguments (kitty, alacritty,
 wezterm, ghostty); Terminal.app is not supported yet. Layout sizes
 (compact and full tab rows, reserved rows, visible choices, scroll steps) are not

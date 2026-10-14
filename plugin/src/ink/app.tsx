@@ -11,6 +11,7 @@ import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from ".
 import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
 import { renderAttachArgv } from "../tui/attach-template.ts";
+import { coalesce } from "./coalesce.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
@@ -33,6 +34,8 @@ export interface InkTuiOptions {
   readonly actionCaptureBytes: number;
   /** Inline attaches in this terminal; window attaches in a terminal started from attachCommand. */
   readonly attachMode: TuiAttachMode;
+  /** A new-session that opened its session in a window reports the line the process prints as it exits. */
+  readonly onWindowOpened?: (line: string) => void;
   readonly attachCommand?: readonly string[];
   readonly attachLaunchCheckMs?: number;
   readonly outputWaitMs: number;
@@ -251,12 +254,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [actions, setActions] = useState<readonly ActionChoice[]>([]);
   const [created, setCreated] = useState<CreatedSession | null>(null);
   const [workChoice, setWorkChoice] = useState(0);
-  const controlBusy = useRef(false);
+  // Bumped when a mutation completes; a read that started before it must not replace the state the mutation showed.
+  const mutationEpoch = useRef(0);
   // Counts the actions that started; a read that completes later checks it before it reports its own result.
   const actionSeq = useRef(0);
   // A status written by a user action; it counts as newer than any refresh read that started before it.
   const bumpStatus = useCallback((message: string | null): void => { actionSeq.current += 1; setStatus(message); }, []);
-  const workBusy = useRef(false);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -388,44 +391,36 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   useEffect(() => () => { void control.close(); }, [control]);
 
   // Sessions and the work list refresh on their own intervals; a manual refresh runs both.
-  const refreshControl = useCallback(async (): Promise<void> => {
-    if (controlBusy.current) return;
-    controlBusy.current = true;
+  // A request during an in-flight read is answered by one follow-up read (see coalesce.ts).
+  const refreshControl = useMemo(() => coalesce(async (): Promise<void> => {
     const started = actionSeq.current;
-    try {
-      const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
-      if (!alive.current) return;
-      if (nextControl.ok) {
-        applySnapshot(nextControl.value, actionSeq.current === started);
-      } else {
-        setStale(true);
-        if (actionSeq.current === started) setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
-      }
-    } finally {
-      controlBusy.current = false;
+    const epoch = mutationEpoch.current;
+    const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
+    if (!alive.current) return;
+    if (nextControl.ok) {
+      // A read that started before a mutation completed is superseded by the follow-up read that the mutation queued.
+      if (mutationEpoch.current === epoch) applySnapshot(nextControl.value, actionSeq.current === started);
+    } else {
+      setStale(true);
+      if (actionSeq.current === started) setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
     }
-  }, [applySnapshot, control]);
+  }), [applySnapshot, control]);
 
-  const refreshWork = useCallback(async (): Promise<void> => {
-    if (options.mode !== "main" || workBusy.current) return;
-    workBusy.current = true;
+  const refreshWork = useMemo(() => coalesce(async (): Promise<void> => {
+    if (options.mode !== "main") return;
     const started = actionSeq.current;
-    try {
-      const nextWork = await loadWork(options.selfBin, options.listTimeoutMs).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
-      if (!alive.current) return;
-      if (nextWork.ok) {
-        const latest = nextWork.value;
-        setWork((previous) => latest.payload === null && previous?.payload !== null && previous !== null ?
-          { ...previous, partial: true, warning: latest.warning ?? "Work refresh unavailable; showing last good rows" } : latest);
-      } else {
-        const warning = `Work refresh failed: ${defaultStatus(nextWork.reason)}`;
-        setWork((previous) => previous === null ? null : { ...previous, partial: true, warning });
-        if (actionSeq.current === started) setStatus(warning);
-      }
-    } finally {
-      workBusy.current = false;
+    const nextWork = await loadWork(options.selfBin, options.listTimeoutMs).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
+    if (!alive.current) return;
+    if (nextWork.ok) {
+      const latest = nextWork.value;
+      setWork((previous) => latest.payload === null && previous?.payload !== null && previous !== null ?
+        { ...previous, partial: true, warning: latest.warning ?? "Work refresh unavailable; showing last good rows" } : latest);
+    } else {
+      const warning = `Work refresh failed: ${defaultStatus(nextWork.reason)}`;
+      setWork((previous) => previous === null ? null : { ...previous, partial: true, warning });
+      if (actionSeq.current === started) setStatus(warning);
     }
-  }, [options.listTimeoutMs, options.mode, options.selfBin]);
+  }), [options.listTimeoutMs, options.mode, options.selfBin]);
 
   const refresh = useCallback(async (): Promise<void> => {
     await Promise.all([refreshControl(), refreshWork()]);
@@ -513,6 +508,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       if (options.attachMode === "window") {
         bumpStatus(await openAttachWindowFor(created.host, created.sessionId));
+        options.onWindowOpened?.(`opened ${created.sessionId} in a new window`);
       } else {
         await suspendForChild(async () => {
           const result = await launcher.attachSession();
@@ -552,6 +548,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       try {
         if (options.attachMode === "window") {
           bumpStatus(await openAttachWindowFor(result.host, result.sessionId));
+          options.onWindowOpened?.(`opened ${result.sessionId} in a new window`);
         } else {
           await suspendForChild(async () => {
             const attached = await launcher.attachSession();
@@ -637,6 +634,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
       if (!result.ok) bumpStatus(`${kind} failed: ${result.error.message}`);
       else {
+        // The notification the daemon returned is shown at once; the reconcile below supersedes any read still in flight.
+        mutationEpoch.current += 1;
+        if ("notification" in result.data) {
+          const updated = result.data.notification;
+          setSnapshot((previous) => previous === null ? previous : { ...previous, notifications: previous.notifications.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) });
+          setNotificationDetail((current) => current !== null && current.host === updated.host && current.id === updated.id ? updated : current);
+        }
         bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
         await refresh();
         // Closes after the list is read, and only if this notification is still the one open: the owner may have

@@ -97,3 +97,32 @@ test("a notification opened during an acknowledgement's delayed refresh stays op
   const result = await scenario.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, SCENARIO_TIMEOUT_MS);
+
+test("an acknowledgement issued during a delayed in-flight read shows without waiting for that read", async () => {
+  // Opening the notification starts a read that the delayed `host discover` holds for REFRESH_DELAY_MS. The
+  // acknowledgement is issued during it and must show at once, not after the read has finished.
+  scenario = await startTuiScenario({ rules: [{ match: ["host", "discover"], delayMs: REFRESH_DELAY_MS }] });
+  const id = await createShellSession(scenario.daemon, "in-flight-session");
+  await failSession(scenario, id);
+  const record = await notificationOf(scenario, id);
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    { pause: REFRESH_DELAY_MS * 2 },
+    keys("4"),
+    { expect: record.title },
+    keys("\r"),
+    { expect: record.body },
+    keys("a"),
+    { expect: "Notification acknowledged" },
+    { send: ESCAPE, settle: 300 },
+    { expect: `${record.title}  acknowledged`, timeout: 1500 },
+    // The in-flight read ends and the reconcile queued by the acknowledgement runs once, after it.
+    { pause: REFRESH_DELAY_MS * 2 },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  // Startup read, the read that opening the notification started, and exactly one reconcile after the acknowledgement.
+  const discovers = (await scenario.proxy.calls()).filter((call) => call.includes("discover")).length;
+  expect(discovers).toBe(3);
+}, SCENARIO_TIMEOUT_MS);

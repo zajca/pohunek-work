@@ -442,8 +442,9 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
   });
   const announcer = mode === "main" ? new NotificationAnnouncer(config.global.notify, logger) : null;
   const noticeTasks = new Set<Promise<void>>();
+  const opened: { line: string | null } = { line: null };
   try {
-    return await runInkTui({
+    const code = await runInkTui({
       mode,
       selfBin: config.global.tui.selfBin,
       pohunekBin: config.global.pohunek.bin,
@@ -479,7 +480,11 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
         void task.finally(() => { noticeTasks.delete(task); });
       },
       log: (event, detail) => { logger.info(event, detail === undefined ? {} : { detail }); },
+      onWindowOpened: (line) => { opened.line = line; },
     });
+    // Printed after the screen is restored, so the launching terminal shows where the session went.
+    if (opened.line !== null) console.log(opened.line);
+    return code;
   } finally {
     await Promise.allSettled([...noticeTasks]);
     await logger.close();
