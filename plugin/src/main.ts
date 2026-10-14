@@ -43,8 +43,8 @@ const USAGE = `usage:
   pohunek-work setup scripts [--force] [--json]
   pohunek-work setup config [--force] [--json]
   pohunek-work setup sway [--force] [--print] [--keybind <key>] [--new-session-keybind <key>] [--issue-project <project> --issue-source <linear|github>] [--issue-keybind <key>] [--json]
-  pohunek-work tui
-  pohunek-work new-session
+  pohunek-work tui [--attach inline|window]
+  pohunek-work new-session [--attach inline|window]
   pohunek-work watch [--project <label>]...
 
 --project on list, watch and manager start repeats to select several projects; do takes one.
@@ -408,13 +408,29 @@ function resolveLocalSocket(): string | null {
 
 async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly string[]): Promise<number> {
   const command = mode === "main" ? "tui" : "new-session";
-  if (argv.length > 0) throw new UsageError(`${command} takes no arguments: ${argv.join(" ")}`);
+  let values: { attach?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({ args: [...argv], strict: true, allowPositionals: true, options: { attach: { type: "string" } } }));
+  } catch (error) {
+    if (argv.includes("--attach")) throw new UsageError("--attach takes inline or window");
+    throw new UsageError(`${command} takes no arguments: ${argv.join(" ")} (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (positionals.length > 0) throw new UsageError(`${command} takes no arguments: ${positionals.join(" ")}`);
+  if (values.attach !== undefined && values.attach !== "inline" && values.attach !== "window") {
+    throw new UsageError(`--attach takes inline or window, got ${JSON.stringify(values.attach)}`);
+  }
   let config;
   try {
     config = await loadConfig(resolveConfigDir());
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
+  }
+  const attachMode = values.attach ?? config.global.tui.attachMode;
+  const attachCommand = config.global.tui.attachCommand;
+  if (attachMode === "window" && attachCommand === undefined) {
+    return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", `${command}: window attach needs attach_command in the [tui] table of config.toml`);
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     return reportError(false, LIST_CONTRACT_VERSION, "usage", "no_terminal", `${command} needs a terminal on stdin and stdout`);
@@ -443,6 +459,12 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       outputWaitMs: config.global.tui.outputWaitMs,
       outputMaxBytes: config.global.tui.outputMaxBytes,
       detailMinWidth: config.global.tui.detailMinWidth,
+      attachMode,
+      ...(attachCommand === undefined || config.global.tui.attachLaunchCheckMs === undefined ? {} : {
+        attachCommand,
+        attachLaunchCheckMs: config.global.tui.attachLaunchCheckMs,
+      }),
+      stderrMaxLines: config.global.tui.stderrMaxLines,
       localSocket: resolveLocalSocket(),
       initialView: config.global.tui.initialView,
       stalePrDays: config.global.tui.stalePrDays,

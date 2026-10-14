@@ -219,6 +219,7 @@ implement = "profile-a"
 review = "profile-b"
 
 [tui]
+attach_mode = "inline"
 self_bin = "/usr/local/bin/pohunek-work"
 refresh_interval_secs = 300
 list_timeout_ms = 60000

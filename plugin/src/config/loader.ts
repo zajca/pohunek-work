@@ -20,12 +20,14 @@ import type {
   ReviewsMode,
   TeardownConfig,
   TuiConfig,
+  TuiAttachMode,
   TuiInitialView,
   WatchConfig,
 } from "../types/config.ts";
 import { fitsLinearComplexity, LINEAR_MAX_COMPLEXITY } from "../util/linear-budget.ts";
 import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
+import { checkAttachWords, splitAttachTemplate } from "../tui/attach-template.ts";
 import {
   fail,
   readStringAllowEmpty,
@@ -331,6 +333,7 @@ function readTimerValue(table: Table, key: string, unitMs: number, file: string,
 const ISSUE_SOURCES: readonly IssueSource["kind"][] = ["linear", "github"];
 const REVIEWS_MODES: readonly ReviewsMode[] = ["session", "external"];
 const TUI_INITIAL_VIEWS: readonly TuiInitialView[] = ["mine", "all"];
+const TUI_ATTACH_MODES: readonly TuiAttachMode[] = ["inline", "window"];
 
 /** A host name as `URL.hostname` returns it: lowercase labels, no port, no scheme. */
 const HOST_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
@@ -358,10 +361,15 @@ function parseTui(root: Table, file: string): TuiConfig {
       "action_capture_bytes",
       "output_wait_ms",
       "output_max_bytes",
+      "attach_mode",
+      "attach_command",
+      "attach_launch_check_ms",
     ],
     file,
     path,
   );
+  const attachMode = readEnum(table, "attach_mode", TUI_ATTACH_MODES, file, path);
+  const attach = parseTuiAttach(table, attachMode, file, path);
   const openUrlHosts = readNonEmptyStringArray(table, "open_url_hosts", file, path);
   if (!openUrlHosts.every((host) => HOST_NAME.test(host))) {
     throw fail(file, [...path, "open_url_hosts"], "must contain only lowercase host names (no scheme, port or path)");
@@ -384,6 +392,30 @@ function parseTui(root: Table, file: string): TuiConfig {
     actionCaptureBytes: readPositiveInt(table, "action_capture_bytes", file, path),
     outputWaitMs: readTimerValue(table, "output_wait_ms", 1, file, path),
     outputMaxBytes: readPositiveInt(table, "output_max_bytes", file, path),
+    attachMode,
+    ...attach,
+  };
+}
+
+/** Window mode requires `attach_command` and `attach_launch_check_ms`; inline mode rejects both. */
+function parseTuiAttach(table: Table, mode: TuiAttachMode, file: string, path: KeyPath): Pick<TuiConfig, "attachCommand" | "attachLaunchCheckMs"> {
+  const hasCommand = table["attach_command"] !== undefined;
+  const hasCheck = table["attach_launch_check_ms"] !== undefined;
+  if (mode === "inline") {
+    if (hasCommand) throw fail(file, [...path, "attach_command"], "is only used with attach_mode = \"window\"");
+    if (hasCheck) throw fail(file, [...path, "attach_launch_check_ms"], "is only used with attach_mode = \"window\"");
+    return {};
+  }
+  if (!hasCommand) throw fail(file, [...path, "attach_command"], "is required with attach_mode = \"window\"");
+  if (!hasCheck) throw fail(file, [...path, "attach_launch_check_ms"], "is required with attach_mode = \"window\"");
+  const command = readString(table, "attach_command", file, path);
+  const split = splitAttachTemplate(command);
+  if (!split.ok) throw fail(file, [...path, "attach_command"], split.message);
+  const problem = checkAttachWords(split.words);
+  if (problem !== null) throw fail(file, [...path, "attach_command"], problem);
+  return {
+    attachCommand: split.words,
+    attachLaunchCheckMs: readTimerValue(table, "attach_launch_check_ms", 1, file, path),
   };
 }
 

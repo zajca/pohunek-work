@@ -251,7 +251,22 @@ unavailable), `detail_min_width` (columns from which the session detail
 sits beside the list; narrower terminals show it full screen) and
 `action_capture_bytes` (output limit of a captured action child), `output_wait_ms`
 (longest wait of one live output read at the end of a session's output) and
-`output_max_bytes` (bytes of a session's output requested per live read). Layout sizes
+`output_max_bytes` (bytes of a session's output requested per live read),
+`attach_mode` (`"inline"` attaches in this terminal; `"window"` opens the session
+in a terminal window started by `attach_command`). Window mode also requires
+`attach_launch_check_ms`: a terminal that exits within that many milliseconds is
+a failed launch, reported with its exit status and the first stderr lines; one that
+keeps running counts as opened, and the TUI does not wait for it. Inline mode
+rejects both window keys. `attach_command` is an argv template, split with POSIX
+quoting and run without a shell: the program word must be an absolute path, and
+`{bin}` (the `pohunek` CLI), `{host}` and `{id}` (the session) each fill exactly one
+argument; `$VAR`, `~` and globs stay literal, and `{id}` must appear. The owner's
+native line works unchanged:
+`attach_command = "/usr/bin/alacritty -e {bin} --host={host} attach -- {id}"`.
+`pohunek-work tui --attach inline|window` and `new-session --attach` override the mode
+for one run; `--attach window` without `attach_command` fails at startup. On macOS
+window mode needs a terminal that takes a command as arguments (kitty, alacritty,
+wezterm, ghostty); Terminal.app is not supported yet. Layout sizes
 (compact and full tab rows, reserved rows, visible choices, scroll steps) are not
 configured: they derive from the rendered chrome and the terminal size. `clipboard_command` is optional and must be an absolute executable
 path; without it, the TUI displays branch and path text for manual selection.

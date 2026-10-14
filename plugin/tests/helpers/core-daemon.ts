@@ -314,9 +314,12 @@ function setTableValue(text: string, table: string, key: string, value: string |
   const next = lines.findIndex((line, index) => index > start && line.startsWith("["));
   const end = next === -1 ? lines.length : next;
   const matches = lines.flatMap((line, index) => (index > start && index < end && line.startsWith(`${key} = `) ? [index] : []));
+  const rendered = `${key} = ${typeof value === "number" ? String(value) : JSON.stringify(value)}`;
+  // A key the fixture leaves out is added to its table; a key it has once is replaced.
+  if (matches.length > 1) throw new Error(`the fixture has ${String(matches.length)} lines for ${table}.${key}, expected at most 1`);
   const [only] = matches;
-  if (only === undefined || matches.length !== 1) throw new Error(`the fixture has ${String(matches.length)} lines for ${table}.${key}, expected 1`);
-  lines[only] = `${key} = ${typeof value === "number" ? String(value) : JSON.stringify(value)}`;
+  if (only === undefined) lines.splice(start + 1, 0, rendered);
+  else lines[only] = rendered;
   return lines.join("\n");
 }
 

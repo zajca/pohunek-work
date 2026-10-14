@@ -103,6 +103,8 @@ export interface PolicyConfig {
 export type ProfilesConfig = Readonly<Record<string, string>>;
 
 export type TuiInitialView = "mine" | "all";
+/** How `attach` opens a session: in this terminal, or in a window started by `attach_command`. */
+export type TuiAttachMode = "inline" | "window";
 
 export interface TuiConfig {
   /** Absolute path of the `pohunek-work` binary the TUI runs `list` and `do` with. */
@@ -136,6 +138,12 @@ export interface TuiConfig {
   readonly actionCaptureBytes: number;
   /** Longest wait of one live output read at the end of a session's output, in milliseconds. */
   readonly outputWaitMs: number;
+  /** Inline attaches in this terminal; window attaches in the terminal that `attachCommand` starts. */
+  readonly attachMode: TuiAttachMode;
+  /** Window mode: the terminal's argv template, split with POSIX quoting; placeholders are filled per attach. */
+  readonly attachCommand?: readonly string[];
+  /** Window mode: a terminal that exits within this many milliseconds is a failed launch. */
+  readonly attachLaunchCheckMs?: number;
   /** Bytes of a session's retained output requested per live read. */
   readonly outputMaxBytes: number;
 }

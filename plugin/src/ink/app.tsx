@@ -5,9 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlRuntime, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
+import type { TuiAttachMode } from "../types/config.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
+import { openAttachWindow } from "../tui/attach-window.ts";
+import { renderAttachArgv } from "../tui/attach-template.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
@@ -28,6 +31,11 @@ export interface InkTuiOptions {
   readonly refreshIntervalMs: number;
   readonly sessionReconcileMs: number;
   readonly actionCaptureBytes: number;
+  readonly stderrMaxLines: number;
+  /** Inline attaches in this terminal; window attaches in a terminal started from attachCommand. */
+  readonly attachMode: TuiAttachMode;
+  readonly attachCommand?: readonly string[];
+  readonly attachLaunchCheckMs?: number;
   readonly outputWaitMs: number;
   readonly outputMaxBytes: number;
   readonly reconnectMaxMs: number;
@@ -490,15 +498,28 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     void loadForm(host, project, assistant);
   }, [loadForm, newLauncher, selectedSession, selectedWork, view]);
 
+  /** Opens a session in the window that `attach_command` starts; throws with the reason when the launch check fails. */
+  const openAttachWindowFor = useCallback(async (host: string, id: string): Promise<string> => {
+    if (options.attachCommand === undefined || options.attachLaunchCheckMs === undefined) throw new Error("window attach needs attach_command in [tui]");
+    const argv = renderAttachArgv(options.attachCommand, { bin: options.pohunekBin, host, id });
+    const result = await openAttachWindow(argv, { launchCheckMs: options.attachLaunchCheckMs, stderrMaxBytes: options.actionCaptureBytes, stderrMaxLines: options.stderrMaxLines });
+    if (!result.ok) throw new Error(result.message);
+    return `Session ${id} opened in a new window`;
+  }, [options.actionCaptureBytes, options.attachCommand, options.attachLaunchCheckMs, options.pohunekBin, options.stderrMaxLines]);
+
   const attachCreated = useCallback(async (): Promise<void> => {
     if (created === null || busy) return;
     actionSeq.current += 1;
     setBusy(true);
     try {
-      await suspendForChild(async () => {
-        const result = await launcher.attachSession();
-        if (result.exitCode !== 0) throw new Error(`attach exited ${String(result.exitCode)}`);
-      });
+      if (options.attachMode === "window") {
+        bumpStatus(await openAttachWindowFor(created.host, created.sessionId));
+      } else {
+        await suspendForChild(async () => {
+          const result = await launcher.attachSession();
+          if (result.exitCode !== 0) throw new Error(`attach exited ${String(result.exitCode)}`);
+        });
+      }
       if (options.mode === "new-session") { setExitCode(0); exit(); }
       else { setCreated(null); setOverlay("none"); void refresh(); }
     } catch (error) {
@@ -507,7 +528,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } finally {
       setBusy(false);
     }
-  }, [busy, created, exit, launcher, options.mode, refresh, setExitCode, suspendForChild]);
+  }, [busy, created, exit, launcher, openAttachWindowFor, options.attachMode, options.mode, refresh, setExitCode, suspendForChild]);
 
   const submitForm = useCallback(async (): Promise<void> => {
     if (formLoadingRef.current) { bumpStatus("Host options are still loading; submit when they finish"); return; }
@@ -530,10 +551,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       bumpStatus(`Created ${result.host}/${result.sessionId}; attaching…`);
       try {
-        await suspendForChild(async () => {
-          const attached = await launcher.attachSession();
-          if (attached.exitCode !== 0) throw new Error(`attach exited ${String(attached.exitCode)}`);
-        });
+        if (options.attachMode === "window") {
+          bumpStatus(await openAttachWindowFor(result.host, result.sessionId));
+        } else {
+          await suspendForChild(async () => {
+            const attached = await launcher.attachSession();
+            if (attached.exitCode !== 0) throw new Error(`attach exited ${String(attached.exitCode)}`);
+          });
+        }
         if (options.mode === "new-session") { setExitCode(0); exit(); }
         else { setCreated(null); setOverlay("none"); void refresh(); }
       } catch (error) {
@@ -665,16 +690,20 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (outcome.data.kind === "resume") {
         const resumed = outcome.data.session;
         try {
-          await suspendForChild(async () => {
-            const code = await execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id]);
-            if (code !== 0) throw new Error(`attach exited ${String(code)}`);
-          });
+          if (options.attachMode === "window") {
+            bumpStatus(await openAttachWindowFor(resumed.host, resumed.id));
+          } else {
+            await suspendForChild(async () => {
+              const code = await execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id]);
+              if (code !== 0) throw new Error(`attach exited ${String(code)}`);
+            });
+          }
         } catch (error) { bumpStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
       }
       void refresh();
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
-  }, [busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
+  }, [busy, control, openAttachWindowFor, options.attachMode, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
 
   const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: Overlay): Promise<void> => {
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
@@ -714,15 +743,19 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     setBusy(true);
     try {
-      await suspendForChild(async () => {
-        const code = await execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id]);
-        if (code !== 0) throw new Error(`attach exited ${String(code)}`);
-      });
+      if (options.attachMode === "window") {
+        bumpStatus(await openAttachWindowFor(target.host, target.id));
+      } else {
+        await suspendForChild(async () => {
+          const code = await execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id]);
+          if (code !== 0) throw new Error(`attach exited ${String(code)}`);
+        });
+      }
       // Not awaited inside the busy window: the work list can take seconds, and input must not wait for it.
       void refresh();
     } catch (error) { bumpStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
-  }, [options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
+  }, [openAttachWindowFor, options.attachMode, options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);
@@ -778,7 +811,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const started = actionSeq.current;
     let report: string;
     try {
-      if (action === "attach") {
+      if (action === "attach" && options.attachMode === "window") {
+        // The window needs the session id, which the attach plan names; `do attach` itself runs inline.
+        const preview = await previewWork(options.selfBin, options.listTimeoutMs, workDetail.key, "attach", workDetail.project);
+        if (typeof preview === "string") throw new Error(preview);
+        if (preview.kind === "error") throw new Error(`${preview.err.code}: ${preview.err.msg}`);
+        if (preview.kind !== "ok") throw new Error(`the attach plan is ${preview.kind}`);
+        const id = preview.plan.find((field) => field.label === "session_id")?.value;
+        if (id === undefined) throw new Error("the attach plan names no session");
+        report = await openAttachWindowFor("local", id);
+      } else if (action === "attach") {
         const code = await suspendForChild(() => execInteractive(checked.argv));
         report = code === 0 ? "Detached from work session" : `Attach ended with ${code === null ? "a signal" : `exit ${String(code)}`}`;
       } else {
@@ -805,7 +847,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     await refresh();
     // A mutation that started during the read may have set its own result; that result takes precedence.
     if (actionSeq.current === started) setStatus(report);
-  }, [busy, options.selfBin, refresh, suspendForChild, workDetail]);
+  }, [busy, openAttachWindowFor, options.attachMode, options.listTimeoutMs, options.selfBin, refresh, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
     if (workDetail === null || busy) return;
