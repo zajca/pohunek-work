@@ -602,7 +602,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
       if (!result.ok) setStatus(`${kind} failed: ${result.error.message}`);
-      else { void refresh(); setOverlay("none"); setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`); }
+      else { await refresh(); setOverlay("none"); setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`); }
     } catch (error) { setStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);
 
@@ -759,8 +759,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const checked = workActionArgv(options.selfBin, workDetail.key, action, workDetail.project);
     if (!checked.ok) { setStatus(checked.reason); return; }
     setBusy(true);
+    let report: string;
     try {
-      let report: string;
       if (action === "attach") {
         const code = await suspendForChild(() => execInteractive(checked.argv));
         report = code === 0 ? "Detached from work session" : `Attach ended with ${code === null ? "a signal" : `exit ${String(code)}`}`;
@@ -780,10 +780,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         }
       }
       setOverlay("none");
-      void refresh();
-      setStatus(report);
-    } catch (error) { setStatus(`Work action: ${defaultStatus(error)}`); }
-    finally { setBusy(false); }
+    } catch (error) {
+      setStatus(`Work action: ${defaultStatus(error)}`);
+      return;
+    } finally { setBusy(false); }
+    // Read after the busy flag is cleared, so input is not refused while the list loads; the report is set last.
+    await refresh();
+    setStatus(report);
   }, [busy, options.selfBin, refresh, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
