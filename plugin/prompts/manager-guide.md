@@ -240,8 +240,8 @@ close, use `list --json` without `--stale-days`: every pull request row carries
    reads is reported with the newer state.
 
 `--stale-days N` removes the rows whose `idle_days` is above N (a row with
-`idle_days` exactly N stays) and reports how many it removed as `omitted_stale`
-(also in the table). Those rows exist: use the flag for an overview, not to
+`idle_days` exactly N stays), except rows with a running session, which always stay.
+It reports how many it removed as `omitted_stale` (also in the table). Those rows exist: use the flag for an overview, not to
 claim that a pull request is absent.
 
 ## Finished sessions
