@@ -62,6 +62,8 @@ export class SdkLink {
     private readonly onEvent: (kind: string) => void,
     private readonly timeoutMs: number,
     private readonly reconnectMaxMs: number,
+    /** Whether the link also follows the daemon's event stream; a link that only polls reads does not. */
+    private readonly subscribes = true,
   ) {}
 
   /** The connected client; connects, checks the daemon's health and starts the event stream on first use. */
@@ -78,6 +80,10 @@ export class SdkLink {
   /** A subscription consumes its connection, so reads and the event stream use two connections, as the web client does. */
   private async open(): Promise<Client> {
     const client = await this.healthy();
+    if (!this.subscribes) {
+      this.client = client;
+      return client;
+    }
     let subscriptionClient: Client | null = null;
     try {
       subscriptionClient = await this.healthy();
@@ -166,7 +172,7 @@ export class SdkLink {
     }
     if (this.closed) return;
     // The stream can end while the attempt awaits its connection; that end was not started as a new loop.
-    if (this.subscription === null) {
+    if (this.subscribes && this.subscription === null) {
       this.scheduleAttempt();
       return;
     }

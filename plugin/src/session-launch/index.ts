@@ -435,7 +435,7 @@ export function createSessionLauncher(config: SessionLaunchConfig, deps: Session
     const session = current.session;
     attaching = (async () => {
       try {
-        const exitCode = await runInteractive([config.bin, "attach", "--host", session.host, session.sessionId]);
+        const exitCode = await runInteractive([config.bin, "attach", "--host", session.host, "--", session.sessionId]);
         return { sessionId: session.sessionId, host: session.host, exitCode };
       } catch (error) {
         if (error instanceof SpawnError) throw new LaunchError("attach_failed", `cannot start ${config.bin}; session ${session.sessionId} already exists on ${session.host}`);

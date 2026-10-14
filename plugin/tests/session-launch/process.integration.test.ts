@@ -122,8 +122,8 @@ test("creates a blank local session once and retries attach on the same terminal
   const traceLines = await calls(trace);
   expect(traceLines.filter((call) => call.argv[0] === "session")).toHaveLength(1);
   expect(traceLines.filter((call) => call.argv[0] === "attach")).toEqual([
-    { argv: ["attach", "--host", "local", "s-session"], stdin: "" },
-    { argv: ["attach", "--host", "local", "s-session"], stdin: "" },
+    { argv: ["attach", "--host", "local", "--", "s-session"], stdin: "" },
+    { argv: ["attach", "--host", "local", "--", "s-session"], stdin: "" },
   ]);
   const create = traceLines.find((call) => call.argv[0] === "session");
   expect(create?.argv).toContain("--json");

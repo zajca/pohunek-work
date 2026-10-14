@@ -1,8 +1,10 @@
 // The `attach_command` argv template of window mode: POSIX word splitting without expansion, and the
 // placeholders that every value fills as exactly one argument.
 
-/** A host or session id as it may appear in the window argv: no leading dash, so it cannot be read as an option. */
+/** A session id as it may appear in the window argv: no leading dash, so it cannot be read as an option. */
 export const ATTACH_VALUE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** A host route (`local`, or an overlay route such as `netbird:...`): it starts with a letter or digit. */
+export const ATTACH_HOST = /^[A-Za-z0-9][A-Za-z0-9._:~@-]*$/;
 
 /** Placeholders a template may use; any other `{name}` is a configuration error. */
 export const ATTACH_PLACEHOLDERS = ["bin", "host", "id"] as const;

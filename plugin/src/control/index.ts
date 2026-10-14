@@ -178,7 +178,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     const existing = outputLinks.get(route);
     if (existing !== undefined) return existing;
     // A reconnect of this link publishes a snapshot, so the panel reads its output again; the link's own events are not needed.
-    const link = new SdkLink(route, connectorFor(route), (kind) => { if (kind === "") scheduleRead(route, false); }, options.timeoutMs, options.reconnectMaxMs);
+    const link = new SdkLink(route, connectorFor(route), (kind) => { if (kind === "") scheduleRead(route, false); }, options.timeoutMs, options.reconnectMaxMs, false);
     outputLinks.set(route, link);
     return link;
   }
@@ -220,11 +220,13 @@ export function createControlClient(options: ControlClientOptions): ControlClien
 
   async function readHost(route: string, withNotifications = true): Promise<void> {
     const link = linkFor(route);
-    const previous = reads.get(route);
-    const [sessions, notifications] = await Promise.all([
+    const [sessions, listed] = await Promise.all([
       link.sessions(),
-      withNotifications || previous === undefined ? link.notifications(options.notificationsPageSize) : Promise.resolve(previous.notifications),
+      withNotifications ? link.notifications(options.notificationsPageSize) : Promise.resolve(null),
     ]);
+    // Read after the await: a read that finished meanwhile may hold fresher notifications than the ones before it.
+    const previous = reads.get(route);
+    const notifications = listed ?? previous?.notifications ?? await link.notifications(options.notificationsPageSize);
     reads.set(route, {
       sessions,
       notifications,
@@ -234,7 +236,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   }
 
   function scheduleRead(route: string, notifications: boolean): void {
-    if (closed) return;
+    if (closed || !hostRecords.has(route)) return;
     const pending = settling.get(route);
     if (pending !== undefined) {
       pending.notifications ||= notifications;
@@ -255,10 +257,12 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     hosts = [LOCAL_HOST, ...(discovered.ok ? discovered.data : [])];
     hostRecords.clear();
     for (const host of hosts) hostRecords.set(host.route, host);
-    for (const route of [...links.keys()]) {
+    for (const route of new Set([...links.keys(), ...outputLinks.keys()])) {
       if (!hostRecords.has(route)) {
         await links.get(route)?.close();
         links.delete(route);
+        await outputLinks.get(route)?.close();
+        outputLinks.delete(route);
         reads.delete(route);
         projectReads.delete(route);
       }
