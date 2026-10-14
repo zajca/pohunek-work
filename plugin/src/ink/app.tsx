@@ -319,6 +319,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (liveHost === null || liveId === null) return;
     let active = true;
     const live = new LiveOutput(options.outputMaxBytes);
+    const nextSnapshot = (): Promise<void> => new Promise((resolve) => {
+      const unsubscribe = control.subscribe(() => { unsubscribe(); resolve(); });
+    });
     const read = async (): Promise<void> => {
       // The cursor is only valid with the runtime it was read from, so both move together.
       let cursor: { readonly after: string; readonly runtime: ControlRuntime } | null = null;
@@ -326,7 +329,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         const result = await control.output(liveHost, liveId, { after: cursor?.after ?? null, runtime: cursor?.runtime ?? null, maxBytes: options.outputMaxBytes, waitMs: options.outputWaitMs });
         if (!active) return;
         // The output block says why nothing is shown; the status line stays free for actions.
-        if (!result.ok) { setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: [`output unavailable: ${result.error.message}`] }); return; }
+        if (!result.ok) {
+          setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: [`output unavailable: ${result.error.message}`] });
+          // The read is tried again when the control client publishes a snapshot, which follows a reconnect.
+          await nextSnapshot();
+          continue;
+        }
         // A new worker instance or generation starts a new output history, so the output before it is a gap.
         if (cursor !== null && (cursor.runtime.workerInstanceId !== result.data.runtime.workerInstanceId || cursor.runtime.runtimeGeneration !== result.data.runtime.runtimeGeneration)) live.markGap();
         cursor = { after: result.data.nextOffset, runtime: result.data.runtime };
@@ -852,11 +860,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [actions, chooseAction, chooseProject, form, launchOptions, loadForm, overlay]);
 
   usePaste((text) => {
+    if (busy) { setStatus(BUSY_REFUSAL); return; }
     if (overlay !== "form" && overlay !== "assistant") return;
-    if (created !== null || busy) return;
+    if (created !== null) return;
     const clean = text.replaceAll("\u0000", "");
     setForm((old) => changeTextField(old, clean, overlay === "assistant", false));
   });
+
+  // The refusal on the status line is for the action that was running, so it goes once that action ends.
+  useEffect(() => { if (!busy) setStatus((old) => old === BUSY_REFUSAL ? null : old); }, [busy]);
 
   useInput((input, key) => {
     const mouse = parseMouseEvent(input);

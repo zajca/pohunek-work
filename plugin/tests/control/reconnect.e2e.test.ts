@@ -11,7 +11,7 @@ const SCENARIO_TIMEOUT_MS = 90_000;
 const SNAPSHOT_WAIT_MS = 30_000;
 /** Backoff cap of the test client: the retries find the restarted daemon well within the snapshot wait. */
 const RECONNECT_MAX_MS = 1_000;
-/** The message the link reports while its event stream is down; the outage snapshot must carry it. */
+/** The start of the message the link reports while its event stream is down; the outage snapshot must carry it. */
 const OUTAGE_MESSAGE = "reconnecting to the daemon";
 
 let daemon: CoreDaemon | null = null;
@@ -41,7 +41,7 @@ function nextSnapshot(client: ControlClient, label: string, ready: (snapshot: Co
 }
 
 const sessionsOutage = (snapshot: ControlSnapshot): boolean =>
-  snapshot.errors.some((error) => error.host === "local" && error.scope === "sessions" && error.error.message === OUTAGE_MESSAGE);
+  snapshot.errors.some((error) => error.host === "local" && error.scope === "sessions" && error.error.message.startsWith(OUTAGE_MESSAGE));
 const sessionsHealthy = (snapshot: ControlSnapshot): boolean =>
   !snapshot.errors.some((error) => error.host === "local" && error.scope === "sessions");
 

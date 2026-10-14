@@ -1,10 +1,23 @@
-// A relay between the TUI and the real daemon socket. Every request and reply passes through unchanged,
-// except that the reply to one session's output read is held for a fixed time. The TUI reads live output
-// through the SDK, which talks to the socket directly, so only a process on the socket can delay that reply.
-// The scenario that uses it needs the reply of one session to arrive after the owner has moved on.
+// A relay between the TUI and the real daemon socket. Every request and reply passes through unchanged, except
+// for two conditions a scenario needs. The reply to a session's output read is held for a fixed time, for the
+// first `holdCount` such replies. After the first hold, `daemon.health` is refused, so a reconnect is refused.
+// The TUI reads live output through the SDK, which talks to the socket directly, so only a process on the
+// socket can produce these conditions.
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+export interface RelayOptions {
+  readonly holdSessionId: string;
+  readonly holdMs: number;
+  readonly holdCount: number;
+  readonly refuseHealthAfterHold: boolean;
+}
+
+export interface SocketRelay {
+  readonly socket: string;
+  readonly stop: () => Promise<void>;
+}
 
 async function isSocket(path: string): Promise<boolean> {
   try {
@@ -14,16 +27,11 @@ async function isSocket(path: string): Promise<boolean> {
   }
 }
 
-export interface SocketRelay {
-  readonly socket: string;
-  readonly stop: () => Promise<void>;
-}
-
-/** Starts a relay that holds the reply to `session.output` for `holdSessionId` by `holdMs`; the daemon serves the rest. */
-export async function startSocketRelay(target: string, holdSessionId: string, holdMs: number): Promise<SocketRelay> {
+/** Starts a relay between the TUI at `socket` and the daemon at `target`. */
+export async function startSocketRelay(target: string, options: RelayOptions): Promise<SocketRelay> {
   const directory = await mkdtemp(join(tmpdir(), "pw-relay-"));
   const socket = join(directory, "relay.sock");
-  const child = Bun.spawn([process.execPath, import.meta.path, socket, target, holdSessionId, String(holdMs)], { stdout: "ignore", stderr: "inherit" });
+  const child = Bun.spawn([process.execPath, import.meta.path, socket, target, JSON.stringify(options)], { stdout: "ignore", stderr: "inherit" });
   const deadline = Date.now() + 10_000;
   while (!(await isSocket(socket))) {
     if (child.exitCode !== null) throw new Error("the socket relay exited before it listened");
@@ -49,8 +57,10 @@ interface Link {
   readonly held: Set<string>;
 }
 
-/** Runs as the relay process: `socket target holdSessionId holdMs`. */
-function serve(listenPath: string, targetPath: string, holdSessionId: string, holdMs: number): void {
+/** Runs as the relay process: `socket target options-json`. */
+function serve(listenPath: string, targetPath: string, options: RelayOptions): void {
+  let holdsLeft = options.holdCount;
+  let refusingHealth = false;
   Bun.listen<Link>({
     unix: listenPath,
     socket: {
@@ -86,8 +96,13 @@ function serve(listenPath: string, targetPath: string, holdSessionId: string, ho
       const line = link.clientPending.slice(0, newline + 1);
       link.clientPending = link.clientPending.slice(newline + 1);
       const request = parse(line);
-      if (request !== null && request["method"] === "session.output" && (request["params"] as { session_id?: unknown } | null)?.session_id === holdSessionId) {
-        link.held.add(String(request["id"]));
+      if (request !== null && request["method"] === "daemon.health" && refusingHealth) {
+        link.client.write(JSON.stringify({ v: 4, id: request["id"], err: { class: "daemon", code: "relay_refused", msg: "the relay refuses health", recover: "" } }) + "\n");
+        continue;
+      }
+      if (request !== null && request["method"] === "session.output" && (request["params"] as { session_id?: unknown } | null)?.session_id === options.holdSessionId && holdsLeft > 0) {
+        const id = request["id"];
+        if (typeof id === "string" || typeof id === "number") link.held.add(String(id));
       }
       link.upstream?.write(line);
     }
@@ -103,7 +118,9 @@ function serve(listenPath: string, targetPath: string, holdSessionId: string, ho
       const reply = parse(line);
       const id = reply?.["id"];
       if ((typeof id === "string" || typeof id === "number") && link.held.delete(String(id))) {
-        setTimeout(() => { try { link.client.write(line); } catch { /* the owner closed the connection meanwhile */ } }, holdMs);
+        holdsLeft -= 1;
+        if (options.refuseHealthAfterHold && holdsLeft === 0) refusingHealth = true;
+        setTimeout(() => { try { link.client.write(line); } catch { /* the owner closed the connection meanwhile */ } }, options.holdMs);
       } else {
         link.client.write(line);
       }
@@ -121,8 +138,8 @@ function parse(line: string): Record<string, unknown> | null {
 }
 
 if (import.meta.main) {
-  const [listenPath, targetPath, holdSessionId, holdMs] = process.argv.slice(2);
-  if (listenPath === undefined || targetPath === undefined || holdSessionId === undefined || holdMs === undefined) throw new Error("usage: socket-relay <listen> <target> <session> <holdMs>");
-  serve(listenPath, targetPath, holdSessionId, Number(holdMs));
+  const [listenPath, targetPath, optionsJson] = process.argv.slice(2);
+  if (listenPath === undefined || targetPath === undefined || optionsJson === undefined) throw new Error("usage: socket-relay <listen> <target> <options-json>");
+  serve(listenPath, targetPath, JSON.parse(optionsJson) as RelayOptions);
   await new Promise(() => undefined);
 }

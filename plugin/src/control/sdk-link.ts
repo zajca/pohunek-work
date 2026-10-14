@@ -27,6 +27,11 @@ export function sdkFailure(error: unknown): ControlError {
  */
 const REFUSAL_KINDS: ReadonlySet<string> = new Set(["protocol", "remoteProtocol", "daemonProtocolTooOld"]);
 
+/** The message of a failure, or a fixed text for a value that is not an error. */
+function describeFailure(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown failure";
+}
+
 /**
  * Doublings of the retry delay before it reaches the cap: the first retry waits `cap / 2^steps`. The base is
  * derived from the cap, so `reconnect_max_secs` is the only timing value of the reconnect.
@@ -43,6 +48,8 @@ export class SdkLink {
   private reconnecting = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
+  /** The last failure that ended a connection or an attempt; the outage message reports it. */
+  private lastFailure: string | null = null;
   /** The last queued call; the next call starts after it settles. */
   private inFlight: Promise<void> = Promise.resolve();
   /** Counts the dropped connections; a call queued under an earlier count is refused. */
@@ -106,8 +113,9 @@ export class SdkLink {
         if (event === null) break;
         if (!this.closed) this.onEvent();
       }
-    } catch {
-      // A broken stream ends the link; the next listing reconnects and reports the cause.
+    } catch (error) {
+      // The cause is kept for the outage message, which the retry loop shows until the link is back.
+      this.lastFailure = describeFailure(error);
     }
     if (this.subscription === subscription) {
       await this.drop();
@@ -117,7 +125,7 @@ export class SdkLink {
 
   /**
    * Starts the retry loop once per outage. The first event asks the client to read the link, and that read
-   * fails at once with "reconnecting to the daemon", so the snapshot shows the outage while the list is kept.
+   * fails at once with the outage message, so the snapshot shows the outage while the list is kept.
    */
   private startReconnect(): void {
     if (this.closed || this.reconnecting) return;
@@ -136,12 +144,23 @@ export class SdkLink {
     }, delay);
   }
 
-  /** One reconnect attempt; a connected link reconciles through the same read an event triggers. */
+  /**
+   * One reconnect attempt; a connected link reconciles through the same read an event triggers. A refusal by the
+   * daemon does not change with time, so the loop stops; the next call that needs the link reports the refusal.
+   */
   private async retryConnect(): Promise<void> {
     try {
       await this.ready();
-    } catch {
-      if (!this.closed) this.scheduleAttempt();
+    } catch (error) {
+      if (this.closed) return;
+      this.lastFailure = describeFailure(error);
+      if (error instanceof ClientError && REFUSAL_KINDS.has(error.kind)) {
+        this.reconnecting = false;
+        this.attempt = 0;
+        this.onEvent();
+        return;
+      }
+      this.scheduleAttempt();
       return;
     }
     if (this.closed) return;
@@ -153,6 +172,10 @@ export class SdkLink {
     this.reconnecting = false;
     this.attempt = 0;
     this.onEvent();
+  }
+
+  private outageMessage(): string {
+    return this.lastFailure === null ? "reconnecting to the daemon" : `reconnecting to the daemon after: ${this.lastFailure}`;
   }
 
   /** Forgets a connection that ended, so the next read reconnects. */
@@ -172,7 +195,7 @@ export class SdkLink {
    */
   public async call<T>(method: string, params: unknown, timeoutMs: number = this.timeoutMs): Promise<T> {
     // Commands are not queued during an outage: they fail now and the caller reports them as unavailable.
-    if (this.reconnecting) throw new Error("reconnecting to the daemon");
+    if (this.reconnecting) throw new Error(this.outageMessage());
     // The bound starts when the caller asks, so time spent behind earlier calls counts against it.
     const deadline = Date.now() + timeoutMs;
     const generation = this.generation;
@@ -192,12 +215,13 @@ export class SdkLink {
     if (remaining <= 0) throw new SdkTimeoutError("the call's time ran out before it was sent");
     // A call queued before the connection was dropped was validated against that connection's state; it is refused
     // instead of being sent on a replacement connection.
-    if (this.generation !== generation || this.reconnecting) throw new Error("the connection was lost before the request was sent");
+    if (this.generation !== generation || this.reconnecting) throw new Error(this.reconnecting ? this.outageMessage() : "the connection was lost before the request was sent");
     try {
       const client = await this.bounded(this.ready(), remaining);
       return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), remaining);
     } catch (error) {
       if (error instanceof ClientError && REFUSAL_KINDS.has(error.kind)) throw error;
+      this.lastFailure = describeFailure(error);
       await this.drop();
       this.startReconnect();
       throw error;
