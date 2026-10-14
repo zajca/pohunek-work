@@ -132,9 +132,122 @@ proof that the work is done.
 - Plain `list` also prints `unlinked_sessions` and `orphaned_sessions`; a
   session missing from a row is not necessarily gone.
 
-**Temporary:** a dedicated view of delegated work is tracked in
-[#85](https://github.com/zajca/pohunek-work/issues/85). Update this section
-when it lands.
+## Following delegated work until it is done
+
+A manager that launched sessions follows them to the end and reports without
+being asked. It does this by subscribing to events, not by polling, and it acts
+only on events that are new.
+
+**1. Subscribe first.** Start `pohunek notifications watch --json` in the
+background, before anything else is read, with its output delivered to the agent
+line by line. The stream does not replay, so a subscription started later can
+miss an event that happened in between. Each line is one JSON object:
+
+- `{"event":"notification_created","record":{...}}` and `notification_updated`
+  carry the notification `record` (`id`, `kind`, `status`, `session_id`,
+  `created_at`);
+- `notification_deleted` carries only `notification_id`.
+
+Act on `notification_created` and `notification_updated` lines whose `record.status`
+is `unread`, whose `record.kind` is `turn_completed`, `agent_blocked` or
+`approval_required`, and whose `record.session_id` is one of the launched sessions.
+The pinned core (0.34.2) has no `--session`, `--kind` or `--status` option on
+`watch`, so filter the lines with `jq`:
+
+```bash
+set -o pipefail
+pohunek notifications watch --json | jq --unbuffered -c --argjson ids '["<session id>"]' '
+  select((.event == "notification_created" or .event == "notification_updated")
+    and .record.status == "unread"
+    and ((.record.kind as $k | ["turn_completed","agent_blocked","approval_required"] | index($k)) != null)
+    and (.record.session_id as $s | $ids | index($s)) != null)'
+```
+
+An update can carry a new kind for a record: core upgrades a generic `agent_blocked`
+to `approval_required` in place and sends only `notification_updated`. So a line
+counts as new when its `record.id` and `record.kind` pair has not been reported yet,
+and a repeated pair is dropped. An update that makes a record `acknowledged` (when
+new input reaches a session, its previous `turn_completed` becomes `acknowledged`)
+is not a new finish and is filtered out by the status check.
+
+If the background command ends for any reason (the daemon restarts, the connection
+drops, jq stops), the stream is down and the manager has heard nothing since. Report
+that, start the subscription again and read the baseline of step 2 before treating
+silence as "nothing happened".
+
+**2. Baseline after subscribing.** Once the subscription runs, read the current
+state of every launched session: `pohunek session inspect <id> --json` (`state`,
+`activity`) and the pull request of each row (`pohunek-work list --json`). Events
+that arrived since step 1 are kept and processed; the baseline does not discard
+them. An event whose change the baseline already shows is still reported once,
+because the owner has not heard of it yet. Old notifications that were already
+acknowledged are never reported as new.
+
+The stream does not replay, so a finish during a disconnect is recovered from the
+notification list: for each launched session, `pohunek notifications list --session
+<id> --status unread --limit 100 --json` and, while the output has a `next_cursor`,
+the same command with `--cursor <next_cursor>`. The list has no default limit, so
+every request carries `--limit`; the page size keeps one response small. Report the
+records whose kind is one of the three and whose `id` and `kind` pair has not been
+reported yet. Run this list after every subscription start and every reconnect.
+
+A read in this step that fails, prints no output or does not parse is a failed read:
+retry it once, and if it still fails report that the recovery is unknown. A failure
+on any page makes the whole recovery unknown, never an empty result, and the manager
+keeps the subscription running until the last page has been read. A failed
+`notifications policy get` counts as policy off, so the `activity` poll of step 3
+covers finished turns.
+
+`turn_completed` is off in the default notification policy, so a finished turn
+then produces no line at all. Read `pohunek notifications policy get` at subscribe
+time. When `turn_completed` is off for the session's provider, detect a finished
+turn in the poll of step 3 instead: `activity` of `pohunek session inspect` going
+from `working` to `idle`. Report that the policy is off; enabling it is the
+owner's decision.
+
+**3. Poll the sessions and the pull requests, reporting changes only.** Every five
+minutes, read `pohunek session list --json` (`state` and `runtime.state` of each
+launched session) and `pohunek session inspect <id> --json` (`activity`), then
+`pohunek-work list --json` for the rows of the launched sessions and, for each of
+their pull requests, `gh pr view <url> --json headRefOid,statusCheckRollup,reviews`
+with the `pull_request.url` of the row. The URL names the repository, so the call
+works from the manager's own directory, which is outside every project checkout. Keep
+the last values (session state, runtime state, activity, head commit, check state,
+and the latest review by a bot, with the commit it reviewed) and report only a change.
+A `runtime.state` that becomes `lost` is reported at once, and an `activity` that goes
+from `working` to `idle` is a finished turn when the policy is off (step 2). A read
+that fails or returns no output is reported as a failed read; it is never compared as
+a value. A review of an older commit does not count as a review of the current head.
+
+**4. On each event, act and report.** For a new `turn_completed` or
+`agent_blocked`, `approval_required`, or a changed pull request state, read the
+row and the session again, report the result to the owner, and apply the rules
+above (never send input to a `blocked` session). A session that finished its turn
+is not a finished task: the pull request decides, as in the previous section.
+
+**5. Re-arm until nothing is still going.** Keep the subscription and the poll until
+every event and change has been reported and no launched session holds the wait. A
+session releases the wait only when one of these is read from `pohunek session list
+--json` and `pohunek session inspect <id> --json`: it is live (`state` is `running` and
+`runtime.state` is not `lost`, the same rule the plugin uses) and its `activity` is
+`idle`, so its turn has finished and its pull request outcome goes into the final
+report (a finished turn is not a finished task, step 4); its `activity` is `blocked`,
+so it is reported and the owner must act; or its `state` is `stopped`, `done` or
+`failed`; or its `runtime.state` is `lost`, which emits no events, so it is reported to
+the owner at once as a lost worker. Any other reading holds the wait and is reported as state unknown: a null or unrecognised
+`activity`, a failed or unparsable `session list` or `session inspect`, and a launched
+session missing from the list (it is not read as finished; a session the manager removed
+itself with `cleanup` is reported as removed and releases the wait, and any other missing
+session is left to the owner, who ends the wait by saying so). Then stop the background
+watch and send one final report: each session with its outcome, each pull request with
+its head and checks, and what needs the owner.
+
+Two limits. `pohunek session wait` and `pohunek session input --timeout` are
+capped at 8000 ms, so they cannot carry a wait of minutes; use the stream above.
+Core [zajca/pohunek#858](https://github.com/zajca/pohunek/issues/858) proposes an
+edge-triggered wait over several sessions for turn events. It is the planned
+primitive for this step; this section does not depend on it. When a pinned core
+release ships it, replace step 1 with that command and keep steps 2, 3 and 5.
 
 ## A branch that is already checked out
 
@@ -349,8 +462,10 @@ agent on demand:
 - `watch` is a deterministic process; an idle poll costs no model tokens.
 - When it notifies, open an agent session and run one pass as above.
 - To wait for one session, use `pohunek session wait <id> --state ... --activity
-  ... --timeout-ms <n>` (bounded, one change) or `pohunek notifications watch
-  --json` (an event stream). Do not loop on `list` or `session list`.
+  ... --timeout-ms <n>` (bounded, one change, at most 8000 ms) or `pohunek
+  notifications watch --json` (an event stream). Do not loop on `list` or
+  `session list`. The one exception is following delegated work to its end, in
+  [Following delegated work until it is done](#following-delegated-work-until-it-is-done).
 - Do not start an agent from a timer: an agent run without a terminal cannot
   get the owner's confirmation, so the unattended path may only notify or
   propose, never run `do --yes`.
