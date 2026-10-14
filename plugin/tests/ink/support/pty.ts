@@ -7,7 +7,8 @@ import { join } from "node:path";
 export type PtyStep =
   | { readonly expect: string; readonly timeout?: number }
   | { readonly send: string; readonly settle?: number }
-  | { readonly pause: number };
+  | { readonly pause: number }
+  | { readonly clear: true };
 
 export interface PtyRun {
   readonly cmd: readonly string[];

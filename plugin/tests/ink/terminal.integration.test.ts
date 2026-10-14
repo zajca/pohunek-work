@@ -74,12 +74,12 @@ while time.monotonic() < deadline:
         step = "hosts"
         output.clear()
     elif step == "hosts" and b"HOSTS" in output:
-        os.write(master, b"\x1b[C")
+        os.write(master, b"\t")
         step = "activity"
         output.clear()
     elif step == "activity" and b"Scope: Recent" in output:
         right_switched = True
-        os.write(master, b"\x1b[D")
+        os.write(master, b"\x1b[Z")
         step = "back"
         output.clear()
     elif step == "back" and b"HOSTS" in output:
@@ -574,7 +574,7 @@ test("the standalone session form cancels before creating a session", async () =
   expect(result).toEqual({ exit: 0, sent: true, alternate: true, restored: true, screen: true });
 }, 20_000);
 
-test("click and horizontal arrows switch tabs and mouse tracking is restored on exit", async () => {
+test("click and Tab keys switch tabs and mouse tracking is restored on exit", async () => {
   const daemon = await startCoreDaemon();
   stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");

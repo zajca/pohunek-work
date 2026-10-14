@@ -245,6 +245,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [created, setCreated] = useState<CreatedSession | null>(null);
   const [workChoice, setWorkChoice] = useState(0);
   const controlBusy = useRef(false);
+  // Counts the actions that started; a read that completes later checks it before it reports its own result.
+  const actionSeq = useRef(0);
   const workBusy = useRef(false);
   const alive = useRef(true);
 
@@ -463,6 +465,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const chooseAction = useCallback(async (action: string | null): Promise<void> => {
     if (action === null || form.project === null) { setForm((old) => ({ ...old, action: null, agent: null, prompt: "", branch: "", baseBranch: "" })); return; }
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const resolved = await launcher.resolveAction(form.host, form.project, action);
@@ -485,6 +488,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const attachCreated = useCallback(async (): Promise<void> => {
     if (created === null || busy) return;
+    actionSeq.current += 1;
     setBusy(true);
     try {
       await suspendForChild(async () => {
@@ -504,6 +508,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const submitForm = useCallback(async (): Promise<void> => {
     if (formLoadingRef.current) { setStatus("Host options are still loading; submit when they finish"); return; }
     if (busy || created !== null) return;
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const request: LaunchRequest = overlay === "assistant" ? {
@@ -540,6 +545,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [busy, created, exit, form, launcher, options.mode, overlay, refresh, setExitCode, suspendForChild]);
 
   const inspectSessionAt = useCallback(async (host: string, id: string): Promise<void> => {
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const result = await control.inspectSession(host, id);
@@ -557,6 +563,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const inspectHost = useCallback(async (host: ControlHost): Promise<void> => {
     if (!host.dialable) { setStatus(`Host ${host.name} has no dialable identity`); return; }
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const [capabilities, policy] = await Promise.all([
@@ -602,7 +609,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
       if (!result.ok) setStatus(`${kind} failed: ${result.error.message}`);
-      else { await refresh(); setOverlay("none"); setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`); }
+      else {
+        // Only the notification overlay closes; the owner may have opened another one while the action ran.
+        setOverlay((current) => current === "notification" ? "none" : current);
+        setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
+        await refresh();
+      }
     } catch (error) { setStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);
 
@@ -616,6 +628,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setStatus("The last fork did not answer, so it may exist; press r to review the Sessions list before forking again");
       return;
     }
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const latest = await control.inspectSession(expected.host, expected.id);
@@ -665,6 +678,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
       setStatus("Session data is stale or unavailable; refresh before recovering it"); return;
     }
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const latest = await control.inspectSession(target.host, target.id);
@@ -697,6 +711,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       await requestRecovery("resume", target, overlay === "session" ? "session" : "none");
       return;
     }
+    actionSeq.current += 1;
     setBusy(true);
     try {
       await suspendForChild(async () => {
@@ -758,7 +773,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (workDetail === null || busy) return;
     const checked = workActionArgv(options.selfBin, workDetail.key, action, workDetail.project);
     if (!checked.ok) { setStatus(checked.reason); return; }
+    actionSeq.current += 1;
     setBusy(true);
+    const started = actionSeq.current;
     let report: string;
     try {
       if (action === "attach") {
@@ -786,11 +803,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } finally { setBusy(false); }
     // Read after the busy flag is cleared, so input is not refused while the list loads; the report is set last.
     await refresh();
-    setStatus(report);
+    // A newer action may have failed while the list was read; its message takes precedence over this report.
+    if (actionSeq.current === started) setStatus(report);
   }, [busy, options.selfBin, refresh, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
     if (workDetail === null || busy) return;
+    actionSeq.current += 1;
     setBusy(true);
     try {
       const preview = await previewWork(options.selfBin, options.listTimeoutMs, workDetail.key, action, workDetail.project);
@@ -962,17 +981,23 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (!key.ctrl && !key.meta) setEdit((old) => old + input);
       return;
     }
-    // Tab and the arrows switch views alike; a text field (Work search, project filter) keeps them for its cursor.
+    // Only Tab and Shift-Tab switch views. A text field (Work search, project filter) keeps Tab for itself.
     const textFocused = workSearch || (overlay === "projects" && pick.filtering);
-    if ((key.tab || input === "\u001b[Z" || key.leftArrow || key.rightArrow) && !textFocused && overlay !== "help" && options.mode === "main") {
-      const backward = key.shift || input === "\u001b[Z" || key.leftArrow;
+    if ((key.tab || input === "\u001b[Z") && !textFocused && overlay !== "help" && options.mode === "main") {
+      const backward = key.shift || input === "\u001b[Z";
       const direction = backward ? -1 : 1;
       setOverlay("none");
       setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
       return;
     }
-    if (overlay === "none" && view === "Sessions" && (input === "[" || input === "]")) {
-      jumpSection(input === "]" ? 1 : -1);
+    if (overlay === "none" && view === "Sessions" && (key.leftArrow || key.rightArrow || input === "[" || input === "]")) {
+      jumpSection(key.rightArrow || input === "]" ? 1 : -1);
+      return;
+    }
+    if (overlay === "none" && view === "Activity" && (key.leftArrow || key.rightArrow)) {
+      const step = key.rightArrow ? 1 : -1;
+      setScope((old) => SCOPES[(SCOPES.indexOf(old) + step + SCOPES.length) % SCOPES.length] ?? "Recent");
+      setCursor((old) => ({ ...old, Activity: 0 }));
       return;
     }
     if (overlay === "help") { if (key.escape || input === "?" || input === "q") setOverlay("none"); return; }
@@ -1085,7 +1110,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   });
 
-  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "←→ views · ↑↓ select · Enter/click open · ? help" : MAIN_FOOTER :
+  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/click open · ? help" : MAIN_FOOTER :
     overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
         overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
@@ -1145,7 +1170,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab, Shift-Tab, ←/→ and 1–4 switch views; a text field keeps ←/→ for its cursor.</Text><Text>Sessions: [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>

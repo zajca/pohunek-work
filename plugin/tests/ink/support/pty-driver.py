@@ -1,7 +1,7 @@
 # Runs a command in a pseudo-terminal and drives it with a list of steps read from a JSON spec.
 # Steps: {"expect": text} waits for text after the previous expect; {"send": hex} writes bytes;
-# {"pause": ms} sleeps. The plain output (ANSI sequences removed) is printed as JSON with the
-# index of the failing step, or -1 when every step completed.
+# {"clear": true} makes later expectations match only output printed after it; {"pause": ms} sleeps.
+# The plain output (ANSI sequences removed) is printed as JSON with the index of the failing step, or -1 when every step completed.
 import fcntl, json, os, pty, re, select, signal, struct, subprocess, sys, termios, time
 
 spec = json.load(open(sys.argv[1]))
@@ -53,6 +53,9 @@ for index, step in enumerate(spec["steps"]):
         pump(step.get("settle", 300) / 1000)
     elif "pause" in step:
         pump(step["pause"] / 1000)
+    elif "clear" in step:
+        # Later expectations match only output printed after this point.
+        mark = len(plain())
 # The command leads its own process group; its helpers (proxy, attach stand-in) belong to it too.
 try:
     os.killpg(child.pid, signal.SIGKILL)

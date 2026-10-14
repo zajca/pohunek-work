@@ -44,7 +44,7 @@ while time.monotonic() < deadline:
     plain = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
     now = time.monotonic()
     if step == "tabs" and b"Work" in plain:
-        os.write(master, b"\x1b[C")
+        os.write(master, b"\t")
         step = "sessions"
         output.clear()
     elif step == "sessions" and b"Recovery session" in plain:
