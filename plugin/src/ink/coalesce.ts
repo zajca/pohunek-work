@@ -14,7 +14,8 @@ export function coalesce(run: () => Promise<void>): () => Promise<void> {
   return () => {
     if (current === null) return start();
     if (queued === null) {
-      queued = current.then(() => {
+      // A failed read must not leave the queue waiting on it forever.
+      queued = current.then(() => undefined, () => undefined).then(() => {
         queued = null;
         return start();
       });
