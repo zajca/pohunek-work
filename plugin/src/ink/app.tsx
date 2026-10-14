@@ -247,6 +247,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const controlBusy = useRef(false);
   // Counts the actions that started; a read that completes later checks it before it reports its own result.
   const actionSeq = useRef(0);
+  // A status written by a user action; it counts as newer than any refresh read that started before it.
+  const bumpStatus = useCallback((message: string | null): void => { actionSeq.current += 1; setStatus(message); }, []);
   const workBusy = useRef(false);
   const alive = useRef(true);
 
@@ -450,7 +452,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const loadedActions = project === null ? [] : await launcher.loadActions(host, project);
       if (generation === formGeneration.current) setActions(loadedActions);
     } catch (error) {
-      if (generation === formGeneration.current) setStatus(`Launch options: ${defaultStatus(error)}`);
+      if (generation === formGeneration.current) bumpStatus(`Launch options: ${defaultStatus(error)}`);
     } finally {
       if (generation === formGeneration.current) {
         formLoadingRef.current = false;
@@ -463,7 +465,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setForm((old) => ({ ...old, project, action: null, agent: null, prompt: "", branch: "", baseBranch: "", search: "", choice: 0 }));
     setActions([]);
     try { setActions(await launcher.loadActions(form.host, project)); }
-    catch (error) { setStatus(`Project actions: ${defaultStatus(error)}`); }
+    catch (error) { bumpStatus(`Project actions: ${defaultStatus(error)}`); }
   }, [form.host, launcher]);
 
   const chooseAction = useCallback(async (action: string | null): Promise<void> => {
@@ -472,7 +474,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       const resolved = await launcher.resolveAction(form.host, form.project, action);
       setForm((old) => ({ ...old, action, agent: resolved.agent, branch: resolved.branch ?? "", baseBranch: resolved.baseBranch ?? "", prompt: resolved.prompt }));
-    } catch (error) { setStatus(`Action template: ${defaultStatus(error)}`); }
+    } catch (error) { bumpStatus(`Action template: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
   }, [form.host, form.project, launcher]);
 
@@ -501,14 +503,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else { setCreated(null); setOverlay("none"); void refresh(); }
     } catch (error) {
       if (options.mode === "new-session") setExitCode(2);
-      setStatus(`Session ${created.host}/${created.sessionId} exists; attach failed: ${defaultStatus(error)}`);
+      bumpStatus(`Session ${created.host}/${created.sessionId} exists; attach failed: ${defaultStatus(error)}`);
     } finally {
       setBusy(false);
     }
   }, [busy, created, exit, launcher, options.mode, refresh, setExitCode, suspendForChild]);
 
   const submitForm = useCallback(async (): Promise<void> => {
-    if (formLoadingRef.current) { setStatus("Host options are still loading; submit when they finish"); return; }
+    if (formLoadingRef.current) { bumpStatus("Host options are still loading; submit when they finish"); return; }
     if (busy || created !== null) return;
     actionSeq.current += 1;
     setBusy(true);
@@ -523,10 +525,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const result = await launcher.createSession(request);
       setCreated(result);
       if (result.warnings.length > 0) {
-        setStatus(`Created ${result.host}/${result.sessionId} with ${result.warnings.length} warning(s); review before attaching`);
+        bumpStatus(`Created ${result.host}/${result.sessionId} with ${result.warnings.length} warning(s); review before attaching`);
         return;
       }
-      setStatus(`Created ${result.host}/${result.sessionId}; attaching…`);
+      bumpStatus(`Created ${result.host}/${result.sessionId}; attaching…`);
       try {
         await suspendForChild(async () => {
           const attached = await launcher.attachSession();
@@ -536,11 +538,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         else { setCreated(null); setOverlay("none"); void refresh(); }
       } catch (error) {
         if (options.mode === "new-session") setExitCode(2);
-        setStatus(`Session ${result.host}/${result.sessionId} exists; attach failed: ${defaultStatus(error)}`);
+        bumpStatus(`Session ${result.host}/${result.sessionId} exists; attach failed: ${defaultStatus(error)}`);
       }
     } catch (error) {
       if (options.mode === "new-session") setExitCode(2);
-      setStatus(defaultStatus(error));
+      bumpStatus(defaultStatus(error));
     } finally {
       setBusy(false);
     }
@@ -550,7 +552,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setBusy(true);
     try {
       const result = await control.inspectSession(host, id);
-      if (!result.ok) { setStatus(result.error.message); return; }
+      if (!result.ok) { bumpStatus(result.error.message); return; }
       setSessionDetail(result.data);
       setDetailOffset(0);
       setFollowOutput(true);
@@ -558,12 +560,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setView("Sessions");
       setScreen(null);
       setOverlay("session");
-    } catch (error) { setStatus(defaultStatus(error)); }
+    } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [control]);
 
   const inspectHost = useCallback(async (host: ControlHost): Promise<void> => {
-    if (!host.dialable) { setStatus(`Host ${host.name} has no dialable identity`); return; }
+    if (!host.dialable) { bumpStatus(`Host ${host.name} has no dialable identity`); return; }
     setBusy(true);
     try {
       const [capabilities, policy] = await Promise.all([
@@ -572,9 +574,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setHostDetail(capabilities.ok ? capabilities.data : null);
       setGovernance(policy.ok ? policy.data : null);
       const failures = [capabilities.ok ? null : capabilities.error.message, policy.ok ? null : policy.error.message].filter((message): message is string => message !== null);
-      if (failures.length > 0) setStatus(failures.join("; "));
+      if (failures.length > 0) bumpStatus(failures.join("; "));
       setOverlay("host");
-    } catch (error) { setStatus(defaultStatus(error)); }
+    } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [control]);
 
@@ -584,12 +586,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setOverlay("notification");
     if (record.status === "unread") {
       if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
-        setStatus("Notification data is stale; it was not marked read");
+        bumpStatus("Notification data is stale; it was not marked read");
       } else {
         try {
           const result = await control.act({ kind: "read", host: record.host, notificationId: record.id });
           if (!result.ok) {
-            if (notificationSelectionGeneration.current === generation) setStatus(`Mark read failed: ${result.error.message}`);
+            if (notificationSelectionGeneration.current === generation) bumpStatus(`Mark read failed: ${result.error.message}`);
           } else {
             if (result.data.kind === "read" && notificationSelectionGeneration.current === generation) {
               const updated = result.data.notification;
@@ -597,51 +599,51 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
             }
             await refresh();
           }
-        } catch (error) { if (notificationSelectionGeneration.current === generation) setStatus(`Mark read failed: ${defaultStatus(error)}`); }
+        } catch (error) { if (notificationSelectionGeneration.current === generation) bumpStatus(`Mark read failed: ${defaultStatus(error)}`); }
       }
     }
   }, [control, refresh, snapshot, stale]);
 
   const updateNotification = useCallback(async (record: ControlNotification, kind: "ack" | "archive"): Promise<void> => {
     if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
-      setStatus("Notification data is stale; refresh before changing it"); return;
+      bumpStatus("Notification data is stale; refresh before changing it"); return;
     }
     try {
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
-      if (!result.ok) setStatus(`${kind} failed: ${result.error.message}`);
+      if (!result.ok) bumpStatus(`${kind} failed: ${result.error.message}`);
       else {
         // Only the notification overlay closes; the owner may have opened another one while the action ran.
         setOverlay((current) => current === "notification" ? "none" : current);
-        setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
+        bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
         await refresh();
       }
-    } catch (error) { setStatus(`${kind} failed: ${defaultStatus(error)}`); }
+    } catch (error) { bumpStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);
 
   const runSessionAction = useCallback(async (action: ControlAction, expected: ControlSession | null = sessionDetail, confirmed: ControlSession | null = null): Promise<void> => {
     if (expected === null || busy || stale || sessionsUnreadable(snapshot, expected.host)) {
-      setStatus("Session data is stale or unavailable; refresh before changing it");
+      bumpStatus("Session data is stale or unavailable; refresh before changing it");
       return;
     }
     mutationNotice.current = null;
     if (action.kind === "fork" && forkUnknown) {
-      setStatus("The last fork did not answer, so it may exist; press r to review the Sessions list before forking again");
+      bumpStatus("The last fork did not answer, so it may exist; press r to review the Sessions list before forking again");
       return;
     }
     actionSeq.current += 1;
     setBusy(true);
     try {
       const latest = await control.inspectSession(expected.host, expected.id);
-      if (!latest.ok) { setStatus(latest.error.message); return; }
-      if (!sameSession(expected, latest.data)) { setSessionDetail(latest.data); setStatus("Session changed; review the new state before acting"); return; }
-      if (confirmed !== null && !sameRecoveryTarget(confirmed, latest.data)) { setStatus("Recovery target changed; review it before confirming again"); return; }
+      if (!latest.ok) { bumpStatus(latest.error.message); return; }
+      if (!sameSession(expected, latest.data)) { setSessionDetail(latest.data); bumpStatus("Session changed; review the new state before acting"); return; }
+      if (confirmed !== null && !sameRecoveryTarget(confirmed, latest.data)) { bumpStatus("Recovery target changed; review it before confirming again"); return; }
       if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) {
-        setStatus("This runtime is read-only"); return;
+        bumpStatus("This runtime is read-only"); return;
       }
       const outcome = await control.act(action);
       if (!outcome.ok) {
         mutationNotice.current = outcome.error.message;
-        setStatus(outcome.error.message);
+        bumpStatus(outcome.error.message);
         // The fork's overlay offers Resume on r, so the owner is taken to the list, where r refreshes it.
         if (outcome.error.code === "outcome_unknown" && action.kind === "fork") { setForkUnknown(true); setOverlay("none"); }
         // What the daemon holds may differ from what the owner sees, so the list is read again after a failed mutation.
@@ -649,16 +651,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         return;
       }
       if (outcome.data.kind === "remove" && (!outcome.data.removed || outcome.data.worktreesFailed > 0)) {
-        setStatus(`Removal unverified; session ${expected.host}/${expected.id} may remain. Inspect before retrying.`);
+        bumpStatus(`Removal unverified; session ${expected.host}/${expected.id} may remain. Inspect before retrying.`);
         await refresh();
         return;
       }
       if (outcome.data.kind === "stop" && !outcome.data.stopped) {
-        setStatus(`Stop unverified; inspect session ${expected.host}/${expected.id}`);
+        bumpStatus(`Stop unverified; inspect session ${expected.host}/${expected.id}`);
         await refresh();
         return;
       }
-      setStatus(`${action.kind} completed`);
+      bumpStatus(`${action.kind} completed`);
       setOverlay("none");
       if (outcome.data.kind === "resume") {
         const resumed = outcome.data.session;
@@ -667,28 +669,28 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
             const code = await execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id]);
             if (code !== 0) throw new Error(`attach exited ${String(code)}`);
           });
-        } catch (error) { setStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
+        } catch (error) { bumpStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
       }
       void refresh();
-    } catch (error) { setStatus(defaultStatus(error)); }
+    } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
 
   const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: Overlay): Promise<void> => {
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
-      setStatus("Session data is stale or unavailable; refresh before recovering it"); return;
+      bumpStatus("Session data is stale or unavailable; refresh before recovering it"); return;
     }
     setBusy(true);
     try {
       const latest = await control.inspectSession(target.host, target.id);
-      if (!latest.ok) { setStatus(latest.error.message); return; }
-      if (!sameSession(target, latest.data)) { setStatus("Session changed; review the new state before recovering it"); return; }
-      if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) { setStatus("This runtime is read-only"); return; }
-      if (latest.data.nativeTarget.status === "invalid") { setStatus(`Recovery target unavailable: ${latest.data.nativeTarget.reason}`); return; }
-      if (kind === "fork" ? !latest.data.canFork : !latest.data.canResume) { setStatus(`This session cannot be ${kind === "fork" ? "forked" : "resumed"}`); return; }
+      if (!latest.ok) { bumpStatus(latest.error.message); return; }
+      if (!sameSession(target, latest.data)) { bumpStatus("Session changed; review the new state before recovering it"); return; }
+      if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) { bumpStatus("This runtime is read-only"); return; }
+      if (latest.data.nativeTarget.status === "invalid") { bumpStatus(`Recovery target unavailable: ${latest.data.nativeTarget.reason}`); return; }
+      if (kind === "fork" ? !latest.data.canFork : !latest.data.canResume) { bumpStatus(`This session cannot be ${kind === "fork" ? "forked" : "resumed"}`); return; }
       setRecovery({ kind, session: latest.data, returnTo });
       setOverlay("recovery");
-    } catch (error) { setStatus(defaultStatus(error)); }
+    } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [busy, control, snapshot, stale]);
 
@@ -704,7 +706,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const target = overlay === "session" ? sessionDetail : selectedSession;
     if (target === null) return;
     if (target.external || ["conflicting", "incompatible", "lost"].includes(target.runtimeState ?? "")) {
-      setStatus("This session cannot be opened from the TUI"); return;
+      bumpStatus("This session cannot be opened from the TUI"); return;
     }
     if (target.canResume && target.state !== "running") {
       await requestRecovery("resume", target, overlay === "session" ? "session" : "none");
@@ -718,25 +720,25 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       });
       // Not awaited inside the busy window: the work list can take seconds, and input must not wait for it.
       void refresh();
-    } catch (error) { setStatus(`Attach: ${defaultStatus(error)}`); }
+    } catch (error) { bumpStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
   }, [options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);
-    if (!checked.ok) { setStatus(checked.reason); return; }
+    if (!checked.ok) { bumpStatus(checked.reason); return; }
     try {
       const child = Bun.spawn([options.openCommand, checked.href], { stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
       child.unref();
-      setStatus(`Opened ${checked.host}`);
-    } catch (error) { setStatus(`Open link: ${defaultStatus(error)}`); }
+      bumpStatus(`Opened ${checked.host}`);
+    } catch (error) { bumpStatus(`Open link: ${defaultStatus(error)}`); }
   }, [options.openCommand, options.openUrlHosts]);
 
   // The branch page comes from the project's GitHub origin; without one the status says so instead of guessing.
   const openBranch = useCallback((session: ControlSession): void => {
     const project = snapshot?.projects.find((entry) => entry.host === session.host && entry.id === session.projectId);
     const url = githubBranchUrl(project?.originUrl ?? null, session.branch);
-    if (url === null) { setStatus("No GitHub branch page: the session has no branch or its project has no GitHub origin"); return; }
+    if (url === null) { bumpStatus("No GitHub branch page: the session has no branch or its project has no GitHub origin"); return; }
     openLink(url);
   }, [openLink, snapshot]);
 
@@ -748,29 +750,29 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [projectFilter, snapshot]);
 
   const openFolder = useCallback(async (session: ControlSession): Promise<void> => {
-    if (session.host !== "local") { setStatus("Remote paths can be copied but cannot be opened on this host"); return; }
+    if (session.host !== "local") { bumpStatus("Remote paths can be copied but cannot be opened on this host"); return; }
     const path = session.worktreePath ?? session.cwd;
-    if (!isAbsolute(path)) { setStatus("The session path is not absolute"); return; }
+    if (!isAbsolute(path)) { bumpStatus("The session path is not absolute"); return; }
     try {
-      if (!(await stat(path)).isDirectory()) { setStatus("The session path is not a directory"); return; }
+      if (!(await stat(path)).isDirectory()) { bumpStatus("The session path is not a directory"); return; }
       const child = Bun.spawn([options.openCommand, path], { stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
       child.unref();
-      setStatus("Opened session folder");
-    } catch (error) { setStatus(`Open folder: ${defaultStatus(error)}`); }
+      bumpStatus("Opened session folder");
+    } catch (error) { bumpStatus(`Open folder: ${defaultStatus(error)}`); }
   }, [options.openCommand]);
 
   const copyValue = useCallback(async (value: string): Promise<void> => {
-    if (options.clipboardCommand === undefined) { setStatus(`Select and copy this value: ${safeText(value)}`); return; }
+    if (options.clipboardCommand === undefined) { bumpStatus(`Select and copy this value: ${safeText(value)}`); return; }
     try {
       const result = await exec([options.clipboardCommand], { timeoutMs: options.timeoutMs, stdin: value });
-      setStatus(result.exitCode === 0 && !result.timedOut ? "Copied to clipboard" : "Clipboard command failed");
-    } catch (error) { setStatus(`Clipboard command failed: ${defaultStatus(error)}`); }
+      bumpStatus(result.exitCode === 0 && !result.timedOut ? "Copied to clipboard" : "Clipboard command failed");
+    } catch (error) { bumpStatus(`Clipboard command failed: ${defaultStatus(error)}`); }
   }, [options.clipboardCommand, options.timeoutMs]);
 
   const workHandover = useCallback(async (action: string): Promise<void> => {
     if (workDetail === null || busy) return;
     const checked = workActionArgv(options.selfBin, workDetail.key, action, workDetail.project);
-    if (!checked.ok) { setStatus(checked.reason); return; }
+    if (!checked.ok) { bumpStatus(checked.reason); return; }
     actionSeq.current += 1;
     setBusy(true);
     const started = actionSeq.current;
@@ -796,7 +798,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       setOverlay("none");
     } catch (error) {
-      setStatus(`Work action: ${defaultStatus(error)}`);
+      bumpStatus(`Work action: ${defaultStatus(error)}`);
       return;
     } finally { setBusy(false); }
     // Read after the busy flag is cleared, so input is not refused while the list loads; the report is set last.
@@ -813,7 +815,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setWorkPreview(preview);
       setPreviewOffset(0);
       setOverlay("work-preview");
-    } catch (error) { setStatus(`Plan preview: ${defaultStatus(error)}`); }
+    } catch (error) { bumpStatus(`Plan preview: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
   }, [busy, options.listTimeoutMs, options.selfBin, workDetail]);
 
@@ -822,7 +824,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const writable = !target.external && !["conflicting", "incompatible"].includes(target.runtimeState ?? "");
     const mutable = writable && target.runtimeState !== "lost";
     const active = ["running", "working", "starting", "reconnecting", "blocked"].includes(target.state);
-    if (kind === "stop" ? !(mutable && active) : !writable) { setStatus(kind === "stop" ? "Only a live session can be stopped" : "This session cannot be removed"); return; }
+    if (kind === "stop" ? !(mutable && active) : !writable) { bumpStatus(kind === "stop" ? "Only a live session can be stopped" : "This session cannot be removed"); return; }
     setConfirmSession(target);
     setConfirm(kind);
     setConfirmReturn(returnTo);
@@ -942,7 +944,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (key.return && form.focus <= 3) {
         if (form.focus === 1 && form.search !== "") {
           const project = launchOptions?.projects.find((entry) => `${entry.id} ${entry.label}`.toLowerCase().includes(form.search.toLowerCase()));
-          if (project === undefined) { setStatus("No project matches the search"); return; }
+          if (project === undefined) { bumpStatus("No project matches the search"); return; }
           void chooseProject(project.id);
         }
         setForm((old) => ({ ...old, search: "", choice: 0, focus: old.focus === 3 && overlay === "assistant" ? 5 : old.focus + 1 }));
@@ -969,7 +971,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if (overlay === "rename") void runSessionAction({ kind: "rename", host: sessionDetail.host, sessionId: sessionDetail.id, name: nullable(edit) });
         else {
           const separator = edit.indexOf("=");
-          if (separator < 1) setStatus("Metadata needs key=value");
+          if (separator < 1) bumpStatus("Metadata needs key=value");
           else void runSessionAction({ kind: "metadata", host: sessionDetail.host, sessionId: sessionDetail.id, set: { [edit.slice(0, separator)]: edit.slice(separator + 1) } });
         }
         return;
@@ -1045,7 +1047,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") restartOutput();
-      else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
+      else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else bumpStatus("No work link on this session"); }
       else if (input === "u") void openFolder(sessionDetail);
       else if (input === "g") openBranch(sessionDetail);
       else if (input === "b") void copyValue(sessionDetail.branch ?? "");
@@ -1088,7 +1090,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } else if (view === "Sessions") {
       if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
       else if (input === "o") void openSelected();
-      else if (input === "l" && selectedSession !== null) { const url = sessionLinkUrl(selectedSession); if (url !== null) openLink(url); else setStatus("No work link on this session"); }
+      else if (input === "l" && selectedSession !== null) { const url = sessionLinkUrl(selectedSession); if (url !== null) openLink(url); else bumpStatus("No work link on this session"); }
       else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
       else if (input === "g" && selectedSession !== null) openBranch(selectedSession);
       else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
@@ -1250,7 +1252,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay !== "form" && overlay !== "assistant") toolbar = <Box gap={1}>
     {(overlay === "rename" || overlay === "metadata") && sessionDetail !== null && <ActionButton label="Save" onClick={() => {
       if (overlay === "rename") void runSessionAction({ kind: "rename", host: sessionDetail.host, sessionId: sessionDetail.id, name: nullable(edit) });
-      else { const separator = edit.indexOf("="); if (separator < 1) setStatus("Metadata needs key=value"); else void runSessionAction({ kind: "metadata", host: sessionDetail.host, sessionId: sessionDetail.id, set: { [edit.slice(0, separator)]: edit.slice(separator + 1) } }); }
+      else { const separator = edit.indexOf("="); if (separator < 1) bumpStatus("Metadata needs key=value"); else void runSessionAction({ kind: "metadata", host: sessionDetail.host, sessionId: sessionDetail.id, set: { [edit.slice(0, separator)]: edit.slice(separator + 1) } }); }
     }} primary />}
     <ActionButton label="Back" onClick={() => { setOverlay(overlay === "rename" || overlay === "metadata" ? "session" : "none"); }} />
   </Box>;
