@@ -213,6 +213,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [status, setStatus] = useState<string | null>(null);
   // Set when a fork did not answer: its outcome is unknown, so another fork waits for the owner to look at the list.
   const [forkUnknown, setForkUnknown] = useState(false);
+  // The message of the last mutation that failed. Snapshots that arrive afterwards keep it on the status line.
+  const mutationNotice = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   const [sessionKey, setSessionKey] = useState<string | null>(null);
@@ -367,7 +369,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try { options.onSnapshot?.(next); }
     catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
     setStale(false);
-    if (next.errors.length > 0) setStatus(`${next.errors.length} source(s) unavailable; mutating actions are paused`);
+    if (next.errors.length > 0 && mutationNotice.current === null) setStatus(`${next.errors.length} source(s) unavailable; mutating actions are paused`);
   }, [options.log, options.onSnapshot]);
 
   useEffect(() => control.subscribe((next) => { if (alive.current) applySnapshot(next); }), [applySnapshot, control]);
@@ -609,6 +611,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setStatus("Session data is stale or unavailable; refresh before changing it");
       return;
     }
+    mutationNotice.current = null;
     if (action.kind === "fork" && forkUnknown) {
       setStatus("The last fork did not answer, so it may exist; press r to review the Sessions list before forking again");
       return;
@@ -624,8 +627,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       const outcome = await control.act(action);
       if (!outcome.ok) {
+        mutationNotice.current = outcome.error.message;
         setStatus(outcome.error.message);
-        if (outcome.error.code === "outcome_unknown" && action.kind === "fork") setForkUnknown(true);
+        // The fork's overlay offers Resume on r, so the owner is taken to the list, where r refreshes it.
+        if (outcome.error.code === "outcome_unknown" && action.kind === "fork") { setForkUnknown(true); setOverlay("none"); }
         // What the daemon holds may differ from what the owner sees, so the list is read again after a failed mutation.
         if (outcome.error.code === "outcome_unknown" || action.kind === "remove") await refresh();
         return;
@@ -1045,7 +1050,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return; }
     if (key.upArrow || input === "k") { move(-1); return; }
     if (key.downArrow || input === "j") { move(1); return; }
-    if (input === "r") { setForkUnknown(false); void refresh(); return; }
+    if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(); return; }
     if (view === "Work") {
       if (input === "m") setWorkFilters((old) => ({ ...old, actor: old.actor === "me" ? "all" : "me" }));
       else if (input === "f") setWorkFilters((old) => ({ ...old, actor: ACTOR_FILTERS[(ACTOR_FILTERS.indexOf(old.actor) + 1) % ACTOR_FILTERS.length] ?? "all" }));

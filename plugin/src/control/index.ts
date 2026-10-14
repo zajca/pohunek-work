@@ -54,6 +54,11 @@ function parseEnvelope(stdout: string, exitCode: number | null): ControlResult<u
   }
 }
 
+/** A daemon answer that refused the request; a transport failure or a timeout does not say whether it was applied. */
+function definitiveRefusal(error: ControlError): boolean {
+  return error.code === "command_failed" && ["configuration", "daemon", "runtime", "discovery"].includes(error.cliClass ?? "");
+}
+
 const ORIGIN_ENVIRONMENT_MESSAGE = "Set both POHUNEK_SESSION_ID and POHUNEK_DAEMON_ID, or unset both.";
 
 function originError(env: Readonly<Record<string, string | undefined>>): ControlError | null {
@@ -276,11 +281,12 @@ export function createControlClient(options: ControlClientOptions): ControlClien
         }
         const removed = await link.request("session.remove", sessionId);
         if (!removed.ok) {
-          if (removed.error.code === "timeout" || removed.error.cliCode === "request_timeout") {
-            return failure("outcome_unknown", `${wasStopped ? "session stopped; " : ""}removal outcome is unknown: the daemon did not answer`);
+          // Only a definitive daemon answer says the removal did not happen; a lost reply may hide a removal that did.
+          if (!definitiveRefusal(removed.error)) {
+            return failure("outcome_unknown", `${wasStopped ? "session stopped; " : ""}removal outcome is unknown: ${removed.error.message}`);
           }
-          // A stop that succeeded before the failed removal stays visible, so the owner knows what changed.
-          return failure("command_failed", wasStopped ? `session stopped but not removed: ${removed.error.message}` : removed.error.message, removed.error.cliCode === undefined ? {} : { cliCode: removed.error.cliCode });
+          // A stop that succeeded before the refused removal stays visible, so the owner knows what changed.
+          return failure("command_failed", wasStopped ? `session stopped but not removed: ${removed.error.message}` : removed.error.message, { ...(removed.error.cliCode === undefined ? {} : { cliCode: removed.error.cliCode }), ...(removed.error.cliClass === undefined ? {} : { cliClass: removed.error.cliClass }) });
         }
         const payload = object(removed.data, "$");
         return { ok: true, data: { kind: "remove", removed: boolean(payload, "removed", "$"), stopped: wasStopped || boolean(payload, "stopped", "$"),
@@ -319,10 +325,10 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     return { ok: true, data: { kind: action.kind, notification: notification(record, "$.record", action.host) } };
   }
 
-  /** A mutation that timed out may still have been applied; the outcome is reported as unknown, never as failed. */
+  /** A mutation that failed after it was sent may still have been applied; only a definitive daemon refusal is a failure. */
   function viaSdkOutcome(action: ControlAction, result: ControlResult<ControlActionOutcome>): ControlResult<ControlActionOutcome> {
-    if (result.ok || result.error.code === "outcome_unknown") return result;
-    if (result.error.code !== "timeout" && result.error.cliCode !== "request_timeout") return result;
+    if (result.ok || result.error.code === "outcome_unknown" || result.error.code === "unavailable") return result;
+    if (definitiveRefusal(result.error)) return result;
     return failure("outcome_unknown", `${action.kind} outcome is unknown: the daemon did not answer; refresh and look before retrying`);
   }
 

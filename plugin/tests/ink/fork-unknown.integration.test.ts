@@ -59,8 +59,10 @@ else process.exit(70);
     { expect: "Confirm fork of Fork source" },
     keys("y"),
     { expect: "fork outcome is unknown" },
-    // The link reconnects after the unanswered fork; the owner then asks for another fork.
+    // The owner is taken to the list; the link reconnects, then the session is opened again for another fork.
     { pause: 3000 },
+    keys("\r"),
+    { expect: "Status  " },
     keys("f"),
     { expect: "Confirm fork of Fork source" },
     keys("y"),

@@ -236,6 +236,21 @@ describe("control CLI process boundary", () => {
     await client.close();
   });
 
+  // A removal whose reply is lost after the stop succeeded may have removed the session: it is not reported as refused.
+  test("a removal lost after a stop is reported as an unknown outcome", async () => {
+    const stub = await cli([
+      { args: ["--host", "local", "session", "inspect", session.id, "--json"], ok: session },
+      { args: ["--host", "local", "session", "stop", session.id, "--json"], ok: { stopped: true } },
+      { args: ["--host", "local", "session", "rm", session.id, "--json"], ok: { removed: true, stopped: true, worktrees_removed: 0, worktrees_failed: 0 } },
+    ]);
+    standIn = await startSdkStandIn(stub.binary, { faults: [{ method: "session.remove", kind: "stall", times: 1 }] });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
+    const outcome = await client.act({ kind: "remove", host: "local", sessionId: session.id });
+    expect(outcome.ok ? "" : outcome.error.code).toBe("outcome_unknown");
+    expect(outcome.ok ? "" : outcome.error.message).toContain("session stopped; removal outcome is unknown");
+    await client.close();
+  }, 15_000);
+
   // A fork whose reply does not come back has an unknown outcome: the fork may exist, so it is not reported as failed.
   test("a fork that does not answer in time reports an unknown outcome", async () => {
     const stub = await cli([{ args: ["host", "discover", "--json"], ok: [] }]);
