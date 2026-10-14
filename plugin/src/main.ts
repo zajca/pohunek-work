@@ -464,7 +464,6 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
         attachCommand,
         attachLaunchCheckMs: config.global.tui.attachLaunchCheckMs,
       }),
-      stderrMaxLines: config.global.tui.stderrMaxLines,
       localSocket: resolveLocalSocket(),
       initialView: config.global.tui.initialView,
       stalePrDays: config.global.tui.stalePrDays,

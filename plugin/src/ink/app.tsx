@@ -31,7 +31,6 @@ export interface InkTuiOptions {
   readonly refreshIntervalMs: number;
   readonly sessionReconcileMs: number;
   readonly actionCaptureBytes: number;
-  readonly stderrMaxLines: number;
   /** Inline attaches in this terminal; window attaches in a terminal started from attachCommand. */
   readonly attachMode: TuiAttachMode;
   readonly attachCommand?: readonly string[];
@@ -502,10 +501,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const openAttachWindowFor = useCallback(async (host: string, id: string): Promise<string> => {
     if (options.attachCommand === undefined || options.attachLaunchCheckMs === undefined) throw new Error("window attach needs attach_command in [tui]");
     const argv = renderAttachArgv(options.attachCommand, { bin: options.pohunekBin, host, id });
-    const result = await openAttachWindow(argv, { launchCheckMs: options.attachLaunchCheckMs, stderrMaxBytes: options.actionCaptureBytes, stderrMaxLines: options.stderrMaxLines });
+    const result = await openAttachWindow(argv, { launchCheckMs: options.attachLaunchCheckMs });
     if (!result.ok) throw new Error(result.message);
     return `Session ${id} opened in a new window`;
-  }, [options.actionCaptureBytes, options.attachCommand, options.attachLaunchCheckMs, options.pohunekBin, options.stderrMaxLines]);
+  }, [options.attachCommand, options.attachLaunchCheckMs, options.pohunekBin]);
 
   const attachCreated = useCallback(async (): Promise<void> => {
     if (created === null || busy) return;

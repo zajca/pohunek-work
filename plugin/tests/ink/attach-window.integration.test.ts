@@ -93,7 +93,7 @@ test("a terminal that exits within the launch check is reported as a failed laun
     keys("2"),
     { expect: "SESSIONS  1" },
     keys("o"),
-    { expect: "exited with status 3 within the launch check; stderr: no display" },
+    { expect: "exited with status 3 within the launch check" },
     keys("q"),
   ];
   const result = await scenario.run(steps, { timeoutS: 60 });
@@ -219,7 +219,7 @@ exit 3
     keys("2"),
     { expect: "SESSIONS  1" },
     keys("o"),
-    { expect: "exited with status 3 within the launch check; stderr: display refused" },
+    { expect: "exited with status 3 within the launch check" },
     keys("q"),
   ], { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);

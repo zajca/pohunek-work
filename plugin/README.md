@@ -255,8 +255,8 @@ sits beside the list; narrower terminals show it full screen) and
 `attach_mode` (`"inline"` attaches in this terminal; `"window"` opens the session
 in a terminal window started by `attach_command`). Window mode also requires
 `attach_launch_check_ms`: a terminal that exits within that many milliseconds is
-a failed launch, reported with its exit status and the first stderr lines; one that
-keeps running counts as opened, and the TUI does not wait for it. Inline mode
+a failed launch, reported with its exit status; one that keeps running counts as
+opened, and the TUI does not wait for it. The terminal runs with null stdio. Inline mode
 rejects both window keys. `attach_command` is an argv template, split with POSIX
 quoting and run without a shell: the program word must be an absolute path, and
 `{bin}` (the `pohunek` CLI), `{host}` and `{id}` (the session) each fill exactly one
