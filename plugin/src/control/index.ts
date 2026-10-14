@@ -1,4 +1,4 @@
-import { connectLocal, connectTcp, resolveRequestOrigin, type ConnectOptions } from "@pohunek/sdk";
+import { connectLocal, connectTcp, resolveRequestOrigin, type Client, type ConnectOptions } from "@pohunek/sdk";
 import { exec, SpawnError } from "../util/exec.ts";
 import {
   InvalidControlResponse, array, boolean, capabilities, count, governance, host as parseHost,
@@ -140,18 +140,18 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     lastNotifications: readonly ControlNotification[];
   }>();
   const projectReads = new Map<string, ControlResult<readonly ControlProject[]>>();
-  const settling = new Map<string, ReturnType<typeof setTimeout>>();
+  // A scheduled read per route; events that arrive before it runs join it instead of postponing it.
+  const settling = new Map<string, { notifications: boolean; timer: ReturnType<typeof setTimeout> }>();
+  // Output polls get their own connection, so a long poll never queues behind the reads and mutations of the route.
+  const outputLinks = new Map<string, SdkLink>();
   const listeners = new Set<(snapshot: ControlSnapshot) => void>();
   let hosts: ControlHost[] = [LOCAL_HOST];
   let discoveryError: ControlError | null = null;
   // Set by close(); a read that was pending when the client closed must not open a connection afterwards.
   let closed = false;
 
-  function linkFor(route: string): SdkLink {
-    if (closed) throw new Error("the control client is closed");
-    const existing = links.get(route);
-    if (existing !== undefined) return existing;
-    const link = new SdkLink(route, () => {
+  function connectorFor(route: string): () => Promise<Client> {
+    return () => {
       const record = hostRecords.get(route);
       if (record === undefined) return Promise.reject(new Error(`host ${route} is not listed`));
       if (route === "local") {
@@ -160,8 +160,26 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       }
       if (record.address === null || record.port === null) return Promise.reject(new Error(`host ${route} has no address`));
       return connectTcp(route, { host: record.address, port: record.port }, connectOptions(environment()));
-    }, () => { scheduleRead(route); }, options.timeoutMs, options.reconnectMaxMs);
+    };
+  }
+
+  function linkFor(route: string): SdkLink {
+    if (closed) throw new Error("the control client is closed");
+    const existing = links.get(route);
+    if (existing !== undefined) return existing;
+    // Only notification events change the notification scope; any other event reads sessions alone.
+    const link = new SdkLink(route, connectorFor(route), (kind) => { scheduleRead(route, kind === "" || kind.startsWith("notification")); }, options.timeoutMs, options.reconnectMaxMs);
     links.set(route, link);
+    return link;
+  }
+
+  function outputLinkFor(route: string): SdkLink {
+    if (closed) throw new Error("the control client is closed");
+    const existing = outputLinks.get(route);
+    if (existing !== undefined) return existing;
+    // A reconnect of this link publishes a snapshot, so the panel reads its output again; the link's own events are not needed.
+    const link = new SdkLink(route, connectorFor(route), (kind) => { if (kind === "") scheduleRead(route, false); }, options.timeoutMs, options.reconnectMaxMs);
+    outputLinks.set(route, link);
     return link;
   }
 
@@ -200,10 +218,13 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     for (const listener of listeners) listener(snapshot);
   }
 
-  async function readHost(route: string): Promise<void> {
+  async function readHost(route: string, withNotifications = true): Promise<void> {
     const link = linkFor(route);
-    const [sessions, notifications] = await Promise.all([link.sessions(), link.notifications(options.notificationsPageSize)]);
     const previous = reads.get(route);
+    const [sessions, notifications] = await Promise.all([
+      link.sessions(),
+      withNotifications || previous === undefined ? link.notifications(options.notificationsPageSize) : Promise.resolve(previous.notifications),
+    ]);
     reads.set(route, {
       sessions,
       notifications,
@@ -212,14 +233,18 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     });
   }
 
-  function scheduleRead(route: string): void {
+  function scheduleRead(route: string, notifications: boolean): void {
     if (closed) return;
     const pending = settling.get(route);
-    if (pending !== undefined) clearTimeout(pending);
-    settling.set(route, setTimeout(() => {
+    if (pending !== undefined) {
+      pending.notifications ||= notifications;
+      return;
+    }
+    const entry = { notifications, timer: setTimeout(() => {
       settling.delete(route);
-      void readHost(route).then(publish, () => undefined);
-    }, EVENT_SETTLE_MS));
+      void readHost(route, entry.notifications).then(publish, () => undefined);
+    }, EVENT_SETTLE_MS) };
+    settling.set(route, entry);
   }
 
   async function refresh(): Promise<ControlSnapshot> {
@@ -352,10 +377,11 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     },
     async close() {
       closed = true;
-      for (const timer of settling.values()) clearTimeout(timer);
+      for (const entry of settling.values()) clearTimeout(entry.timer);
       settling.clear();
-      await Promise.all([...links.values()].map(async link => { await link.close(); }));
+      await Promise.all([...links.values(), ...outputLinks.values()].map(async link => { await link.close(); }));
       links.clear();
+      outputLinks.clear();
     },
     inspectHost: host => host.startsWith("undialable:") ? Promise.resolve(failure("unavailable", "the selected host has no dialable identity"))
       : read(["host", "inspect", host, "--json"], raw => capabilities(raw, "$.ok")),
@@ -375,7 +401,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       const invalidTarget = bareIdError(id);
       if (invalidTarget !== null) return Promise.resolve({ ok: false, error: invalidTarget });
       if (host.startsWith("undialable:")) return Promise.resolve(failure("unavailable", "the selected host has no dialable identity"));
-      return linkFor(host).output(id, request);
+      return outputLinkFor(host).output(id, request);
     },
     showProject: (host, reference) => read(onHost(host, ["project", "show", reference]), raw => projectDetail(raw, "$.ok", host)),
     act,

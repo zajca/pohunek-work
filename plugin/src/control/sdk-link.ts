@@ -58,7 +58,8 @@ export class SdkLink {
   public constructor(
     public readonly route: string,
     private readonly connect: () => Promise<Client>,
-    private readonly onEvent: () => void,
+    /** Called with the event name; an empty name means the connection changed, so every scope is read again. */
+    private readonly onEvent: (kind: string) => void,
     private readonly timeoutMs: number,
     private readonly reconnectMaxMs: number,
   ) {}
@@ -111,7 +112,7 @@ export class SdkLink {
       for (;;) {
         const event = await subscription.nextEvent();
         if (event === null) break;
-        if (!this.closed) this.onEvent();
+        if (!this.closed) this.onEvent(event.event);
       }
     } catch (error) {
       // The cause is kept for the outage message, which the retry loop shows until the link is back.
@@ -131,7 +132,7 @@ export class SdkLink {
     if (this.closed || this.reconnecting) return;
     this.reconnecting = true;
     this.attempt = 0;
-    this.onEvent();
+    this.onEvent("");
     this.scheduleAttempt();
   }
 
@@ -157,7 +158,7 @@ export class SdkLink {
       if (error instanceof ClientError && REFUSAL_KINDS.has(error.kind)) {
         this.reconnecting = false;
         this.attempt = 0;
-        this.onEvent();
+        this.onEvent("");
         return;
       }
       this.scheduleAttempt();
@@ -171,7 +172,7 @@ export class SdkLink {
     }
     this.reconnecting = false;
     this.attempt = 0;
-    this.onEvent();
+    this.onEvent("");
   }
 
   private outageMessage(): string {

@@ -79,6 +79,8 @@ test("window mode starts the terminal with the exact argv and the TUI stays resp
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   const argv = (await readFile(terminal.trace, "utf8")).split("\n").filter((line) => line !== "");
   expect(argv).toEqual([`--bin=${scenario.proxy.binary}`, "--host=local", `--name=session ${id} label`, "attach", "--", id]);
+  // The new-session line is for a new-session process only; the main TUI exits without it.
+  expect(result.output).not.toContain(`opened ${id} in a new window`);
 }, SCENARIO_TIMEOUT_MS);
 
 test("a terminal that exits within the launch check is reported as a failed launch", async () => {

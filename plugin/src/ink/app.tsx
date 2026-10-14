@@ -10,7 +10,7 @@ import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
-import { renderAttachArgv } from "../tui/attach-template.ts";
+import { ATTACH_VALUE, renderAttachArgv } from "../tui/attach-template.ts";
 import { coalesce } from "./coalesce.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
@@ -495,6 +495,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   /** Opens a session in the window that `attach_command` starts; throws with the reason when the launch check fails. */
   const openAttachWindowFor = useCallback(async (host: string, id: string): Promise<string> => {
     if (options.attachCommand === undefined || options.attachLaunchCheckMs === undefined) throw new Error("window attach needs attach_command in [tui]");
+    if (!ATTACH_VALUE.test(host) || !ATTACH_VALUE.test(id)) throw new Error("the session's host or id is not a plain name, so it is not passed to the window");
     const argv = renderAttachArgv(options.attachCommand, { bin: options.pohunekBin, host, id });
     const result = await openAttachWindow(argv, { launchCheckMs: options.attachLaunchCheckMs });
     if (!result.ok) throw new Error(result.message);
@@ -508,7 +509,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       if (options.attachMode === "window") {
         bumpStatus(await openAttachWindowFor(created.host, created.sessionId));
-        options.onWindowOpened?.(`opened ${created.sessionId} in a new window`);
+        if (options.mode === "new-session") options.onWindowOpened?.(`opened ${created.sessionId} in a new window`);
       } else {
         await suspendForChild(async () => {
           const result = await launcher.attachSession();
@@ -548,7 +549,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       try {
         if (options.attachMode === "window") {
           bumpStatus(await openAttachWindowFor(result.host, result.sessionId));
-          options.onWindowOpened?.(`opened ${result.sessionId} in a new window`);
+          if (options.mode === "new-session") options.onWindowOpened?.(`opened ${result.sessionId} in a new window`);
         } else {
           await suspendForChild(async () => {
             const attached = await launcher.attachSession();
@@ -690,9 +691,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         await refresh();
         return;
       }
+      // Without a resume the list is read before the result is shown, so the read's own warnings cannot replace it.
+      if (outcome.data.kind !== "resume") {
+        void refresh();
+        bumpStatus(`${action.kind} completed`);
+        setOverlay("none");
+        return;
+      }
       bumpStatus(`${action.kind} completed`);
       setOverlay("none");
-      if (outcome.data.kind === "resume") {
+      {
         const resumed = outcome.data.session;
         try {
           if (options.attachMode === "window") {
