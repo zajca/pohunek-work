@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Box, render, Text, useApp, useInput, usePaste, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
+import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlRuntime, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
 import { staleCutoff } from "../output/stale.ts";
@@ -172,7 +172,7 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
       </Text>
     </MouseZone>)}
     {created === null && choices.length > 0 && <MouseZone flexDirection="column" width="100%" onWheel={(direction) => { onScrollChoices(direction, choices.length - choiceLimit); }}>
-      {!compact && <Text dimColor>{`Choose ${formFieldLabel(assistant, form.focus).toLowerCase()}${choices.length > choiceLimit ? ` (${choiceStart + 1}–${Math.min(choiceStart + choiceLimit, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>}
+      <Text dimColor>{`Choose ${formFieldLabel(assistant, form.focus).toLowerCase()}${choices.length > choiceLimit && !compact ? ` (${choiceStart + 1}–${Math.min(choiceStart + choiceLimit, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>
       {choices.slice(choiceStart, choiceStart + choiceLimit).map((choice, index) => <MouseZone key={`${choiceStart + index}/${choice}`} onClick={() => { onPickChoice(choiceStart + index); }}>
         <Text color={choiceStart + index === selectedChoice ? "cyan" : "white"} bold={choiceStart + index === selectedChoice}>{`${choiceStart + index === selectedChoice ? "▸" : " "} ${choiceStart + index + 1}. ${shorten(choice, 65)}`}</Text>
       </MouseZone>)}
@@ -318,12 +318,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     let active = true;
     const live = new LiveOutput(options.outputMaxBytes);
     const read = async (): Promise<void> => {
-      let after: string | null = null;
+      // The cursor is only valid with the runtime it was read from, so both move together.
+      let cursor: { readonly after: string; readonly runtime: ControlRuntime } | null = null;
       for (;;) {
-        const result = await control.output(liveHost, liveId, { after, maxBytes: options.outputMaxBytes, waitMs: options.outputWaitMs });
+        const result = await control.output(liveHost, liveId, { after: cursor?.after ?? null, runtime: cursor?.runtime ?? null, maxBytes: options.outputMaxBytes, waitMs: options.outputWaitMs });
         if (!active) return;
         if (!result.ok) { setStatus(`Live output stopped: ${result.error.message}; press p to retry`); return; }
-        after = result.data.nextOffset;
+        // A new worker instance or generation starts a new output history, so the output before it is a gap.
+        if (cursor !== null && (cursor.runtime.workerInstanceId !== result.data.runtime.workerInstanceId || cursor.runtime.runtimeGeneration !== result.data.runtime.runtimeGeneration)) live.markGap();
+        cursor = { after: result.data.nextOffset, runtime: result.data.runtime };
         if (result.data.gap) live.markGap();
         if (result.data.bytes.length === 0 && !result.data.gap) continue;
         live.append(result.data.bytes);
@@ -932,8 +935,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     if (overlay === "help") { if (key.escape || input === "?" || input === "q") setOverlay("none"); return; }
     if (overlay === "projects") {
+      const chooseProject = (): void => {
+        const choice = pickChoices[pick.index];
+        if (choice !== undefined) { setProjectFilter(choice.label); setCursor((old) => ({ ...old, Sessions: 0 })); }
+        setOverlay("none");
+      };
       if (pick.filtering) {
-        if (key.escape || key.return) setPick((old) => ({ ...old, filtering: false }));
+        if (key.escape) setPick((old) => ({ ...old, filtering: false }));
+        else if (key.return) chooseProject();
         else if (key.backspace || key.delete) setPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
         else if (input !== "" && !key.ctrl && !key.meta && !key.tab) setPick((old) => ({ ...old, search: old.search + input, index: 0 }));
         return;
@@ -942,11 +951,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (key.upArrow) setPick((old) => ({ ...old, index: Math.max(0, old.index - 1) }));
       else if (key.downArrow) setPick((old) => ({ ...old, index: Math.min(pickChoices.length - 1, old.index + 1) }));
       else if (input === "/") setPick((old) => ({ ...old, filtering: true }));
-      else if (key.return) {
-        const choice = pickChoices[pick.index];
-        if (choice !== undefined) { setProjectFilter(choice.label); setCursor((old) => ({ ...old, Sessions: 0 })); }
-        setOverlay("none");
-      }
+      else if (key.return) chooseProject();
       return;
     }
     if (overlay === "work-preview") {

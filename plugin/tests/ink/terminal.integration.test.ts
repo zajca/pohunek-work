@@ -50,6 +50,7 @@ fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
 os.close(slave)
 output = bytearray()
+step = "click"
 clicked = False
 switched = False
 right_switched = False
@@ -62,20 +63,30 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
-    if not clicked and b"\x1b[?1006h" in output:
-        os.write(master, b"\x1b[<0;17;3M")
+    # Sessions takes the arrow keys as section jumps, so the tab switch by arrow is made from Hosts and Activity.
+    if step == "click" and b"\x1b[?1006h" in output:
+        os.write(master, b"\x1b[<0;17;2M")
         clicked = True
-    if clicked and not switched and b"No sessions" in output:
+        step = "sessions"
+        output.clear()
+    elif step == "sessions" and b"No sessions" in output:
         switched = True
+        os.write(master, b"\t")
+        step = "hosts"
         output.clear()
+    elif step == "hosts" and b"HOSTS" in output:
         os.write(master, b"\x1b[C")
-    elif switched and not right_switched and b"HOSTS" in output:
-        right_switched = True
+        step = "activity"
         output.clear()
+    elif step == "activity" and b"Scope: Recent" in output:
+        right_switched = True
         os.write(master, b"\x1b[D")
-    elif right_switched and not left_switched and b"No sessions" in output:
+        step = "back"
+        output.clear()
+    elif step == "back" and b"HOSTS" in output:
         left_switched = True
         os.write(master, b"q")
+        step = "quit"
     if child.poll() is not None:
         break
 if child.poll() is None:
@@ -110,8 +121,9 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
+    # The unreachable binary adds the status and warning lines above the form, which puts Name on row 10.
     if not clicked and b"\x1b[?1006h" in output and b"host list: cannot start" in output:
-        os.write(master, b"\x1b[<0;10;11Mmouse-name")
+        os.write(master, b"\x1b[<0;10;10Mmouse-name")
         clicked = True
     plain = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", output)
     if clicked and not edited and re.search(rb"Name\s+mouse-name_", plain):
@@ -128,7 +140,7 @@ print(json.dumps({"exit": child.returncode, "clicked": clicked, "edited": edited
 
 
 const PYTHON_TWO_FORMS_PTY = String.raw`
-import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+import fcntl, json, os, pty, re, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
@@ -141,6 +153,10 @@ deadline = time.monotonic() + 20
 def calls():
     if not os.path.exists(sys.argv[3]): return []
     return [json.loads(line) for line in open(sys.argv[3]) if line.strip()]
+def press(data, times):
+    for _ in range(times):
+        os.write(master, data)
+        time.sleep(0.15)
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.05)
     if ready:
@@ -148,32 +164,46 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
+    text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output)).decode("utf-8", "replace")
     now = time.monotonic()
     if step == 0 and b"\x1b[?1006h" in output:
         output.clear()
         os.write(master, b"n")
         step = 1
-    elif step == 1 and b"NEW SESSION" in output and b"Create and attach" in output:
+    # The form has loaded its options once the default agent label is shown; Tab then moves the focus from
+    # Project to the button row, where Enter creates the session.
+    elif step == 1 and "Create and attach" in text and "‹ shell ›" in text:
         output.clear()
-        os.write(master, b"\x1b[<0;10;15M")
+        press(b"\t", 7)
+        os.write(master, b"\r")
         step = 2
-    elif step == 2 and b"Launch warning: base_branch_fallback" in output:
+    elif step == 2 and "Launch warning: base_branch_fallback" in text:
         paused = not any(call[:2] == ["attach", "--host"] for call in calls())
-        os.write(master, b"\x1b[<0;10;8M")
+        os.write(master, b"\r")
         step = 3
-    elif step == 3 and any(call[:2] == ["attach", "--host"] for call in calls()) and b"Work is unavailable" in output:
+    elif step == 3 and any(call[:2] == ["attach", "--host"] for call in calls()) and "Work is unavailable" in text:
         output.clear()
-        os.write(master, b"\x1b[<0;17;3M")
+        next_input = now
         step = 4
-    elif step == 4 and b"No sessions" in output:
-        output.clear()
+    # Keys are ignored while the TUI is busy, so each view key is sent again until its view is shown.
+    elif step == 4:
+        if "No sessions" in text:
+            output.clear()
+            next_input = now
+            step = 5
+        elif now >= next_input:
+            os.write(master, b"2")
+            next_input = now + 0.5
+    elif step == 5 and "NEW ASSISTANT" not in text and now >= next_input:
         os.write(master, b"a")
-        step = 5
-    elif step == 5 and b"NEW ASSISTANT" in output and b"Create and attach" in output:
+        next_input = now + 0.5
+    # The assistant fields skip the unavailable request field: from Project, five Tabs reach the button row.
+    elif step == 5 and "NEW ASSISTANT" in text and "Create and attach" in text and "codex" in text.lower():
         output.clear()
-        os.write(master, b"\x1b[<0;10;14M")
+        press(b"\t", 5)
+        os.write(master, b"\r")
         step = 6
-    elif step == 6 and len([call for call in calls() if call[:2] == ["attach", "--host"]]) == 2 and b"No sessions" in output:
+    elif step == 6 and len([call for call in calls() if call[:2] == ["attach", "--host"]]) == 2 and "No sessions" in text:
         os.write(master, b"q")
         next_input = now + 0.3
         step = 7
@@ -243,7 +273,8 @@ while time.monotonic() < deadline:
     elif step == 5 and b"WORK ITEM" in output and b"Run review" in output:
         time.sleep(0.2)
         output.clear()
-        os.write(master, b"\x1b[<0;10;11M")
+        # The action buttons are on row 12; column 18 is inside "Preview plan", which never runs the action.
+        os.write(master, b"\x1b[<0;18;12M")
         step = 6
     elif step == 6 and b"PLAN PREVIEW" in output:
         mouse_action_previewed = True
@@ -301,10 +332,10 @@ while time.monotonic() < deadline:
         output.clear()
         os.write(master, b"\r")
         step = 2
-    elif step == 2 and b"TERMINAL SCREEN" in output and b" Resume " in output and b" Remove " in output:
+    elif step == 2 and b"OUTPUT" in output and b"Resume" in output and b"Remove" in output:
         resume_visible = True
         remove_visible = True
-        attach_hidden = b" Attach " not in output
+        attach_hidden = b"Attach" not in output
         output.clear()
         os.write(master, b"r")
         step = 3
@@ -319,15 +350,18 @@ while time.monotonic() < deadline:
     elif step == 31 and now >= next_input:
         os.write(master, b"\r")
         step = 4
-    elif step == 4 and b"TERMINAL SCREEN" in output and b" Remove " in output:
+    elif step == 4 and b"OUTPUT" in output and b"Remove" in output:
         output.clear()
         os.write(master, b"D")
         step = 5
-    elif step == 5 and b"Confirm remove" in output:
-        output.clear()
+    # Keys are ignored while the TUI is busy, so the confirmation is sent again until the removal is requested.
+    elif step == 5 and '"rm","lost-1"' not in trace() and b"Confirm remove" in output and now >= next_input:
         os.write(master, b"y")
+        next_input = now + 0.5
+    elif step == 5 and '"rm","lost-1"' in trace():
         step = 6
-    elif step == 6 and '"rm","lost-1"' in trace() and b"remove completed" in output:
+    # The success status is replaced by the refresh that follows the removal, so the reload is awaited instead.
+    elif step == 6 and '"session","list"' in trace()[trace().find('"rm","lost-1"'):] and trace().find('"rm","lost-1"') >= 0:
         os.write(master, b"q")
         step = 7
     if child.poll() is not None:
@@ -350,6 +384,11 @@ output = bytearray()
 step = 0
 next_input = 0
 deadline = time.monotonic() + 15
+def press(data, times):
+    for _ in range(times):
+        os.write(master, data)
+        time.sleep(0.15)
+# Keys, not clicks: the form's row positions depend on whether the status line is drawn yet.
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.05)
     if ready:
@@ -364,19 +403,20 @@ while time.monotonic() < deadline:
         step = 1
     elif step == 1 and b"NEW SESSION" in output and b"repo" in output and b"Create and attach" in output:
         output.clear()
-        os.write(master, b"\x1b[<0;10;9M")
+        press(b"\t", 2)
         step = 2
     elif step == 2 and b"Choose action/template" in output and b"review" in output:
         output.clear()
-        os.write(master, b"\x1b[<0;10;16M")
+        os.write(master, b"\x1b[C")
         step = 3
     elif step == 3 and b"Review template prompt" in output:
         output.clear()
-        os.write(master, b"\x1b[<0;10;15M")
-        next_input = now + 0.1
+        os.write(master, b"\x1b[D")
+        next_input = now + 0.5
         step = 4
     elif step == 4 and now >= next_input:
-        os.write(master, b"\x1b[<0;10;17M")
+        press(b"\t", 5)
+        os.write(master, b"\r")
         step = 5
     elif step == 5 and os.path.exists(sys.argv[3]) and '"session","new"' in open(sys.argv[3]).read() and b"Work is unavailable" in output:
         os.write(master, b"q")
@@ -395,7 +435,7 @@ print(json.dumps({"exit": child.returncode, "step": step}))
 `;
 
 const PYTHON_FOCUSED_CHOICE_PTY = String.raw`
-import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+import fcntl, json, os, pty, re, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
@@ -406,6 +446,11 @@ next_input = 0
 deadline = time.monotonic() + 15
 def trace():
     return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
+def click(column, row):
+    os.write(master, ("\x1b[<0;%d;%dM" % (column, row)).encode())
+# Rows are read from the form: the status line above the fields appears with the first refresh and shifts
+# every row below it by one, so the Action row is measured once the refresh has settled.
+action_row = None
 while time.monotonic() < deadline:
     ready, _, _ = select.select([master], [], [], 0.05)
     if ready:
@@ -413,28 +458,35 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
+    text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output)).decode("utf-8", "replace")
     now = time.monotonic()
     if step == 0 and b"\x1b[?1006h" in output:
         output.clear()
         os.write(master, b"n")
         step = 1
-    elif step == 1 and b"NEW SESSION" in output and b"repo" in output:
+    elif step == 1 and "NEW SESSION" in text and "repo" in text and "Create and attach" in text:
+        if action_row is None:
+            action_row = now + 1.5
+        elif now >= action_row:
+            row = 9 if "host/source error(s)" in text else 8
+            output.clear()
+            click(10, row)
+            action_row = row
+            step = 2
+    elif step == 2 and "Choose action/template" in text and "review" in text:
         output.clear()
-        os.write(master, b"\x1b[<0;10;9M")
-        step = 2
-    elif step == 2 and b"Choose action/template" in output and b"review" in output:
-        output.clear()
-        os.write(master, b"\x1b[<0;10;16M")
+        click(10, action_row + 7)
         step = 3
-    elif step == 3 and b"Review template prompt" in output:
+    elif step == 3 and "Review template prompt" in text:
+        # A click on the focused field's own row must keep the selected template.
         output.clear()
-        os.write(master, b"\x1b[<0;10;9M")
-        next_input = now + 0.3
+        click(10, action_row)
+        next_input = now + 0.5
         step = 4
     elif step == 4 and now >= next_input:
-        os.write(master, b"\x1b[<0;10;17M")
+        click(10, action_row + 8)
         step = 5
-    elif step == 5 and '"session","new"' in trace() and b"Work is unavailable" in output:
+    elif step == 5 and '"session","new"' in trace() and "Work is unavailable" in text:
         os.write(master, b"q")
         next_input = now + 0.3
         step = 6
@@ -452,7 +504,7 @@ print(json.dumps({"exit": child.returncode, "step": step, **({"trace": trace()} 
 
 async function runPty(mode: "main" | "new-session", key: string): Promise<{ exit: number; sent: boolean; alternate: boolean; restored: boolean; screen: boolean }> {
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_PTY, Bun.which("bun") ?? "bun", source, mode === "main" ? "pohunek-work" : "pohunek-work new-session", Buffer.from(key).toString("hex")], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -479,7 +531,7 @@ test("click and horizontal arrows switch tabs and mouse tracking is restored on 
   const daemon = await startCoreDaemon();
   stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -490,7 +542,7 @@ test("the standalone session form focuses a text field by click", async () => {
   const daemon = await startCoreDaemon();
   stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_FORM_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -526,7 +578,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_TWO_FORMS_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -564,7 +616,7 @@ else process.exit(70);
 `);
     await chmod(binary, 0o700);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_WORK_RESULT_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -606,7 +658,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_LOST_SESSION_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -647,7 +699,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_TEMPLATE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -692,7 +744,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_FOCUSED_CHOICE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);

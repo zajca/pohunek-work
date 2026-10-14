@@ -32,11 +32,11 @@ test("sections head the list and the highlighted session's panel follows the sel
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
-    { expect: "READY  1" },
-    { expect: "UNAVAILABLE  1" },
-    { expect: "alpha-panel · local · shell" },
-    keys("\x1b[B"),
+    { expect: "NEEDS YOU  1" },
+    { expect: "RUNNING  1" },
     { expect: "broken-panel · local · shell" },
+    keys("\x1b[B"),
+    { expect: "alpha-panel · local · shell" },
     keys("q"),
   ];
   const result = await scenario.run(steps, { ...WIDE, timeoutS: 40 });
@@ -66,9 +66,11 @@ test("Tab cycles the views and a narrow terminal shows the panel full screen unt
   const wide: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("\t"),
+    { expect: "SESSIONS  " },
+    keys("\t"),
     { expect: "HOSTS" },
     keys("\t"),
-    { expect: "ACTIVITY" },
+    { expect: "Scope: Recent" },
     keys("2"),
     { expect: "SESSIONS" },
   ];

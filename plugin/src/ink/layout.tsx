@@ -20,6 +20,10 @@ export const TOOLBAR_LINES = 1;
 export const FORM_FIXED_LINES = 10;
 /** Padding columns ScreenFrame adds on each side. */
 const FRAME_PADDING_COLUMNS = 2;
+/** Columns between the header title and the control label, and the label's right margin. */
+export const HEADER_GAP_COLUMNS = 2;
+/** Label shown at the right of the header when the title and the label fit side by side. */
+export const CONTROL_LABEL = "CONTROL CENTER";
 /** Gap between two tabs in the tab row. */
 const TAB_GAP_COLUMNS = 1;
 

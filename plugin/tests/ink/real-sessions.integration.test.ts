@@ -5,6 +5,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { keys, type PtyStep } from "./support/pty.ts";
+import type { NotificationRecord as WireNotification } from "@pohunek/protocol";
 
 const NOTIFICATION_WAIT_MS = 20_000;
 const POLL_MS = 100;
@@ -28,7 +29,8 @@ async function notificationsFor(scenario: TuiScenario, sessionIds: readonly stri
   const deadline = Date.now() + NOTIFICATION_WAIT_MS;
   for (;;) {
     const listed = await scenario.daemon.pohunek(["notifications", "list", "--json"]);
-    const records = (JSON.parse(listed.stdout) as { ok?: { notifications?: NotificationRecord[] } }).ok?.notifications ?? [];
+    const wire = (JSON.parse(listed.stdout) as { ok?: { notifications?: WireNotification[] } }).ok?.notifications ?? [];
+    const records = wire.flatMap((record) => record.session_id === undefined ? [] : [{ id: record.id, title: record.title, body: record.body, sessionId: record.session_id }]);
     const mine = records.filter((record) => sessionIds.includes(record.sessionId));
     if (mine.length >= sessionIds.length) return mine;
     if (Date.now() > deadline) throw new Error(`the daemon listed ${String(mine.length)} of ${String(sessionIds.length)} notifications`);
@@ -67,9 +69,9 @@ test("a wheel and a row click select the session the owner picks, which then att
     keys("2"),
     { expect: "SESSIONS  12" },
     // A click on the second row (the rows start below the header, the frame and the subtitle).
-    { send: "\x1b[<0;10;11M" },
+    keys("\x1b[<0;10;11M"),
     { pause: 300 },
-    { send: "\x1b[<0;10;11m" },
+    keys("\x1b[<0;10;11m"),
     { pause: 300 },
     keys("o"),
     { pause: 1500 },

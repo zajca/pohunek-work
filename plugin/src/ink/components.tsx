@@ -1,7 +1,7 @@
 import { Box, Text, useStdout } from "ink";
 import type { ReactNode } from "react";
 import { MouseZone } from "./mouse.tsx";
-import { useLayout } from "./layout.tsx";
+import { CONTROL_LABEL, HEADER_GAP_COLUMNS, useLayout } from "./layout.tsx";
 
 /** Keep terminal control bytes and bidi overrides out of text supplied by external systems. */
 export function safeText(value: string): string {
@@ -38,7 +38,7 @@ export function ScreenFrame({ title, tabs, activeTab, onTab, subtitle, footer, s
     <Box flexDirection="column" width="100%" height={stdout.rows} paddingX={1}>
       <Box justifyContent="space-between">
         <Text bold color="cyan">{safeText(title)}</Text>
-        {stdout.columns >= layout.compactColumns && <Text dimColor>{"CONTROL CENTER"}</Text>}
+        {stdout.columns >= safeText(title).length + CONTROL_LABEL.length + HEADER_GAP_COLUMNS && <Text dimColor>{CONTROL_LABEL}</Text>}
       </Box>
       {tabs !== undefined && <Box gap={1} marginTop={stdout.rows < layout.compactRows || stdout.columns < layout.compactColumns ? 0 : 1}>{tabs.map((tab, index) =>
         <MouseZone key={tab} onClick={onTab === undefined ? undefined : () => { onTab(index); }}>

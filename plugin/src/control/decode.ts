@@ -210,6 +210,7 @@ export function sessionOutput(raw: unknown, path: string): ControlOutput {
     bytes: new Uint8Array(Buffer.from(encoded, "base64")),
     nextOffset: string(obj, "next_offset", path),
     runtimeEndOffset: string(obj, "runtime_end_offset", path),
+    runtime: { workerInstanceId: string(obj, "worker_instance_id", path), runtimeGeneration: string(obj, "runtime_generation", path) },
     gap: obj["gap"] !== undefined && obj["gap"] !== null,
     hasMore: boolean(obj, "has_more", path),
     timedOut: boolean(obj, "timed_out", path),

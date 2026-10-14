@@ -20,8 +20,6 @@ test("a stop goes through when only host discovery fails", async () => {
     { expect: "CONTROL CENTER" },
     keys("2"),
     { expect: "gamma-stop" },
-    keys("\r"),
-    { expect: "gamma-stop" },
     keys("x"),
     { expect: "Confirm stop" },
     keys("y"),

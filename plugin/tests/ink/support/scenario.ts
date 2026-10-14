@@ -10,13 +10,18 @@ import { runPty, type PtyResult, type PtyStep } from "./pty.ts";
 export const PROJECT = "widgets";
 /** Time bound of a scenario that starts a real daemon: its git, daemon and TUI startup run on a loaded host. */
 export const REAL_SCENARIO_TIMEOUT_MS = 120_000;
+/**
+ * The fixture has no netbird overlay, so the core refuses host discovery with netbird_cli_missing and
+ * the TUI would pause every mutation. An empty discovery answer keeps the local source available.
+ */
+const NO_OVERLAY_RULES: readonly ProxyRule[] = [{ match: ["host", "discover"], appendOk: [] }];
 const MAIN = new URL("../../../src/main.ts", import.meta.url).pathname;
 
 export interface TuiScenario {
   readonly daemon: CoreDaemon;
   readonly proxy: CliProxy;
   readonly fixture: PluginFixture;
-  run(steps: readonly PtyStep[], options?: { readonly cols?: number; readonly rows?: number; readonly timeoutS?: number }): Promise<PtyResult>;
+  run(steps: readonly PtyStep[], options?: { readonly cols?: number; readonly rows?: number; readonly timeoutS?: number; readonly env?: Readonly<Record<string, string>> }): Promise<PtyResult>;
   stop(): Promise<void>;
 }
 
@@ -29,7 +34,7 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
   let proxy: CliProxy | null = null;
   try {
     await daemon.registerProject(PROJECT, "acme/widgets");
-    proxy = await startCliProxy(join(daemon.coreDir, "pohunek"), options.rules ?? []);
+    proxy = await startCliProxy(join(daemon.coreDir, "pohunek"), [...NO_OVERLAY_RULES, ...(options.rules ?? [])]);
     const started = proxy;
     const fixture = await writePluginConfig(daemon, [{ label: PROJECT, repo: "acme/widgets" }], {
       overrides: { "pohunek.bin": started.binary, "tui.self_bin": await workSourceStub(daemon.root), ...(options.overrides ?? {}) },
@@ -42,7 +47,7 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
       fixture,
       run: (steps, run = {}) => runPty({
         cmd: [Bun.which("bun") ?? "bun", MAIN, "tui"],
-        env,
+        env: { ...env, ...(run.env ?? {}) },
         cols: run.cols ?? 120,
         rows: run.rows ?? 40,
         steps,

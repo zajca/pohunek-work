@@ -1,4 +1,4 @@
-import { connectLocal, connectTcp } from "@pohunek/sdk";
+import { connectLocal, connectTcp, resolveRequestOrigin, type ConnectOptions } from "@pohunek/sdk";
 import { exec, SpawnError } from "../util/exec.ts";
 import {
   InvalidControlResponse, array, boolean, capabilities, count, governance, host as parseHost,
@@ -54,13 +54,24 @@ function parseEnvelope(stdout: string, exitCode: number | null): ControlResult<u
   }
 }
 
-function originError(): ControlError | null {
-  const session = process.env["POHUNEK_SESSION_ID"] !== undefined;
-  const daemon = process.env["POHUNEK_DAEMON_ID"] !== undefined;
+function originError(env: Readonly<Record<string, string | undefined>>): ControlError | null {
+  const session = env["POHUNEK_SESSION_ID"] !== undefined;
+  const daemon = env["POHUNEK_DAEMON_ID"] !== undefined;
   return session === daemon ? null : {
     code: "origin_environment",
     message: "Set both POHUNEK_SESSION_ID and POHUNEK_DAEMON_ID, or unset both.",
   };
+}
+
+/**
+ * Connect options that carry the origin of a TUI hosted in a managed session, so the daemon refuses mutations
+ * aimed at that session. The SDK does not read these variables itself. Callers check the pair with originError first.
+ */
+function connectOptions(env: Readonly<Record<string, string | undefined>>): ConnectOptions {
+  const sessionId = env["POHUNEK_SESSION_ID"];
+  const daemonId = env["POHUNEK_DAEMON_ID"];
+  if (sessionId === undefined || daemonId === undefined) return {};
+  return { origin: resolveRequestOrigin({ sessionId, daemonId }) };
 }
 
 function bareIdError(id: string): ControlError | null {
@@ -80,9 +91,10 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       !Number.isSafeInteger(options.reconnectMaxMs) || options.reconnectMaxMs < 1) {
     throw new TypeError("control client requires binary, positive timeoutMs, positive notificationsPageSize and positive reconnectMaxMs");
   }
+  const environment = (): Readonly<Record<string, string | undefined>> => options.env ?? process.env;
 
   async function call(args: readonly string[]): Promise<ControlResult<unknown>> {
-    const invalidOrigin = originError();
+    const invalidOrigin = originError(environment());
     if (invalidOrigin !== null) { return { ok: false, error: invalidOrigin }; }
     try {
       const result = await exec([options.binary, ...args], { timeoutMs: options.timeoutMs, ...(options.env === undefined ? {} : { env: options.env }) });
@@ -123,8 +135,11 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   const listeners = new Set<(snapshot: ControlSnapshot) => void>();
   let hosts: ControlHost[] = [LOCAL_HOST];
   let discoveryError: ControlError | null = null;
+  // Set by close(); a read that was pending when the client closed must not open a connection afterwards.
+  let closed = false;
 
   function linkFor(route: string): SdkLink {
+    if (closed) throw new Error("the control client is closed");
     const existing = links.get(route);
     if (existing !== undefined) return existing;
     const link = new SdkLink(route, () => {
@@ -132,10 +147,10 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       if (record === undefined) return Promise.reject(new Error(`host ${route} is not listed`));
       if (route === "local") {
         if (options.localSocket === null) return Promise.reject(new Error("the local daemon socket cannot be resolved"));
-        return connectLocal(options.localSocket);
+        return connectLocal(options.localSocket, connectOptions(environment()));
       }
       if (record.address === null || record.port === null) return Promise.reject(new Error(`host ${route} has no address`));
-      return connectTcp(route, { host: record.address, port: record.port });
+      return connectTcp(route, { host: record.address, port: record.port }, connectOptions(environment()));
     }, () => { scheduleRead(route); }, options.timeoutMs, options.reconnectMaxMs);
     links.set(route, link);
     return link;
@@ -189,6 +204,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   }
 
   function scheduleRead(route: string): void {
+    if (closed) return;
     const pending = settling.get(route);
     if (pending !== undefined) clearTimeout(pending);
     settling.set(route, setTimeout(() => {
@@ -200,6 +216,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   async function refresh(): Promise<ControlSnapshot> {
     const discovered = await read(["host", "discover", "--json"], raw =>
       array(raw, "$.ok").map((item, index) => parseHost(item, `$.ok[${String(index)}]`)));
+    if (closed) return assemble();
     discoveryError = discovered.ok ? null : discovered.error;
     hosts = [LOCAL_HOST, ...(discovered.ok ? discovered.data : [])];
     hostRecords.clear();
@@ -311,6 +328,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       return () => { listeners.delete(listener); };
     },
     async close() {
+      closed = true;
       for (const timer of settling.values()) clearTimeout(timer);
       settling.clear();
       await Promise.all([...links.values()].map(async link => { await link.close(); }));

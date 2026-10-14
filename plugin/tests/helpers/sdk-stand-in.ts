@@ -4,9 +4,17 @@
 // socket runs the scenario's own binary with the CLI's arguments and returns that envelope's payload.
 // Limits: health, session list, notification list, notification update, session stop, remove, resume, fork and inspect are answered;
 // `subscribe` is acknowledged and pushes no events; every other method is refused with `stand_in_refused`.
+// Faults make the next replies to one method stall (no reply) or arrive corrupted (a line that is not JSON).
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** A reply the stand-in withholds or corrupts; `times` replies are affected, then the method is answered again. */
+export interface SdkFault {
+  readonly method: string;
+  readonly kind: "stall" | "corrupt";
+  readonly times: number;
+}
 
 export interface SdkStandIn {
   readonly socket: string;
@@ -15,6 +23,7 @@ export interface SdkStandIn {
 
 const SERVER = `
 const [socketPath, relay] = process.argv.slice(2);
+const faults = JSON.parse(process.argv[4] ?? "[]");
 const buffers = new Map();
 async function runRelay(args) {
   const child = Bun.spawn([relay, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -46,6 +55,12 @@ function mutationArgs(request) {
 }
 async function answer(socket, request) {
   const reply = (body) => socket.write(JSON.stringify({ v: 4, id: request.id, ...body }) + "\\n");
+  const fault = faults.find((entry) => entry.method === request.method && entry.times > 0);
+  if (fault !== undefined) {
+    fault.times -= 1;
+    if (fault.kind === "corrupt") socket.write("this reply is not JSON\\n");
+    return;
+  }
   try {
     if (request.method === "daemon.health") return reply({ ok: { status: "ok", daemon_version: "0.34.2", protocol_version: 4 } });
     if (request.method === "session.list") return reply(outcome(await runRelay(["--host", "local", "session", "list", "--json"])));
@@ -58,9 +73,9 @@ async function answer(socket, request) {
     if (request.method === "subscribe") return reply({ ok: null });
     const mutation = mutationArgs(request);
     if (mutation !== null) return reply(outcome(await runRelay(mutation)));
-    return reply({ err: { class: "unsupported", code: "stand_in_refused", msg: "the stand-in serves the scenario reads and mutations only: " + request.method, recover: "use the CLI" } });
+    return reply({ err: { class: "daemon", code: "stand_in_refused", msg: "the stand-in serves the scenario reads and mutations only: " + request.method, recover: "use the CLI" } });
   } catch (error) {
-    return reply({ err: { class: "unavailable", code: "stand_in_relay_failed", msg: String(error), recover: "fix the scenario relay" } });
+    return reply({ err: { class: "transport", code: "stand_in_relay_failed", msg: String(error), recover: "fix the scenario relay" } });
   }
 }
 Bun.listen({
@@ -93,13 +108,13 @@ async function isSocket(path: string): Promise<boolean> {
 }
 
 /** Starts the stand-in on a fresh socket; `relay` is the scenario's CLI that serves the reads. */
-export async function startSdkStandIn(relay: string): Promise<SdkStandIn> {
+export async function startSdkStandIn(relay: string, options: { readonly faults?: readonly SdkFault[] } = {}): Promise<SdkStandIn> {
   const directory = await mkdtemp(join(tmpdir(), "pw-standin-"));
   const socket = join(directory, "daemon.sock");
   const script = join(directory, "stand-in.ts");
   await writeFile(script, SERVER);
   await chmod(script, 0o600);
-  const child = Bun.spawn([process.execPath, script, socket, relay], { stdout: "ignore", stderr: "inherit" });
+  const child = Bun.spawn([process.execPath, script, socket, relay, JSON.stringify(options.faults ?? [])], { stdout: "ignore", stderr: "inherit" });
   const deadline = Date.now() + 10_000;
   while (!(await isSocket(socket))) {
     if (child.exitCode !== null) throw new Error("the SDK stand-in exited before it listened");

@@ -60,14 +60,17 @@ export interface ControlGovernance {
   readonly approvalKeyReference: string;
 }
 export interface ControlScreen { readonly sessionId: string; readonly title: string | null; readonly progress: string | null; readonly visibleLines: readonly string[] }
+/** Worker instance and runtime generation a session output cursor belongs to; the daemon rejects a cursor without it. */
+export interface ControlRuntime { readonly workerInstanceId: string; readonly runtimeGeneration: string }
 /** One bounded replay of a session's retained PTY output; the offsets are opaque cursors the daemon issues. */
 export interface ControlOutput {
   readonly sessionId: string; readonly bytes: Uint8Array; readonly nextOffset: string; readonly runtimeEndOffset: string;
+  readonly runtime: ControlRuntime;
   /** Whether the requested cursor had been evicted, so output between the cursor and the next replay is missing. */
   readonly gap: boolean; readonly hasMore: boolean; readonly timedOut: boolean;
 }
-/** Output replay request: `after` is the cursor of the previous replay, omitted for the newest retained tail. */
-export interface ControlOutputRequest { readonly after: string | null; readonly maxBytes: number; readonly waitMs: number }
+/** Output replay request: `after` and `runtime` are the cursor and its runtime from the previous replay, both null for the newest retained tail. */
+export interface ControlOutputRequest { readonly after: string | null; readonly runtime: ControlRuntime | null; readonly maxBytes: number; readonly waitMs: number }
 export interface ControlSnapshotError { readonly host: string; readonly scope: "discovery" | "sessions" | "projects" | "notifications"; readonly error: ControlError }
 export interface ControlSnapshot {
   readonly hosts: readonly ControlHost[]; readonly sessions: readonly ControlSession[];

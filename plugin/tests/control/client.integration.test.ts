@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createControlClient } from "../../src/control/index.ts";
-import { startSdkStandIn, type SdkStandIn } from "../helpers/sdk-stand-in.ts";
+import { createControlClient, type ControlClient, type ControlSnapshot } from "../../src/control/index.ts";
+import { startSdkStandIn, type SdkFault, type SdkStandIn } from "../helpers/sdk-stand-in.ts";
 
 // Session mutations go through the daemon socket, so these tests run the socket stand-in relaying the CLI stub.
 let standIn: SdkStandIn | null = null;
@@ -114,7 +114,7 @@ describe("control CLI process boundary", () => {
       { args: ["--host", "local", "session", "inspect", "verified", "--json"], ok: { ...session, id: "verified", native_session_id: "native-1", native_last_activity_at: "2026-10-09T09:00:00Z" } },
       { args: ["--host", "local", "session", "inspect", "ambiguous", "--json"], ok: { ...session, id: "ambiguous", native_session_id: "native-1", native_session_path: "/conversation.jsonl" } },
       { args: ["--host", "local", "session", "inspect", "unknown", "--json"], ok: { ...session, id: "unknown", native_session_id: null, native_session_path: null, native_last_activity_at: null } },
-      { args: ["--host", "local", "session", "resume", "ambiguous", "--json"], err: { class: "invalid_state", code: "recovery_target_ambiguous", msg: "two native references" } },
+      { args: ["--host", "local", "session", "resume", "ambiguous", "--json"], err: { class: "runtime", code: "recovery_target_ambiguous", msg: "two native references" } },
     ]);
     standIn = await startSdkStandIn(stub.binary);
     const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
@@ -154,5 +154,72 @@ describe("control CLI process boundary", () => {
     const result = await client.act({ kind: "remove", host: "local", sessionId: "s1" });
     expect(result.ok ? null : result.error.code).toBe("timeout");
     expect((await stub.calls()).filter((call) => call.includes("rm"))).toEqual([args]);
+  });
+
+  // The stand-in makes the reply faults: a real daemon cannot produce a connection that a stalled or corrupted
+  // reply has left unusable, so the link's recovery from such a reply is only reachable through the socket stand-in.
+  describe("a reply fault leaves the link usable for the calls after it", () => {
+    const RECOVERY_WAIT_MS = 10_000;
+    const sessionsFailed = (snapshot: ControlSnapshot): boolean =>
+      snapshot.errors.some((error) => error.host === "local" && error.scope === "sessions");
+
+    /** Refreshes until the sessions read succeeds again; the link waits out its reconnect backoff in between. */
+    async function refreshUntilHealthy(client: ControlClient): Promise<ControlSnapshot> {
+      const deadline = Date.now() + RECOVERY_WAIT_MS;
+      for (;;) {
+        const snapshot = await client.refresh();
+        if (!sessionsFailed(snapshot) || Date.now() > deadline) return snapshot;
+        await Bun.sleep(100);
+      }
+    }
+
+    async function faultedClient(fault: SdkFault["kind"]): Promise<{ client: ControlClient }> {
+      const stub = await cli([
+        { args: ["host", "discover", "--json"], ok: [] },
+        { args: ["--host", "local", "session", "list", "--json"], ok: [session] },
+        { args: ["--host", "local", "project", "list", "--json"], ok: [project] },
+      ]);
+      standIn = await startSdkStandIn(stub.binary, { faults: [{ method: "session.list", kind: fault, times: 1 }] });
+      const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
+      return { client };
+    }
+
+    test("a stalled reply", async () => {
+      const { client } = await faultedClient("stall");
+      expect(sessionsFailed(await client.refresh())).toBe(true);
+      const recovered = await refreshUntilHealthy(client);
+      expect(sessionsFailed(recovered)).toBe(false);
+      expect(recovered.sessions.map((item) => item.id)).toEqual([session.id]);
+      await client.close();
+    });
+
+    test("a corrupted reply", async () => {
+      const { client } = await faultedClient("corrupt");
+      expect(sessionsFailed(await client.refresh())).toBe(true);
+      const recovered = await refreshUntilHealthy(client);
+      expect(sessionsFailed(recovered)).toBe(false);
+      expect(recovered.sessions.map((item) => item.id)).toEqual([session.id]);
+      await client.close();
+    });
+  });
+
+  // A refresh still waiting on host discovery must not reach the daemon socket once the client is closed.
+  test("close during a pending refresh opens no daemon connection afterwards", async () => {
+    const stub = await cli([{ args: ["host", "discover", "--json"], ok: [], delayMs: 1_000 }]);
+    const directory = await mkdtemp(join(tmpdir(), "pohunek-control-socket-"));
+    tempDirs.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    let connections = 0;
+    const listener = Bun.listen({ unix: socketPath, socket: { open() { connections += 1; }, data() {}, close() {}, error() {} } });
+    try {
+      const client = createControlClient({ binary: stub.binary, timeoutMs: 5_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: socketPath });
+      const pending = client.refresh();
+      await Bun.sleep(200);
+      await client.close();
+      await pending;
+      expect(connections).toBe(0);
+    } finally {
+      listener.stop(true);
+    }
   });
 });

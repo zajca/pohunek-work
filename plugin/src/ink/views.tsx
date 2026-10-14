@@ -249,7 +249,8 @@ export function projectChoices(sessions: readonly ControlSession[], search: stri
   }
   const needle = search.toLowerCase();
   const projects = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([label, count]) => ({ label, count }));
-  return [{ label: null, count: sessions.length }, ...projects].filter((choice) => choice.label === null || choice.label.toLowerCase().includes(needle));
+  // The "all" choice is kept only while its own name matches, so the first highlighted choice is the first match.
+  return [{ label: null, count: sessions.length }, ...projects].filter((choice) => choice.label === null ? "all".includes(needle) : choice.label.toLowerCase().includes(needle));
 }
 
 export function ProjectPicker({ choices, selected, search, filtering, limit }: {

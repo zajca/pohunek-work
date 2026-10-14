@@ -22,6 +22,12 @@ export function sdkFailure(error: unknown): ControlError {
 }
 
 /**
+ * A daemon refusal arrives over a healthy connection, so only these client errors keep it. Any other client
+ * error (timeout, framing, I/O, unreachable daemon) can leave the connection unusable, so it is reset.
+ */
+const REFUSAL_KINDS: ReadonlySet<string> = new Set(["protocol", "remoteProtocol", "daemonProtocolTooOld"]);
+
+/**
  * Doublings of the retry delay before it reaches the cap: the first retry waits `cap / 2^steps`. The base is
  * derived from the cap, so `reconnect_max_secs` is the only timing value of the reconnect.
  */
@@ -166,7 +172,7 @@ export class SdkLink {
       const client = await this.bounded(this.ready(), timeoutMs);
       return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), timeoutMs);
     } catch (error) {
-      if (error instanceof ClientError) throw error;
+      if (error instanceof ClientError && REFUSAL_KINDS.has(error.kind)) throw error;
       await this.drop();
       this.startReconnect();
       throw error;
@@ -224,6 +230,7 @@ export class SdkLink {
     const params = {
       session_id: sessionId,
       max_bytes: request.maxBytes,
+      ...(request.after === null || request.runtime === null ? {} : { runtime: { worker_instance_id: request.runtime.workerInstanceId, runtime_generation: request.runtime.runtimeGeneration } }),
       ...(request.after === null ? {} : { after_offset: request.after }),
       ...(request.after === null ? {} : { wait_ms: request.waitMs }),
     };

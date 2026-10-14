@@ -53,8 +53,7 @@ while time.monotonic() < deadline:
         last_sent = now
         output.clear()
     elif step == "open" and now - last_sent > 0.5:
-        os.write(master, b"r")
-        last_sent = now
+        # Enter opens the recovery from the list; a resend waits for the overlay, since any key closes it.
         if b"RECOVERY TARGET" in plain:
             shown = True
             target_shown = b"native-1" in plain and b"2026-10-09T09:00:00Z" in plain
@@ -62,9 +61,11 @@ while time.monotonic() < deadline:
             step = "cancelled"
             last_sent = now
             output.clear()
+        else:
+            os.write(master, b"\r")
+            last_sent = now
     elif step == "cancelled" and now - last_sent > 1.5:
         cancel_resumed = '"resume"' in trace()
-        os.write(master, b"r")
         step = "reopen"
         last_sent = now
         output.clear()
@@ -74,7 +75,7 @@ while time.monotonic() < deadline:
             step = "confirmed"
             last_sent = now
         else:
-            os.write(master, b"r")
+            os.write(master, b"\r")
             last_sent = now
     elif step == "confirmed" and '"resume"' in trace():
         confirmed_resumed = True
@@ -125,7 +126,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"all",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"all",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_RECOVERY_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
