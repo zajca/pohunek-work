@@ -236,7 +236,9 @@ so it is reported and the owner must act; or its `state` is `stopped`, `done` or
 `failed`; or its `runtime.state` is `lost`, which emits no events, so it is reported to
 the owner at once as a lost worker. Any other reading holds the wait and is reported as state unknown: a null or unrecognised
 `activity`, a failed or unparsable `session list` or `session inspect`, and a launched
-session missing from the list (it is not read as finished). Then stop the background
+session missing from the list (it is not read as finished; a session the manager removed
+itself with `cleanup` is reported as removed and releases the wait, and any other missing
+session is left to the owner, who ends the wait by saying so). Then stop the background
 watch and send one final report: each session with its outcome, each pull request with
 its head and checks, and what needs the owner.
 
