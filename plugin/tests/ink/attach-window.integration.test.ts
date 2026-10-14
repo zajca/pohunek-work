@@ -162,3 +162,65 @@ test("the --attach flag overrides the configured mode for one run", async () => 
   // The recording terminal never ran, so its trace file was never written.
   expect(await readFile(terminal.trace, "utf8").catch(() => null)).toBeNull();
 }, SCENARIO_TIMEOUT_MS);
+
+test("a window terminal outlives the TUI and keeps writing to stderr after it has quit", async () => {
+  // The stub waits past the TUI's exit, writes to stderr, and then records that it is still running.
+  const sleep = Bun.which("sleep");
+  if (sleep === null) throw new Error("sleep is not on PATH; the terminal stub needs it");
+  directory = await mkdtemp(join(tmpdir(), "pohunek-attach-window-"));
+  const marker = join(directory, "survived");
+  const path = join(directory, "late-terminal");
+  await writeFile(path, `#!/bin/sh
+${JSON.stringify(sleep)} 1
+echo late >&2
+echo ok > ${JSON.stringify(marker)}
+exec ${JSON.stringify(sleep)} 60
+`);
+  await chmod(path, 0o700);
+  scenario = await startTuiScenario({
+    overrides: { "tui.attach_mode": "window", "tui.attach_command": `${path} {id}`, "tui.attach_launch_check_ms": LAUNCH_CHECK_MS },
+  });
+  await createShellSession(scenario.daemon, "late");
+  const result = await scenario.run([
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "SESSIONS  1" },
+    keys("o"),
+    { expect: "opened in a new window" },
+    keys("q"),
+  ], { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  // The terminal wrote to stderr after the TUI was gone; it must still be running to record the marker.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (await readFile(marker, "utf8").catch(() => null) !== null) break;
+    await Bun.sleep(200);
+  }
+  expect(await readFile(marker, "utf8").catch(() => null)).toBe("ok\n");
+}, SCENARIO_TIMEOUT_MS);
+
+test("a failed launch is reported while a descendant of the terminal still holds its stderr", async () => {
+  // The terminal exits with status 3 at once, but leaves a background child that keeps stderr open.
+  const sleep = Bun.which("sleep");
+  if (sleep === null) throw new Error("sleep is not on PATH; the terminal stub needs it");
+  directory = await mkdtemp(join(tmpdir(), "pohunek-attach-window-"));
+  const path = join(directory, "descendant-terminal");
+  await writeFile(path, `#!/bin/sh
+(${JSON.stringify(sleep)} 30) &
+echo "display refused" >&2
+exit 3
+`);
+  await chmod(path, 0o700);
+  scenario = await startTuiScenario({
+    overrides: { "tui.attach_mode": "window", "tui.attach_command": `${path} {id}`, "tui.attach_launch_check_ms": LAUNCH_CHECK_MS },
+  });
+  await createShellSession(scenario.daemon, "descendant");
+  const result = await scenario.run([
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "SESSIONS  1" },
+    keys("o"),
+    { expect: "exited with status 3 within the launch check; stderr: display refused" },
+    keys("q"),
+  ], { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
