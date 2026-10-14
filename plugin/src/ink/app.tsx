@@ -492,7 +492,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if (result.exitCode !== 0) throw new Error(`attach exited ${String(result.exitCode)}`);
       });
       if (options.mode === "new-session") { setExitCode(0); exit(); }
-      else { setCreated(null); setOverlay("none"); await refresh(); }
+      else { setCreated(null); setOverlay("none"); void refresh(); }
     } catch (error) {
       if (options.mode === "new-session") setExitCode(2);
       setStatus(`Session ${created.host}/${created.sessionId} exists; attach failed: ${defaultStatus(error)}`);
@@ -526,7 +526,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
           if (attached.exitCode !== 0) throw new Error(`attach exited ${String(attached.exitCode)}`);
         });
         if (options.mode === "new-session") { setExitCode(0); exit(); }
-        else { setCreated(null); setOverlay("none"); await refresh(); }
+        else { setCreated(null); setOverlay("none"); void refresh(); }
       } catch (error) {
         if (options.mode === "new-session") setExitCode(2);
         setStatus(`Session ${result.host}/${result.sessionId} exists; attach failed: ${defaultStatus(error)}`);
@@ -588,7 +588,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
               const updated = result.data.notification;
               setNotificationDetail((current) => current?.host === record.host && current.id === record.id ? updated : current);
             }
-            await refresh();
+            void refresh();
           }
         } catch (error) { if (notificationSelectionGeneration.current === generation) setStatus(`Mark read failed: ${defaultStatus(error)}`); }
       }
@@ -602,7 +602,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     try {
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
       if (!result.ok) setStatus(`${kind} failed: ${result.error.message}`);
-      else { await refresh(); setOverlay("none"); setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`); }
+      else { void refresh(); setOverlay("none"); setStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`); }
     } catch (error) { setStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);
 
@@ -632,17 +632,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         // The fork's overlay offers Resume on r, so the owner is taken to the list, where r refreshes it.
         if (outcome.error.code === "outcome_unknown" && action.kind === "fork") { setForkUnknown(true); setOverlay("none"); }
         // What the daemon holds may differ from what the owner sees, so the list is read again after a failed mutation.
-        if (outcome.error.code === "outcome_unknown" || action.kind === "remove") await refresh();
+        if (outcome.error.code === "outcome_unknown" || action.kind === "remove") void refresh();
         return;
       }
       if (outcome.data.kind === "remove" && (!outcome.data.removed || outcome.data.worktreesFailed > 0)) {
         setStatus(`Removal unverified; session ${expected.host}/${expected.id} may remain. Inspect before retrying.`);
-        await refresh();
+        void refresh();
         return;
       }
       if (outcome.data.kind === "stop" && !outcome.data.stopped) {
         setStatus(`Stop unverified; inspect session ${expected.host}/${expected.id}`);
-        await refresh();
+        void refresh();
         return;
       }
       setStatus(`${action.kind} completed`);
@@ -656,7 +656,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
           });
         } catch (error) { setStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
       }
-      await refresh();
+      void refresh();
     } catch (error) { setStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
@@ -703,7 +703,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         const code = await execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id]);
         if (code !== 0) throw new Error(`attach exited ${String(code)}`);
       });
-      await refresh();
+      // Not awaited inside the busy window: the work list can take seconds, and input must not wait for it.
+      void refresh();
     } catch (error) { setStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
   }, [options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
@@ -779,7 +780,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         }
       }
       setOverlay("none");
-      await refresh();
+      void refresh();
       setStatus(report);
     } catch (error) { setStatus(`Work action: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
@@ -958,22 +959,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (!key.ctrl && !key.meta) setEdit((old) => old + input);
       return;
     }
-    if ((key.tab || input === "\u001b[Z") && !workSearch && overlay !== "help" && options.mode === "main") {
-      const backward = key.shift || input === "\u001b[Z";
+    // Tab and the arrows switch views alike; a text field (Work search, project filter) keeps them for its cursor.
+    const textFocused = workSearch || (overlay === "projects" && pick.filtering);
+    if ((key.tab || input === "\u001b[Z" || key.leftArrow || key.rightArrow) && !textFocused && overlay !== "help" && options.mode === "main") {
+      const backward = key.shift || input === "\u001b[Z" || key.leftArrow;
       const direction = backward ? -1 : 1;
       setOverlay("none");
       setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
       return;
     }
-    if (overlay === "none" && view === "Sessions" && (key.leftArrow || key.rightArrow || input === "[" || input === "]")) {
-      const forward = key.rightArrow || input === "]";
-      jumpSection(forward ? 1 : -1);
-      return;
-    }
-    if ((key.leftArrow || key.rightArrow) && !workSearch && overlay !== "help" && options.mode === "main") {
-      const direction = key.leftArrow ? -1 : 1;
-      setOverlay("none");
-      setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
+    if (overlay === "none" && view === "Sessions" && (input === "[" || input === "]")) {
+      jumpSection(input === "]" ? 1 : -1);
       return;
     }
     if (overlay === "help") { if (key.escape || input === "?" || input === "q") setOverlay("none"); return; }
@@ -1146,7 +1142,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab or Shift-Tab and 1–4 switch views.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens, Esc returns, Tab, Shift-Tab, ←/→ and 1–4 switch views; a text field keeps ←/→ for its cursor.</Text><Text>Sessions: [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>

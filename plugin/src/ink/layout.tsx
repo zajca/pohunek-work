@@ -2,7 +2,7 @@ import { createContext, useContext } from "react";
 import { useStdout } from "ink";
 
 /** Footer of the views at full width; a terminal narrower than it gets the short footer. */
-export const MAIN_FOOTER = "Tab views  ·  ↑↓ select  ·  ←→ sections  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
+export const MAIN_FOOTER = "Tab or ←→ views  ·  ↑↓ select  ·  [ ] sections  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
 /** Footer of the new-session and assistant forms at full width. */
 export const FORM_FOOTER = "Tab next field  ·  Ctrl+Enter create  ·  Esc back";
 

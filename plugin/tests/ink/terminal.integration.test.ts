@@ -63,7 +63,6 @@ while time.monotonic() < deadline:
             output.extend(os.read(master, 65536))
         except OSError:
             break
-    # Sessions takes the arrow keys as section jumps, so the tab switch by arrow is made from Hosts and Activity.
     if step == "click" and b"\x1b[?1006h" in output:
         os.write(master, b"\x1b[<0;17;2M")
         clicked = True
