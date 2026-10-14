@@ -468,7 +468,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const chooseAction = useCallback(async (action: string | null): Promise<void> => {
     if (action === null || form.project === null) { setForm((old) => ({ ...old, action: null, agent: null, prompt: "", branch: "", baseBranch: "" })); return; }
-    actionSeq.current += 1;
     setBusy(true);
     try {
       const resolved = await launcher.resolveAction(form.host, form.project, action);
@@ -548,7 +547,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [busy, created, exit, form, launcher, options.mode, overlay, refresh, setExitCode, suspendForChild]);
 
   const inspectSessionAt = useCallback(async (host: string, id: string): Promise<void> => {
-    actionSeq.current += 1;
     setBusy(true);
     try {
       const result = await control.inspectSession(host, id);
@@ -566,7 +564,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const inspectHost = useCallback(async (host: ControlHost): Promise<void> => {
     if (!host.dialable) { setStatus(`Host ${host.name} has no dialable identity`); return; }
-    actionSeq.current += 1;
     setBusy(true);
     try {
       const [capabilities, policy] = await Promise.all([
@@ -681,7 +678,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
       setStatus("Session data is stale or unavailable; refresh before recovering it"); return;
     }
-    actionSeq.current += 1;
     setBusy(true);
     try {
       const latest = await control.inspectSession(target.host, target.id);
@@ -714,7 +710,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       await requestRecovery("resume", target, overlay === "session" ? "session" : "none");
       return;
     }
-    actionSeq.current += 1;
     setBusy(true);
     try {
       await suspendForChild(async () => {
@@ -778,6 +773,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (!checked.ok) { setStatus(checked.reason); return; }
     actionSeq.current += 1;
     setBusy(true);
+    const started = actionSeq.current;
     let report: string;
     try {
       if (action === "attach") {
@@ -799,18 +795,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         }
       }
       setOverlay("none");
-      setStatus(report);
     } catch (error) {
       setStatus(`Work action: ${defaultStatus(error)}`);
       return;
     } finally { setBusy(false); }
-    // Read after the busy flag is cleared, so input is not refused while the list loads.
+    // Read after the busy flag is cleared, so input is not refused while the list loads; the report is set last.
     await refresh();
+    // A mutation that started during the read may have set its own result; that result takes precedence.
+    if (actionSeq.current === started) setStatus(report);
   }, [busy, options.selfBin, refresh, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
     if (workDetail === null || busy) return;
-    actionSeq.current += 1;
     setBusy(true);
     try {
       const preview = await previewWork(options.selfBin, options.listTimeoutMs, workDetail.key, action, workDetail.project);
