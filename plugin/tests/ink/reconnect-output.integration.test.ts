@@ -21,13 +21,13 @@ afterEach(async () => {
 });
 
 /** Starts the TUI behind a relay whose first output reply past the SDK bound is held; returns the TUI's socket. */
-async function startOutageScenario(refuseHealthAfterHold: boolean): Promise<{ run: TuiScenario; socket: string }> {
+async function startOutageScenario(refuseHealthAfterHold: boolean, skipCount = 0): Promise<{ run: TuiScenario; socket: string }> {
   const started = await startTuiScenario({ rules: [], overrides: OVERRIDES });
   scenario = started;
   const id = await createShellSession(started.daemon, "outage-panel");
   const sent = await started.daemon.pohunek(["session", "input", id, "echo OUT-MARK\n", "--json"]);
   if (!sent.stdout.includes('"ok"')) throw new Error(`session input failed: ${sent.stdout}${sent.stderr}`);
-  const relayStarted = await startSocketRelay(daemonLocalSocket(started.daemon), { holdSessionId: id, holdMs: HOLD_MS, holdCount: 1, refuseHealthAfterHold });
+  const relayStarted = await startSocketRelay(daemonLocalSocket(started.daemon), { holdSessionId: id, holdMs: HOLD_MS, skipCount, holdCount: 1, refuseHealthAfterHold });
   relay = relayStarted;
   return { run: started, socket: relayStarted.socket };
 }
@@ -51,6 +51,21 @@ test("a reconnect the daemon refuses stops retrying and the panel says why", asy
     keys("2"),
     { expect: "output unavailable: no daemon response" },
     { expect: "relay refuses health" },
+  ];
+  const result = await outage.run.run(steps, { timeoutS: 40, env: { POHUNEK_SOCKET_PATH: outage.socket } });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
+
+// The outage starts on a later read, so the retry resumes from the cursor of the output already shown. The session
+// has no new output, so the retry returns nothing new; the panel must show the output it already had again.
+test("the panel shows its output again after an outage that brought no new output", async () => {
+  const outage = await startOutageScenario(false, 1);
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "OUT-MARK" },
+    { expect: "output unavailable: no daemon response" },
+    { expect: "OUT-MARK" },
   ];
   const result = await outage.run.run(steps, { timeoutS: 40, env: { POHUNEK_SOCKET_PATH: outage.socket } });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);

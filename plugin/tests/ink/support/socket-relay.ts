@@ -10,6 +10,8 @@ import { join } from "node:path";
 export interface RelayOptions {
   readonly holdSessionId: string;
   readonly holdMs: number;
+  /** Output reads of the session that pass before the first held one. */
+  readonly skipCount: number;
   readonly holdCount: number;
   readonly refuseHealthAfterHold: boolean;
 }
@@ -60,6 +62,7 @@ interface Link {
 /** Runs as the relay process: `socket target options-json`. */
 function serve(listenPath: string, targetPath: string, options: RelayOptions): void {
   let holdsLeft = options.holdCount;
+  let skipsLeft = options.skipCount;
   let refusingHealth = false;
   Bun.listen<Link>({
     unix: listenPath,
@@ -100,9 +103,12 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
         link.client.write(JSON.stringify({ v: 4, id: request["id"], err: { class: "daemon", code: "relay_refused", msg: "the relay refuses health", recover: "" } }) + "\n");
         continue;
       }
-      if (request !== null && request["method"] === "session.output" && (request["params"] as { session_id?: unknown } | null)?.session_id === options.holdSessionId && holdsLeft > 0) {
-        const id = request["id"];
-        if (typeof id === "string" || typeof id === "number") link.held.add(String(id));
+      if (request !== null && request["method"] === "session.output" && (request["params"] as { session_id?: unknown } | null)?.session_id === options.holdSessionId) {
+        if (skipsLeft > 0) skipsLeft -= 1;
+        else if (holdsLeft > 0) {
+          const id = request["id"];
+          if (typeof id === "string" || typeof id === "number") link.held.add(String(id));
+        }
       }
       link.upstream?.write(line);
     }
