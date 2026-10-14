@@ -148,23 +148,27 @@ miss an event that happened in between. Each line is one JSON object:
   `created_at`);
 - `notification_deleted` carries only `notification_id`.
 
-Act only on `notification_created` lines whose `record.status` is `unread`, whose
-`record.kind` is `turn_completed`, `agent_blocked` or `approval_required`, and
-whose `record.session_id` is one of the launched sessions. The pinned core (0.34.2)
-has no `--session`, `--kind` or `--status` option on `watch`, so filter the lines
-with `jq`:
+Act on `notification_created` and `notification_updated` lines whose `record.status`
+is `unread`, whose `record.kind` is `turn_completed`, `agent_blocked` or
+`approval_required`, and whose `record.session_id` is one of the launched sessions.
+The pinned core (0.34.2) has no `--session`, `--kind` or `--status` option on
+`watch`, so filter the lines with `jq`:
 
 ```bash
 set -o pipefail
 pohunek notifications watch --json | jq --unbuffered -c --argjson ids '["<session id>"]' '
-  select(.event == "notification_created" and .record.status == "unread"
+  select((.event == "notification_created" or .event == "notification_updated")
+    and .record.status == "unread"
     and ((.record.kind as $k | ["turn_completed","agent_blocked","approval_required"] | index($k)) != null)
     and (.record.session_id as $s | $ids | index($s)) != null)'
 ```
 
-A `notification_updated` line is the status change of an older record: when new
-input reaches a session, its previous `turn_completed` becomes `acknowledged`,
-which is not a new finish. Ignore it.
+An update can carry a new kind for a record: core upgrades a generic `agent_blocked`
+to `approval_required` in place and sends only `notification_updated`. So a line
+counts as new when its `record.id` and `record.kind` pair has not been reported yet,
+and a repeated pair is dropped. An update that makes a record `acknowledged` (when
+new input reaches a session, its previous `turn_completed` becomes `acknowledged`)
+is not a new finish and is filtered out by the status check.
 
 If the background command ends for any reason (the daemon restarts, the connection
 drops, jq stops), the stream is down and the manager has heard nothing since. Report
@@ -178,6 +182,13 @@ that arrived since step 1 are kept and processed; the baseline does not discard
 them. An event whose change the baseline already shows is still reported once,
 because the owner has not heard of it yet. Old notifications that were already
 acknowledged are never reported as new.
+
+The stream does not replay, so a finish during a disconnect is recovered from the
+notification list: for each launched session, `pohunek notifications list --session
+<id> --status unread --json` and, while the output has a `next_cursor`, the same
+command with `--cursor <next_cursor>`. Report the records whose kind is one of the
+three and whose `id` and `kind` pair has not been reported yet. Run this list after
+every subscription start and every reconnect.
 
 `turn_completed` is off in the default notification policy, so a finished turn
 then produces no line at all. Read `pohunek notifications policy get` at subscribe

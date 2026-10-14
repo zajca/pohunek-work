@@ -76,7 +76,7 @@ async function shimDir(lines: readonly string[], holdSecs: number): Promise<stri
   return dir;
 }
 
-test("the guide's stream command passes only new unread events of a launched session's turn, blocked or approval", async () => {
+test("the guide's stream command passes only new unread events of a launched session's turn, blocked or approval, including upgrades", async () => {
   const dir = await shimDir(
     [
       event("turn_completed", "unread", SESSION_ID),
@@ -87,6 +87,7 @@ test("the guide's stream command passes only new unread events of a launched ses
       event("turn_completed", "unread", "s-9999"),
       JSON.stringify({ event: "notification_updated", record: { id: "n-old", kind: "turn_completed", status: "acknowledged", session_id: SESSION_ID } }),
       JSON.stringify({ event: "notification_deleted", notification_id: "n-gone" }),
+      JSON.stringify({ event: "notification_updated", record: { id: "n-upgraded", kind: "approval_required", status: "unread", session_id: SESSION_ID } }),
     ],
     0,
   );
@@ -98,7 +99,7 @@ test("the guide's stream command passes only new unread events of a launched ses
   if (result.exitCode !== 0) throw new Error(`the stream command failed (${String(result.exitCode)}): ${result.stderr}`);
 
   const kept = result.stdout.trim().split("\n").map((line) => (JSON.parse(line) as { record: { kind: string } }).record.kind);
-  expect(kept).toEqual(["turn_completed", "agent_blocked", "approval_required"]);
+  expect(kept).toEqual(["turn_completed", "agent_blocked", "approval_required", "approval_required"]);
 });
 
 test("the guide's stream command delivers a matching line while the producer is still open", async () => {
