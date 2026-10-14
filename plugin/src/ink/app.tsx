@@ -366,12 +366,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const restartOutput = useCallback((): void => { setLiveRound((round) => round + 1); }, []);
 
   // Snapshots from the reconcile and from the daemon's event stream share one path.
-  const applySnapshot = useCallback((next: ControlSnapshot): void => {
+  // A read that started before a newer action may not replace that action's status; the snapshot itself is always applied.
+  const applySnapshot = useCallback((next: ControlSnapshot, mayReport = true): void => {
     setSnapshot((previous) => retainUnavailable(previous, next));
     try { options.onSnapshot?.(next); }
     catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
     setStale(false);
-    if (next.errors.length > 0 && mutationNotice.current === null) setStatus(`${next.errors.length} source(s) unavailable; mutating actions are paused`);
+    if (mayReport && next.errors.length > 0 && mutationNotice.current === null) setStatus(`${next.errors.length} source(s) unavailable; mutating actions are paused`);
   }, [options.log, options.onSnapshot]);
 
   useEffect(() => control.subscribe((next) => { if (alive.current) applySnapshot(next); }), [applySnapshot, control]);
@@ -381,14 +382,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const refreshControl = useCallback(async (): Promise<void> => {
     if (controlBusy.current) return;
     controlBusy.current = true;
+    const started = actionSeq.current;
     try {
       const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
       if (!alive.current) return;
       if (nextControl.ok) {
-        applySnapshot(nextControl.value);
+        applySnapshot(nextControl.value, actionSeq.current === started);
       } else {
         setStale(true);
-        setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
+        if (actionSeq.current === started) setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
       }
     } finally {
       controlBusy.current = false;
@@ -398,6 +400,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const refreshWork = useCallback(async (): Promise<void> => {
     if (options.mode !== "main" || workBusy.current) return;
     workBusy.current = true;
+    const started = actionSeq.current;
     try {
       const nextWork = await loadWork(options.selfBin, options.listTimeoutMs).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
       if (!alive.current) return;
@@ -408,7 +411,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       } else {
         const warning = `Work refresh failed: ${defaultStatus(nextWork.reason)}`;
         setWork((previous) => previous === null ? null : { ...previous, partial: true, warning });
-        setStatus(warning);
+        if (actionSeq.current === started) setStatus(warning);
       }
     } finally {
       workBusy.current = false;
@@ -775,7 +778,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (!checked.ok) { setStatus(checked.reason); return; }
     actionSeq.current += 1;
     setBusy(true);
-    const started = actionSeq.current;
     let report: string;
     try {
       if (action === "attach") {
@@ -797,14 +799,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         }
       }
       setOverlay("none");
+      setStatus(report);
     } catch (error) {
       setStatus(`Work action: ${defaultStatus(error)}`);
       return;
     } finally { setBusy(false); }
-    // Read after the busy flag is cleared, so input is not refused while the list loads; the report is set last.
+    // Read after the busy flag is cleared, so input is not refused while the list loads.
     await refresh();
-    // A newer action may have failed while the list was read; its message takes precedence over this report.
-    if (actionSeq.current === started) setStatus(report);
   }, [busy, options.selfBin, refresh, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
@@ -852,7 +853,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     const currentStart = starts.filter((start) => start <= current).pop() ?? 0;
     selectIndex(current === currentStart ? (starts.filter((start) => start < currentStart).pop() ?? 0) : currentStart);
-  }, [selectedSessionIndex, sessions, snapshot]);
+  }, [selectIndex, selectedSessionIndex, sessions, snapshot]);
 
   const move = useCallback((delta: number): void => {
     const current = view === "Sessions" ? selectedSessionIndex : view === "Work" ? selectedWorkIndex : cursor[view];
