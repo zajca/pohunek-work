@@ -155,6 +155,7 @@ has no `--session`, `--kind` or `--status` option on `watch`, so filter the line
 with `jq`:
 
 ```bash
+set -o pipefail
 pohunek notifications watch --json | jq --unbuffered -c --argjson ids '["<session id>"]' '
   select(.event == "notification_created" and .record.status == "unread"
     and ((.record.kind as $k | ["turn_completed","agent_blocked","approval_required"] | index($k)) != null)
@@ -164,6 +165,11 @@ pohunek notifications watch --json | jq --unbuffered -c --argjson ids '["<sessio
 A `notification_updated` line is the status change of an older record: when new
 input reaches a session, its previous `turn_completed` becomes `acknowledged`,
 which is not a new finish. Ignore it.
+
+If the background command ends for any reason (the daemon restarts, the connection
+drops, jq stops), the stream is down and the manager has heard nothing since. Report
+that, start the subscription again and read the baseline of step 2 before treating
+silence as "nothing happened".
 
 **2. Baseline after subscribing.** Once the subscription runs, read the current
 state of every launched session: `pohunek session inspect <id> --json` (`state`,
@@ -186,7 +192,8 @@ their pull requests, `gh pr view <url> --json headRefOid,statusCheckRollup,revie
 with the `pull_request.url` of the row. The URL names the repository, so the call
 works from the manager's own directory, which is outside every project checkout. Keep
 the last values (head commit, check state, and the latest review by a bot, with
-the commit it reviewed) and report only a change. A review of an older commit
+the commit it reviewed) and report only a change. A read that fails or returns no
+output is reported as a failed read; it is never compared as a value. A review of an older commit
 does not count as a review of the current head.
 
 **4. On each event, act and report.** For a new `turn_completed` or
@@ -197,7 +204,8 @@ is not a finished task: the pull request decides, as in the previous section.
 
 **5. Re-arm until nothing is running.** Keep the subscription and the poll until
 no session the manager launched is still running (`pohunek session list --json`)
-and every event and change has been reported. Then stop the background watch and
+and every event and change has been reported. A failed `session list` means the
+state is unknown, so the manager keeps watching and says so. Then stop the background watch and
 send one final report: each session with its outcome, each pull request with its
 head and checks, and what needs the owner.
 
