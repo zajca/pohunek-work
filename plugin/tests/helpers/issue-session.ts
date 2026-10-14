@@ -97,7 +97,7 @@ export async function setUpIssueProject(resources: ScenarioResources, options: S
   const origin = join(core.root, "origin.git");
   await git(core.root, ["init", "-q", "--bare", "-b", "main", origin]);
   await git(repo, ["push", "-q", origin, "HEAD:refs/heads/main"]);
-  const provider = await startGithubProvider(join(core.root, "github"), ISSUE, options.pullRequest ?? null);
+  const provider = await startGithubProvider(join(core.root, "github"), ISSUE, options.pullRequest === undefined ? [] : [options.pullRequest]);
   resources.github = provider;
   return {
     core,

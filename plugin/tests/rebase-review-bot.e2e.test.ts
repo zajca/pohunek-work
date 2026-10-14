@@ -14,7 +14,18 @@ const BOT_LOGIN = "review-bot";
 const ISSUE: GithubIssue = { repo: "acme/widgets", number: 7, title: "Cache widgets", body: "Cache the widgets." };
 /** Joins the pull request through `branch_pattern` of the project, which takes the issue number from the branch. */
 const ROW_KEY = `github-issue:${ISSUE.repo}#${String(ISSUE.number)}`;
-const PULL_REQUEST = { number: 12, title: "Cache widgets", headRefName: "alice/issue-7/cache-widgets", authorLogin: "alice" };
+const PULL_REQUEST = {
+  number: 12,
+  title: "Cache widgets",
+  headRefName: "alice/issue-7/cache-widgets",
+  authorLogin: "alice",
+  createdAt: "2026-10-01T00:00:00Z",
+  updatedAt: "2026-10-01T00:00:00Z",
+  additions: 1,
+  deletions: 1,
+  changedFiles: 1,
+  baseRefName: "main",
+};
 /** The project file of `GITHUB_ISSUE_PROJECT` with a review bot instead of `none`. */
 const BOT_PROJECT = GITHUB_ISSUE_PROJECT.replace('review_bot = "none"', `review_bot = ${JSON.stringify(BOT_LOGIN)}`);
 const REQUEST_MARKER = "requestReviewsByLogin";
@@ -39,7 +50,7 @@ async function setUp(projectFile: string): Promise<PluginFixture> {
   const core = await startCoreDaemon();
   daemon = core;
   await core.registerProject("widgets", ISSUE.repo);
-  const provider = await startGithubProvider(join(core.root, "github"), ISSUE, PULL_REQUEST);
+  const provider = await startGithubProvider(join(core.root, "github"), ISSUE, [PULL_REQUEST]);
   github = provider;
   const fixture = await writePluginConfig(core, [{ label: "widgets", repo: ISSUE.repo, template: projectFile }], {
     overrides: { "github.endpoint": provider.endpoint, "github.gh_bin": provider.ghBin },

@@ -38,7 +38,18 @@ const EXIT_ERROR = 2;
 /** The adopting action: its precondition holds for a pull request of the owner that conflicts with its base. */
 const ACTION = "rebase";
 /** The owner's conflicting pull request on the issue's branch; `branch_pattern` joins it to the issue's row. */
-const PULL_REQUEST = { number: 12, title: ISSUE.title, headRefName: ISSUE_BRANCH, authorLogin: "alice" };
+const PULL_REQUEST = {
+  number: 12,
+  title: ISSUE.title,
+  headRefName: ISSUE_BRANCH,
+  authorLogin: "alice",
+  createdAt: "2026-10-01T00:00:00Z",
+  updatedAt: "2026-10-01T00:00:00Z",
+  additions: 1,
+  deletions: 1,
+  changedFiles: 1,
+  baseRefName: "main",
+};
 /** Display name of the session that holds the branch; it carries no `work.*` metadata. */
 const HOLDER_NAME = "holder";
 /** `[actions] holder_entries_listed`: the refusal lists this many dirty entries and counts the rest. */

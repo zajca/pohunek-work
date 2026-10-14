@@ -359,6 +359,10 @@ function toPullRequest(pr: JsonObject, relation: PullRequestRelation, project: P
     closingIssueNumbers: closingIssueNumbers(pr, project.repo, project.issueSource.kind === "github"),
     ignored: project.ignoreLabel !== null && carriesIgnoreLabel(labelNames(pr), project.ignoreLabel),
     updatedAt: asString(pr["updatedAt"], "updatedAt"),
+    createdAt: asString(pr["createdAt"], "createdAt"),
+    additions: asInteger(pr["additions"], "additions"),
+    deletions: asInteger(pr["deletions"], "deletions"),
+    changedFiles: asInteger(pr["changedFiles"], "changedFiles"),
   };
 }
 
