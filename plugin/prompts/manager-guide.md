@@ -185,10 +185,11 @@ acknowledged are never reported as new.
 
 The stream does not replay, so a finish during a disconnect is recovered from the
 notification list: for each launched session, `pohunek notifications list --session
-<id> --status unread --json` and, while the output has a `next_cursor`, the same
-command with `--cursor <next_cursor>`. Report the records whose kind is one of the
-three and whose `id` and `kind` pair has not been reported yet. Run this list after
-every subscription start and every reconnect.
+<id> --status unread --limit 100 --json` and, while the output has a `next_cursor`,
+the same command with `--cursor <next_cursor>`. The list has no default limit, so
+every request carries `--limit`; the page size keeps one response small. Report the
+records whose kind is one of the three and whose `id` and `kind` pair has not been
+reported yet. Run this list after every subscription start and every reconnect.
 
 `turn_completed` is off in the default notification policy, so a finished turn
 then produces no line at all. Read `pohunek notifications policy get` at subscribe
