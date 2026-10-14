@@ -45,6 +45,8 @@ export class SdkLink {
   private attempt = 0;
   /** The last queued call; the next call starts after it settles. */
   private inFlight: Promise<void> = Promise.resolve();
+  /** Counts the dropped connections; a call queued under an earlier count is refused. */
+  private generation = 0;
 
   public constructor(
     public readonly route: string,
@@ -155,6 +157,7 @@ export class SdkLink {
 
   /** Forgets a connection that ended, so the next read reconnects. */
   private async drop(): Promise<void> {
+    this.generation += 1;
     const client = this.client;
     const subscriptionClient = this.subscriptionClient;
     this.client = null;
@@ -170,16 +173,25 @@ export class SdkLink {
   public async call<T>(method: string, params: unknown, timeoutMs: number = this.timeoutMs): Promise<T> {
     // Commands are not queued during an outage: they fail now and the caller reports them as unavailable.
     if (this.reconnecting) throw new Error("reconnecting to the daemon");
-    const run = this.inFlight.then(() => this.exchange<T>(method, params, timeoutMs));
+    // The bound starts when the caller asks, so time spent behind earlier calls counts against it.
+    const deadline = Date.now() + timeoutMs;
+    const generation = this.generation;
+    const run = this.inFlight.then(() => this.exchange<T>(method, params, deadline, generation));
     this.inFlight = run.then(() => undefined, () => undefined);
     return run;
   }
 
   /** Runs one request; calls on a link are queued in `call`, because the SDK pairs each reply with the request in flight. */
-  private async exchange<T>(method: string, params: unknown, timeoutMs: number): Promise<T> {
+  private async exchange<T>(method: string, params: unknown, deadline: number, generation: number): Promise<T> {
+    const remaining = deadline - Date.now();
+    // A call whose bound ran out while queued is not sent, so the daemon never runs it after its caller gave up.
+    if (remaining <= 0) throw new SdkTimeoutError("the call's time ran out before it was sent");
+    // A call queued before the connection was dropped was validated against that connection's state; it is refused
+    // instead of being sent on a replacement connection.
+    if (this.generation !== generation || this.reconnecting) throw new Error("the connection was lost before the request was sent");
     try {
-      const client = await this.bounded(this.ready(), timeoutMs);
-      return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), timeoutMs);
+      const client = await this.bounded(this.ready(), remaining);
+      return await this.bounded((client.call as (m: string, p: unknown) => Promise<T>).call(client, method, params), remaining);
     } catch (error) {
       if (error instanceof ClientError && REFUSAL_KINDS.has(error.kind)) throw error;
       await this.drop();

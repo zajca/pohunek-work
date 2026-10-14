@@ -203,6 +203,28 @@ describe("control CLI process boundary", () => {
     });
   });
 
+  // Calls on one link run one at a time. A mutation queued behind a read that stalls must not run after the link
+  // has entered its outage: the stand-in never answers the read, the read times out, and the mutation is refused.
+  test("a mutation queued behind a stalled read is refused, not sent, once the link reconnects", async () => {
+    const stub = await cli([
+      { args: ["host", "discover", "--json"], ok: [] },
+      { args: ["--host", "local", "session", "list", "--json"], ok: [session] },
+      { args: ["--host", "local", "project", "list", "--json"], ok: [project] },
+      { args: ["--host", "local", "session", "stop", session.id, "--json"], ok: { stopped: true } },
+    ]);
+    standIn = await startSdkStandIn(stub.binary, { faults: [{ method: "session.list", kind: "stall", times: 1 }] });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
+    const listing = client.refresh();
+    // Host discovery runs before the session read, so the mutation is asked for once that read is in flight.
+    await Bun.sleep(300);
+    const stopped = client.act({ kind: "stop", host: "local", sessionId: session.id });
+    await listing;
+    const outcome = await stopped;
+    expect(outcome.ok).toBe(false);
+    expect((await stub.calls()).some((call) => call.includes("stop"))).toBe(false);
+    await client.close();
+  }, 15_000);
+
   // A refresh still waiting on host discovery must not reach the daemon socket once the client is closed.
   test("close during a pending refresh opens no daemon connection afterwards", async () => {
     const stub = await cli([{ args: ["host", "discover", "--json"], ok: [], delayMs: 1_000 }]);
