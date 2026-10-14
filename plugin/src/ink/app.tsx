@@ -211,6 +211,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [previewOffset, setPreviewOffset] = useState(0);
   const [stale, setStale] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Set when a fork did not answer: its outcome is unknown, so another fork waits for the owner to look at the list.
+  const [forkUnknown, setForkUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   const [sessionKey, setSessionKey] = useState<string | null>(null);
@@ -607,6 +609,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setStatus("Session data is stale or unavailable; refresh before changing it");
       return;
     }
+    if (action.kind === "fork" && forkUnknown) {
+      setStatus("The last fork did not answer, so it may exist; press r to review the Sessions list before forking again");
+      return;
+    }
     setBusy(true);
     try {
       const latest = await control.inspectSession(expected.host, expected.id);
@@ -617,7 +623,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         setStatus("This runtime is read-only"); return;
       }
       const outcome = await control.act(action);
-      if (!outcome.ok) { setStatus(outcome.error.message); return; }
+      if (!outcome.ok) {
+        setStatus(outcome.error.message);
+        if (outcome.error.code === "outcome_unknown" && action.kind === "fork") setForkUnknown(true);
+        // What the daemon holds may differ from what the owner sees, so the list is read again after a failed mutation.
+        if (outcome.error.code === "outcome_unknown" || action.kind === "remove") await refresh();
+        return;
+      }
       if (outcome.data.kind === "remove" && (!outcome.data.removed || outcome.data.worktreesFailed > 0)) {
         setStatus(`Removal unverified; session ${expected.host}/${expected.id} may remain. Inspect before retrying.`);
         await refresh();
@@ -1033,7 +1045,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return; }
     if (key.upArrow || input === "k") { move(-1); return; }
     if (key.downArrow || input === "j") { move(1); return; }
-    if (input === "r") { void refresh(); return; }
+    if (input === "r") { setForkUnknown(false); void refresh(); return; }
     if (view === "Work") {
       if (input === "m") setWorkFilters((old) => ({ ...old, actor: old.actor === "me" ? "all" : "me" }));
       else if (input === "f") setWorkFilters((old) => ({ ...old, actor: ACTOR_FILTERS[(ACTOR_FILTERS.indexOf(old.actor) + 1) % ACTOR_FILTERS.length] ?? "all" }));

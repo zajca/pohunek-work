@@ -275,7 +275,13 @@ export function createControlClient(options: ControlClientOptions): ControlClien
           wasStopped = result.data;
         }
         const removed = await link.request("session.remove", sessionId);
-        if (!removed.ok) return removed;
+        if (!removed.ok) {
+          if (removed.error.code === "timeout" || removed.error.cliCode === "request_timeout") {
+            return failure("outcome_unknown", `${wasStopped ? "session stopped; " : ""}removal outcome is unknown: the daemon did not answer`);
+          }
+          // A stop that succeeded before the failed removal stays visible, so the owner knows what changed.
+          return failure("command_failed", wasStopped ? `session stopped but not removed: ${removed.error.message}` : removed.error.message, removed.error.cliCode === undefined ? {} : { cliCode: removed.error.cliCode });
+        }
         const payload = object(removed.data, "$");
         return { ok: true, data: { kind: "remove", removed: boolean(payload, "removed", "$"), stopped: wasStopped || boolean(payload, "stopped", "$"),
           worktreesRemoved: count(payload, "worktrees_removed", "$"), worktreesFailed: count(payload, "worktrees_failed", "$") } };
@@ -313,13 +319,20 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     return { ok: true, data: { kind: action.kind, notification: notification(record, "$.record", action.host) } };
   }
 
+  /** A mutation that timed out may still have been applied; the outcome is reported as unknown, never as failed. */
+  function viaSdkOutcome(action: ControlAction, result: ControlResult<ControlActionOutcome>): ControlResult<ControlActionOutcome> {
+    if (result.ok || result.error.code === "outcome_unknown") return result;
+    if (result.error.code !== "timeout" && result.error.cliCode !== "request_timeout") return result;
+    return failure("outcome_unknown", `${action.kind} outcome is unknown: the daemon did not answer; refresh and look before retrying`);
+  }
+
   async function act(action: ControlAction): Promise<ControlResult<ControlActionOutcome>> {
     const host = action.host;
     if (host.startsWith("undialable:")) { return failure("unavailable", "the selected host has no dialable identity"); }
     const invalidTarget = bareIdError("sessionId" in action ? action.sessionId : action.notificationId);
     if (invalidTarget !== null) { return { ok: false, error: invalidTarget }; }
     const viaSdk = await sdkAct(action);
-    if (viaSdk !== null) return viaSdk;
+    if (viaSdk !== null) return viaSdkOutcome(action, viaSdk);
     switch (action.kind) {
       default: return failure("command_failed", `${action.kind} is handled over the SDK`);
     }

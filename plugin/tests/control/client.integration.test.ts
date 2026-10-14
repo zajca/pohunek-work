@@ -152,7 +152,7 @@ describe("control CLI process boundary", () => {
     standIn = await startSdkStandIn(stub.binary);
     const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
     const result = await client.act({ kind: "remove", host: "local", sessionId: "s1" });
-    expect(result.ok ? null : result.error.code).toBe("timeout");
+    expect(result.ok ? null : result.error.code).toBe("outcome_unknown");
     expect((await stub.calls()).filter((call) => call.includes("rm"))).toEqual([args]);
   });
 
@@ -219,6 +219,33 @@ describe("control CLI process boundary", () => {
     expect((await stub.calls()).some((call) => call.includes("stop"))).toBe(false);
     await client.close();
   });
+
+  // A removal that fails after the stop succeeded must say both facts: the session is stopped and not removed.
+  test("a failed removal after a stop reports that the session is stopped but not removed", async () => {
+    const stub = await cli([
+      { args: ["--host", "local", "session", "inspect", session.id, "--json"], ok: session },
+      { args: ["--host", "local", "session", "stop", session.id, "--json"], ok: { stopped: true } },
+      { args: ["--host", "local", "session", "rm", session.id, "--json"], err: { class: "runtime", code: "worktree_dirty", msg: "uncommitted changes" } },
+    ]);
+    standIn = await startSdkStandIn(stub.binary);
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
+    const outcome = await client.act({ kind: "remove", host: "local", sessionId: session.id });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok ? "" : outcome.error.message).toContain("session stopped but not removed");
+    expect((await stub.calls()).some((call) => call.includes("stop"))).toBe(true);
+    await client.close();
+  });
+
+  // A fork whose reply does not come back has an unknown outcome: the fork may exist, so it is not reported as failed.
+  test("a fork that does not answer in time reports an unknown outcome", async () => {
+    const stub = await cli([{ args: ["host", "discover", "--json"], ok: [] }]);
+    standIn = await startSdkStandIn(stub.binary, { faults: [{ method: "session.fork", kind: "stall", times: 1 }] });
+    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
+    const outcome = await client.act({ kind: "fork", host: "local", sessionId: session.id, cols: 80, rows: 24 });
+    expect(outcome.ok ? "" : outcome.error.code).toBe("outcome_unknown");
+    expect(outcome.ok ? "" : outcome.error.message).toContain("fork outcome is unknown");
+    await client.close();
+  }, 15_000);
 
   // Calls on one link run one at a time. A mutation queued behind a read that stalls must not run after the link
   // has entered its outage: the stand-in never answers the read, the read times out, and the mutation is refused.

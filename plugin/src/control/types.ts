@@ -1,4 +1,5 @@
-export type ControlErrorCode = "unavailable" | "timeout" | "protocol_mismatch" | "invalid_response" | "origin_environment" | "command_failed";
+/** `outcome_unknown`: a mutation the daemon may have applied did not answer; the caller must look before retrying. */
+export type ControlErrorCode = "unavailable" | "timeout" | "protocol_mismatch" | "invalid_response" | "origin_environment" | "command_failed" | "outcome_unknown";
 export interface ControlError { readonly code: ControlErrorCode; readonly message: string; readonly cliCode?: string; readonly cliClass?: string }
 export type ControlResult<T> = { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: ControlError };
 
