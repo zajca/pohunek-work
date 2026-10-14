@@ -220,7 +220,7 @@ print(json.dumps({"exit": child.returncode, "step": step, "paused": paused}))
 `;
 
 const PYTHON_WORK_RESULT_PTY = String.raw`
-import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+import fcntl, json, os, pty, re, select, struct, subprocess, sys, termios, time
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 child = subprocess.Popen([sys.argv[1], "--eval", sys.argv[2]], stdin=slave, stdout=slave, stderr=slave, env={**os.environ, "TERM": "xterm-256color", "CI": "true"})
@@ -234,6 +234,16 @@ no_automatic_action = True
 previewed = False
 mouse_action_previewed = False
 deadline = time.monotonic() + 15
+last_data = time.monotonic()
+def button_cell(raw, label):
+    # The latest drawn work-item screen gives the cell: its header starts the frame, and the button is drawn below it.
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw.decode(errors="replace"))
+    lines = text.replace("\r", "").split("\n")
+    header = max(index for index, line in enumerate(lines) if "WORK ITEM" in line)
+    for index in range(header, len(lines)):
+        if label in lines[index]:
+            return index + 1, lines[index].index(label) + 2
+    raise SystemExit("button not drawn")
 def trace():
     return open(sys.argv[3]).read() if os.path.exists(sys.argv[3]) else ""
 while time.monotonic() < deadline:
@@ -241,6 +251,7 @@ while time.monotonic() < deadline:
     if ready:
         try:
             output.extend(os.read(master, 65536))
+            last_data = time.monotonic()
         except OSError:
             break
     now = time.monotonic()
@@ -269,12 +280,14 @@ while time.monotonic() < deadline:
         previewed = True
         output.clear()
         os.write(master, b"\x1b")
+        # The click waits for the Escape to close the plan and for the work item to be drawn again.
+        next_input = now + 0.5
         step = 5
-    elif step == 5 and b"WORK ITEM" in output and b"Run review" in output:
-        time.sleep(0.2)
+    elif step == 5 and b"WORK ITEM" in output and b"Run review" in output and now >= next_input and now - last_data > 0.5:
+        # The button's cell comes from the rendered frame, so the click follows the layout the terminal draws.
+        row, column = button_cell(output, "Preview plan")
         output.clear()
-        # The action buttons are on row 12; column 18 is inside "Preview plan", which never runs the action.
-        os.write(master, b"\x1b[<0;18;12M")
+        os.write(master, b"\x1b[<0;%d;%dM" % (column, row))
         step = 6
     elif step == 6 and b"PLAN PREVIEW" in output:
         mouse_action_previewed = True
