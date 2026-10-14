@@ -588,7 +588,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
               const updated = result.data.notification;
               setNotificationDetail((current) => current?.host === record.host && current.id === record.id ? updated : current);
             }
-            void refresh();
+            await refresh();
           }
         } catch (error) { if (notificationSelectionGeneration.current === generation) setStatus(`Mark read failed: ${defaultStatus(error)}`); }
       }
@@ -632,17 +632,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         // The fork's overlay offers Resume on r, so the owner is taken to the list, where r refreshes it.
         if (outcome.error.code === "outcome_unknown" && action.kind === "fork") { setForkUnknown(true); setOverlay("none"); }
         // What the daemon holds may differ from what the owner sees, so the list is read again after a failed mutation.
-        if (outcome.error.code === "outcome_unknown" || action.kind === "remove") void refresh();
+        if (outcome.error.code === "outcome_unknown" || action.kind === "remove") await refresh();
         return;
       }
       if (outcome.data.kind === "remove" && (!outcome.data.removed || outcome.data.worktreesFailed > 0)) {
         setStatus(`Removal unverified; session ${expected.host}/${expected.id} may remain. Inspect before retrying.`);
-        void refresh();
+        await refresh();
         return;
       }
       if (outcome.data.kind === "stop" && !outcome.data.stopped) {
         setStatus(`Stop unverified; inspect session ${expected.host}/${expected.id}`);
-        void refresh();
+        await refresh();
         return;
       }
       setStatus(`${action.kind} completed`);
