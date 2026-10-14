@@ -20,10 +20,9 @@ test("a stop goes through when only host discovery fails", async () => {
     { expect: "CONTROL CENTER" },
     keys("2"),
     { expect: "gamma-stop" },
-    // The split view shows the highlighted session's panel; Enter would attach to it, so the panel is the check here.
-    { expect: "gamma-stop · local · shell" },
     keys("x"),
-    { expect: "Confirm stop" },
+    // The confirmation names the highlighted session, so the stop applies to the session the owner sees.
+    { expect: "Confirm stop of gamma-stop? y/N" },
     keys("y"),
     { expect: "stop completed" },
   ];
