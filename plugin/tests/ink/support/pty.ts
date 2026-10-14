@@ -8,7 +8,8 @@ export type PtyStep =
   | { readonly expect: string; readonly timeout?: number }
   | { readonly send: string; readonly settle?: number }
   | { readonly pause: number }
-  | { readonly clear: true };
+  | { readonly clear: true }
+  | { readonly absent: string; readonly pause?: number };
 
 export interface PtyRun {
   readonly cmd: readonly string[];

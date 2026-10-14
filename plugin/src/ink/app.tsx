@@ -636,10 +636,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const result = await control.act({ kind, host: record.host, notificationId: record.id });
       if (!result.ok) bumpStatus(`${kind} failed: ${result.error.message}`);
       else {
-        // Only the notification overlay closes; the owner may have opened another one while the action ran.
-        setOverlay((current) => current === "notification" ? "none" : current);
         bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
         await refresh();
+        // Closes after the list is read, and only if this overlay is still open: the owner may have opened another one meanwhile.
+        setOverlay((current) => current === "notification" ? "none" : current);
       }
     } catch (error) { bumpStatus(`${kind} failed: ${defaultStatus(error)}`); }
   }, [control, refresh, snapshot, stale]);

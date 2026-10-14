@@ -51,6 +51,12 @@ for index, step in enumerate(spec["steps"]):
     elif "send" in step:
         os.write(master, bytes.fromhex(step["send"]))
         pump(step.get("settle", 300) / 1000)
+    elif "absent" in step:
+        # Waits, then fails the run if the text was printed after the last clear.
+        pump(step.get("pause", 300) / 1000)
+        if step["absent"] in plain()[mark:]:
+            failed = index
+            break
     elif "pause" in step:
         pump(step["pause"] / 1000)
     elif "clear" in step:
