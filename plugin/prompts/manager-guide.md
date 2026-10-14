@@ -225,15 +225,18 @@ row and the session again, report the result to the owner, and apply the rules
 above (never send input to a `blocked` session). A session that finished its turn
 is not a finished task: the pull request decides, as in the previous section.
 
-**5. Re-arm until nothing is running.** Keep the subscription and the poll until
-no session the manager launched is still running (`pohunek session list --json`)
-and every event and change has been reported. A session is still running when its
-`state` is `running` and its `runtime.state` is not `lost`; the plugin reads it the same
-way. A session whose runtime is `lost` emits no events, so report it to the owner at
-once as a lost worker, and stop waiting for it. A launched session missing from the
-list is reported as unknown, not as finished. A failed `session list` means the state
-is unknown, so the manager keeps watching and says so. Then stop the background watch
-and send one final report: each session with its outcome, each pull request with its
+**5. Re-arm until nothing is still going.** Keep the subscription and the poll until
+no launched session is still going (`pohunek session list --json` and `session inspect`)
+and every event and change has been reported. A session is still going when it is
+live (`state` is `running` and `runtime.state` is not `lost`, the same rule the plugin
+uses) and its `activity` is `working`. A live session that is `idle` has finished its
+turn, and a finished turn is not a finished task (step 4), but it no longer holds the
+wait. A `blocked` session waits for the owner, so report it and do not hold the wait
+for it. A session whose runtime is `lost` emits no events, so report it to the owner
+at once as a lost worker. A launched session missing from the list is reported as
+unknown, not as finished. A failed `session list` means the state is unknown, so the
+manager keeps watching and says so. Then stop the background watch and send one final
+report: each session with its outcome, each pull request with its
 head and checks, and what needs the owner.
 
 Two limits. `pohunek session wait` and `pohunek session input --timeout` are
