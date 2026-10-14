@@ -29,7 +29,7 @@ test("a late output reply for the first session never replaces the panel of the 
     const sent = await scenario.daemon.pohunek(["session", "input", id, text, "--json"]);
     if (!sent.stdout.includes('"ok"')) throw new Error(`session input failed: ${sent.stdout}${sent.stderr}`);
   }
-  relay = await startSocketRelay(daemonLocalSocket(scenario.daemon), { holdSessionId: first, holdMs: HOLD_MS, holdCount: Number.MAX_SAFE_INTEGER, refuseHealthAfterHold: false });
+  relay = await startSocketRelay(daemonLocalSocket(scenario.daemon), { holdSessionId: first, holdMs: HOLD_MS, skipCount: 0, holdCount: Number.MAX_SAFE_INTEGER, refuseHealthAfterHold: false });
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
