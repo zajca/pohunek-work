@@ -7,6 +7,7 @@ import { MenuRow, Message, safeText, Section, shorten } from "./components.tsx";
 import { MouseZone } from "./mouse.tsx";
 import { isUnresolvedAction } from "./attention.ts";
 import { workLinkOf, type SessionLink } from "./links.ts";
+import { fuzzyFilter } from "../tui/search.ts";
 
 export type ViewName = "Work" | "Sessions" | "Hosts" | "Activity";
 export type ActivityScope = "Recent" | "Unread" | "Archived";
@@ -38,6 +39,30 @@ export function activityRecords(snapshot: ControlSnapshot, scope: ActivityScope)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
+/** The fields of a session the Sessions `/` filter matches. */
+function sessionTerms(session: ControlSession): string[] {
+  return [session.projectLabel ?? session.projectId ?? "unassigned", session.name ?? session.id, session.branch ?? "", session.agent, session.host];
+}
+
+/**
+ * The sessions the `/` filter keeps, best match first inside each section; the sections keep their order because
+ * the Sessions view draws one heading per section.
+ */
+export function filterSessions(snapshot: ControlSnapshot, sessions: readonly ControlSession[], query: string): ControlSession[] {
+  const rank = (session: ControlSession): number => GROUPS.indexOf(sessionGroup(session, snapshot.notifications) as (typeof GROUPS)[number]);
+  return fuzzyFilter(sessions, query, sessionTerms).sort((left, right) => rank(left) - rank(right));
+}
+
+/** Terms of an activity record for the Activity `/` filter. */
+export function recordTerms(record: ControlNotification): string[] {
+  return [record.title, record.host, record.kind, record.status];
+}
+
+/** Terms of a host for the Hosts `/` filter. */
+export function hostTerms(host: ControlHost): string[] {
+  return [host.name, host.route, host.classification];
+}
+
 interface ListInteraction {
   /** First row drawn, from listWindowStart; the rows before it are scrolled out of view. */
   readonly start: number;
@@ -66,6 +91,16 @@ function EmptyState({ title, hint }: { readonly title: string; readonly hint: st
   </Box>;
 }
 
+/**
+ * The `/` filter of a list while it is typed (with the cursor) or while it narrows the list (with the match count).
+ * Nothing is drawn when the list has no filter.
+ */
+export function FilterLine({ text, editing, shown }: { readonly text: string; readonly editing: boolean; readonly shown: number }): ReactNode {
+  if (editing) return <Text color="cyan" wrap="truncate-end">{`Search  ${safeText(text)}_  ·  Enter apply  ·  Esc clear`}</Text>;
+  if (text === "") return null;
+  return <Text color="gray" wrap="truncate-end">{safeText(`Search  ${text}  ·  ${String(shown)} shown  ·  / edit  ·  Esc clear`)}</Text>;
+}
+
 export function WorkView({ rows, selected, start, limit, filter, warning, searchActive, searchText, onRowClick, onWheel, width }: { readonly rows: readonly ListItem[] | null; readonly selected: number; readonly limit: number; readonly filter: string; readonly warning: string | null; readonly searchActive: boolean; readonly searchText: string } & ListInteraction): ReactNode {
   const filterLine = <Text color={searchActive ? "cyan" : "gray"} wrap="truncate-end">{searchActive ? `Search  ${safeText(searchText)}_  ·  Enter apply  ·  Esc clear` : safeText(filter)}</Text>;
   if (rows === null) return <Box flexDirection="column">{filterLine}{warning === null ? <Message text="Loading work items…" /> : <EmptyState title="Work is unavailable" hint={warning} />}</Box>;
@@ -92,12 +127,16 @@ export function projectChips(snapshot: ControlSnapshot, project: string | null):
   return [`${project === null ? "[all]" : "all"} ${String(snapshot.sessions.length)}`, ...chips].join("  ");
 }
 
-export function SessionsView({ snapshot, sessions, selected, start, limit, project, onRowClick, onWheel, width }: {
+export function SessionsView({ snapshot, sessions, selected, start, limit, project, query, editing, onRowClick, onWheel, width }: {
   readonly snapshot: ControlSnapshot | null; readonly sessions: readonly ControlSession[]; readonly selected: number;
-  readonly limit: number; readonly project: string | null;
+  readonly limit: number; readonly project: string | null; readonly query: string; readonly editing: boolean;
 } & ListInteraction): ReactNode {
   if (snapshot === null) return <Message text="Loading sessions…" />;
-  if (sessions.length === 0) return <EmptyState title="No sessions" hint={project === null ? "Create a session to get started." : "Change the project filter or create a session."} />;
+  const filter = <FilterLine text={query} editing={editing} shown={sessions.length} />;
+  if (sessions.length === 0) return <Box flexDirection="column">
+    {filter}
+    <EmptyState title={query.trim() === "" ? "No sessions" : "No sessions match"} hint={query.trim() !== "" ? "Backspace edits the filter, Esc clears it." : project === null ? "Create a session to get started." : "Change the project filter or create a session."} />
+  </Box>;
   const groupOf = (session: ControlSession): string => sessionGroup(session, snapshot.notifications);
   const counts = GROUPS.map((group) => `${group} ${sessions.filter((session) => groupOf(session) === group).length}`).join("  ");
   const visible = sessions.slice(start, start + limit);
@@ -105,6 +144,7 @@ export function SessionsView({ snapshot, sessions, selected, start, limit, proje
     <Text bold>{`SESSIONS  ${sessions.length}`}</Text>
     <Text dimColor wrap="truncate-end">{safeText(counts)}</Text>
     <Text dimColor wrap="truncate-end">{safeText(`Projects  ${projectChips(snapshot, project)}   P cycles`)}</Text>
+    {filter}
     {visible.map((session, index) => {
       const absolute = start + index;
       // The first visible row of each section carries the section's heading.
@@ -122,20 +162,23 @@ export function SessionsView({ snapshot, sessions, selected, start, limit, proje
   </Box>;
 }
 
-export function HostsView({ hosts, selected, start, limit, onRowClick, onWheel, width }: { readonly hosts: readonly ControlHost[]; readonly selected: number; readonly limit: number } & ListInteraction): ReactNode {
-  if (hosts.length === 0) return <EmptyState title="No hosts discovered" hint="Refresh after the local daemon starts." />;
-  return <Box flexDirection="column"><Text bold>{`HOSTS  ${hosts.length}`}</Text>{hosts.slice(start, start + limit).map((host, index) => <MenuRow key={host.route} selected={start + index === selected}
+export function HostsView({ hosts, selected, start, limit, query, editing, onRowClick, onWheel, width }: { readonly hosts: readonly ControlHost[]; readonly selected: number; readonly limit: number; readonly query: string; readonly editing: boolean } & ListInteraction): ReactNode {
+  const filter = <FilterLine text={query} editing={editing} shown={hosts.length} />;
+  if (hosts.length === 0) return <Box flexDirection="column">{filter}<EmptyState title={query.trim() === "" ? "No hosts discovered" : "No hosts match"} hint={query.trim() === "" ? "Refresh after the local daemon starts." : "Backspace edits the filter, Esc clears it."} /></Box>;
+  return <Box flexDirection="column"><Text bold>{`HOSTS  ${hosts.length}`}</Text>{filter}{hosts.slice(start, start + limit).map((host, index) => <MenuRow key={host.route} selected={start + index === selected}
     onClick={() => { onRowClick(start + index); }} onWheel={onWheel} width={width}
     primary={`${host.name} (${host.route})`} badge={host.dialable ? host.classification : "unavailable"} secondary={host.dialable ? host.daemonVersion : "No dialable identity"} />)}</Box>;
 }
 
-export function ActivityView({ records, selected, start, scope, limit, onRowClick, onWheel, width }: {
-  readonly records: readonly ControlNotification[]; readonly selected: number; readonly scope: ActivityScope; readonly limit: number;
+export function ActivityView({ records, selected, start, scope, limit, query, editing, onRowClick, onWheel, width }: {
+  readonly records: readonly ControlNotification[]; readonly selected: number; readonly scope: ActivityScope; readonly limit: number; readonly query: string; readonly editing: boolean;
 } & ListInteraction): ReactNode {
-  if (records.length === 0) return <EmptyState title={`No ${scope.toLowerCase()} notifications`} hint="Choose another scope to see older activity." />;
+  const filter = <FilterLine text={query} editing={editing} shown={records.length} />;
+  if (records.length === 0) return <Box flexDirection="column">{filter}<EmptyState title={query.trim() === "" ? `No ${scope.toLowerCase()} notifications` : "No notifications match"} hint={query.trim() === "" ? "Choose another scope to see older activity." : "Backspace edits the filter, Esc clears it."} /></Box>;
   return <Box flexDirection="column">
     <Text bold>{`ACTIVITY  ${records.length}`}</Text>
     <Text dimColor>{`Scope: ${scope}`}</Text>
+    {filter}
     {records.slice(start, start + limit).map((record, index) => <MenuRow key={`${record.host}/${record.id}`}
       onClick={() => { onRowClick(start + index); }} onWheel={onWheel} width={width}
       selected={start + index === selected} primary={shorten(record.title, 65)}
@@ -285,17 +328,19 @@ export function SessionDetail({ session, screen, notifications, links, noLinks, 
 
 export interface ProjectChoice { readonly label: string | null; readonly count: number }
 
-/** The projects the sessions belong to with their session counts, `all` first; `search` keeps the labels that contain it. */
+/**
+ * The projects the sessions belong to with their session counts, `all` first. `search` is a fuzzy query over the
+ * labels: a blank one keeps every choice in order, otherwise the best matches come first.
+ */
 export function projectChoices(sessions: readonly ControlSession[], search: string): ProjectChoice[] {
   const counts = new Map<string, number>();
   for (const session of sessions) {
     const label = session.projectLabel ?? session.projectId ?? "unassigned";
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
-  const needle = search.toLowerCase();
   const projects = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([label, count]) => ({ label, count }));
-  // The "all" choice is kept only while its own name matches, so the first highlighted choice is the first match.
-  return [{ label: null, count: sessions.length }, ...projects].filter((choice) => choice.label === null ? "all".includes(needle) : choice.label.toLowerCase().includes(needle));
+  const all: ProjectChoice = { label: null, count: sessions.length };
+  return fuzzyFilter([all, ...projects], search, (choice) => [choice.label ?? "all"]);
 }
 
 export function ProjectPicker({ choices, selected, search, filtering, limit }: {

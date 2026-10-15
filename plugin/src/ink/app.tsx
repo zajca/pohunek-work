@@ -16,10 +16,12 @@ import { coalesce } from "./coalesce.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
-import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
+import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, HostsView, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
+import { fuzzyFilter, typedText } from "../tui/search.ts";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -76,11 +78,34 @@ interface LaunchForm {
   readonly baseBranch: string;
   readonly intent: "setup" | "project" | "update" | "debug" | "help";
   readonly focus: number;
+  /** The query of the focused pick field; it narrows that field's choices. */
   readonly search: string;
+  /** Index in the matching choices of the highlighted one, moved by ←/→ and reset by typing. */
+  readonly highlight: number;
+  /** First choice shown in the choice list. */
   readonly choice: number;
 }
 
-const EMPTY_FORM: LaunchForm = { host: "local", project: null, agent: null, action: null, name: "", prompt: "", branch: "", baseBranch: "", intent: "help", focus: 1, search: "", choice: 0 };
+const EMPTY_FORM: LaunchForm = { host: "local", project: null, agent: null, action: null, name: "", prompt: "", branch: "", baseBranch: "", intent: "help", focus: 1, search: "", highlight: 0, choice: 0 };
+
+const FORM_FIELDS = 9;
+const ASSISTANT_FIELDS = 8;
+/** The Assistant form's Request row is disabled, so focus never stops on it. */
+const ASSISTANT_DISABLED_FIELD = 4;
+
+/** The field Tab (wrapping) or ↑/↓ (stopping at the first and last field) moves to; the disabled row is skipped. */
+function nextField(focus: number, step: 1 | -1, assistant: boolean, wrap: boolean): number {
+  const count = assistant ? ASSISTANT_FIELDS : FORM_FIELDS;
+  let next = focus + step;
+  if (wrap) next = (next + count) % count;
+  else if (next < 0 || next >= count) return focus;
+  return assistant && next === ASSISTANT_DISABLED_FIELD ? next + step : next;
+}
+
+/** Focus moves to another field; the query and highlight belong to the field they were typed in. */
+function moveFocus(form: LaunchForm, focus: number): LaunchForm {
+  return focus === form.focus ? form : { ...form, focus, search: "", highlight: 0, choice: 0 };
+}
 
 function nullable(value: string): string | null {
   const trimmed = value.trim();
@@ -150,22 +175,21 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
   const { stdout } = useStdout();
   const layout = useLayout();
   const compact = stdout.rows < layout.compactRows || stdout.columns < layout.compactColumns;
-  const hostChoices = options?.hosts.map((host) => host.label) ?? [];
-  const projectChoices = options?.projects.filter((project) => `${project.id} ${project.label}`.toLowerCase().includes(form.search.toLowerCase())).map((project) => project.label) ?? [];
-  const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
-  const choices = form.focus === 0 ? hostChoices : form.focus === 1 ? projectChoices : form.focus === 2 ? ["default", ...agentChoices] :
-    form.focus === 3 ? assistant ? ["help", "setup", "project", "update", "debug"] : ["blank session", ...actions.map((action) => action.label)] : [];
+  const pick = formPick(form, options, actions, assistant);
+  const choices = pick?.matches ?? [];
+  const highlight = pick?.highlight ?? -1;
   const choiceLimit = compact ? 2 : layout.visibleChoices;
-  const choiceStart = Math.min(form.choice, Math.max(0, choices.length - choiceLimit));
-  const selectedChoice = form.focus === 0 ? options?.hosts.findIndex((host) => host.id === form.host) ?? -1 :
-    form.focus === 1 ? options?.projects.filter((project) => `${project.id} ${project.label}`.toLowerCase().includes(form.search.toLowerCase())).findIndex((project) => project.id === form.project) ?? -1 :
-      form.focus === 2 ? form.agent === null ? 0 : 1 + (options?.agents.filter((agent) => !assistant || agent.assistantCapable).findIndex((agent) => agent.id === form.agent) ?? -2) :
-        form.focus === 3 ? assistant ? choices.indexOf(form.intent) : form.action === null ? 0 : 1 + actions.findIndex((action) => action.id === form.action) : -1;
+  const choiceStart = listWindowStart(form.choice, highlight, choices.length, choiceLimit);
+  const fieldName = formFieldLabel(assistant, form.focus).toLowerCase();
+  const hostChoices = options?.hosts.map((host) => host.label) ?? [];
+  const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
+  // A pick field shows its query in place of its value while the query is typed.
+  const pickValue = (value: string, index: number): string => form.focus === index && form.search !== "" ? `search: ${form.search}` : value;
   const fields = [
-    hostChoices.find((_, index) => options?.hosts[index]?.id === form.host) ?? form.host,
-    form.search === "" ? options?.projects.find((project) => project.id === form.project)?.label ?? "none" : `search: ${form.search}`,
-    options?.agents.find((agent) => agent.id === form.agent)?.label ?? "default",
-    assistant ? form.intent : actions.find((action) => action.id === form.action)?.label ?? "blank session",
+    pickValue(options?.hosts.find((host) => host.id === form.host)?.label ?? form.host, 0),
+    pickValue(options?.projects.find((project) => project.id === form.project)?.label ?? "none", 1),
+    pickValue(options?.agents.find((agent) => agent.id === form.agent)?.label ?? "default", 2),
+    pickValue(assistant ? form.intent : actions.find((action) => action.id === form.action)?.label ?? "blank session", 3),
     assistant ? "Free-form request unavailable in core CLI" : form.name,
     assistant ? form.branch : form.prompt,
     assistant ? form.baseBranch : form.branch,
@@ -173,30 +197,31 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
   ];
   return <Box flexDirection="column">
     <Text bold color="cyan">{assistant ? "NEW ASSISTANT" : "NEW SESSION"}</Text>
-    {created === null && !compact && choices.length === 0 && <Text dimColor>{loading ? `Loading ${form.host} options…` : "Click a field to edit it. Tab moves to the next field."}</Text>}
+    {created === null && !compact && choices.length === 0 && form.search === "" && <Text dimColor>{loading ? `Loading ${form.host} options…` : "Click a field to edit it. Tab moves to the next field."}</Text>}
     {created !== null && <Message color="green" text={`Created ${created.host}/${created.sessionId}. Creation is locked.`} />}
     {created?.warnings.map((warning, index) => <Message key={index} text={`Launch warning: ${warning}`} />)}
     {created === null && options?.warning !== null && options?.warning !== undefined && <Text color="yellow" wrap="truncate-end">{safeText(options.warning)}</Text>}
-    {created === null && fields.map((value, index) => <MouseZone key={index} onClick={assistant && index === 4 ? undefined : () => { onFocus(index); }}>
-      <Text color={assistant && index === 4 ? "gray" : form.focus === index ? "cyan" : "white"} bold={form.focus === index} wrap="truncate-end">
-        {`${form.focus === index ? "▸" : " "} ${formFieldLabel(assistant, index).padEnd(16)} ${index <= 3 ? "‹ " : ""}${shorten(value || (index <= 3 ? "none" : "(empty)"), 60)}${index <= 3 ? " ›" : form.focus === index ? "_" : ""}`}
+    {created === null && fields.map((value, index) => <MouseZone key={index} onClick={assistant && index === ASSISTANT_DISABLED_FIELD ? undefined : () => { onFocus(index); }}>
+      <Text color={assistant && index === ASSISTANT_DISABLED_FIELD ? "gray" : form.focus === index ? "cyan" : "white"} bold={form.focus === index} wrap="truncate-end">
+        {`${form.focus === index ? "▸" : " "} ${formFieldLabel(assistant, index).padEnd(16)} ${index <= LAST_PICK_FIELD ? "‹ " : ""}${shorten(value || (index <= LAST_PICK_FIELD ? "none" : "(empty)"), 60)}${index <= LAST_PICK_FIELD ? " ›" : form.focus === index ? "_" : ""}`}
       </Text>
     </MouseZone>)}
+    {created === null && pick !== null && form.search !== "" && <Text dimColor wrap="truncate-end">{safeText(`Search: ${form.search}  ·  ${String(choices.length)} matches  ·  Enter picks the highlighted one`)}</Text>}
+    {created === null && pick !== null && form.search !== "" && choices.length === 0 && <Text color="yellow" wrap="truncate-end">{safeText(`No ${fieldName} matches; Backspace edits the query, Esc clears it`)}</Text>}
     {created === null && choices.length > 0 && <MouseZone flexDirection="column" width="100%" onWheel={(direction) => { onScrollChoices(direction, choices.length - choiceLimit); }}>
-      <Text dimColor>{`Choose ${formFieldLabel(assistant, form.focus).toLowerCase()}${choices.length > choiceLimit && !compact ? ` (${choiceStart + 1}–${Math.min(choiceStart + choiceLimit, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>
-      {choices.slice(choiceStart, choiceStart + choiceLimit).map((choice, index) => <MouseZone key={`${choiceStart + index}/${choice}`} onClick={() => { onPickChoice(choiceStart + index); }}>
-        <Text color={choiceStart + index === selectedChoice ? "cyan" : "white"} bold={choiceStart + index === selectedChoice}>{`${choiceStart + index === selectedChoice ? "▸" : " "} ${choiceStart + index + 1}. ${shorten(choice, 65)}`}</Text>
+      <Text dimColor>{`Choose ${fieldName}${choices.length > choiceLimit && !compact ? ` (${choiceStart + 1}–${Math.min(choiceStart + choiceLimit, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>
+      {choices.slice(choiceStart, choiceStart + choiceLimit).map((choice, index) => <MouseZone key={`${choiceStart + index}/${choice.label}`} onClick={() => { onPickChoice(choiceStart + index); }}>
+        <Text color={choiceStart + index === highlight ? "cyan" : "white"} bold={choiceStart + index === highlight}>{`${choiceStart + index === highlight ? "▸" : " "} ${choiceStart + index + 1}. ${shorten(choice.label, 65)}`}</Text>
       </MouseZone>)}
     </MouseZone>}
     <Box gap={1}>
       <ActionButton label={created === null ? "Create and attach" : "Attach session"} onClick={onSubmit} primary />
       <ActionButton label={created === null ? "Cancel" : "Close"} onClick={onCancel} />
     </Box>
-    {created === null && form.focus === 1 && form.search !== "" && <Text dimColor wrap="truncate-end">{`Search: ${safeText(form.search)} (${projectChoices.length} matches)`}</Text>}
     {created === null && !compact && form.focus === 0 && <Text dimColor wrap="truncate-end">{`Hosts: ${hostChoices.join(", ") || "loading"}`}</Text>}
     {created === null && !compact && form.focus === 2 && <Text dimColor wrap="truncate-end">{`Agents: ${agentChoices.join(", ") || "loading"}`}</Text>}
     {created === null && !compact && form.focus === 3 && !assistant && <Text dimColor wrap="truncate-end">{`Actions: blank session, ${actions.map((action) => action.label).join(", ")}`}</Text>}
-    {!compact && <Text dimColor wrap="truncate-end">{busy ? "Working…" : created === null ? "Click a choice · Tab next field · ←/→ change · Ctrl+Enter create · Esc back" : "Enter retry attach  Esc close"}</Text>}
+    {!compact && <Text dimColor wrap="truncate-end">{busy ? "Working…" : created === null ? FORM_FOOTER : "Enter retry attach  Esc close"}</Text>}
   </Box>;
 }
 
@@ -215,7 +240,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [snapshot, setSnapshot] = useState<ControlSnapshot | null>(null);
   const [work, setWork] = useState<WorkSnapshot | null>(null);
   const [workFilters, setWorkFilters] = useState<Filters>({ actor: options.initialView === "mine" ? "me" : "all", project: null, text: "", hideStale: false });
-  const [workSearch, setWorkSearch] = useState(false);
+  // The view whose `/` filter takes the text keys; Work keeps its query in workFilters.
+  const [editing, setEditing] = useState<ViewName | null>(null);
+  // A view change by pointer leaves the filter of the view it came from: its text keys must not reach the new view.
+  useEffect(() => { setEditing((old) => old === null || old === view ? old : null); }, [view]);
+  const [queries, setQueries] = useState<Record<"Sessions" | "Hosts" | "Activity", string>>({ Sessions: "", Hosts: "", Activity: "" });
   const [workKey, setWorkKey] = useState<string | null>(null);
   const [workDetailKey, setWorkDetailKey] = useState<string | null>(null);
   const [workPreview, setWorkPreview] = useState<DoOutcome | string | null>(null);
@@ -292,9 +321,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   }, [suspendTerminal]);
 
-  const sessions = useMemo(() => snapshot === null ? [] : orderedSessions(snapshot, projectFilter), [snapshot, projectFilter]);
+  const sessions = useMemo(() => snapshot === null ? [] : filterSessions(snapshot, orderedSessions(snapshot, projectFilter), queries.Sessions), [snapshot, projectFilter, queries.Sessions]);
   const pickChoices = useMemo(() => projectChoices(snapshot?.sessions ?? [], pick.search), [snapshot, pick.search]);
-  const records = useMemo(() => snapshot === null ? [] : activityRecords(snapshot, scope), [snapshot, scope]);
+  const records = useMemo(() => snapshot === null ? [] : fuzzyFilter(activityRecords(snapshot, scope), queries.Activity, recordTerms), [snapshot, scope, queries.Activity]);
+  const hostRows = useMemo(() => snapshot === null ? [] : fuzzyFilter(snapshot.hosts, queries.Hosts, hostTerms), [snapshot, queries.Hosts]);
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
   const selectedWork = workRows?.find((item) => rowId(item) === workKey) ?? selectedAt(workRows ?? [], cursor.Work);
   const workDetail = work?.payload?.items.find((item) => rowId(item) === workDetailKey) ?? null;
@@ -307,7 +337,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const selectedSession = sessions.find((session) => `${session.host}/${session.id}` === sessionKey) ?? selectedAt(sessions, cursor.Sessions);
   const split = options.mode === "main" && stdout.columns >= options.detailMinWidth;
   const selectedSessionIndex = selectedSession === null ? 0 : sessions.indexOf(selectedSession);
-  const selectedHost = selectedAt(snapshot?.hosts ?? [], cursor.Hosts);
+  const selectedHost = selectedAt(hostRows, cursor.Hosts);
   const selectedRecord = selectedAt(records, cursor.Activity);
   const visibleRows = Math.max(2, Math.floor((stdout.rows - layout.listReservedRows) / 2));
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
@@ -912,12 +942,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, []);
 
   const selectIndex = useCallback((index: number): void => {
-    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? snapshot?.hosts.length ?? 0 : records.length;
+    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? hostRows.length : records.length;
     const next = Math.max(0, Math.min(count - 1, index));
     setCursor((old) => ({ ...old, [view]: next }));
     if (view === "Sessions") { const session = sessions[next]; setSessionKey(session === undefined ? null : `${session.host}/${session.id}`); }
     if (view === "Work") { const item = workRows?.[next]; setWorkKey(item === undefined ? null : rowId(item)); }
-  }, [records.length, sessions, snapshot?.hosts.length, view, workRows]);
+  }, [records.length, sessions, hostRows.length, view, workRows]);
 
   /** Moves the Sessions selection to the first row of the next (or the previous) group; the first row of the current group counts as its start. */
   const jumpSection = useCallback((direction: 1 | -1): void => {
@@ -939,7 +969,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [cursor, selectedSessionIndex, selectedWorkIndex, selectIndex, view]);
 
   const openRow = useCallback((index: number): void => {
-    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? snapshot?.hosts.length ?? 0 : records.length;
+    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? hostRows.length : records.length;
     if (count === 0) return;
     const targetIndex = Math.max(0, Math.min(count - 1, index));
     selectIndex(targetIndex);
@@ -953,13 +983,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const session = sessions[targetIndex];
       if (session !== undefined) void inspectSessionAt(session.host, session.id);
     } else if (view === "Hosts") {
-      const host = snapshot?.hosts[targetIndex];
+      const host = hostRows[targetIndex];
       if (host !== undefined) void inspectHost(host);
     } else {
       const record = records[targetIndex];
       if (record !== undefined) void openNotification(record);
     }
-  }, [inspectHost, inspectSessionAt, openNotification, records, selectIndex, sessions, snapshot?.hosts, view, workRows]);
+  }, [hostRows, inspectHost, inspectSessionAt, openNotification, records, selectIndex, sessions, view, workRows]);
 
   /**
    * The identity of the item drawn at `index` of `target`. A snapshot refresh can reorder a list between two presses,
@@ -968,10 +998,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const rowIdentity = useCallback((target: ViewName, index: number): string | null => {
     if (target === "Work") { const item = workRows?.[index]; return item === undefined ? null : `work:${rowId(item)}`; }
     if (target === "Sessions") { const session = sessions[index]; return session === undefined ? null : `session:${session.host}/${session.id}`; }
-    if (target === "Hosts") { const host = snapshot?.hosts[index]; return host === undefined ? null : `host:${host.route}`; }
+    if (target === "Hosts") { const host = hostRows[index]; return host === undefined ? null : `host:${host.route}`; }
     const record = records[index];
     return record === undefined ? null : `activity:${record.host}/${record.id}`;
-  }, [records, sessions, snapshot?.hosts, workRows]);
+  }, [hostRows, records, sessions, workRows]);
 
   /**
    * A press on a row selects it and never opens it. A second press on the same row of the same view within
@@ -993,32 +1023,41 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     openRow(index);
   }, [openRow, openSelected, options.doubleClickMs, rowIdentity, selectIndex, sessions, split, view]);
 
-  const changeFormChoice = useCallback((delta: number): void => {
-    if (launchOptions === null) return;
-    if (form.focus === 0) {
-      const index = launchOptions.hosts.findIndex((host) => host.id === form.host);
-      const target = launchOptions.hosts[(index + delta + launchOptions.hosts.length) % launchOptions.hosts.length];
-      if (target !== undefined) void loadForm(target.id, form.project, overlay === "assistant");
-    } else if (form.focus === 1) {
-      const matches = launchOptions.projects.filter((project) => `${project.id} ${project.label}`.toLowerCase().includes(form.search.toLowerCase()));
-      const index = matches.findIndex((project) => project.id === form.project);
-      const target = matches[(index + delta + matches.length) % matches.length];
-      if (target !== undefined) void chooseProject(target.id);
-    } else if (form.focus === 2) {
-      const matches = launchOptions.agents.filter((agent) => overlay !== "assistant" || agent.assistantCapable);
-      const index = matches.findIndex((agent) => agent.id === form.agent);
-      const target = matches[(index + delta + matches.length) % matches.length];
-      if (target !== undefined) setForm((old) => ({ ...old, agent: target.id }));
-    } else if (form.focus === 3 && overlay === "form") {
-      const choices = [null, ...actions.map((action) => action.id)];
-      const index = choices.indexOf(form.action);
-      void chooseAction(choices[(index + delta + choices.length) % choices.length] ?? null);
-    } else if (form.focus === 3 && overlay === "assistant") {
-      const intents = ["help", "setup", "project", "update", "debug"] as const;
-      const index = intents.indexOf(form.intent);
-      setForm((old) => ({ ...old, intent: intents[(index + delta + intents.length) % intents.length] ?? "help" }));
+  // Stores the choice of pick field `focus`; the field's own action runs where it has one (host, project, action).
+  const applyPick = (focus: number, item: PickItem, assistant: boolean): void => {
+    if (focus === 0) { if (item.value !== null) void loadForm(item.value, form.project, assistant); }
+    else if (focus === 1) { if (item.value !== null) void chooseProject(item.value); }
+    else if (focus === 2) setForm((old) => ({ ...old, agent: item.value }));
+    else if (focus === 3) {
+      if (!assistant) { void chooseAction(item.value); return; }
+      const intent = INTENTS.find((entry) => entry === item.value);
+      if (intent !== undefined) setForm((old) => ({ ...old, intent }));
     }
-  }, [actions, chooseAction, chooseProject, form, launchOptions, loadForm, overlay]);
+  };
+
+  /** ←/→ move the highlight through the matches of the focused pick field and select the highlighted one. */
+  const changeFormChoice = (delta: 1 | -1): void => {
+    const assistant = overlay === "assistant";
+    const pick = formPick(form, launchOptions, actions, assistant);
+    if (pick === null || pick.matches.length === 0) return;
+    const count = pick.matches.length;
+    const next = pick.highlight < 0 ? (delta > 0 ? 0 : count - 1) : (pick.highlight + delta + count) % count;
+    const item = pick.matches[next];
+    if (item === undefined) return;
+    setForm((old) => ({ ...old, highlight: next }));
+    applyPick(form.focus, item, assistant);
+  };
+
+  const queryOf = (target: ViewName): string => target === "Work" ? workFilters.text : queries[target];
+
+  /** Changes the query of `target`; the selection returns to the first match because the matches changed. */
+  const editQuery = (target: ViewName, update: (text: string) => string): void => {
+    if (target === "Work") setWorkFilters((old) => ({ ...old, text: update(old.text) }));
+    else setQueries((old) => ({ ...old, [target]: update(old[target]) }));
+    setCursor((old) => ({ ...old, [target]: 0 }));
+    if (target === "Sessions") setSessionKey(null);
+    if (target === "Work") setWorkKey(null);
+  };
 
   usePaste((text) => {
     if (busy) { setStatus(BUSY_REFUSAL); return; }
@@ -1038,33 +1077,38 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (mouse !== null) { dispatchMouse(mouse); return; }
     if (input.startsWith("[<")) return;
     if (overlay === "form" || overlay === "assistant") {
+      const assistant = overlay === "assistant";
+      const pickField = form.focus <= LAST_PICK_FIELD;
       if (created !== null) { if (key.return) void attachCreated(); else if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay("none"); } return; }
-      if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay("none"); return; }
-      if (key.ctrl && key.return) { void submitForm(); return; }
-      if (key.return && form.focus === (overlay === "assistant" ? 7 : 8)) { void submitForm(); return; }
-      if (key.tab) {
-        setForm((old) => {
-          const count = overlay === "assistant" ? 8 : 9;
-          let next = (old.focus + (key.shift ? count - 1 : 1)) % count;
-          if (overlay === "assistant" && next === 4) next = key.shift ? 3 : 5;
-          return { ...old, focus: next, search: "", choice: 0 };
-        });
+      // Esc first clears the query of a pick field; the next Esc leaves the form.
+      if (key.escape) {
+        if (form.search !== "") { setForm((old) => ({ ...old, search: "", highlight: 0 })); return; }
+        if (options.mode === "new-session") exit(); else setOverlay("none");
         return;
       }
-      if (key.leftArrow || key.upArrow) { changeFormChoice(-1); return; }
-      if (key.rightArrow || key.downArrow) { changeFormChoice(1); return; }
-      if (key.return && form.focus <= 3) {
-        if (form.focus === 1 && form.search !== "") {
-          const project = launchOptions?.projects.find((entry) => `${entry.id} ${entry.label}`.toLowerCase().includes(form.search.toLowerCase()));
-          if (project === undefined) { bumpStatus("No project matches the search"); return; }
-          void chooseProject(project.id);
-        }
-        setForm((old) => ({ ...old, search: "", choice: 0, focus: old.focus === 3 && overlay === "assistant" ? 5 : old.focus + 1 }));
+      if (key.ctrl && key.return) { void submitForm(); return; }
+      if (key.return && form.focus === (assistant ? 7 : 8)) { void submitForm(); return; }
+      if (key.tab) { setForm((old) => moveFocus(old, nextField(old.focus, key.shift ? -1 : 1, assistant, true))); return; }
+      if (key.upArrow || key.downArrow) { setForm((old) => moveFocus(old, nextField(old.focus, key.upArrow ? -1 : 1, assistant, false))); return; }
+      if (key.leftArrow || key.rightArrow) { changeFormChoice(key.leftArrow ? -1 : 1); return; }
+      if (key.return && pickField) {
+        if (form.search === "") { setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false))); return; }
+        const pick = formPick(form, launchOptions, actions, assistant);
+        const item = pick?.matches[pick.highlight];
+        if (item === undefined) { bumpStatus(`No ${formFieldLabel(assistant, form.focus).toLowerCase()} matches "${form.search}"; Backspace edits the query`); return; }
+        applyPick(form.focus, item, assistant);
+        setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false)));
         return;
       }
       if (key.return && overlay === "form" && form.focus === 5) { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return; }
-      if (key.backspace || key.delete) { setForm((old) => changeTextField(old, "", overlay === "assistant", true)); return; }
-      if (!key.ctrl && !key.meta && input !== "") setForm((old) => changeTextField(old, input, overlay === "assistant", false));
+      // The focus is read from the state the update applies to: a click that changed it may not have rendered yet.
+      if (key.backspace || key.delete) {
+        setForm((old) => old.focus <= LAST_PICK_FIELD ? (old.search === "" ? old : { ...old, search: old.search.slice(0, -1), highlight: 0 }) : changeTextField(old, "", assistant, true));
+        return;
+      }
+      if (!key.ctrl && !key.meta && input !== "") {
+        setForm((old) => old.focus <= LAST_PICK_FIELD ? (typedText(input) === "" ? old : { ...old, search: old.search + input, highlight: 0 }) : changeTextField(old, input, assistant, false));
+      }
       return;
     }
     if (overlay === "confirm") {
@@ -1092,8 +1136,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (!key.ctrl && !key.meta) setEdit((old) => old + input);
       return;
     }
-    // Only Tab and Shift-Tab switch views. A text field (Work search, project filter) keeps Tab for itself.
-    const textFocused = workSearch || (overlay === "projects" && pick.filtering);
+    // Only Tab and Shift-Tab switch views. A list filter that is typed takes Tab for itself, as a text field does.
+    const textFocused = editing !== null || (overlay === "projects" && pick.filtering);
     if ((key.tab || input === "\u001b[Z") && !textFocused && overlay !== "help" && options.mode === "main") {
       const backward = key.shift || input === "\u001b[Z";
       const direction = backward ? -1 : 1;
@@ -1101,6 +1145,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
       return;
     }
+    // While a filter is typed every key is text: x, D, 1-4 and the arrows never act on the list.
+    if (overlay === "none" && editing !== null) {
+      if (key.escape) { editQuery(editing, () => ""); setEditing(null); return; }
+      if (key.return) { setEditing(null); return; }
+      if (key.tab) return;
+      if (key.backspace || key.delete) { editQuery(editing, (old) => old.slice(0, -1)); return; }
+      const typed = key.ctrl || key.meta ? "" : typedText(input);
+      if (typed !== "") editQuery(editing, (old) => old + typed);
+      return;
+    }
+    if (overlay === "none" && key.escape && queryOf(view) !== "") { editQuery(view, () => ""); return; }
+    if (overlay === "none" && input === "/") { setEditing(view); return; }
     if (overlay === "none" && view === "Sessions" && (key.leftArrow || key.rightArrow || input === "[" || input === "]")) {
       jumpSection(key.rightArrow || input === "]" ? 1 : -1);
       return;
@@ -1119,7 +1175,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         setOverlay("none");
       };
       if (pick.filtering) {
-        if (key.escape) setPick((old) => ({ ...old, filtering: false }));
+        if (key.escape) setPick((old) => ({ ...old, search: "", index: 0, filtering: false }));
         else if (key.return) chooseProject();
         else if (key.backspace || key.delete) setPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
         else if (input !== "" && !key.ctrl && !key.meta && !key.tab) setPick((old) => ({ ...old, search: old.search + input, index: 0 }));
@@ -1214,13 +1270,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     if (overlay === "host") { if (key.escape) setOverlay("none"); return; }
-    if (workSearch) {
-      if (key.escape) { setWorkFilters((old) => ({ ...old, text: "" })); setWorkSearch(false); return; }
-      if (key.return) { setWorkSearch(false); return; }
-      if (key.backspace || key.delete) setWorkFilters((old) => ({ ...old, text: old.text.slice(0, -1) }));
-      else if (!key.ctrl && !key.meta && input !== "") setWorkFilters((old) => ({ ...old, text: old.text + input.replaceAll("\r", " ").replaceAll("\n", " ") }));
-      return;
-    }
     if (input === "q" || (key.ctrl && input === "c")) { exit(); return; }
     if (input === "?") { setOverlay("help"); return; }
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return; }
@@ -1235,7 +1284,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         const index = projects.indexOf(workFilters.project ?? "");
         setWorkFilters((old) => ({ ...old, project: projects[index + 1] ?? null }));
       }
-      else if (input === "/") setWorkSearch(true);
       else if (input === "h") setWorkFilters((old) => ({ ...old, hideStale: !old.hideStale }));
       else if (key.return || input === "a") openRow(selectedWorkIndex);
       else if (input === "n") openForm(false);
@@ -1262,8 +1310,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   });
 
-  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/double-click open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :
-    overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
+  const footer = overlay === "none" ? editing !== null ? FILTER_FOOTER : stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · / filter · Enter open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :
+    overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · ↑↓ field · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
         overlay === "links" ? "↑↓ choose · Enter or 1-9 opens · Esc back" : overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
@@ -1271,7 +1319,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   // Each list is drawn from the window it last showed, so the window moves only when the selection leaves it.
   const workStart = listWindowStart(windowStarts.Work, selectedWorkIndex, workRows?.length ?? 0, visibleRows);
   const sessionsStart = listWindowStart(windowStarts.Sessions, selectedSessionIndex, sessions.length, visibleRows);
-  const hostsStart = listWindowStart(windowStarts.Hosts, cursor.Hosts, snapshot?.hosts.length ?? 0, visibleRows);
+  const hostsStart = listWindowStart(windowStarts.Hosts, cursor.Hosts, hostRows.length, visibleRows);
   const activityStart = listWindowStart(windowStarts.Activity, cursor.Activity, records.length, visibleRows);
   // The windows drawn become the ones the next render starts from; the state changes only when a window moved.
   useEffect(() => {
@@ -1281,22 +1329,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   let content: ReactNode;
   if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy} loading={formLoading}
-    onFocus={(focus) => { setForm((old) => ({ ...old, focus, choice: 0 })); }}
+    onFocus={(focus) => { setForm((old) => ({ ...moveFocus(old, focus), choice: 0 })); }}
     onPickChoice={(index) => {
-      if (form.focus === 3 && overlay === "assistant") {
-        const intents = ["help", "setup", "project", "update", "debug"] as const;
-        setForm((old) => ({ ...old, intent: intents[index] ?? old.intent }));
-        return;
-      }
-      if (launchOptions === null) return;
-      if (form.focus === 0) { const host = launchOptions.hosts[index]; if (host !== undefined) void loadForm(host.id, form.project, overlay === "assistant"); }
-      else if (form.focus === 1) {
-        const project = launchOptions.projects.filter((entry) => `${entry.id} ${entry.label}`.toLowerCase().includes(form.search.toLowerCase()))[index];
-        if (project !== undefined) void chooseProject(project.id);
-      } else if (form.focus === 2) {
-        const agent = launchOptions.agents.filter((entry) => overlay !== "assistant" || entry.assistantCapable)[index - 1];
-        setForm((old) => ({ ...old, agent: index === 0 ? null : agent?.id ?? old.agent }));
-      } else if (form.focus === 3) void chooseAction(index === 0 ? null : actions[index - 1]?.id ?? null);
+      const assistant = overlay === "assistant";
+      const item = formPick(form, launchOptions, actions, assistant)?.matches[index];
+      if (item === undefined) return;
+      setForm((old) => ({ ...old, highlight: index }));
+      applyPick(form.focus, item, assistant);
     }}
     onScrollChoices={(direction, max) => { setForm((old) => ({ ...old, choice: Math.max(0, Math.min(Math.max(0, max), old.choice + direction)) })); }}
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
@@ -1338,17 +1377,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; u opens its folder; PgUp/PgDn scroll the side panel.</Text><Text>Sessions: l opens the only work link, or lists several in a chooser where 1–9 or ↑↓ and Enter pick one; clicking a numbered line in the panel opens that link.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
-  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Views: Tab or Shift-Tab cycles Work, Sessions, Hosts and Activity; 1–4 jump to one. ↑/↓ select a row, Enter or a double click opens it, PgUp/PgDn scroll a detail, ? help, q quit.</Text><Text>Filter: / starts a fuzzy filter on Work, Sessions, Hosts and Activity; the typed text goes to the filter until Enter keeps it or Esc clears it. Esc clears an applied filter. P picks a project on Sessions.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; l links, g branch on GitHub, u folder, b copy branch, c copy path.</Text><Text>Work: m mine, f actor, P project, h hide stale; choose an action in its detail.</Text><Text>Activity: ←/→ or c change the scope; Enter opens a notification.</Text><Text>Forms: ↑/↓ move between fields. In Host, Project, Agent and Action or Intent, typing filters the choices, ←/→ pick a match, Enter picks the highlighted match and moves on, Esc clears the query. Ctrl+Enter creates.</Text></Box>;
+  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={editing === "Work"} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
-    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
+    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
       {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work, originOf(selectedSession))} offset={panelOffset} height={detailHeight}
         onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
     </Box>
-  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} {...listInteraction} />;
-  else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} start={hostsStart} limit={visibleRows} {...listInteraction} />;
-  else content = <ActivityView records={records} selected={cursor.Activity} start={activityStart} scope={scope} limit={visibleRows} {...listInteraction} />;
+  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} />;
+  else if (view === "Hosts") content = <HostsView hosts={hostRows} selected={cursor.Hosts} start={hostsStart} limit={visibleRows} query={queries.Hosts} editing={editing === "Hosts"} {...listInteraction} />;
+  else content = <ActivityView records={records} selected={cursor.Activity} start={activityStart} scope={scope} limit={visibleRows} query={queries.Activity} editing={editing === "Activity"} {...listInteraction} />;
 
   let toolbar: ReactNode = null;
   if (overlay === "none") {
@@ -1362,7 +1401,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         const index = projects.indexOf(workFilters.project ?? "");
         setWorkFilters((old) => ({ ...old, project: projects[index + 1] ?? null }));
       }} />
-      <ActionButton label="Search /" onClick={() => { setWorkSearch(true); }} />
+      <ActionButton label="Search /" onClick={() => { setEditing("Work"); }} />
       <ActionButton label={`Stale: ${workFilters.hideStale ? "hide" : "show"}`} onClick={() => { setWorkFilters((old) => ({ ...old, hideStale: !old.hideStale })); }} />
       <ActionButton label="Refresh" onClick={() => void refresh()} />
       <ActionButton label="Help ?" onClick={() => { setOverlay("help"); }} />
@@ -1371,13 +1410,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       {selectedSession !== null && <ActionButton label="Open session" onClick={() => { openRow(selectedSessionIndex); }} primary />}
       <ActionButton label="New session" onClick={() => { openForm(false); }} />
       <ActionButton label="Assistant" onClick={() => { openForm(true); }} />
+      <ActionButton label="Search /" onClick={() => { setEditing("Sessions"); }} />
       <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => { if (snapshot !== null) openProjectPicker(); }} />
       <ActionButton label="Refresh" onClick={() => void refresh()} />
       <ActionButton label="Help ?" onClick={() => { setOverlay("help"); }} />
     </Box>;
-    else if (view === "Hosts") toolbar = <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Refresh" onClick={() => void refresh()} /></Box>;
+    else if (view === "Hosts") toolbar = <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Search /" onClick={() => { setEditing("Hosts"); }} /><ActionButton label="Refresh" onClick={() => void refresh()} /></Box>;
     else toolbar = <Box gap={1} flexWrap="wrap">
       <ActionButton label={`Scope: ${scope}`} onClick={() => { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }} />
+      <ActionButton label="Search /" onClick={() => { setEditing("Activity"); }} />
       {selectedRecord !== null && <ActionButton label="Open notification" onClick={() => { openRow(cursor.Activity); }} primary />}
     </Box>;
   } else if (overlay === "work-detail") toolbar = <Box gap={1} flexWrap="wrap">

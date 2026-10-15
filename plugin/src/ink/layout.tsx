@@ -2,11 +2,13 @@ import { createContext, useContext } from "react";
 import { useStdout } from "ink";
 
 /** Footer of the views at full width; a terminal narrower than it gets the short footer. */
-export const MAIN_FOOTER = "Tab views  ·  ↑↓ select  ·  ←→ sections in Sessions  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
+export const MAIN_FOOTER = "Tab views  ·  ↑↓ select  ·  / filter  ·  Enter open  ·  x stop  ·  D remove  ·  ←→ sections in Sessions  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
 /** Footer of the Sessions view while its side panel shows the links of the selected session; no longer than MAIN_FOOTER. */
-export const SESSIONS_FOOTER = "Tab views  ·  ↑↓ select  ·  ←→ sections  ·  l links  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
+export const SESSIONS_FOOTER = "Tab views  ·  ↑↓ select  ·  / filter  ·  ←→ sections  ·  l links  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
 /** Footer of the new-session and assistant forms at full width. */
-export const FORM_FOOTER = "Tab next field  ·  Ctrl+Enter create  ·  Esc back";
+export const FORM_FOOTER = "↑↓ field  ·  ←→ choice  ·  type to filter a pick field  ·  Enter picks  ·  Tab next  ·  Ctrl+Enter create  ·  Esc clears a query, then back";
+/** Footer while a `/` filter takes the text keys. */
+export const FILTER_FOOTER = "Type to filter  ·  Backspace edits  ·  Enter keeps the filter  ·  Esc clears it";
 
 /** Lines ScreenFrame renders around its children: header, tab row with its top margin, divider, reserved subtitle, reserved status and footer. */
 export const FRAME_LINES = 7;

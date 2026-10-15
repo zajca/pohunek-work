@@ -2,12 +2,14 @@
 // and the TUI process started from the sources with the daemon's environment.
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { startCoreDaemon, writePluginConfig, type CoreDaemon, type PluginFixture } from "../../helpers/core-daemon.ts";
+import { installAgentProfile, startCoreDaemon, writePluginConfig, type CoreDaemon, type PluginFixture } from "../../helpers/core-daemon.ts";
 import { startCliProxy, type CliProxy, type ProxyRule } from "./cli-proxy.ts";
 import { runPty, type PtyResult, type PtyStep } from "./pty.ts";
 
 /** The project every scenario works in; its repository is a local git repository registered with the daemon. */
 export const PROJECT = "widgets";
+/** A profile program that only stays alive: the forms list profiles and never start them. */
+const IDLE_PROFILE_SCRIPT = "#!/bin/sh\nexec sleep 30\n";
 /** Time bound of a scenario that starts a real daemon: its git, daemon and TUI startup run on a loaded host. */
 export const REAL_SCENARIO_TIMEOUT_MS = 120_000;
 /**
@@ -31,10 +33,12 @@ export interface TuiScenario {
  * Starts a real daemon and a TUI scenario on it. The TUI calls the pinned CLI through a process
  * proxy (see cli-proxy.ts), which forwards every call unchanged when no rule applies.
  */
-export async function startTuiScenario(options: { readonly rules?: readonly ProxyRule[]; readonly extraGlobal?: string; readonly overrides?: Record<string, string | number> } = {}): Promise<TuiScenario> {
+export async function startTuiScenario(options: { readonly rules?: readonly ProxyRule[]; readonly extraGlobal?: string; readonly overrides?: Record<string, string | number>; readonly agentProfiles?: readonly string[] } = {}): Promise<TuiScenario> {
   const daemon = await startCoreDaemon();
   let proxy: CliProxy | null = null;
   try {
+    // The daemon lists the profiles it finds when it starts, so they are installed before anything else runs.
+    for (const name of options.agentProfiles ?? []) await installAgentProfile(daemon, name, IDLE_PROFILE_SCRIPT);
     await daemon.registerProject(PROJECT, "acme/widgets");
     proxy = await startCliProxy(join(daemon.coreDir, "pohunek"), [...NO_OVERLAY_RULES, ...(options.rules ?? [])]);
     const started = proxy;

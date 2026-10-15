@@ -2,6 +2,7 @@
 // client-side filters (the TUI always fetches every row and filters itself).
 import { isStalePullRequest } from "../output/stale.ts";
 import type { ListItem, ListPayload, TurnActor } from "../types/item.ts";
+import { fuzzyFilter } from "./search.ts";
 import { toSafe } from "./safe.ts";
 
 export type ActorFilter = "all" | TurnActor;
@@ -14,7 +15,7 @@ const ACTOR_ORDER: readonly TurnActor[] = ["me", "unknown", "agent", "reviewer",
 export interface Filters {
   readonly actor: ActorFilter;
   readonly project: string | null;
-  /** Case-insensitive substring of the key or the title; empty matches every row. */
+  /** Fuzzy match over the key and the title (`fuzzyFilter`); empty matches every row. */
   readonly text: string;
   /** Hides pull requests not updated for `stale_pr_days` that nothing runs for. */
   readonly hideStale: boolean;
@@ -38,38 +39,37 @@ export function sortRows(items: readonly ListItem[]): ListItem[] {
   );
 }
 
-function matchesText(item: ListItem, text: string): boolean {
-  if (text === "") return true;
-  const needle = text.toLowerCase();
-  // Matching runs on the sanitized text, so ASCII typed by the owner finds titles with diacritics.
-  return [item.key, rowTitle(item)].some((field) => toSafe(field).toLowerCase().includes(needle));
+/** The sanitized key and title, so ASCII typed by the owner finds titles with diacritics. */
+function rowTerms(item: ListItem): string[] {
+  return [toSafe(item.key), toSafe(rowTitle(item))];
 }
 
-function matchesBase(item: ListItem, filters: Filters): boolean {
-  return (filters.project === null || item.project === filters.project) && matchesText(item, filters.text);
+function inProject(item: ListItem, filters: Filters): boolean {
+  return filters.project === null || item.project === filters.project;
+}
+
+function matchingRows(items: readonly ListItem[], filters: Filters): ListItem[] {
+  return fuzzyFilter(items, filters.text, rowTerms);
 }
 
 /** `staleBefore` is the instant before which a pull request counts as stale (`staleCutoff`). */
 export function filterRows(payload: ListPayload, filters: Filters, staleBefore: number): ListItem[] {
-  return sortRows(
+  const rows = sortRows(
     payload.items.filter(
       (item) =>
-        matchesBase(item, filters) &&
+        inProject(item, filters) &&
         (filters.actor === "all" || item.on_turn.actor === filters.actor) &&
         !(filters.hideStale && isStalePullRequest(item, staleBefore)),
     ),
   );
+  return matchingRows(rows, filters);
 }
 
 /** Rows the stale filter hides on top of the other filters, for the header counter. */
 export function hiddenStaleCount(payload: ListPayload, filters: Filters, staleBefore: number): number {
   if (!filters.hideStale) return 0;
-  return payload.items.filter(
-    (item) =>
-      matchesBase(item, filters) &&
-      (filters.actor === "all" || item.on_turn.actor === filters.actor) &&
-      isStalePullRequest(item, staleBefore),
-  ).length;
+  const rows = payload.items.filter((item) => inProject(item, filters) && (filters.actor === "all" || item.on_turn.actor === filters.actor));
+  return matchingRows(rows, filters).filter((item) => isStalePullRequest(item, staleBefore)).length;
 }
 
 /**
@@ -78,7 +78,7 @@ export function hiddenStaleCount(payload: ListPayload, filters: Filters, staleBe
  */
 export function hiddenUnknownCount(payload: ListPayload, filters: Filters): number {
   if (filters.actor !== "me") return 0;
-  return payload.items.filter((item) => item.on_turn.actor === "unknown" && matchesBase(item, filters)).length;
+  return matchingRows(payload.items.filter((item) => item.on_turn.actor === "unknown" && inProject(item, filters)), filters).length;
 }
 
 /** Every project label in the payload, sorted; the `P` cycle and the PROJECT column use it. */

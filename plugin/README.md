@@ -98,8 +98,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   its message visible and offers an explicit Open session action. Use the wheel
   to move through lists and click labeled actions in each detail. Press `?` for
   the available keys. The Work view supports
-  `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
-  pull requests). Tab and Shift-Tab cycle the views; 1–4 jump to one. ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
+  `m` (mine/all), `f` (actor), `P` (project) and `h` (hide stale pull requests).
+  Tab and Shift-Tab cycle the views; 1–4 jump to one. ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
   view lists sections (Needs you, Running, Ready, Unavailable) with their counts.
   At or above `detail_min_width` columns the highlighted session's flat panel sits
   beside the list and follows the selection (PgUp/PgDn or the wheel scroll the part below its head);
@@ -121,15 +121,29 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   recover (ID or path, last native activity, or Unknown) and wait for `y`; an
   ambiguous reference is refused before the confirmation and a core refusal is
   shown without starting a worker. Activity has
-  Recent, Unread and Archived scopes. Partial host failures are shown in the
+  Recent, Unread and Archived scopes.
+
+  Key model, the same in this README, `?` and every footer: `/` filters the
+  current list (Work, Sessions, Hosts, Activity) and the project picker `P`
+  filters the projects. The query is a fuzzy subsequence matched by one shared
+  matcher (`src/tui/search.ts`, the fzf ranking: letters in order, case-insensitive,
+  consecutive and word-start matches first). While the filter is typed every key is
+  text, so `x`, `D` and `1`–`4` do not act; Enter keeps the filter, Esc clears it, and
+  the header shows the query with its match count. In the forms the same query
+  narrows a pick field (see below). Partial host failures are shown in the
   interface and block writes on affected hosts;
 - `pohunek-work new-session` opens the session form alone. With `attach_mode = "inline"` (or `--attach inline`)
   it attaches in the same terminal; with `window` (or `--attach window`) it opens the session in a new window,
   prints `opened <id> in a new window` and exits. In the main TUI, `n` opens that form and `a` in Sessions opens
-  the Assistant form. Click a field or use Tab to change focus; click a visible
-  choice to select it, use the wheel to browse longer choice lists, or use
-  arrows to change a host, project, agent or action template. Clicking the
-  focused field again leaves its value intact. Click Create and attach or focus it and
+  the Assistant form. ↑/↓ and Tab move between fields: ↑/↓ stop at the first and
+  last field, Tab wraps, and the Assistant's disabled Request row is skipped. In a
+  pick field (Host, Project, Agent, Action/template or, in the Assistant, Intent)
+  typing narrows its choices with the query and the match count is shown; Backspace
+  edits the query; ←/→ move the highlight through the matches and pick it; Enter picks
+  the highlighted match, clears the query and moves to the next field; with no match
+  the form shows a status and keeps the field; Esc clears the query first. Clicking a
+  visible choice selects it, and the wheel browses longer lists. Text fields keep
+  their text input, and ←/→ never change a pick field from a text field. Click Create and attach or focus it and
   press Enter. The Assistant
   currently supports intent-only launch: the core CLI exposes a free-form
   request only as a process argument, so the form does not send private request
