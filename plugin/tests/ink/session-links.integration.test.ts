@@ -23,6 +23,9 @@ const LINEAR_ITEM = "linear:WID-7";
 /** Wait bound for the open command's trace: the child process writes it after the TUI reports the open. */
 const TRACE_WAIT_MS = 10_000;
 const TRACE_POLL_MS = 50;
+const ARROW_DOWN = "\x1b[B";
+const ENTER = "\r";
+const ESCAPE = "\x1b";
 
 let scenario: TuiScenario | null = null;
 let directory: string | null = null;
@@ -91,7 +94,7 @@ function workList(items: readonly Record<string, unknown>[]): unknown {
   return { ...envelope, ok: { ...envelope.ok, items } };
 }
 
-test("the Links block lists the PR and the Linear issue at a wide terminal; a click and key 2 open the Linear issue", async () => {
+test("the Links block lists the PR and the Linear issue at a wide terminal; a click opens a line and l chooses among them", async () => {
   directory = await mkdtemp(join(tmpdir(), "pw-links-"));
   const stub = await openStub();
   scenario = await startTuiScenario({ overrides: { "tui.open_command": stub.command } });
@@ -106,16 +109,32 @@ test("the Links block lists the PR and the Linear issue at a wide terminal; a cl
     { expect: "Folder" },
     { ...keys(PRESS_LINEAR_LINE), settle: SETTLE_MS },
     { expect: "Opened linear.app" },
-    // The second open repeats the same status text, so the trace is what shows it ran.
-    keys("2"),
-    { pause: SETTLE_MS },
+    // With three links, l lists them; the digit picks the PR and closes the chooser.
+    keys("l"),
+    { expect: "Choose 1–3" },
     keys("1"),
     { expect: "Opened github.com" },
+    // The arrows move the highlight to the Linear issue, Enter opens it. The repeated status text is not
+    // printed again, so the trace shows the second Linear open.
+    keys("l"),
+    { expect: "Choose 1–3" },
+    keys(ARROW_DOWN),
+    keys(ENTER),
+    { pause: SETTLE_MS },
+    // Esc closes the chooser without opening anything.
+    keys("l"),
+    { expect: "Choose 1–3" },
+    keys(ESCAPE),
+    { clear: true },
+    { absent: "Choose 1–3", pause: SETTLE_MS },
+    // Digits still switch views in Sessions: 3 is Hosts.
+    keys("3"),
+    { expect: "HOSTS" },
     keys("q"),
   ];
   const result = await scenario.run(steps, { ...WIDE, timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
-  expect(await traced(stub.trace, 3)).toEqual([LINEAR_URL, LINEAR_URL, PR_URL]);
+  expect(await traced(stub.trace, 3)).toEqual([LINEAR_URL, PR_URL, LINEAR_URL]);
 }, REAL_SCENARIO_TIMEOUT_MS);
 
 test("a link whose host is not in open_url_hosts is refused on screen and the open command does not run", async () => {
@@ -128,7 +147,7 @@ test("a link whose host is not in open_url_hosts is refused on screen and the op
     { expect: "CONTROL CENTER" },
     keys("2"),
     { expect: "[1] Work link" },
-    keys("1"),
+    keys("l"),
     { expect: "Not opened: host evil.example.net is not in open_url_hosts" },
     keys("q"),
   ];

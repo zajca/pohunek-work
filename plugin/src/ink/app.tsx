@@ -19,7 +19,7 @@ import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDi
 import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, HostsView, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, LinkChooser, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -56,7 +56,7 @@ export interface InkTuiOptions {
   readonly log?: (event: string, detail?: string) => void;
 }
 
-type Overlay = "none" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help" | "projects";
+type Overlay = "none" | "links" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help" | "projects";
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: Overlay }
 type ConfirmAction = "stop" | "remove";
@@ -255,6 +255,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [actions, setActions] = useState<readonly ActionChoice[]>([]);
   const [created, setCreated] = useState<CreatedSession | null>(null);
   const [workChoice, setWorkChoice] = useState(0);
+  // The link chooser of `l`: the session, the highlighted line and the overlay it returns to on Esc or a pick.
+  const [linkChoice, setLinkChoice] = useState<{ session: ControlSession; index: number; returnTo: "none" | "session" } | null>(null);
   // Bumped when a mutation completes; a read that started before it must not replace the state the mutation showed.
   const mutationEpoch = useRef(0);
   // Counts the actions that started; a read that completes later checks it before it reports its own result.
@@ -791,19 +793,21 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     openLink(url);
   }, [openLink, originOf]);
 
-  // `number` names a line of the Links block (1-9); null is `l`, which opens the only link and otherwise names the numbers.
-  const openSessionLink = useCallback((session: ControlSession, number: number | null): void => {
-    const links = linksOf(session);
-    if (links.length === 0) { bumpStatus("No work link on this session"); return; }
-    if (number === null) {
-      const only = links[0];
-      if (links.length === 1 && only !== undefined) openLink(only.url);
-      else bumpStatus(`${String(links.length)} links: press 1-${String(links.length)} to open one`);
-      return;
-    }
-    const link = links[number - 1];
+  // A numbered line of the Links block (a click on it) opens that link directly.
+  const openLinkNumber = useCallback((session: ControlSession, number: number): void => {
+    const link = linksOf(session)[number - 1];
     if (link === undefined) { bumpStatus(`No link ${String(number)} on this session`); return; }
     openLink(link.url);
+  }, [linksOf, openLink]);
+
+  // `l`: no link reports it, one link opens directly, several open the chooser that returns to `returnTo`.
+  const chooseLink = useCallback((session: ControlSession, returnTo: "none" | "session"): void => {
+    const links = linksOf(session);
+    if (links.length === 0) { bumpStatus("No work link on this session"); return; }
+    const only = links[0];
+    if (links.length === 1 && only !== undefined) { openLink(only.url); return; }
+    setLinkChoice({ session, index: 0, returnTo });
+    setOverlay("links");
   }, [linksOf, openLink]);
 
   // The picker opens on the current project filter with its full list, so a stale search cannot hide that project.
@@ -1128,6 +1132,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "o" && workDetail !== null) { const url = workDetail.pull_request?.url ?? workDetail.issue?.url; if (url !== undefined) openLink(url); }
       return;
     }
+    if (overlay === "links") {
+      const choice = linkChoice;
+      if (choice === null) { setOverlay("none"); return; }
+      const links = linksOf(choice.session);
+      const close = (): void => { setLinkChoice(null); setOverlay(choice.returnTo); };
+      const pick = (index: number): void => { close(); const link = links[index]; if (link !== undefined) openLink(link.url); };
+      if (key.escape) close();
+      else if (key.upArrow || key.downArrow) setLinkChoice({ ...choice, index: Math.max(0, Math.min(links.length - 1, choice.index + (key.downArrow ? 1 : -1))) });
+      else if (key.return) pick(choice.index);
+      else if (/^[1-9]$/.test(input) && Number(input) <= links.length) pick(Number(input) - 1);
+      return;
+    }
     if (overlay === "session") {
       if (key.escape) { setOverlay("none"); return; }
       if (sessionDetail === null) return;
@@ -1139,8 +1155,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") restartOutput();
-      else if (input === "l") openSessionLink(sessionDetail, null);
-      else if (/^[1-9]$/.test(input)) openSessionLink(sessionDetail, Number(input));
+      else if (input === "l") chooseLink(sessionDetail, "session");
       else if (input === "u") void openFolder(sessionDetail);
       else if (input === "g") openBranch(sessionDetail);
       else if (input === "b") void copyValue(sessionDetail.branch ?? "");
@@ -1163,8 +1178,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     if (input === "q" || (key.ctrl && input === "c")) { exit(); return; }
     if (input === "?") { setOverlay("help"); return; }
-    // With the side panel shown, digits open the links of the selected session and do not switch views (Tab still does).
-    if (view === "Sessions" && split && /^[1-9]$/.test(input)) { if (selectedSession !== null) openSessionLink(selectedSession, Number(input)); return; }
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return; }
     if (key.upArrow || input === "k") { move(-1); return; }
     if (key.downArrow || input === "j") { move(1); return; }
@@ -1185,7 +1198,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } else if (view === "Sessions") {
       if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
       else if (input === "o") void openSelected();
-      else if (input === "l" && selectedSession !== null) openSessionLink(selectedSession, null);
+      else if (input === "l" && selectedSession !== null) chooseLink(selectedSession, "none");
       else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
       else if (input === "g" && selectedSession !== null) openBranch(selectedSession);
       else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
@@ -1207,7 +1220,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/double-click open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :
     overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
-        overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
+        overlay === "links" ? "↑↓ choose · Enter or 1-9 opens · Esc back" : overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
   const listInteraction = { onRowClick: clickRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
 
@@ -1235,7 +1248,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)}
     offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
-    onOpenLink={(index) => { openSessionLink(sessionDetail, index + 1); }} />;
+    onOpenLink={(index) => { openLinkNumber(sessionDetail, index + 1); }} />;
+  else if (overlay === "links" && linkChoice !== null) content = <LinkChooser links={linksOf(linkChoice.session)} selected={linkChoice.index} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
@@ -1265,13 +1279,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views (not the digits of a Sessions side panel); ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; u opens its folder; PgUp/PgDn scroll the side panel.</Text><Text>Sessions with the side panel: 1–9 open the link with that number in the Links block (digits do not switch views there); l opens the only link.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; u opens its folder; PgUp/PgDn scroll the side panel.</Text><Text>Sessions: l opens the only work link, or lists several in a chooser where 1–9 or ↑↓ and Enter pick one; clicking a numbered line in the panel opens that link.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
       {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} offset={panelOffset} height={detailHeight}
-        onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openSessionLink(selectedSession, index + 1); }} />}
+        onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
     </Box>
   </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
   else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
@@ -1332,7 +1346,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {sessionMutable && <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />}
     {sessionDetail.branch !== null && <ActionButton label="Copy branch" onClick={() => void copyValue(sessionDetail.branch ?? "")} />}
     <ActionButton label="Copy path" onClick={() => void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd)} />
-    {linksOf(sessionDetail).length === 1 && <ActionButton label="Open link" onClick={() => { openSessionLink(sessionDetail, null); }} />}
+    {linksOf(sessionDetail).length === 1 && <ActionButton label="Open link" onClick={() => { chooseLink(sessionDetail, "session"); }} />}
     {sessionDetail.host === "local" && <ActionButton label="Open folder" onClick={() => void openFolder(sessionDetail)} />}
     {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />}
     {sessionWritable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}

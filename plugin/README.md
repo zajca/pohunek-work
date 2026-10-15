@@ -99,7 +99,7 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   to move through lists and click labeled actions in each detail. Press `?` for
   the available keys. The Work view supports
   `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
-  pull requests). Tab and Shift-Tab cycle the views; 1–4 jump to one, except that with the Sessions side panel shown the digits open links (below). ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
+  pull requests). Tab and Shift-Tab cycle the views; 1–4 jump to one. ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
   view lists sections (Needs you, Running, Ready, Unavailable) with their counts.
   At or above `detail_min_width` columns the highlighted session's flat panel sits
   beside the list and follows the selection (PgUp/PgDn or the wheel scroll the part below its head);
@@ -110,8 +110,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   origin; the status says so when there is none), `b` copies the branch and `c` the path.
   The panel's head holds a Links block: one numbered line per known link of the session (its
   GitHub pull request and issue from the Work join, its core work link, its branch page on GitHub), each
-  clickable. A click or its number (`1`–`9`) opens that link; `l` opens the only link and otherwise names the
-  numbers. Every link goes through the `open_url_hosts` allowlist: a link on another host is refused in the
+  clickable: a click on its line opens it. `l` opens the only link directly; with several it opens a chooser
+  where `1`–`9` or the arrows and Enter pick a link and Esc closes it. Every link goes through the `open_url_hosts` allowlist: a link on another host is refused in the
   status line and nothing is run. A session with no core work link and no Work item shows none; the branch line is
   omitted when the project's origin is not a GitHub repository. Session actions through the SDK are stop, remove, resume,
   rename, metadata and fork; notifications are read, acknowledged and archived

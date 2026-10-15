@@ -199,7 +199,7 @@ export function sessionDetailParts(session: ControlSession, screen: ControlScree
     { text: `Status  ${session.state} · ${session.activity ?? "unknown"} · ${session.runtimeState ?? "unknown"}` },
     { text: attention.length === 0 ? "Attention  none" : `Attention  ${attention[0]?.title ?? ""}${attention.length > 1 ? ` (+${String(attention.length - 1)})` : ""}` },
     { text: `Project  ${session.projectLabel ?? session.projectId ?? "unassigned"}   Branch  ${session.branch ?? "none"}` },
-    { text: "LINKS  1-9 open", heading: true },
+    { text: "LINKS  l opens or chooses", heading: true },
     ...(links.length === 0 ? [{ text: "  none" }] : links.map((link, index) => ({ text: `  [${String(index + 1)}] ${link.label}  ${link.url}`, link: index }))),
     { text: `  Folder  ${session.worktreePath ?? session.cwd}   u opens` },
   ];
@@ -224,6 +224,15 @@ function bodyRows(pinned: readonly PanelLine[], height: number): number {
 export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[], links: readonly SessionLink[]): number {
   const { pinned, body } = sessionDetailParts(session, screen, notifications, links);
   return Math.max(0, body.length - bodyRows(pinned, height));
+}
+
+/** The links of a session as a numbered list; 1-9 or the arrows and Enter pick one, and the caller closes it. */
+export function LinkChooser({ links, selected }: { readonly links: readonly SessionLink[]; readonly selected: number }): ReactNode {
+  return <Box flexDirection="column">
+    <Text bold color="cyan">LINKS</Text>
+    <Text dimColor>{`Choose 1–${String(links.length)} or ↑↓ and Enter · Esc closes`}</Text>
+    {links.map((link, index) => <Text key={link.url} inverse={index === selected} wrap="truncate-end">{safeText(`${index === selected ? "› " : "  "}[${String(index + 1)}] ${link.label}  ${link.url}`)}</Text>)}
+  </Box>;
 }
 
 export function RecoveryConfirmation({ action, session }: { readonly action: "resume" | "fork"; readonly session: ControlSession }): ReactNode {
