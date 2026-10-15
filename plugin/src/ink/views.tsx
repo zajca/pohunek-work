@@ -39,10 +39,24 @@ export function activityRecords(snapshot: ControlSnapshot, scope: ActivityScope)
 }
 
 interface ListInteraction {
+  /** First row drawn, from listWindowStart; the rows before it are scrolled out of view. */
+  readonly start: number;
   /** A press on a row; the caller decides whether it only selects or also opens. */
   readonly onRowClick: (index: number) => void;
   readonly onWheel: (direction: -1 | 1) => void;
   readonly width: number;
+}
+
+/**
+ * First row of the `limit`-row window that holds `selected`. The window keeps `previous`, the start the list was last
+ * drawn with, while the selection stays inside it, so a press on a visible row never moves the rows under the pointer.
+ */
+export function listWindowStart(previous: number, selected: number, count: number, limit: number): number {
+  const last = Math.max(0, count - limit);
+  let start = Math.min(Math.max(0, previous), last);
+  if (selected < start) start = selected;
+  else if (selected >= start + limit) start = selected - limit + 1;
+  return Math.min(Math.max(0, start), last);
 }
 
 function EmptyState({ title, hint }: { readonly title: string; readonly hint: string }): ReactNode {
@@ -52,11 +66,10 @@ function EmptyState({ title, hint }: { readonly title: string; readonly hint: st
   </Box>;
 }
 
-export function WorkView({ rows, selected, limit, filter, warning, searchActive, searchText, onRowClick, onWheel, width }: { readonly rows: readonly ListItem[] | null; readonly selected: number; readonly limit: number; readonly filter: string; readonly warning: string | null; readonly searchActive: boolean; readonly searchText: string } & ListInteraction): ReactNode {
+export function WorkView({ rows, selected, start, limit, filter, warning, searchActive, searchText, onRowClick, onWheel, width }: { readonly rows: readonly ListItem[] | null; readonly selected: number; readonly limit: number; readonly filter: string; readonly warning: string | null; readonly searchActive: boolean; readonly searchText: string } & ListInteraction): ReactNode {
   const filterLine = <Text color={searchActive ? "cyan" : "gray"} wrap="truncate-end">{searchActive ? `Search  ${safeText(searchText)}_  ·  Enter apply  ·  Esc clear` : safeText(filter)}</Text>;
   if (rows === null) return <Box flexDirection="column">{filterLine}{warning === null ? <Message text="Loading work items…" /> : <EmptyState title="Work is unavailable" hint={warning} />}</Box>;
   if (rows.length === 0) return <Box flexDirection="column"><Text bold>WORK  0 items</Text>{filterLine}<EmptyState title="No work items match" hint="Change Mine or Search to see other work." /></Box>;
-  const start = Math.max(0, selected - Math.floor(limit / 2));
   return <Box flexDirection="column">
     <Text bold>{`WORK  ${rows.length} items`}</Text>
     {filterLine}
@@ -79,7 +92,7 @@ export function projectChips(snapshot: ControlSnapshot, project: string | null):
   return [`${project === null ? "[all]" : "all"} ${String(snapshot.sessions.length)}`, ...chips].join("  ");
 }
 
-export function SessionsView({ snapshot, sessions, selected, limit, project, onRowClick, onWheel, width }: {
+export function SessionsView({ snapshot, sessions, selected, start, limit, project, onRowClick, onWheel, width }: {
   readonly snapshot: ControlSnapshot | null; readonly sessions: readonly ControlSession[]; readonly selected: number;
   readonly limit: number; readonly project: string | null;
 } & ListInteraction): ReactNode {
@@ -87,7 +100,6 @@ export function SessionsView({ snapshot, sessions, selected, limit, project, onR
   if (sessions.length === 0) return <EmptyState title="No sessions" hint={project === null ? "Create a session to get started." : "Change the project filter or create a session."} />;
   const groupOf = (session: ControlSession): string => sessionGroup(session, snapshot.notifications);
   const counts = GROUPS.map((group) => `${group} ${sessions.filter((session) => groupOf(session) === group).length}`).join("  ");
-  const start = Math.max(0, selected - Math.floor(limit / 2));
   const visible = sessions.slice(start, start + limit);
   return <Box flexDirection="column">
     <Text bold>{`SESSIONS  ${sessions.length}`}</Text>
@@ -110,19 +122,17 @@ export function SessionsView({ snapshot, sessions, selected, limit, project, onR
   </Box>;
 }
 
-export function HostsView({ hosts, selected, limit, onRowClick, onWheel, width }: { readonly hosts: readonly ControlHost[]; readonly selected: number; readonly limit: number } & ListInteraction): ReactNode {
+export function HostsView({ hosts, selected, start, limit, onRowClick, onWheel, width }: { readonly hosts: readonly ControlHost[]; readonly selected: number; readonly limit: number } & ListInteraction): ReactNode {
   if (hosts.length === 0) return <EmptyState title="No hosts discovered" hint="Refresh after the local daemon starts." />;
-  const start = Math.max(0, selected - Math.floor(limit / 2));
   return <Box flexDirection="column"><Text bold>{`HOSTS  ${hosts.length}`}</Text>{hosts.slice(start, start + limit).map((host, index) => <MenuRow key={host.route} selected={start + index === selected}
     onClick={() => { onRowClick(start + index); }} onWheel={onWheel} width={width}
     primary={`${host.name} (${host.route})`} badge={host.dialable ? host.classification : "unavailable"} secondary={host.dialable ? host.daemonVersion : "No dialable identity"} />)}</Box>;
 }
 
-export function ActivityView({ records, selected, scope, limit, onRowClick, onWheel, width }: {
+export function ActivityView({ records, selected, start, scope, limit, onRowClick, onWheel, width }: {
   readonly records: readonly ControlNotification[]; readonly selected: number; readonly scope: ActivityScope; readonly limit: number;
 } & ListInteraction): ReactNode {
   if (records.length === 0) return <EmptyState title={`No ${scope.toLowerCase()} notifications`} hint="Choose another scope to see older activity." />;
-  const start = Math.max(0, selected - Math.floor(limit / 2));
   return <Box flexDirection="column">
     <Text bold>{`ACTIVITY  ${records.length}`}</Text>
     <Text dimColor>{`Scope: ${scope}`}</Text>
@@ -189,7 +199,7 @@ export interface PanelLine { readonly text: string; readonly heading?: boolean; 
  * stays at the top, and the body (recent activity, subagents, output) scrolls below it, so the links stay visible
  * while the output follows.
  */
-export function sessionDetailParts(session: ControlSession, screen: ControlScreen | null, notifications: readonly ControlNotification[], links: readonly SessionLink[]): { pinned: PanelLine[]; body: PanelLine[] } {
+export function sessionDetailParts(session: ControlSession, screen: ControlScreen | null, notifications: readonly ControlNotification[], links: readonly SessionLink[], noLinks: string): { pinned: PanelLine[]; body: PanelLine[] } {
   const records = notifications.filter((record) => record.host === session.host && record.sessionId === session.id);
   const attention = records.filter(isUnresolvedAction);
   const recent = records.filter((record) => record.status !== "archived").sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, RECENT_ACTIVITY_ROWS);
@@ -200,7 +210,7 @@ export function sessionDetailParts(session: ControlSession, screen: ControlScree
     { text: attention.length === 0 ? "Attention  none" : `Attention  ${attention[0]?.title ?? ""}${attention.length > 1 ? ` (+${String(attention.length - 1)})` : ""}` },
     { text: `Project  ${session.projectLabel ?? session.projectId ?? "unassigned"}   Branch  ${session.branch ?? "none"}` },
     { text: "LINKS  l opens or chooses", heading: true },
-    ...(links.length === 0 ? [{ text: "  none" }] : links.map((link, index) => ({ text: `  [${String(index + 1)}] ${link.label}  ${link.url}`, link: index }))),
+    ...(links.length === 0 ? [{ text: `  ${noLinks}` }] : links.map((link, index) => ({ text: `  [${String(index + 1)}] ${link.label}  ${link.url}`, link: index }))),
     { text: `  Folder  ${session.worktreePath ?? session.cwd}   u opens` },
   ];
   const body: PanelLine[] = [
@@ -221,8 +231,8 @@ function bodyRows(pinned: readonly PanelLine[], height: number): number {
   return Math.max(0, height - pinned.length);
 }
 
-export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[], links: readonly SessionLink[]): number {
-  const { pinned, body } = sessionDetailParts(session, screen, notifications, links);
+export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[], links: readonly SessionLink[], noLinks: string): number {
+  const { pinned, body } = sessionDetailParts(session, screen, notifications, links, noLinks);
   return Math.max(0, body.length - bodyRows(pinned, height));
 }
 
@@ -235,6 +245,7 @@ export function LinkChooser({ links, selected }: { readonly links: readonly Sess
   </Box>;
 }
 
+/** What a resume or fork will recover, as the owner confirms it. An unknown target is shown as such, never guessed. */
 export function RecoveryConfirmation({ action, session }: { readonly action: "resume" | "fork"; readonly session: ControlSession }): ReactNode {
   const target = session.nativeTarget;
   const reference = target.status === "verified" ? `${target.kind === "id" ? "ID" : "path"}: ${target.value}` : "Unknown";
@@ -247,12 +258,12 @@ export function RecoveryConfirmation({ action, session }: { readonly action: "re
   </Box>;
 }
 
-export function SessionDetail({ session, screen, notifications, links, offset, height, onWheel, onOpenLink }: {
+export function SessionDetail({ session, screen, notifications, links, noLinks, offset, height, onWheel, onOpenLink }: {
   readonly session: ControlSession; readonly screen: ControlScreen | null; readonly notifications: readonly ControlNotification[];
-  readonly links: readonly SessionLink[]; readonly offset: number; readonly height: number;
+  readonly links: readonly SessionLink[]; readonly noLinks: string; readonly offset: number; readonly height: number;
   readonly onWheel: (direction: -1 | 1) => void; readonly onOpenLink: (index: number) => void;
 }): ReactNode {
-  const { pinned, body } = sessionDetailParts(session, screen, notifications, links);
+  const { pinned, body } = sessionDetailParts(session, screen, notifications, links, noLinks);
   const rows = bodyRows(pinned, height);
   const start = Math.max(0, Math.min(offset, Math.max(0, body.length - rows)));
   const line = (entry: PanelLine, key: string): ReactNode => {

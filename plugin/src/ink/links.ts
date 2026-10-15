@@ -1,6 +1,7 @@
 import type { ControlSession } from "../control/types.ts";
 import type { ListItem } from "../types/item.ts";
 import { githubBranchUrl } from "../tui/actions.ts";
+import type { WorkSnapshot } from "./work.ts";
 
 /** One line of a session's Links block: the label shown and the URL it opens. */
 export interface SessionLink {
@@ -35,6 +36,16 @@ export function sessionLinks(session: ControlSession, items: readonly ListItem[]
     seen.add(link.url);
     return true;
   });
+}
+
+/**
+ * Why a session has no link in its Links block: the Work data it is joined with is missing, or the session is not
+ * local, or nothing in the loaded Work matches it. The text reads after "No link:" and after the Links heading.
+ */
+export function noLinkReason(session: ControlSession, work: WorkSnapshot | null): string {
+  if (session.host !== "local") return "the session is not local; Work is read on the local host only";
+  if (work === null || work.payload === null) return work?.warning ? `Work unavailable: ${work.warning}` : "Work not loaded yet";
+  return "no Work match for this session";
 }
 
 function joinedItems(session: ControlSession, items: readonly ListItem[] | null): readonly ListItem[] {

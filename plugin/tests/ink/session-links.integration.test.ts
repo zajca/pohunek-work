@@ -175,3 +175,23 @@ test("the Work join adds the pull request line to a session without a core work 
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   expect(await traced(stub.trace, 1)).toEqual([PR_URL]);
 }, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a session without any Work match says why its Links block is empty, and l reports the same reason", async () => {
+  directory = await mkdtemp(join(tmpdir(), "pw-links-"));
+  const stub = await openStub();
+  scenario = await startTuiScenario({ overrides: { "tui.open_command": stub.command } });
+  await linkedSession("links-unmatched", null, null);
+  await writeFile(scenario.workListFile, JSON.stringify(workList([])));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "no Work match for this session" },
+    { clear: true },
+    keys("l"),
+    { expect: "No link: no Work match for this session" },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { ...WIDE, timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
+}, REAL_SCENARIO_TIMEOUT_MS);

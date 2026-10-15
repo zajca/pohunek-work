@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlRuntime, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
-import { sessionLinks, type SessionLink } from "./links.ts";
+import { noLinkReason, sessionLinks, type SessionLink } from "./links.ts";
 import type { TuiAttachMode } from "../types/config.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
@@ -19,7 +19,7 @@ import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDi
 import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, HostsView, LinkChooser, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -228,6 +228,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const mutationNotice = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
+  // The first row each list was last drawn from; a selection inside that window never scrolls it.
+  const windowStarts = useRef<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [pick, setPick] = useState({ index: 0, search: "", filtering: false });
@@ -310,12 +312,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
   // The side panel shows the highlighted session; its screen is kept only for that session.
   const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
-  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? [], linksOf(selectedSession));
+  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? [], linksOf(selectedSession), noLinkReason(selectedSession, work));
   // Following the output keeps the end of the text in view; a scroll that reaches the end resumes following.
   const panelOffset = followOutput ? panelMaxOffset : Math.min(detailOffset, panelMaxOffset);
   // The list takes half of a split terminal; the panel takes the rest. Each row keeps a margin of one column.
   const listWidth = split ? Math.floor(stdout.columns / 2) : stdout.columns;
-  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? [], linksOf(sessionDetail));
+  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? [], linksOf(sessionDetail), noLinkReason(sessionDetail, work));
   const overlayOffset = followOutput ? detailMaxOffset : Math.min(detailOffset, detailMaxOffset);
   const scrollDetail = (next: number, max: number): void => {
     const clamped = Math.max(0, Math.min(max, next));
@@ -798,12 +800,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const link = linksOf(session)[number - 1];
     if (link === undefined) { bumpStatus(`No link ${String(number)} on this session`); return; }
     openLink(link.url);
-  }, [linksOf, openLink]);
+  }, [linksOf, openLink, work]);
 
   // `l`: no link reports it, one link opens directly, several open the chooser that returns to `returnTo`.
   const chooseLink = useCallback((session: ControlSession, returnTo: "none" | "session"): void => {
     const links = linksOf(session);
-    if (links.length === 0) { bumpStatus("No work link on this session"); return; }
+    if (links.length === 0) { bumpStatus(`No link: ${noLinkReason(session, work)}`); return; }
     const only = links[0];
     if (links.length === 1 && only !== undefined) { openLink(only.url); return; }
     setLinkChoice({ session, index: 0, returnTo });
@@ -1137,11 +1139,21 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (choice === null) { setOverlay("none"); return; }
       const links = linksOf(choice.session);
       const close = (): void => { setLinkChoice(null); setOverlay(choice.returnTo); };
-      const pick = (index: number): void => { close(); const link = links[index]; if (link !== undefined) openLink(link.url); };
+      // A refresh can shrink the links while the chooser is open; an out-of-range pick says so instead of failing silently.
+      const missing = (number: number): void => { bumpStatus(`No link ${String(number)} on this session anymore; choose 1–${String(links.length)}`); };
+      const pick = (index: number): void => {
+        const link = links[index];
+        if (link === undefined) { close(); missing(index + 1); return; }
+        close();
+        openLink(link.url);
+      };
       if (key.escape) close();
       else if (key.upArrow || key.downArrow) setLinkChoice({ ...choice, index: Math.max(0, Math.min(links.length - 1, choice.index + (key.downArrow ? 1 : -1))) });
       else if (key.return) pick(choice.index);
-      else if (/^[1-9]$/.test(input) && Number(input) <= links.length) pick(Number(input) - 1);
+      else if (/^[1-9]$/.test(input)) {
+        if (Number(input) <= links.length) pick(Number(input) - 1);
+        else missing(Number(input));
+      }
       return;
     }
     if (overlay === "session") {
@@ -1223,6 +1235,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         overlay === "links" ? "↑↓ choose · Enter or 1-9 opens · Esc back" : overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
   const listInteraction = { onRowClick: clickRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
+  // Each list keeps the window it was drawn with: the window moves only when the selection leaves it.
+  const windowOf = (name: ViewName, selected: number, count: number): number => {
+    const start = listWindowStart(windowStarts.current[name], selected, count, visibleRows);
+    windowStarts.current[name] = start;
+    return start;
+  };
 
   let content: ReactNode;
   if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy} loading={formLoading}
@@ -1246,7 +1264,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onScrollChoices={(direction, max) => { setForm((old) => ({ ...old, choice: Math.max(0, Math.min(Math.max(0, max), old.choice + direction)) })); }}
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
-  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)}
+  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work)}
     offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
     onOpenLink={(index) => { openLinkNumber(sessionDetail, index + 1); }} />;
   else if (overlay === "links" && linkChoice !== null) content = <LinkChooser links={linksOf(linkChoice.session)} selected={linkChoice.index} />;
@@ -1280,16 +1298,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
   else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; u opens its folder; PgUp/PgDn scroll the side panel.</Text><Text>Sessions: l opens the only work link, or lists several in a chooser where 1–9 or ↑↓ and Enter pick one; clicking a numbered line in the panel opens that link.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
-  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
+  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={windowOf("Work", selectedWorkIndex, workRows?.length ?? 0)} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
-    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
+    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={windowOf("Sessions", selectedSessionIndex, sessions.length)} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
-      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} offset={panelOffset} height={detailHeight}
+      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work)} offset={panelOffset} height={detailHeight}
         onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
     </Box>
-  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
-  else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
-  else content = <ActivityView records={records} selected={cursor.Activity} scope={scope} limit={visibleRows} {...listInteraction} />;
+  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={windowOf("Sessions", selectedSessionIndex, sessions.length)} limit={visibleRows} project={projectFilter} {...listInteraction} />;
+  else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} start={windowOf("Hosts", cursor.Hosts, snapshot?.hosts.length ?? 0)} limit={visibleRows} {...listInteraction} />;
+  else content = <ActivityView records={records} selected={cursor.Activity} start={windowOf("Activity", cursor.Activity, records.length)} scope={scope} limit={visibleRows} {...listInteraction} />;
 
   let toolbar: ReactNode = null;
   if (overlay === "none") {
