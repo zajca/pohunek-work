@@ -99,15 +99,21 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   to move through lists and click labeled actions in each detail. Press `?` for
   the available keys. The Work view supports
   `m` (mine/all), `f` (actor), `P` (project), `/` (search) and `h` (hide stale
-  pull requests). Tab and Shift-Tab cycle the views; 1–4 jump to one. ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
+  pull requests). Tab and Shift-Tab cycle the views; 1–4 jump to one, except that with the Sessions side panel shown the digits open links (below). ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
   view lists sections (Needs you, Running, Ready, Unavailable) with their counts.
   At or above `detail_min_width` columns the highlighted session's flat panel sits
-  beside the list and follows the selection (PgUp/PgDn or the wheel scroll it);
+  beside the list and follows the selection (PgUp/PgDn or the wheel scroll the part below its head);
   below that width Enter or a double click opens the same panel full screen and Esc returns. `←`/`→` or `[`/`]`
   jump between sections, `o` attaches, `x` stops and `D` removes the
   highlighted session after an inline confirmation that names it (a remove names
-  its worktree too), `l` opens its work link, `u` its folder, `g` its branch on GitHub (from the project's GitHub
-  origin; the status says so when there is none), `b` copies the branch and `c` the path. Session actions through the SDK are stop, remove, resume,
+  its worktree too), `u` opens its folder, `g` its branch on GitHub (from the project's GitHub
+  origin; the status says so when there is none), `b` copies the branch and `c` the path.
+  The panel's head holds a Links block: one numbered line per known link of the session (its
+  GitHub pull request and issue from the Work join, its core work link, its branch page on GitHub), each
+  clickable. A click or its number (`1`–`9`) opens that link; `l` opens the only link and otherwise names the
+  numbers. Every link goes through the `open_url_hosts` allowlist: a link on another host is refused in the
+  status line and nothing is run. A session with no core work link and no Work item shows none; the branch line is
+  omitted when the project's origin is not a GitHub repository. Session actions through the SDK are stop, remove, resume,
   rename, metadata and fork; notifications are read, acknowledged and archived
   through the SDK too. Fork and resume ask for confirmation after the session is
   inspected again. Resume, fork and

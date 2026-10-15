@@ -21,6 +21,8 @@ export interface TuiScenario {
   readonly daemon: CoreDaemon;
   readonly proxy: CliProxy;
   readonly fixture: PluginFixture;
+  /** File the work source answers `list --json` with; a test writes the envelope of the work items it needs here. */
+  readonly workListFile: string;
   run(steps: readonly PtyStep[], options?: { readonly cols?: number; readonly rows?: number; readonly timeoutS?: number; readonly env?: Readonly<Record<string, string>> }): Promise<PtyResult>;
   stop(): Promise<void>;
 }
@@ -36,8 +38,10 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
     await daemon.registerProject(PROJECT, "acme/widgets");
     proxy = await startCliProxy(join(daemon.coreDir, "pohunek"), [...NO_OVERLAY_RULES, ...(options.rules ?? [])]);
     const started = proxy;
+    const workListFile = join(daemon.root, "work-list.json");
+    await writeFile(workListFile, JSON.stringify(EMPTY_WORK_LIST));
     const fixture = await writePluginConfig(daemon, [{ label: PROJECT, repo: "acme/widgets" }], {
-      overrides: { "pohunek.bin": started.binary, "tui.self_bin": await workSourceStub(daemon.root), ...(options.overrides ?? {}) },
+      overrides: { "pohunek.bin": started.binary, "tui.self_bin": await workSourceStub(daemon.root, workListFile), ...(options.overrides ?? {}) },
       ...(options.extraGlobal === undefined ? {} : { extraGlobal: options.extraGlobal }),
     });
     const env: Record<string, string> = { ...fixture.env, TERM: "xterm-256color", CI: "true" };
@@ -45,6 +49,7 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
       daemon,
       proxy: started,
       fixture,
+      workListFile,
       run: (steps, run = {}) => runPty({
         cmd: [Bun.which("bun") ?? "bun", MAIN, "tui"],
         env: { ...env, ...(run.env ?? {}) },
@@ -66,16 +71,21 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
   }
 }
 
+/** The `list --json` envelope of a scenario without work items; GitHub and Linear are not part of the daemon. */
+export const EMPTY_WORK_LIST = { cli_version: "0.5.0", protocol: { minimum: 4, maximum: 4 }, ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [], omitted_ignored: 0 } };
+
 /**
- * The work source of a scenario that does not test work items: GitHub and Linear are not part of the daemon,
- * so `list --json` answers an empty work list and every other command is refused.
+ * The work source of a scenario: `list --json` prints the envelope in `workListFile` as it is at the call, so a test
+ * can answer with work items once its sessions exist. The stand-in is needed because the work items come from
+ * GitHub and Linear, which the daemon does not reach; every other command is refused.
  */
-async function workSourceStub(root: string): Promise<string> {
+async function workSourceStub(root: string, workListFile: string): Promise<string> {
   const path = join(root, "work-source");
   await writeFile(path, `#!${process.execPath}
+import { readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "list" && args[1] === "--json") {
-  console.log(JSON.stringify({ cli_version: "0.5.0", protocol: { minimum: 4, maximum: 4 }, ok: { items: [], orphaned_sessions: [], unlinked_sessions: [], projects: [], omitted_ignored: 0 } }));
+  process.stdout.write(readFileSync(${JSON.stringify(workListFile)}, "utf8") + "\\n");
 } else process.exit(70);
 `);
   await chmod(path, 0o700);

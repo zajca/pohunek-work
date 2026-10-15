@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlRuntime, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
+import { sessionLinks, type SessionLink } from "./links.ts";
 import type { TuiAttachMode } from "../types/config.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
@@ -15,10 +16,10 @@ import { coalesce } from "./coalesce.ts";
 import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, Section, shorten } from "./components.tsx";
 import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
-import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, useLayout } from "./layout.tsx";
+import { FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, HostsView, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workLinkOf, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, HostsView, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -121,10 +122,6 @@ function defaultStatus(error: unknown): string {
 
 function selectedAt<T>(items: readonly T[], index: number): T | null {
   return items[Math.max(0, Math.min(index, items.length - 1))] ?? null;
-}
-
-function sessionLinkUrl(session: ControlSession): string | null {
-  return workLinkOf(session);
 }
 
 function formFieldLabel(assistant: boolean, index: number): string {
@@ -296,6 +293,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
   const selectedWork = workRows?.find((item) => rowId(item) === workKey) ?? selectedAt(workRows ?? [], cursor.Work);
   const workDetail = work?.payload?.items.find((item) => rowId(item) === workDetailKey) ?? null;
+  const originOf = useCallback((session: ControlSession): string | null => snapshot?.projects.find((entry) => entry.host === session.host && entry.id === session.projectId)?.originUrl ?? null, [snapshot]);
+  const linksOf = useCallback((session: ControlSession): SessionLink[] => sessionLinks(session, work?.payload?.items ?? null, originOf(session)), [originOf, work]);
   const selectedWorkAction = workDetail?.actions[workChoice];
   const previewMatchesSelection = workPreview !== null && typeof workPreview !== "string" && workPreview.kind === "ok" &&
     workDetail !== null && selectedWorkAction !== undefined && workPreview.key === workDetail.key && workPreview.action === selectedWorkAction.name;
@@ -309,12 +308,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
   // The side panel shows the highlighted session; its screen is kept only for that session.
   const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
-  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? []);
+  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? [], linksOf(selectedSession));
   // Following the output keeps the end of the text in view; a scroll that reaches the end resumes following.
   const panelOffset = followOutput ? panelMaxOffset : Math.min(detailOffset, panelMaxOffset);
   // The list takes half of a split terminal; the panel takes the rest. Each row keeps a margin of one column.
   const listWidth = split ? Math.floor(stdout.columns / 2) : stdout.columns;
-  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? []);
+  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? [], linksOf(sessionDetail));
   const overlayOffset = followOutput ? detailMaxOffset : Math.min(detailOffset, detailMaxOffset);
   const scrollDetail = (next: number, max: number): void => {
     const clamped = Math.max(0, Math.min(max, next));
@@ -777,7 +776,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);
-    if (!checked.ok) { bumpStatus(checked.reason); return; }
+    if (!checked.ok) { bumpStatus(`Not opened: ${checked.reason}`); return; }
     try {
       const child = Bun.spawn([options.openCommand, checked.href], { stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
       child.unref();
@@ -787,11 +786,25 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   // The branch page comes from the project's GitHub origin; without one the status says so instead of guessing.
   const openBranch = useCallback((session: ControlSession): void => {
-    const project = snapshot?.projects.find((entry) => entry.host === session.host && entry.id === session.projectId);
-    const url = githubBranchUrl(project?.originUrl ?? null, session.branch);
+    const url = githubBranchUrl(originOf(session), session.branch);
     if (url === null) { bumpStatus("No GitHub branch page: the session has no branch or its project has no GitHub origin"); return; }
     openLink(url);
-  }, [openLink, snapshot]);
+  }, [openLink, originOf]);
+
+  // `number` names a line of the Links block (1-9); null is `l`, which opens the only link and otherwise names the numbers.
+  const openSessionLink = useCallback((session: ControlSession, number: number | null): void => {
+    const links = linksOf(session);
+    if (links.length === 0) { bumpStatus("No work link on this session"); return; }
+    if (number === null) {
+      const only = links[0];
+      if (links.length === 1 && only !== undefined) openLink(only.url);
+      else bumpStatus(`${String(links.length)} links: press 1-${String(links.length)} to open one`);
+      return;
+    }
+    const link = links[number - 1];
+    if (link === undefined) { bumpStatus(`No link ${String(number)} on this session`); return; }
+    openLink(link.url);
+  }, [linksOf, openLink]);
 
   // The picker opens on the current project filter with its full list, so a stale search cannot hide that project.
   const openProjectPicker = useCallback((): void => {
@@ -1126,7 +1139,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
       else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay(input === "e" ? "rename" : "metadata"); }
       else if (input === "p") restartOutput();
-      else if (input === "l") { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); else bumpStatus("No work link on this session"); }
+      else if (input === "l") openSessionLink(sessionDetail, null);
+      else if (/^[1-9]$/.test(input)) openSessionLink(sessionDetail, Number(input));
       else if (input === "u") void openFolder(sessionDetail);
       else if (input === "g") openBranch(sessionDetail);
       else if (input === "b") void copyValue(sessionDetail.branch ?? "");
@@ -1149,6 +1163,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     if (input === "q" || (key.ctrl && input === "c")) { exit(); return; }
     if (input === "?") { setOverlay("help"); return; }
+    // With the side panel shown, digits open the links of the selected session and do not switch views (Tab still does).
+    if (view === "Sessions" && split && /^[1-9]$/.test(input)) { if (selectedSession !== null) openSessionLink(selectedSession, Number(input)); return; }
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return; }
     if (key.upArrow || input === "k") { move(-1); return; }
     if (key.downArrow || input === "j") { move(1); return; }
@@ -1169,7 +1185,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } else if (view === "Sessions") {
       if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
       else if (input === "o") void openSelected();
-      else if (input === "l" && selectedSession !== null) { const url = sessionLinkUrl(selectedSession); if (url !== null) openLink(url); else bumpStatus("No work link on this session"); }
+      else if (input === "l" && selectedSession !== null) openSessionLink(selectedSession, null);
       else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
       else if (input === "g" && selectedSession !== null) openBranch(selectedSession);
       else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
@@ -1188,7 +1204,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   });
 
-  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/double-click open · ? help" : MAIN_FOOTER :
+  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/double-click open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :
     overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
         overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
@@ -1217,8 +1233,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onScrollChoices={(direction, max) => { setForm((old) => ({ ...old, choice: Math.max(0, Math.min(Math.max(0, max), old.choice + direction)) })); }}
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
-  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []}
-    offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }} />;
+  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)}
+    offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
+    onOpenLink={(index) => { openSessionLink(sessionDetail, index + 1); }} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
@@ -1248,12 +1265,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views (not the digits of a Sessions side panel); ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; u opens its folder; PgUp/PgDn scroll the side panel.</Text><Text>Sessions with the side panel: 1–9 open the link with that number in the Links block (digits do not switch views there); l opens the only link.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
-      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} offset={panelOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} />}
+      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} offset={panelOffset} height={detailHeight}
+        onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openSessionLink(selectedSession, index + 1); }} />}
     </Box>
   </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} />;
   else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} limit={visibleRows} {...listInteraction} />;
@@ -1314,7 +1332,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {sessionMutable && <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay("metadata"); }} />}
     {sessionDetail.branch !== null && <ActionButton label="Copy branch" onClick={() => void copyValue(sessionDetail.branch ?? "")} />}
     <ActionButton label="Copy path" onClick={() => void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd)} />
-    {sessionLinkUrl(sessionDetail) !== null && <ActionButton label="Open link" onClick={() => { const url = sessionLinkUrl(sessionDetail); if (url !== null) openLink(url); }} />}
+    {linksOf(sessionDetail).length === 1 && <ActionButton label="Open link" onClick={() => { openSessionLink(sessionDetail, null); }} />}
     {sessionDetail.host === "local" && <ActionButton label="Open folder" onClick={() => void openFolder(sessionDetail)} />}
     {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />}
     {sessionWritable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}

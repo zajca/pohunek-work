@@ -6,6 +6,7 @@ import type { ControlHost, ControlNotification, ControlScreen, ControlSession, C
 import { MenuRow, Message, safeText, Section, shorten } from "./components.tsx";
 import { MouseZone } from "./mouse.tsx";
 import { isUnresolvedAction } from "./attention.ts";
+import { workLinkOf, type SessionLink } from "./links.ts";
 
 export type ViewName = "Work" | "Sessions" | "Hosts" | "Activity";
 export type ActivityScope = "Recent" | "Unread" | "Archived";
@@ -180,25 +181,29 @@ function subagentRows(agents: readonly ControlSubagent[]): { agent: ControlSubag
   return rows;
 }
 
-/** The work item a session is linked to, from the metadata the plugin and the launch flows write. */
-export function workLinkOf(session: ControlSession): string | null {
-  return session.metadata["work.link.id"] !== undefined ? session.metadata["work.link.url"] ?? null : session.metadata["link.url"] ?? null;
-}
+/** One line of the session panel; `link` is the index of the link the line opens, when it is a link line. */
+export interface PanelLine { readonly text: string; readonly heading?: boolean; readonly link?: number }
 
-/** One flat panel: status and attention, location, work link, recent activity, output and subagents. */
-export function sessionDetailLines(session: ControlSession, screen: ControlScreen | null, notifications: readonly ControlNotification[]): { text: string; heading?: boolean }[] {
+/**
+ * The flat session panel in two parts: the pinned head (status and attention, project and branch, the Links block)
+ * stays at the top, and the body (recent activity, subagents, output) scrolls below it, so the links stay visible
+ * while the output follows.
+ */
+export function sessionDetailParts(session: ControlSession, screen: ControlScreen | null, notifications: readonly ControlNotification[], links: readonly SessionLink[]): { pinned: PanelLine[]; body: PanelLine[] } {
   const records = notifications.filter((record) => record.host === session.host && record.sessionId === session.id);
   const attention = records.filter(isUnresolvedAction);
   const recent = records.filter((record) => record.status !== "archived").sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, RECENT_ACTIVITY_ROWS);
-  const link = workLinkOf(session);
   const running = session.subagents.filter((agent) => agent.lifecycle === "running").length;
-  return [
+  const pinned: PanelLine[] = [
     { text: `${session.name ?? session.id} · ${session.host} · ${session.agent}`, heading: true },
     { text: `Status  ${session.state} · ${session.activity ?? "unknown"} · ${session.runtimeState ?? "unknown"}` },
     { text: attention.length === 0 ? "Attention  none" : `Attention  ${attention[0]?.title ?? ""}${attention.length > 1 ? ` (+${String(attention.length - 1)})` : ""}` },
     { text: `Project  ${session.projectLabel ?? session.projectId ?? "unassigned"}   Branch  ${session.branch ?? "none"}` },
-    { text: `Path  ${session.worktreePath ?? session.cwd}` },
-    { text: `Work  ${link ?? "none"}${link === null ? "" : "   l opens"}` },
+    { text: "LINKS  1-9 open", heading: true },
+    ...(links.length === 0 ? [{ text: "  none" }] : links.map((link, index) => ({ text: `  [${String(index + 1)}] ${link.label}  ${link.url}`, link: index }))),
+    { text: `  Folder  ${session.worktreePath ?? session.cwd}   u opens` },
+  ];
+  const body: PanelLine[] = [
     { text: "RECENT ACTIVITY", heading: true },
     ...(recent.length === 0 ? [{ text: "  none" }] : recent.map((record) => ({ text: `  ${record.createdAt}  ${record.title}` }))),
     { text: `SUBAGENTS  ${session.subagents.length} (${String(running)} running)`, heading: true },
@@ -206,15 +211,21 @@ export function sessionDetailLines(session: ControlSession, screen: ControlScree
     { text: "OUTPUT", heading: true },
     ...(screen === null ? [{ text: "  no output yet; p restarts the read" }] : screen.visibleLines.map((line) => ({ text: line }))),
   ];
+  return { pinned, body };
 }
 
 const RECENT_ACTIVITY_ROWS = 3;
 
-export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[]): number {
-  return Math.max(0, sessionDetailLines(session, screen, notifications).length - height);
+/** Rows of the body that fit under the pinned head in `height` rows. */
+function bodyRows(pinned: readonly PanelLine[], height: number): number {
+  return Math.max(0, height - pinned.length);
 }
 
-/** What a resume or fork will recover, as the owner confirms it. An unknown target is shown as such, never guessed. */
+export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[], links: readonly SessionLink[]): number {
+  const { pinned, body } = sessionDetailParts(session, screen, notifications, links);
+  return Math.max(0, body.length - bodyRows(pinned, height));
+}
+
 export function RecoveryConfirmation({ action, session }: { readonly action: "resume" | "fork"; readonly session: ControlSession }): ReactNode {
   const target = session.nativeTarget;
   const reference = target.status === "verified" ? `${target.kind === "id" ? "ID" : "path"}: ${target.value}` : "Unknown";
@@ -227,15 +238,23 @@ export function RecoveryConfirmation({ action, session }: { readonly action: "re
   </Box>;
 }
 
-export function SessionDetail({ session, screen, notifications, offset, height, onWheel }: {
+export function SessionDetail({ session, screen, notifications, links, offset, height, onWheel, onOpenLink }: {
   readonly session: ControlSession; readonly screen: ControlScreen | null; readonly notifications: readonly ControlNotification[];
-  readonly offset: number; readonly height: number; readonly onWheel: (direction: -1 | 1) => void;
+  readonly links: readonly SessionLink[]; readonly offset: number; readonly height: number;
+  readonly onWheel: (direction: -1 | 1) => void; readonly onOpenLink: (index: number) => void;
 }): ReactNode {
-  const lines = sessionDetailLines(session, screen, notifications);
-  const start = Math.max(0, Math.min(offset, Math.max(0, lines.length - height)));
+  const { pinned, body } = sessionDetailParts(session, screen, notifications, links);
+  const rows = bodyRows(pinned, height);
+  const start = Math.max(0, Math.min(offset, Math.max(0, body.length - rows)));
+  const line = (entry: PanelLine, key: string): ReactNode => {
+    const text = <Text bold={entry.heading === true} color={entry.heading ? "cyan" : "white"} wrap="truncate-end">{safeText(entry.text)}</Text>;
+    const link = entry.link;
+    return link === undefined ? <Box key={key}>{text}</Box> : <MouseZone key={key} width="100%" onClick={() => { onOpenLink(link); }}>{text}</MouseZone>;
+  };
   return <MouseZone flexDirection="column" width="100%" onWheel={onWheel}>
-    {lines.slice(start, start + height).map((line, index) => <Text key={start + index} bold={line.heading === true} color={line.heading ? "cyan" : "white"} wrap="truncate-end">{safeText(line.text)}</Text>)}
-    {lines.length > height && <Text dimColor>{`${start + 1}–${Math.min(start + height, lines.length)} / ${lines.length}  ·  scroll with wheel or PageUp/PageDown`}</Text>}
+    {pinned.map((entry, index) => line(entry, `pinned-${String(index)}`))}
+    {body.slice(start, start + rows).map((entry, index) => line(entry, `body-${String(start + index)}`))}
+    {body.length > rows && <Text dimColor>{`${start + 1}–${Math.min(start + rows, body.length)} / ${body.length}  ·  scroll with wheel or PageUp/PageDown`}</Text>}
   </MouseZone>;
 }
 

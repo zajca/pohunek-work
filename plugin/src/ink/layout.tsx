@@ -4,6 +4,8 @@ import { useStdout } from "ink";
 /** Footer of the views at full width; a terminal narrower than it gets the short footer. */
 export const MAIN_FOOTER = "Tab views  ·  ↑↓ select  ·  ←→ sections in Sessions  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
 /** Footer of the new-session and assistant forms at full width. */
+/** Footer of the Sessions view while its side panel shows the links of the selected session; no longer than MAIN_FOOTER. */
+export const SESSIONS_FOOTER = "Tab views  ·  ↑↓ select  ·  ←→ sections  ·  1-9 open link  ·  Enter open  ·  x stop  ·  D remove  ·  PgUp/PgDn detail  ·  ? help  ·  q quit";
 export const FORM_FOOTER = "Tab next field  ·  Ctrl+Enter create  ·  Esc back";
 
 /** Lines ScreenFrame renders around its children: header, tab row with its top margin, divider, reserved subtitle, reserved status and footer. */
