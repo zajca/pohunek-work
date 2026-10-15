@@ -199,7 +199,8 @@ test("a session created from the form is attached, and its end brings the TUI ba
     tab,
     { expect: "▸ Create and attach" },
     keys("\r"),
-    { expect: "sh-" },
+    // The shell prompt differs between hosts, so the attach is awaited with the settle the other attach scenarios use.
+    { pause: ATTACH_SETTLE_MS },
     keys(ECHO_READY),
     { expect: READY },
     keys("exit\r"),
