@@ -9,6 +9,9 @@ const DOWN = "\x1b[B";
 const UP = "\x1b[A";
 /** Wheel down over the first choice row of the Agent list (SGR button 65, 1-based cell row 15, column 10). */
 const WHEEL_DOWN_AT_AGENT_CHOICES = "\x1b[<65;10;15M";
+/** The same wheel step once a query is typed: the Search line sits above the list and pushes it one row down. */
+const WHEEL_DOWN_AT_FILTERED_AGENT_CHOICES = "\x1b[<65;10;16M";
+const BACKSPACE = "\x7f";
 const WHEEL_STEPS = 3;
 const PROFILES = Array.from({ length: 10 }, (_, index) => `profile-${String.fromCharCode(97 + index)}`);
 let scenario: TuiScenario | null = null;
@@ -69,6 +72,28 @@ test("a paste into the Host and Agent fields becomes the field's query", async (
     { expect: "1. opus-review" },
     keys("\r"),
     { expect: "‹ opus-review ›" },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
+
+test("a query edit after a wheel scroll brings the highlighted match back into the choice window", async () => {
+  scenario = await startTuiScenario({ agentProfiles: PROFILES });
+  // The highlight stays on the first match through the scroll and the Backspace, so only the query change moves the window.
+  const steps: PtyStep[] = [
+    ...openNewSession(),
+    keys(DOWN),
+    { expect: "▸ Agent" },
+    keys("profile"),
+    { expect: "Search: profile" },
+    { expect: "▸ 1. profile-a" },
+    { send: Buffer.from(WHEEL_DOWN_AT_FILTERED_AGENT_CHOICES).toString("hex"), settle: 600 },
+    { send: Buffer.from(WHEEL_DOWN_AT_FILTERED_AGENT_CHOICES).toString("hex"), settle: 600 },
+    { send: Buffer.from(WHEEL_DOWN_AT_FILTERED_AGENT_CHOICES).toString("hex"), settle: 600 },
+    { expect: `${String(WHEEL_STEPS + 1)}. ${PROFILES[WHEEL_STEPS] ?? ""}` },
+    keys(BACKSPACE),
+    { expect: "Search: profil" },
+    { expect: "▸ 1. profile-a" },
   ];
   const result = await scenario.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);

@@ -182,14 +182,17 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
   const choices = pick?.matches ?? [];
   const highlight = pick?.highlight ?? -1;
   const choiceLimit = compact ? 2 : layout.visibleChoices;
-  // The window is where the wheel left it; the highlight pulls it along only when the highlight moves.
+  // The window is where the wheel left it. The highlight pulls it along whenever the highlight, the query or the
+  // matches change; a wheel step alone changes none of them and keeps the window where it is.
   const choiceStart = Math.min(form.choice, Math.max(0, choices.length - choiceLimit));
-  const followedHighlight = useRef(highlight);
+  const matchKey = choices.map((choice) => choice.label).join("\n");
+  const followed = useRef({ highlight, search: form.search, matchKey });
   useEffect(() => {
-    if (followedHighlight.current === highlight) return;
-    followedHighlight.current = highlight;
+    const last = followed.current;
+    if (last.highlight === highlight && last.search === form.search && last.matchKey === matchKey) return;
+    followed.current = { highlight, search: form.search, matchKey };
     onFollowHighlight(listWindowStart(form.choice, highlight, choices.length, choiceLimit));
-  }, [choiceLimit, choices.length, form.choice, highlight, onFollowHighlight]);
+  }, [choiceLimit, choices.length, form.choice, form.search, highlight, matchKey, onFollowHighlight]);
   const fieldName = formFieldLabel(assistant, form.focus).toLowerCase();
   const hostChoices = options?.hosts.map((host) => host.label) ?? [];
   const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
