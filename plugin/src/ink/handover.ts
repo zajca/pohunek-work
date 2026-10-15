@@ -1,38 +1,71 @@
-// The one path every inline attach takes. The attach child is ended when its session is over, and the way it ended
-// decides whether the attach succeeded, so no caller can wait on a child whose session has gone.
-import type { ControlClient, ControlSnapshot } from "../control/index.ts";
+// The one path every inline attach takes. The attach child is ended only when the session is confirmed over by a
+// targeted read of that session on its host. A snapshot that lacks the session, or lists it ended, only asks for that
+// read: a stale snapshot, a failed discovery or an unreachable host is not evidence that the session ended.
+import type { ControlClient, ControlError, ControlSnapshot } from "../control/index.ts";
 import type { ChildEnd, InteractiveOutcome } from "../util/exec.ts";
 
 /** Session states in which the session will not run again; an attach to it has nothing left to show. */
 const ENDED_STATES: readonly string[] = ["stopped", "done", "failed"];
+/** The CLI code of a read of a session the daemon does not have. */
+const NOT_FOUND_CODE = "session_not_found";
 
-/**
- * Whether the session is over in `snapshot`. A session listed in an ended state is over. A session that is not listed
- * is over only when the snapshot read every host's sessions: a failed discovery or a failed sessions read removes
- * entries without saying that their sessions ended.
- */
-export function sessionOver(snapshot: ControlSnapshot, host: string, id: string): boolean {
+type SessionControl = Pick<ControlClient, "subscribe" | "inspectSession">;
+
+/** Whether a snapshot is a reason to read the session again: it is missing or listed in an ended state. */
+export function mayBeOver(snapshot: ControlSnapshot, host: string, id: string): boolean {
   const session = snapshot.sessions.find((item) => item.host === host && item.id === id);
-  if (session !== undefined) return ENDED_STATES.includes(session.state);
-  return snapshot.errors.every((error) => error.scope !== "discovery" && !(error.host === host && error.scope === "sessions"));
+  return session === undefined || ENDED_STATES.includes(session.state);
 }
 
-/** Calls `onEnded` once the session is over, from the control subscription; returns the stop of the watch. */
-export function sessionEnd(control: Pick<ControlClient, "subscribe">, host: string, id: string, graceMs: number): ChildEnd {
+/** The daemon answered that the session does not exist; any other failure says nothing about the session. */
+function notFound(error: ControlError): boolean {
+  return error.cliCode === NOT_FOUND_CODE;
+}
+
+/**
+ * Calls `onEnded` once a targeted read confirms the session is over: it is in an ended state, or the daemon on its
+ * host reports it not found. Reads run one at a time; a trigger that arrives during a read is read again afterwards.
+ */
+export function sessionEnd(control: SessionControl, host: string, id: string, graceMs: number): ChildEnd {
   return {
-    watch: (onEnded) => control.subscribe((next) => { if (sessionOver(next, host, id)) onEnded(); }),
+    watch: (onEnded) => {
+      const state = { stopped: false, reading: false, again: false };
+      const requested = (): boolean => state.again;
+      const confirm = async (): Promise<void> => {
+        if (state.reading) { state.again = true; return; }
+        state.reading = true;
+        try {
+          for (;;) {
+            state.again = false;
+            const result = await control.inspectSession(host, id);
+            if (state.stopped) return;
+            if (result.ok ? ENDED_STATES.includes(result.data.state) : notFound(result.error)) {
+              state.stopped = true;
+              onEnded();
+              return;
+            }
+            // A call of this function, so the check is not narrowed to the value assigned above.
+            if (!requested()) return;
+          }
+        } finally {
+          state.reading = false;
+        }
+      };
+      const unsubscribe = control.subscribe((snapshot) => { if (!state.stopped && mayBeOver(snapshot, host, id)) void confirm(); });
+      return () => { state.stopped = true; unsubscribe(); };
+    },
     graceMs,
   };
 }
 
 /**
  * Runs one inline attach. `run` starts the attach child with the end watch it must use. Resolves when the attach
- * completed (the child exited with 0, or the session ended and the child was stopped with it) and rejects with the
- * reason otherwise: a failed exit, or a signal sent by something other than the session end.
+ * completed (the child exited with 0, or the session was confirmed over and the child stopped with it) and rejects
+ * with the reason otherwise: a failed exit, or a signal sent by something other than the session end.
  */
 export async function handover(
   run: (end: ChildEnd) => Promise<InteractiveOutcome>,
-  control: Pick<ControlClient, "subscribe">,
+  control: SessionControl,
   host: string,
   id: string,
   graceMs: number,

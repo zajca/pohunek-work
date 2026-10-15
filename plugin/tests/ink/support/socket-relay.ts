@@ -2,7 +2,9 @@
 // for two conditions a scenario needs. The reply to a session's output read is held for a fixed time, for the
 // first `holdCount` such replies. After the first hold, `daemon.health` is refused, so a reconnect is refused.
 // The TUI reads live output through the SDK, which talks to the socket directly, so only a process on the
-// socket can produce these conditions.
+// socket can produce these conditions. The session list the TUI polls is read the same way, so a snapshot without
+// the session can only be produced here: the relay answers the list with nothing while its flag file exists.
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +18,11 @@ export interface RelayOptions {
   readonly skipCount: number;
   readonly holdCount: number;
   readonly refuseHealthAfterHold: boolean;
+  /**
+   * While this file exists, every `session.list` reply that starts while it exists is an empty list. The file is the
+   * switch the scenario flips, because the relay runs in its own process.
+   */
+  readonly emptySessionListFlag?: string;
 }
 
 export interface SocketRelay {
@@ -66,6 +73,7 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
   let holdsLeft = options.holdCount;
   let skipsLeft = options.skipCount;
   let refusingHealth = false;
+  const emptyLists = new Set<string>();
   Bun.listen<Link>({
     unix: listenPath,
     socket: {
@@ -105,6 +113,10 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
         link.client.write(JSON.stringify({ v: 4, id: request["id"], err: { class: "daemon", code: "relay_refused", msg: "the relay refuses health", recover: "" } }) + "\n");
         continue;
       }
+      if (request !== null && request["method"] === "session.list" && options.emptySessionListFlag !== undefined && existsSync(options.emptySessionListFlag)) {
+        const id = request["id"];
+        if (typeof id === "string" || typeof id === "number") emptyLists.add(String(id));
+      }
       if (request !== null && request["method"] === (options.holdMethod ?? "session.output") && (request["params"] as { session_id?: unknown } | null)?.session_id === options.holdSessionId) {
         if (skipsLeft > 0) skipsLeft -= 1;
         else if (holdsLeft > 0) {
@@ -125,6 +137,10 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
       link.daemonPending = link.daemonPending.slice(newline + 1);
       const reply = parse(line);
       const id = reply?.["id"];
+      if ((typeof id === "string" || typeof id === "number") && emptyLists.delete(String(id))) {
+        link.client.write(JSON.stringify({ v: reply?.["v"], id, ok: [] }) + "\n");
+        continue;
+      }
       if ((typeof id === "string" || typeof id === "number") && link.held.delete(String(id))) {
         holdsLeft -= 1;
         if (options.refuseHealthAfterHold && holdsLeft === 0) refusingHealth = true;

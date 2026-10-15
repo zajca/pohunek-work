@@ -3,8 +3,12 @@
 // Other processes act from inside the attached shell, after the attach is confirmed by its output, so each trigger
 // happens at a known point of the run and not on a timer.
 import { afterEach, expect, test } from "bun:test";
+import { writeFile, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { keys, type PtyStep } from "./support/pty.ts";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
+import { startSocketRelay, type SocketRelay } from "./support/socket-relay.ts";
+import { daemonLocalSocket } from "../helpers/core-daemon.ts";
 
 const CTRL_BACKSLASH = "1c";
 const BUSY_REFUSAL = "Still working on the last action";
@@ -12,13 +16,17 @@ const READY = "ready-2";
 const ECHO_READY = "echo ready-$((1+1))\r";
 const ATTACH_SETTLE_MS = 2000;
 const RETURN_SETTLE_MS = 1000;
+const VIEW_SWITCH_MS = 500;
 const INLINE = { overrides: { "tui.attach_mode": "inline" } };
 const STOPPED_BY_SIGNAL = "stopped by SIGTERM";
 const OUTPUT_WAIT_MS = 60_000;
 const OUTPUT_POLL_MS = 300;
 let scenario: TuiScenario | null = null;
+let relay: SocketRelay | null = null;
 
 afterEach(async () => {
+  await relay?.stop();
+  relay = null;
   await scenario?.stop();
   scenario = null;
 });
@@ -45,6 +53,7 @@ function backInTui(sessionsLeft: string): PtyStep[] {
     { pause: RETURN_SETTLE_MS },
     keys("3"),
     { expect: "HOSTS" },
+    { pause: VIEW_SWITCH_MS },
     keys("2"),
     { expect: sessionsLeft },
   ];
@@ -187,4 +196,75 @@ test("a session created from the form is attached, and its end brings the TUI ba
   const result = await scenario.run(steps, { timeoutS: 90 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
   expect(result.output).not.toContain(BUSY_REFUSAL);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+/** Rules of the test proxy: the proxy reads them at every call, so a rewrite takes effect at the next CLI call. */
+function proxyRulesFile(tui: TuiScenario): string {
+  return join(dirname(tui.proxy.binary), "rules.json");
+}
+
+/** Writes proxy rules from the attached shell, a process of its own that the proxy does not see as the session. */
+function writeRules(tui: TuiScenario, rules: unknown): PtyStep {
+  return keys(`printf '%s' '${JSON.stringify(rules)}' > ${proxyRulesFile(tui)}\r`);
+}
+
+/** Waits until the proxy refuses `host list`, which the TUI's discovery runs; the failure is then in effect. */
+async function untilDiscoveryFails(tui: TuiScenario): Promise<void> {
+  const deadline = Date.now() + OUTPUT_WAIT_MS;
+  for (;;) {
+    const proc = Bun.spawn([tui.proxy.binary, "host", "list", "--json"], { env: tui.daemon.clientEnv, stdout: "pipe", stderr: "pipe" });
+    const exit = await proc.exited;
+    if (exit !== 0) return;
+    if (Date.now() > deadline) throw new Error("the proxy never refused host list");
+    await Bun.sleep(OUTPUT_POLL_MS);
+  }
+}
+
+const EMPTY_LIST_WINDOW_MS = 8000;
+const DISCOVERY_SETTLE_MS = 4000;
+
+test("discovery fails and the attached local session is removed: the attach ends and the TUI comes back", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const id = await createShellSession(scenario.daemon, "alpha");
+  // The removal runs from the test once the proxy refuses discovery, so the snapshot has the discovery error.
+  const removing = untilPrinted(scenario, id, READY)
+    .then(() => untilDiscoveryFails(scenario as TuiScenario))
+    // The TUI's own refresh must read the failure before the removal, so the removal snapshot carries it. No output
+    // shows that read, so the wait is a settle time for the TUI's refresh.
+    .then(() => Bun.sleep(DISCOVERY_SETTLE_MS))
+    .then(() => scenario?.daemon.pohunek(["session", "rm", id]));
+  const steps: PtyStep[] = [
+    ...attachFirst(1),
+    writeRules(scenario, [{ match: ["host", "list"], failWith: 1 }]),
+    // The main footer comes back only when the TUI redraws after the attach; the list then shows the session gone.
+    { expect: "Tab views" },
+    // The list shows the session gone or kept as stopped, depending on the failed read; the toolbar is the same in both.
+    ...backInTui("Search /"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 90 });
+  await removing;
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a snapshot without the attached session does not end the attach while a read says it is running", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const id = await createShellSession(scenario.daemon, "alpha");
+  // Stand-in: the real daemon cannot produce a snapshot that lacks a running session it still lists, so the socket
+  // relay answers the session list with nothing for the window, and the attach must not end on that snapshot.
+  const flag = join(dirname(scenario.proxy.binary), "empty-list.flag");
+  relay = await startSocketRelay(daemonLocalSocket(scenario.daemon), { holdSessionId: "none", holdMs: 0, skipCount: 0, holdCount: 0, refuseHealthAfterHold: false, emptySessionListFlag: flag });
+  const window = untilPrinted(scenario, id, READY).then(async () => {
+    await writeFile(flag, "");
+    await Bun.sleep(EMPTY_LIST_WINDOW_MS);
+    await rm(flag, { force: true });
+  });
+  const steps: PtyStep[] = [
+    ...attachFirst(1),
+    { pause: EMPTY_LIST_WINDOW_MS + RETURN_SETTLE_MS },
+    keys("echo still-$((1+1))\r"),
+    { expect: "still-2" },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 90, env: { POHUNEK_SOCKET_PATH: relay.socket } });
+  await window;
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);
