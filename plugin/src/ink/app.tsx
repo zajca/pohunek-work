@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { Box, render, Text, useApp, useInput, usePaste, useStdout } from "ink";
+import { Box, render, Text, useApp, useInput, usePaste, useStdout, type Key } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlRuntime, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
@@ -23,6 +23,7 @@ import { LiveOutput } from "./live-output.ts";
 import { ActivityView, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
+import { keyPresses } from "./key-presses.ts";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -1084,7 +1085,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   // The refusal on the status line is for the action that was running, so it goes once that action ends.
   useEffect(() => { if (!busy) setStatus((old) => old === BUSY_REFUSAL ? null : old); }, [busy]);
 
-  useInput((input, key) => {
+  const handleKey = (input: string, key: Key): void => {
     const mouse = parseMouseEvent(input);
     // Input that arrives while an action runs is refused on the status line, so the owner sees why nothing happened.
     if (busy && (mouse !== null || !input.startsWith("[<"))) { setStatus(BUSY_REFUSAL); return; }
@@ -1120,7 +1121,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         setForm((old) => old.focus <= LAST_PICK_FIELD ? (old.search === "" ? old : { ...old, search: old.search.slice(0, -1), highlight: 0 }) : changeTextField(old, "", assistant, true));
         return;
       }
-      if (!key.ctrl && !key.meta && input !== "") {
+      // Control characters are never text: an input without printable characters types nothing.
+      if (!key.ctrl && !key.meta && typedText(input) !== "") {
         setForm((old) => old.focus <= LAST_PICK_FIELD ? (typedText(input) === "" ? old : { ...old, search: old.search + input, highlight: 0 }) : changeTextField(old, input, assistant, false));
       }
       return;
@@ -1322,6 +1324,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (input === "c") { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }
       else if (key.return) openRow(cursor.Activity);
     }
+  };
+
+  useInput((input, key) => {
+    // Ink passes a run of Tabs as one input; each press is handled on its own, with the Tab flag its own.
+    for (const press of keyPresses(input)) handleKey(press, press === input ? key : { ...key, tab: true });
   });
 
   const footer = overlay === "none" ? editing !== null ? FILTER_FOOTER : stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · / filter · Enter open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :

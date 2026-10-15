@@ -119,3 +119,31 @@ test("a query without a match shows a status and keeps the field", async () => {
   const result = await scenario.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
 }, SCENARIO_TIMEOUT_MS);
+
+test("three Tabs sent as one write move the focus three fields and never enter a text field", async () => {
+  scenario = await startTuiScenario();
+  // Project, Agent, Action/template, Name: the Tabs arrive together, so each one must be read as a press of its own.
+  const steps: PtyStep[] = [
+    ...openNewSession(),
+    keys("\t\t\t"),
+    { expect: "▸ Name" },
+    keys("q"),
+    // A tab typed into Name would sit before the q, so the value must read exactly q.
+    { expect: `▸ ${"Name".padEnd(16)} q_` },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
+
+test("two ↓ sent as one write move the focus two fields", async () => {
+  scenario = await startTuiScenario();
+  const steps: PtyStep[] = [
+    ...openNewSession(),
+    keys(DOWN + DOWN),
+    { expect: "▸ Action/template" },
+    // A third move would reach Name; the focus must stay on Action/template.
+    { absent: "▸ Name", pause: 500 },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
