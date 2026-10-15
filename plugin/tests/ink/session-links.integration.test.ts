@@ -195,3 +195,67 @@ test("a session without any Work match says why its Links block is empty, and l 
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
 }, REAL_SCENARIO_TIMEOUT_MS);
+
+/** Work-list calls answered with the full envelope before the stand-in source switches to the shrunk one. */
+const FULL_LIST_CALLS = 8;
+/** The work refresh runs once a second in this scenario, so the shrunk list is served a few seconds into the run. */
+const REFRESH_SECS = 1;
+/** Waits past the refreshes that serve the shrunk list, so the chooser has seen the new link set. */
+const SHRINK_WAIT_MS = 10_000;
+
+/**
+ * A work source that answers `full` for its first calls and `shrunk` afterwards. Both envelopes are read from files at
+ * each call, so the test can write them once its session exists; the calls are counted in `callsFile`.
+ */
+async function shrinkingWorkSource(dir: string, full: string, shrunk: string, callsFile: string): Promise<string> {
+  const path = join(dir, "work-source-shrinking");
+  await writeFile(path, `#!${process.execPath}
+import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "list" && args[1] === "--json") {
+  appendFileSync(${JSON.stringify(callsFile)}, "list\\n");
+  const calls = readFileSync(${JSON.stringify(callsFile)}, "utf8").split("\\n").length - 1;
+  const envelope = calls <= ${String(FULL_LIST_CALLS)} ? ${JSON.stringify(full)} : ${JSON.stringify(shrunk)};
+  process.stdout.write(readFileSync(envelope, "utf8") + "\\n");
+} else process.exit(70);
+`);
+  await chmod(path, 0o700);
+  return path;
+}
+
+test("a link chooser whose links shrink on a refresh reports a missing pick by a digit and by Enter", async () => {
+  directory = await mkdtemp(join(tmpdir(), "pw-links-"));
+  const stub = await openStub();
+  const fullFile = join(directory, "work-full.json");
+  const shrunkFile = join(directory, "work-shrunk.json");
+  const selfBin = await shrinkingWorkSource(directory, fullFile, shrunkFile, join(directory, "list-calls"));
+  scenario = await startTuiScenario({ overrides: { "tui.open_command": stub.command, "tui.self_bin": selfBin, "tui.refresh_interval_secs": REFRESH_SECS } });
+  const linked = await linkedSession("links-shrink", { id: LINEAR_ITEM, url: LINEAR_URL }, "feature/links");
+  // The shrunk set keeps the core work link and the branch page, so the chooser lists two links where it listed three.
+  await writeFile(fullFile, JSON.stringify(workList([workItem(linked, LINEAR_ITEM, PR_URL, { id: LINEAR_ITEM, url: LINEAR_URL })])));
+  await writeFile(shrunkFile, JSON.stringify(workList([workItem(linked, LINEAR_ITEM, null, null)])));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "[3] Branch on GitHub" },
+    keys("l"),
+    { expect: "Choose 1–3" },
+    keys(ARROW_DOWN),
+    keys(ARROW_DOWN),
+    // The chooser stays open while the refreshes replace the links with the shrunk set.
+    { pause: SHRINK_WAIT_MS },
+    { expect: "Choose 1–2 or ↑↓ and Enter" },
+    // A digit past the shrunk set reports the missing link and keeps the chooser open on the new count.
+    keys("3"),
+    { expect: "No link 3 on this session anymore; choose 1–2" },
+    { clear: true },
+    // Enter on the highlighted third line reports it too, and closes the chooser.
+    keys(ENTER),
+    { expect: "No link 3 on this session anymore; choose 1–2" },
+    { absent: "Choose 1–2", pause: SETTLE_MS },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { ...WIDE, timeoutS: 90 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
+}, REAL_SCENARIO_TIMEOUT_MS);

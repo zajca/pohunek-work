@@ -229,7 +229,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [busy, setBusy] = useState(false);
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   // The first row each list was last drawn from; a selection inside that window never scrolls it.
-  const windowStarts = useRef<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
+  const [windowStarts, setWindowStarts] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [pick, setPick] = useState({ index: 0, search: "", filtering: false });
@@ -1235,12 +1235,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         overlay === "links" ? "↑↓ choose · Enter or 1-9 opens · Esc back" : overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
   const listInteraction = { onRowClick: clickRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
-  // Each list keeps the window it was drawn with: the window moves only when the selection leaves it.
-  const windowOf = (name: ViewName, selected: number, count: number): number => {
-    const start = listWindowStart(windowStarts.current[name], selected, count, visibleRows);
-    windowStarts.current[name] = start;
-    return start;
-  };
+  // Each list is drawn from the window it last showed, so the window moves only when the selection leaves it.
+  const workStart = listWindowStart(windowStarts.Work, selectedWorkIndex, workRows?.length ?? 0, visibleRows);
+  const sessionsStart = listWindowStart(windowStarts.Sessions, selectedSessionIndex, sessions.length, visibleRows);
+  const hostsStart = listWindowStart(windowStarts.Hosts, cursor.Hosts, snapshot?.hosts.length ?? 0, visibleRows);
+  const activityStart = listWindowStart(windowStarts.Activity, cursor.Activity, records.length, visibleRows);
+  // The windows drawn become the ones the next render starts from; the state changes only when a window moved.
+  useEffect(() => {
+    setWindowStarts((old) => old.Work === workStart && old.Sessions === sessionsStart && old.Hosts === hostsStart && old.Activity === activityStart ? old :
+      { Work: workStart, Sessions: sessionsStart, Hosts: hostsStart, Activity: activityStart });
+  }, [workStart, sessionsStart, hostsStart, activityStart]);
 
   let content: ReactNode;
   if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy} loading={formLoading}
@@ -1298,16 +1302,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
   else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; u opens its folder; PgUp/PgDn scroll the side panel.</Text><Text>Sessions: l opens the only work link, or lists several in a chooser where 1–9 or ↑↓ and Enter pick one; clicking a numbered line in the panel opens that link.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
-  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={windowOf("Work", selectedWorkIndex, workRows?.length ?? 0)} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
+  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
-    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={windowOf("Sessions", selectedSessionIndex, sessions.length)} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
+    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
       {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work)} offset={panelOffset} height={detailHeight}
         onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
     </Box>
-  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={windowOf("Sessions", selectedSessionIndex, sessions.length)} limit={visibleRows} project={projectFilter} {...listInteraction} />;
-  else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} start={windowOf("Hosts", cursor.Hosts, snapshot?.hosts.length ?? 0)} limit={visibleRows} {...listInteraction} />;
-  else content = <ActivityView records={records} selected={cursor.Activity} start={windowOf("Activity", cursor.Activity, records.length)} scope={scope} limit={visibleRows} {...listInteraction} />;
+  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} {...listInteraction} />;
+  else if (view === "Hosts") content = <HostsView hosts={snapshot?.hosts ?? []} selected={cursor.Hosts} start={hostsStart} limit={visibleRows} {...listInteraction} />;
+  else content = <ActivityView records={records} selected={cursor.Activity} start={activityStart} scope={scope} limit={visibleRows} {...listInteraction} />;
 
   let toolbar: ReactNode = null;
   if (overlay === "none") {
