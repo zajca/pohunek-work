@@ -58,6 +58,8 @@ const args = recorded.map((arg) => {
 });
 const edit = matched.some((rule) => rule.protocolRange !== undefined || rule.appendOk !== undefined);
 const child = Bun.spawn([${JSON.stringify(realBinary)}, ...args], { stdio: edit ? ["inherit", "pipe", "inherit"] : ["inherit", "inherit", "inherit"] });
+// A stop sent to the proxy reaches the real CLI too; the attach it runs must not outlive the proxy.
+process.on("SIGTERM", () => { child.kill("SIGTERM"); });
 if (!edit) process.exit(await child.exited);
 const envelope = JSON.parse(await new Response(child.stdout).text());
 for (const rule of matched) {

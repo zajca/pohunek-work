@@ -1,6 +1,6 @@
 import { SUPPORTED_PROTOCOL_VERSION } from "../sources/pohunek.ts";
 import { host as parseControlHost, InvalidControlResponse } from "../control/decode.ts";
-import { exec, execInteractive, SpawnError, type Exec, type InteractiveExec } from "../util/exec.ts";
+import { exec, execInteractive, SpawnError, type ChildEnd, type Exec, type InteractiveExec } from "../util/exec.ts";
 
 export interface SessionLaunchConfig {
   readonly bin: string;
@@ -93,7 +93,8 @@ export interface SessionLauncher {
   /** At most one create attempt is made for this launcher instance. */
   createSession(request: LaunchRequest): Promise<CreatedSession>;
   /** Can be retried after an attach failure without creating another session. */
-  attachSession(): Promise<AttachResult>;
+  /** `end` stops the attach when its session is over; the exit code is then null. */
+  attachSession(end?: ChildEnd): Promise<AttachResult>;
   status(): LaunchStatus;
 }
 
@@ -429,13 +430,13 @@ export function createSessionLauncher(config: SessionLaunchConfig, deps: Session
     return creating;
   }
 
-  async function attachSession(): Promise<AttachResult> {
+  async function attachSession(end?: ChildEnd): Promise<AttachResult> {
     if (current.phase !== "created") throw new LaunchError("not_created", "create a session before attaching");
     if (attaching !== null) return attaching;
     const session = current.session;
     attaching = (async () => {
       try {
-        const exitCode = await runInteractive([config.bin, "attach", "--host", session.host, "--", session.sessionId]);
+        const exitCode = await runInteractive([config.bin, "attach", "--host", session.host, "--", session.sessionId], end);
         return { sessionId: session.sessionId, host: session.host, exitCode };
       } catch (error) {
         if (error instanceof SpawnError) throw new LaunchError("attach_failed", `cannot start ${config.bin}; session ${session.sessionId} already exists on ${session.host}`);

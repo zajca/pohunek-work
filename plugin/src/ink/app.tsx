@@ -9,7 +9,7 @@ import { noLinkReason, sessionLinks, type SessionLink } from "./links.ts";
 import type { TuiAttachMode } from "../types/config.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
-import { exec, execInteractive, execInteractiveCapture } from "../util/exec.ts";
+import { exec, execInteractive, execInteractiveCapture, type ChildEnd } from "../util/exec.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
 import { ATTACH_HOST, ATTACH_VALUE, renderAttachArgv } from "../tui/attach-template.ts";
 import { coalesce } from "./coalesce.ts";
@@ -139,6 +139,19 @@ function retainUnavailable(previous: ControlSnapshot | null, current: ControlSna
     projects: [...current.projects, ...previous.projects.filter((project) => failed(project.host, "projects") && !presentProject.has(`${project.host}/${project.id}`))],
     notifications: [...current.notifications, ...previous.notifications.filter((notification) => failed(notification.host, "notifications") && !presentNotification.has(`${notification.host}/${notification.id}`))],
   };
+}
+
+/** States in which a session will not run again; an attach to it has nothing left to show. */
+const ENDED_STATES: readonly string[] = ["stopped", "done", "failed"];
+
+/**
+ * Whether the session is over in `snapshot`: it is in an ended state, or it is no longer listed while its host's
+ * sessions could be read. An unreadable host is not evidence that its session ended.
+ */
+function sessionOver(snapshot: ControlSnapshot, host: string, id: string): boolean {
+  const session = snapshot.sessions.find((item) => item.host === host && item.id === id);
+  if (session === undefined) return !sessionsUnreadable(snapshot, host);
+  return ENDED_STATES.includes(session.state);
 }
 
 function defaultStatus(error: unknown): string {
@@ -303,6 +316,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setMouseTracking(true);
     return () => { process.removeListener("exit", restore); restore(); };
   }, []);
+
+  /** Ends an attach child when its session is over, so the TUI comes back even when `pohunek attach` does not return. */
+  const sessionEnd = useCallback((host: string, id: string): ChildEnd => ({
+    watch: (onEnded) => control.subscribe((next) => { if (sessionOver(next, host, id)) onEnded(); }),
+    graceMs: options.timeoutMs,
+  }), [control, options.timeoutMs]);
 
   const suspendForChild = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
     setMouseTracking(false);
@@ -550,8 +569,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if (options.mode === "new-session") options.onWindowOpened?.(`opened ${created.sessionId} in a new window`);
       } else {
         await suspendForChild(async () => {
-          const result = await launcher.attachSession();
-          if (result.exitCode !== 0) throw new Error(`attach exited ${String(result.exitCode)}`);
+          const result = await launcher.attachSession(sessionEnd(created.host, created.sessionId));
+          if (result.exitCode !== 0 && result.exitCode !== null) throw new Error(`attach exited ${String(result.exitCode)}`);
         });
       }
       if (options.mode === "new-session") { setExitCode(0); exit(); }
@@ -562,7 +581,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } finally {
       setBusy(false);
     }
-  }, [busy, created, exit, launcher, openAttachWindowFor, options.attachMode, options.mode, refresh, setExitCode, suspendForChild]);
+  }, [busy, created, exit, launcher, openAttachWindowFor, options.attachMode, options.mode, refresh, sessionEnd, setExitCode, suspendForChild]);
 
   const submitForm = useCallback(async (): Promise<void> => {
     if (formLoadingRef.current) { bumpStatus("Host options are still loading; submit when they finish"); return; }
@@ -745,8 +764,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
             bumpStatus(await openAttachWindowFor(resumed.host, resumed.id));
           } else {
             await suspendForChild(async () => {
-              const code = await execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id]);
-              if (code !== 0) throw new Error(`attach exited ${String(code)}`);
+              const code = await execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id], sessionEnd(resumed.host, resumed.id));
+              if (code !== 0 && code !== null) throw new Error(`attach exited ${String(code)}`);
             });
           }
         } catch (error) { bumpStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
@@ -754,7 +773,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       void refresh();
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
-  }, [busy, control, openAttachWindowFor, options.attachMode, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
+  }, [busy, control, openAttachWindowFor, options.attachMode, options.pohunekBin, refresh, sessionDetail, sessionEnd, snapshot, stale, suspendForChild]);
 
   const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: Overlay): Promise<void> => {
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
@@ -798,16 +817,15 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (options.attachMode === "window") {
         bumpStatus(await openAttachWindowFor(target.host, target.id));
       } else {
-        await suspendForChild(async () => {
-          const code = await execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id]);
-          if (code !== 0) throw new Error(`attach exited ${String(code)}`);
-        });
+        const code = await suspendForChild(() => execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id], sessionEnd(target.host, target.id)));
+        // Null means the session ended and the attach was stopped with it, which the list already shows.
+        if (code !== 0 && code !== null) throw new Error(`attach exited ${String(code)}`);
       }
       // Not awaited inside the busy window: the work list can take seconds, and input must not wait for it.
       void refresh();
     } catch (error) { bumpStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
-  }, [openAttachWindowFor, options.attachMode, options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
+  }, [openAttachWindowFor, options.attachMode, options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, sessionEnd, suspendForChild]);
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);

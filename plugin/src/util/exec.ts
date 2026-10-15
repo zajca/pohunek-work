@@ -33,7 +33,17 @@ export class SpawnError extends Error {
 export type Exec = (argv: readonly string[], options: ExecOptions) => Promise<ExecResult>;
 
 /** Runs a child on the caller's terminal and resolves with its exit code (null when a signal ended it). */
-export type InteractiveExec = (argv: readonly string[]) => Promise<number | null>;
+/**
+ * Reports when the work an interactive child serves is over. `watch` calls `onEnded` at most once and returns the
+ * function that stops watching; `graceMs` is how long the child has to exit after its SIGTERM before it is killed.
+ */
+export interface ChildEnd {
+  readonly watch: (onEnded: () => void) => () => void;
+  readonly graceMs: number;
+}
+
+/** Resolves with the exit code, or null when a signal or the `end` watch ended the child. */
+export type InteractiveExec = (argv: readonly string[], end?: ChildEnd) => Promise<number | null>;
 
 export interface InteractiveCaptureResult {
   readonly exitCode: number | null;
@@ -45,7 +55,7 @@ export interface InteractiveCaptureResult {
  * its own group would be stopped by SIGTTIN when it reads the terminal. There
  * is no timeout because the owner ends the child (for example by detaching).
  */
-export const execInteractive: InteractiveExec = async (argv) => {
+export const execInteractive: InteractiveExec = async (argv, end) => {
   const [binary, ...args] = argv;
   if (binary === undefined) {
     throw new TypeError("execInteractive requires a non-empty argv");
@@ -56,8 +66,25 @@ export const execInteractive: InteractiveExec = async (argv) => {
   } catch (cause) {
     throw new SpawnError(binary, cause);
   }
-  await child.exited;
-  return child.exitCode;
+  if (end === undefined) {
+    await child.exited;
+    return child.exitCode;
+  }
+  // The child is asked to stop once its work is over; it is killed when it is still running after the grace time.
+  const ending: { ended: boolean; killTimer?: ReturnType<typeof setTimeout> } = { ended: false };
+  const stopWatching = end.watch(() => {
+    if (ending.ended) return;
+    ending.ended = true;
+    child.kill("SIGTERM");
+    ending.killTimer = setTimeout(() => { child.kill("SIGKILL"); }, end.graceMs);
+  });
+  try {
+    await child.exited;
+  } finally {
+    stopWatching();
+    clearTimeout(ending.killTimer);
+  }
+  return ending.ended ? null : child.exitCode;
 };
 
 /** Keeps stdin on the terminal while forwarding and retaining bounded stdout. */
