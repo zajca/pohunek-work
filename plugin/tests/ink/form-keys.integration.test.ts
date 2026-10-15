@@ -161,8 +161,25 @@ test("n and a Tab sent as one write open the form and move the focus to the seco
     keys("n\t"),
     { expect: "NEW SESSION" },
     { expect: "▸ Agent" },
-    { pause: 500 },
-    { expect: "▸ Agent" },
+    // The form stays open: a closed form would show the empty Sessions view again.
+    { absent: "No sessions", pause: 500 },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
+
+test("a Tab sent before a paste lands the paste in the field the Tab moves to", async () => {
+  scenario = await startTuiScenario();
+  // Name is the fourth field. The Tab and the bracketed paste arrive in one write: the paste must land in Prompt,
+  // the field the Tab reached, and Name must stay empty.
+  const steps: PtyStep[] = [
+    ...openNewSession(),
+    keys("\t\t\t"),
+    { expect: "▸ Name" },
+    keys(`\t\x1b[200~hello\x1b[201~`),
+    { expect: "▸ Prompt" },
+    // The cursor sits on Prompt only, so the text after it is the one the paste put there.
+    { expect: "hello_" },
   ];
   const result = await scenario.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);

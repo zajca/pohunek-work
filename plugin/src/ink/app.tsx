@@ -60,6 +60,8 @@ export interface InkTuiOptions {
   readonly log?: (event: string, detail?: string) => void;
 }
 
+/** An event waiting for its render: a key press of Ink's input channel or a paste of its paste channel. */
+type PendingEvent = { readonly kind: "key"; readonly press: string; readonly key: Key } | { readonly kind: "paste"; readonly text: string };
 type Overlay = "none" | "links" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help" | "projects";
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: Overlay }
@@ -1075,7 +1077,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (target === "Work") setWorkKey(null);
   };
 
-  usePaste((text) => {
+  const handlePaste = (text: string): void => {
     if (busy) { setStatus(BUSY_REFUSAL); return; }
     if (overlay !== "form" && overlay !== "assistant") return;
     if (created !== null) return;
@@ -1083,6 +1085,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const assistant = overlay === "assistant";
     // A pick field takes the paste as its query, like typed text; a text field takes it as text.
     setForm((old) => old.focus <= LAST_PICK_FIELD ? (pastedText(clean) === "" ? old : { ...old, search: old.search + pastedText(clean), highlight: 0 }) : changeTextField(old, clean, assistant, false));
+  };
+  usePaste((text) => {
+    pendingEvents.current.push({ kind: "paste", text });
+    setPressTick((old) => old + 1);
   });
 
   // The refusal on the status line is for the action that was running, so it goes once that action ends.
@@ -1330,18 +1336,20 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   };
 
-  // Ink passes a chunk of several presses as one input. Each press is handled after the render that committed the
-  // previous one, so it reads the state that press left; the handler closure of a render is current only for that render.
-  const pendingPresses = useRef<{ press: string; key: Key }[]>([]);
+  // Ink passes a chunk of several presses as one input, and pastes on a channel of their own. Key presses and pastes
+  // are handled in arrival order, one per committed render, so each reads the state the event before it left.
+  // The handler closure of a render is current only for that render.
+  const pendingEvents = useRef<PendingEvent[]>([]);
   const [pressTick, setPressTick] = useState(0);
   useEffect(() => {
-    const next = pendingPresses.current.shift();
+    const next = pendingEvents.current.shift();
     if (next === undefined) return;
-    handleKey(next.press, next.key);
-    if (pendingPresses.current.length > 0) setPressTick((old) => old + 1);
+    if (next.kind === "paste") handlePaste(next.text);
+    else handleKey(next.press, next.key);
+    if (pendingEvents.current.length > 0) setPressTick((old) => old + 1);
   }, [pressTick]);
   useInput((input, key) => {
-    for (const press of keyPresses(input)) pendingPresses.current.push({ press, key: press === input ? key : splitKey(press, key) });
+    for (const press of keyPresses(input)) pendingEvents.current.push({ kind: "key", press, key: press === input ? key : splitKey(press, key) });
     setPressTick((old) => old + 1);
   });
 
