@@ -70,6 +70,7 @@ test("an attach failure during a delayed Work read is not replaced by the older 
   const steps: PtyStep[] = [
     { expect: "WORK  1 items" },
     { pause: 500 },
+    { send: MOUSE_PRESS_ROW_SIX, settle: 50 },
     { send: MOUSE_PRESS_ROW_SIX, settle: 500 },
     { expect: "Run review" },
     { pause: 300 },
