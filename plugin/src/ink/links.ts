@@ -38,14 +38,29 @@ export function sessionLinks(session: ControlSession, items: readonly ListItem[]
   });
 }
 
+/** Longest warning of the Work source shown in a reason; the rest of a longer first line is cut. */
+const WARNING_REASON_MAX = 120;
+
 /**
- * Why a session has no link in its Links block: the Work data it is joined with is missing, or the session is not
- * local, or nothing in the loaded Work matches it. The text reads after "No link:" and after the Links heading.
+ * Why a session has no link in its Links block, one reason per missing source. Work links exist for local sessions
+ * only and come from the loaded Work list: a list that is missing, failed, or incomplete (a source did not answer,
+ * or the last good rows are kept after a failed refresh) cannot say that nothing matches. The branch page needs the
+ * project's GitHub origin.
  */
-export function noLinkReason(session: ControlSession, work: WorkSnapshot | null): string {
-  if (session.host !== "local") return "the session is not local; Work is read on the local host only";
-  if (work === null || work.payload === null) return work?.warning ? `Work unavailable: ${work.warning}` : "Work not loaded yet";
-  return "no Work match for this session";
+export function noLinkReason(session: ControlSession, work: WorkSnapshot | null, originUrl: string | null): string {
+  const reasons: string[] = [];
+  if (session.host !== "local") reasons.push("Work is read on the local host only");
+  else if (work === null || work.payload === null) reasons.push(work?.warning ? `Work unavailable: ${warningText(work.warning)}` : "Work not loaded yet");
+  else if (work.partial || work.warning !== null) reasons.push(`Work incomplete: ${work.warning === null ? "a source did not answer" : warningText(work.warning)}`);
+  else reasons.push("no Work match for this session");
+  if (session.branch !== null && originUrl === null) reasons.push("the project has no GitHub origin for its branch page");
+  return reasons.join("; ");
+}
+
+/** The first line of a Work warning, cut to WARNING_REASON_MAX characters. */
+function warningText(warning: string): string {
+  const line = warning.split("\n")[0]?.trim() ?? "";
+  return line.length > WARNING_REASON_MAX ? `${line.slice(0, WARNING_REASON_MAX - 1)}…` : line;
 }
 
 function joinedItems(session: ControlSession, items: readonly ListItem[] | null): readonly ListItem[] {

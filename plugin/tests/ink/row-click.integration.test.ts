@@ -24,6 +24,10 @@ const PRESS_ROW_THREE = "\x1b[<0;10;12M";
 /** A row of the long list below the middle of its visible window (1-based terminal cell, row 7 of 8 visible). */
 const PRESS_LONG_LIST_ROW = "\x1b[<0;10;21M";
 const LONG_LIST_ROW_INDEX = 6;
+const ARROW_DOWN = "\x1b[B";
+const ARROW_UP = "\x1b[A";
+/** Rows of the long list the window shows at LONG_LIST: the arrows must scroll it past this count. */
+const VISIBLE_ROWS_AT_LONG_LIST = 8;
 /** Footer of every overlay that replaces the list; the list keeps the plain footer. */
 const OVERLAY_FOOTER = "Esc back";
 const SCENARIO_OVERRIDES = { "tui.double_click_ms": DOUBLE_CLICK_MS };
@@ -170,4 +174,29 @@ test("a double click on a row below the middle of a scrolled list attaches that 
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   const attached = (await scenario.proxy.calls()).filter((call) => call.includes("attach")).map((call) => call.at(-1));
   expect(attached).toEqual([ids[LONG_LIST_ROW_INDEX]]);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("arrow keys past the visible window of a long list keep the selection on screen in both directions", async () => {
+  scenario = await startTuiScenario({ rules: [], overrides: SCENARIO_OVERRIDES });
+  for (let index = 1; index <= LONG_LIST_SESSIONS; index++) await createShellSession(scenario.daemon, `s${String(index).padStart(2, "0")}`);
+  const down = (count: number): PtyStep[] => Array.from({ length: count }, () => ({ ...keys(ARROW_DOWN), settle: SETTLE_MS }));
+  const up = (count: number): PtyStep[] => Array.from({ length: count }, () => ({ ...keys(ARROW_UP), settle: SETTLE_MS }));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "SESSIONS  12" },
+    { expect: "unassigned  s01" },
+    // The ninth row is the first one past the window that starts at the top: the window must scroll to show it.
+    ...down(VISIBLE_ROWS_AT_LONG_LIST),
+    { expect: "s09 · local · shell" },
+    { expect: "unassigned  s09" },
+    { clear: true },
+    // Past the last visible row and back to the first: the top row is shown again with the selection on it.
+    ...up(LONG_LIST_SESSIONS),
+    { expect: "s01 · local · shell" },
+    { expect: "unassigned  s01" },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { ...LONG_LIST, timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);

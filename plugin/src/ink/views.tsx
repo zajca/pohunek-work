@@ -240,7 +240,7 @@ export function sessionDetailMaxOffset(session: ControlSession, screen: ControlS
 export function LinkChooser({ links, selected }: { readonly links: readonly SessionLink[]; readonly selected: number }): ReactNode {
   return <Box flexDirection="column">
     <Text bold color="cyan">LINKS</Text>
-    <Text dimColor>{`Choose 1–${String(links.length)} or ↑↓ and Enter · Esc closes`}</Text>
+    <Text dimColor>{links.length === 0 ? "No links left on this session · Esc closes" : `Choose 1–${String(links.length)} or ↑↓ and Enter · Esc closes`}</Text>
     {links.map((link, index) => <Text key={link.url} inverse={index === selected} wrap="truncate-end">{safeText(`${index === selected ? "› " : "  "}[${String(index + 1)}] ${link.label}  ${link.url}`)}</Text>)}
   </Box>;
 }

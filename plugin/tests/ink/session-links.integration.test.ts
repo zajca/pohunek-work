@@ -196,44 +196,66 @@ test("a session without any Work match says why its Links block is empty, and l 
   expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
 }, REAL_SCENARIO_TIMEOUT_MS);
 
-/** Work-list calls answered with the full envelope before the stand-in source switches to the shrunk one. */
-const FULL_LIST_CALLS = 8;
-/** The work refresh runs once a second in this scenario, so the shrunk list is served a few seconds into the run. */
+/** One phase of the stand-in work source: whether it prints the envelope in its file, its stderr and its exit code. */
+interface WorkPhase { readonly envelope: boolean; readonly stderr: string; readonly exit: number }
+
+/** Work-list calls answered with the `before` phase; later calls get the `after` phase. */
+const SWITCH_AFTER_CALLS = 8;
+/** The work refresh runs once a second in the scenarios that change the answer while the TUI runs. */
 const REFRESH_SECS = 1;
-/** Waits past the refreshes that serve the shrunk list, so the chooser has seen the new link set. */
+/** Waits past the refreshes that serve the `after` phase, so the chooser has seen the new link set. */
 const SHRINK_WAIT_MS = 10_000;
+/** Waits for a refresh that the scenario expects to change the Links block. */
+const REFRESH_WAIT_MS = 30_000;
 
 /**
- * A work source that answers `full` for its first calls and `shrunk` afterwards. Both envelopes are read from files at
- * each call, so the test can write them once its session exists; the calls are counted in `callsFile`.
+ * A stand-in work source for scenarios whose Work answer the daemon fixture cannot give: a source that fails or is
+ * incomplete needs GitHub or Linear, which the fixture does not reach, so the stand-in exits with the code and the
+ * stderr the real `list --json` uses for it. The envelopes are read from `dir/work-before.json` and
+ * `dir/work-after.json` at each call, so the test can write them once its session exists.
  */
-async function shrinkingWorkSource(dir: string, full: string, shrunk: string, callsFile: string): Promise<string> {
-  const path = join(dir, "work-source-shrinking");
+async function scriptedWorkSource(dir: string, before: WorkPhase, after: WorkPhase, switchAfter: number): Promise<string> {
+  const path = join(dir, "work-source-scripted");
+  const callsFile = join(dir, "list-calls");
+  const phaseOf = (phase: WorkPhase, name: string): unknown => ({ ...phase, file: phase.envelope ? join(dir, `work-${name}.json`) : null });
   await writeFile(path, `#!${process.execPath}
 import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "list" && args[1] === "--json") {
   appendFileSync(${JSON.stringify(callsFile)}, "list\\n");
   const calls = readFileSync(${JSON.stringify(callsFile)}, "utf8").split("\\n").length - 1;
-  const envelope = calls <= ${String(FULL_LIST_CALLS)} ? ${JSON.stringify(full)} : ${JSON.stringify(shrunk)};
-  process.stdout.write(readFileSync(envelope, "utf8") + "\\n");
+  const phase = calls <= ${String(switchAfter)} ? ${JSON.stringify(phaseOf(before, "before"))} : ${JSON.stringify(phaseOf(after, "after"))};
+  if (phase.file !== null) process.stdout.write(readFileSync(phase.file, "utf8") + "\\n");
+  if (phase.stderr !== "") process.stderr.write(phase.stderr + "\\n");
+  process.exit(phase.exit);
 } else process.exit(70);
 `);
   await chmod(path, 0o700);
   return path;
 }
 
-test("a link chooser whose links shrink on a refresh reports a missing pick by a digit and by Enter", async () => {
+/** Starts a scenario whose work source follows the two phases; the caller writes the envelopes the phases name. */
+async function startScriptedScenario(before: WorkPhase, after: WorkPhase, switchAfter: number): Promise<{ stub: { command: string; trace: string }; tui: TuiScenario }> {
   directory = await mkdtemp(join(tmpdir(), "pw-links-"));
   const stub = await openStub();
-  const fullFile = join(directory, "work-full.json");
-  const shrunkFile = join(directory, "work-shrunk.json");
-  const selfBin = await shrinkingWorkSource(directory, fullFile, shrunkFile, join(directory, "list-calls"));
-  scenario = await startTuiScenario({ overrides: { "tui.open_command": stub.command, "tui.self_bin": selfBin, "tui.refresh_interval_secs": REFRESH_SECS } });
+  const selfBin = await scriptedWorkSource(directory, before, after, switchAfter);
+  const tui = await startTuiScenario({ overrides: { "tui.open_command": stub.command, "tui.self_bin": selfBin, "tui.refresh_interval_secs": REFRESH_SECS } });
+  scenario = tui;
+  return { stub, tui };
+}
+
+/** Writes the envelope of a scripted phase; `name` is `before` or `after`. */
+async function writeWorkPhase(name: "before" | "after", envelope: unknown): Promise<void> {
+  if (directory === null) throw new Error("scenario directory missing");
+  await writeFile(join(directory, `work-${name}.json`), JSON.stringify(envelope));
+}
+
+test("a link chooser whose links shrink on a refresh reports a missing pick by a digit and by Enter", async () => {
+  const { stub, tui } = await startScriptedScenario({ envelope: true, stderr: "", exit: 0 }, { envelope: true, stderr: "", exit: 0 }, SWITCH_AFTER_CALLS);
   const linked = await linkedSession("links-shrink", { id: LINEAR_ITEM, url: LINEAR_URL }, "feature/links");
+  await writeWorkPhase("before", workList([workItem(linked, LINEAR_ITEM, PR_URL, { id: LINEAR_ITEM, url: LINEAR_URL })]));
   // The shrunk set keeps the core work link and the branch page, so the chooser lists two links where it listed three.
-  await writeFile(fullFile, JSON.stringify(workList([workItem(linked, LINEAR_ITEM, PR_URL, { id: LINEAR_ITEM, url: LINEAR_URL })])));
-  await writeFile(shrunkFile, JSON.stringify(workList([workItem(linked, LINEAR_ITEM, null, null)])));
+  await writeWorkPhase("after", workList([workItem(linked, LINEAR_ITEM, null, null)]));
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
@@ -255,7 +277,63 @@ test("a link chooser whose links shrink on a refresh reports a missing pick by a
     { absent: "Choose 1–2", pause: SETTLE_MS },
     keys("q"),
   ];
-  const result = await scenario.run(steps, { ...WIDE, timeoutS: 90 });
+  const result = await tui.run(steps, { ...WIDE, timeoutS: 90 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("when every link disappears while the chooser is open, a digit closes it and says none are left", async () => {
+  const { stub, tui } = await startScriptedScenario({ envelope: true, stderr: "", exit: 0 }, { envelope: true, stderr: "", exit: 0 }, SWITCH_AFTER_CALLS);
+  const linked = await linkedSession("links-gone", null, null);
+  await writeWorkPhase("before", workList([workItem(linked, "github:acme/widgets#12", PR_URL, { id: LINEAR_ITEM, url: LINEAR_URL })]));
+  await writeWorkPhase("after", workList([]));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "[2] Linear issue" },
+    keys("l"),
+    { expect: "Choose 1–2" },
+    { pause: SHRINK_WAIT_MS },
+    { expect: "No links left on this session" },
+    { clear: true },
+    keys("1"),
+    { expect: "No link 1 on this session anymore; none are left" },
+    { absent: "No links left on this session", pause: SETTLE_MS },
+    keys("q"),
+  ];
+  const result = await tui.run(steps, { ...WIDE, timeoutS: 90 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a Work list whose source did not answer says it is incomplete, not that no item matches", async () => {
+  // The stand-in exits with the partial code (3) and names the failed source on stderr, as `list --json` does.
+  const { tui } = await startScriptedScenario({ envelope: true, stderr: "linear: unreachable", exit: 3 }, { envelope: true, stderr: "linear: unreachable", exit: 3 }, 0);
+  await linkedSession("incomplete-a", null, null);
+  await writeWorkPhase("before", workList([]));
+  await writeWorkPhase("after", workList([]));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "Work incomplete: linear: unreachable" },
+    keys("q"),
+  ];
+  const result = await tui.run(steps, { ...WIDE, timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a refresh that fails after a good load keeps the rows and says the Work list is incomplete", async () => {
+  const { tui } = await startScriptedScenario({ envelope: true, stderr: "", exit: 0 }, { envelope: false, stderr: "gh: unavailable", exit: 1 }, SWITCH_AFTER_CALLS);
+  await linkedSession("incomplete-b", null, null);
+  await writeWorkPhase("before", workList([]));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "no Work match for this session" },
+    // The next refreshes fail; the last good rows stay and the Links block says the list is incomplete.
+    { expect: "Work incomplete: gh: unavailable", timeout: REFRESH_WAIT_MS },
+    keys("q"),
+  ];
+  const result = await tui.run(steps, { ...WIDE, timeoutS: 90 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);
