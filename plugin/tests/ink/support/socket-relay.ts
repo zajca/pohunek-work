@@ -4,7 +4,7 @@
 // The TUI reads live output through the SDK, which talks to the socket directly, so only a process on the
 // socket can produce these conditions. The session list the TUI polls is read the same way, so a snapshot without
 // the session can only be produced here: the relay answers the list with nothing while its flag file exists.
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,6 +139,8 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
       const id = reply?.["id"];
       if ((typeof id === "string" || typeof id === "number") && emptyLists.delete(String(id))) {
         link.client.write(JSON.stringify({ v: reply?.["v"], id, ok: [] }) + "\n");
+        // The scenario counts these replies through the flag's sibling file, since the relay is another process.
+        appendFileSync(`${options.emptySessionListFlag ?? ""}.served`, "served\n");
         continue;
       }
       if ((typeof id === "string" || typeof id === "number") && link.held.delete(String(id))) {

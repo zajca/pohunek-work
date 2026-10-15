@@ -3,11 +3,12 @@
 // Other processes act from inside the attached shell, after the attach is confirmed by its output, so each trigger
 // happens at a known point of the run and not on a timer.
 import { afterEach, expect, test } from "bun:test";
-import { writeFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { keys, type PtyStep } from "./support/pty.ts";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { startSocketRelay, type SocketRelay } from "./support/socket-relay.ts";
+import { startTcpRelay, type TcpRelay } from "./support/tcp-relay.ts";
 import { daemonLocalSocket } from "../helpers/core-daemon.ts";
 
 const CTRL_BACKSLASH = "1c";
@@ -23,8 +24,11 @@ const OUTPUT_WAIT_MS = 60_000;
 const OUTPUT_POLL_MS = 300;
 let scenario: TuiScenario | null = null;
 let relay: SocketRelay | null = null;
+let tcp: TcpRelay | null = null;
 
 afterEach(async () => {
+  tcp?.stop();
+  tcp = null;
   await relay?.stop();
   relay = null;
   await scenario?.stop();
@@ -208,11 +212,11 @@ function writeRules(tui: TuiScenario, rules: unknown): PtyStep {
   return keys(`printf '%s' '${JSON.stringify(rules)}' > ${proxyRulesFile(tui)}\r`);
 }
 
-/** Waits until the proxy refuses `host list`, which the TUI's discovery runs; the failure is then in effect. */
+/** Waits until the proxy refuses `host discover`, which the TUI's refresh runs; the failure is then in effect. */
 async function untilDiscoveryFails(tui: TuiScenario): Promise<void> {
   const deadline = Date.now() + OUTPUT_WAIT_MS;
   for (;;) {
-    const proc = Bun.spawn([tui.proxy.binary, "host", "list", "--json"], { env: tui.daemon.clientEnv, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn([tui.proxy.binary, "host", "discover", "--json"], { env: tui.daemon.clientEnv, stdout: "pipe", stderr: "pipe" });
     const exit = await proc.exited;
     if (exit !== 0) return;
     if (Date.now() > deadline) throw new Error("the proxy never refused host list");
@@ -235,7 +239,9 @@ test("discovery fails and the attached local session is removed: the attach ends
     .then(() => scenario?.daemon.pohunek(["session", "rm", id]));
   const steps: PtyStep[] = [
     ...attachFirst(1),
-    writeRules(scenario, [{ match: ["host", "list"], failWith: 1 }]),
+    writeRules(scenario, [{ match: ["host", "discover"], failWith: 1 }]),
+    // The TUI shows the discovery error in its header, so the failure is observed before the removal.
+    { expect: "host/source error" },
     // The main footer comes back only when the TUI redraws after the attach; the list then shows the session gone.
     { expect: "Tab views" },
     // The list shows the session gone or kept as stopped, depending on the failed read; the toolbar is the same in both.
@@ -255,6 +261,8 @@ test("a snapshot without the attached session does not end the attach while a re
   relay = await startSocketRelay(daemonLocalSocket(scenario.daemon), { holdSessionId: "none", holdMs: 0, skipCount: 0, holdCount: 0, refuseHealthAfterHold: false, emptySessionListFlag: flag });
   const window = untilPrinted(scenario, id, READY).then(async () => {
     await writeFile(flag, "");
+    // A session event makes the TUI read the session list inside the window.
+    await createShellSession(scenario?.daemon as TuiScenario["daemon"], "beta");
     await Bun.sleep(EMPTY_LIST_WINDOW_MS);
     await rm(flag, { force: true });
   });
@@ -266,5 +274,52 @@ test("a snapshot without the attached session does not end the attach while a re
   ];
   const result = await scenario.run(steps, { timeoutS: 90, env: { POHUNEK_SOCKET_PATH: relay.socket } });
   await window;
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+  // The relay counts the empty replies it served; without one the window tested nothing.
+  expect(await readFile(`${flag}.served`, "utf8").catch(() => "")).toContain("served");
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+// A remote host served through a TCP listener of the test process (the real daemon reaches remote peers over TCP, the
+// harness has only the unix socket), so its reads can be refused without touching the TUI or its SDK.
+const REMOTE = "remote-peer";
+const REMOTE_FAILURE_MS = 6000;
+
+test("a remote host whose reads fail keeps its attach, and the attach ends once a read confirms the session stopped", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const id = await createShellSession(scenario.daemon, "alpha");
+  const daemon = scenario.daemon;
+  tcp = startTcpRelay(daemonLocalSocket(daemon));
+  await scenario.proxy.setRules([
+    { match: ["host", "discover"], appendOk: [{ name: REMOTE, fqdn: "remote.netbird.example", address: "127.0.0.1", port: tcp.port, overlay: "netbird", peer_id: REMOTE, classification: "reachable_daemon", daemon_version: "0.34.2" }] },
+    { match: [], aliasPrefix: { from: "netbird:", to: "local" } },
+  ]);
+  // The remote reads are refused for a window after the attach answers; then the relay recovers and the session is
+  // stopped, so the first successful read confirms the end.
+  const remote = untilPrinted(scenario, id, READY).then(async () => {
+    tcp?.setFailing(true);
+    await Bun.sleep(REMOTE_FAILURE_MS);
+    tcp?.setFailing(false);
+    await daemon.pohunek(["session", "stop", id]);
+  });
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "SESSIONS  2" },
+    keys("\x1b[B"),
+    keys("o"),
+    { pause: ATTACH_SETTLE_MS },
+    keys(ECHO_READY),
+    { expect: READY },
+    // Inside the failure window the attach must still take input.
+    { pause: REMOTE_FAILURE_MS / 2 },
+    keys("echo still-$((1+1))\r"),
+    { expect: "still-2" },
+    // After recovery and the confirmed stop the attach is gone and the TUI is back.
+    { pause: REMOTE_FAILURE_MS },
+    { expect: "UNAVAILABLE" },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 120 });
+  await remote;
+  expect(tcp.refusedCount(), "no remote read was refused").toBeGreaterThan(0);
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);
