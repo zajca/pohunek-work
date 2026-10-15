@@ -346,16 +346,18 @@ test("a 16-row terminal with a session of three links still shows its output and
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
-    // The panel follows the output, so the shell prompt shows although the head holds the links and the body is short.
-    { expect: "sh-5" },
+    // The panel follows the output, so the body's last lines show; the OUTPUT heading is in the body on every shell.
+    { expect: "Branch  feature/links" },
+    { expect: "OUTPUT" },
     { clear: true },
-    // PageUp brings the links, which are part of the scrolled body on this terminal, into view.
+    // PageUp brings the scrolled body's top into view: the links, which are not in the fixed head on this terminal.
     keys("\x1b[5~"),
     { expect: "LINKS" },
     { expect: "[3] Branch on GitHub" },
     { clear: true },
+    // PageDown returns to the output, whose heading shows again.
     keys("\x1b[6~"),
-    { expect: "sh-5" },
+    { expect: "OUTPUT" },
     keys("q"),
   ];
   const result = await tui.run(steps, { cols: 120, rows: 16, timeoutS: 60 });
@@ -438,7 +440,7 @@ test("a project whose origin is not GitHub says why its session has no branch pa
   const label = (JSON.parse(added.stdout) as { ok?: { label?: unknown } }).ok?.label;
   if (typeof label !== "string") throw new Error(`project add failed: ${added.stdout}${added.stderr}`);
   const created = await tui.daemon.pohunek(["session", "new", "--agent", "shell", "--project", label, "--name", "gitlab-branch", "--branch", "feature/gitlab", "--json"]);
-  expect((JSON.parse(created.stdout) as { ok?: unknown }).ok).toBeDefined();
+  if ((JSON.parse(created.stdout) as { ok?: unknown }).ok === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
