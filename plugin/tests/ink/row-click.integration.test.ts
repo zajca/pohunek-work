@@ -2,8 +2,12 @@
 // within `[tui] double_click_ms` does what Enter does on that row. The interval is set in the scenario's
 // configuration, and the gaps between presses are derived from it, so the scenario and the TUI agree on it.
 import { afterEach, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { keys, type PtyStep } from "./support/pty.ts";
+import { REFRESH_SECS, SWITCH_AFTER_CALLS, scriptedWorkSource, workItem, workList, writeWorkPhase } from "./support/work-source.ts";
 
 const DOUBLE_CLICK_MS = 1000;
 /** Gap between the two presses of a double click: well inside the interval. */
@@ -24,6 +28,12 @@ const PRESS_ROW_THREE = "\x1b[<0;10;12M";
 /** A row of the long list below the middle of its visible window (1-based terminal cell, row 7 of 8 visible). */
 const PRESS_LONG_LIST_ROW = "\x1b[<0;10;21M";
 const LONG_LIST_ROW_INDEX = 6;
+/** Left-button press on the second Work row (1-based cell): the Work list has a title and a filter line above its rows. */
+const PRESS_WORK_ROW_TWO = "\x1b[<0;10;9M";
+/** Waits past the refresh that serves the `after` phase of the stand-in work source. */
+const WORK_REORDER_WAIT_MS = 10_000;
+/** A double click window longer than the reorder wait, so only the item identity can separate the two presses. */
+const REORDER_DOUBLE_CLICK_MS = WORK_REORDER_WAIT_MS * 3;
 const ARROW_DOWN = "\x1b[B";
 const ARROW_UP = "\x1b[A";
 /** Rows of the long list the window shows at LONG_LIST: the arrows must scroll it past this count. */
@@ -33,10 +43,13 @@ const OVERLAY_FOOTER = "Esc back";
 const SCENARIO_OVERRIDES = { "tui.double_click_ms": DOUBLE_CLICK_MS };
 
 let scenario: TuiScenario | null = null;
+let directory: string | null = null;
 
 afterEach(async () => {
   await scenario?.stop();
   scenario = null;
+  if (directory !== null) await rm(directory, { recursive: true, force: true });
+  directory = null;
 });
 
 test("a single click selects a session at a wide terminal and only a second click on it attaches", async () => {
@@ -198,5 +211,30 @@ test("arrow keys past the visible window of a long list keep the selection on sc
     keys("q"),
   ];
   const result = await scenario.run(steps, { ...LONG_LIST, timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a second press on a Work row whose position a refresh changed opens nothing", async () => {
+  directory = await mkdtemp(join(tmpdir(), "pw-clicks-"));
+  // Sorted by key the rows are b, c; the refresh adds a, which moves c from the second row to the third and b into the second.
+  const selfBin = await scriptedWorkSource(directory, { envelope: true, stderr: "", exit: 0 }, { envelope: true, stderr: "", exit: 0 }, SWITCH_AFTER_CALLS);
+  const item = (key: string): Record<string, unknown> => workItem("", key, null, null);
+  await writeWorkPhase(directory, "before", workList([item("widgets-b"), item("widgets-c")]));
+  await writeWorkPhase(directory, "after", workList([item("widgets-a"), item("widgets-b"), item("widgets-c")]));
+  scenario = await startTuiScenario({ rules: [], overrides: { "tui.double_click_ms": REORDER_DOUBLE_CLICK_MS, "tui.self_bin": selfBin, "tui.refresh_interval_secs": REFRESH_SECS } });
+  const steps: PtyStep[] = [
+    { expect: "WORK  2 items" },
+    { expect: "widgets / widgets-c" },
+    { ...keys(PRESS_WORK_ROW_TWO), settle: SETTLE_MS },
+    { clear: true },
+    // The refresh that moves the rows lands here; the second press comes after it, on the same cell.
+    { pause: WORK_REORDER_WAIT_MS },
+    { expect: "widgets / widgets-a" },
+    { clear: true },
+    { ...keys(PRESS_WORK_ROW_TWO), settle: SETTLE_MS },
+    { absent: OVERLAY_FOOTER, pause: SETTLE_MS },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { ...WIDE, timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);

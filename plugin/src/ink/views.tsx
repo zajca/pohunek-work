@@ -226,14 +226,20 @@ export function sessionDetailParts(session: ControlSession, screen: ControlScree
 
 const RECENT_ACTIVITY_ROWS = 3;
 
-/** Rows of the body that fit under the pinned head in `height` rows. */
-function bodyRows(pinned: readonly PanelLine[], height: number): number {
-  return Math.max(0, height - pinned.length);
+/**
+ * The panel of `height` rows as it is drawn: the fixed lines at its top and the scrolled lines under them. The fixed
+ * head keeps at most half of the panel, so the scrolled part always has the other half, and any pinned line past
+ * that cap scrolls with the body (a short panel shows the links of a session with many of them and still the output).
+ */
+export function sessionDetailFrame(session: ControlSession, screen: ControlScreen | null, notifications: readonly ControlNotification[], links: readonly SessionLink[], noLinks: string, height: number): { fixed: PanelLine[]; scrolled: PanelLine[]; rows: number } {
+  const { pinned, body } = sessionDetailParts(session, screen, notifications, links, noLinks);
+  const fixedCount = Math.min(pinned.length, Math.floor(height / 2));
+  return { fixed: pinned.slice(0, fixedCount), scrolled: [...pinned.slice(fixedCount), ...body], rows: Math.max(0, height - fixedCount) };
 }
 
 export function sessionDetailMaxOffset(session: ControlSession, screen: ControlScreen | null, height: number, notifications: readonly ControlNotification[], links: readonly SessionLink[], noLinks: string): number {
-  const { pinned, body } = sessionDetailParts(session, screen, notifications, links, noLinks);
-  return Math.max(0, body.length - bodyRows(pinned, height));
+  const { scrolled, rows } = sessionDetailFrame(session, screen, notifications, links, noLinks, height);
+  return Math.max(0, scrolled.length - rows);
 }
 
 /** The links of a session as a numbered list; 1-9 or the arrows and Enter pick one, and the caller closes it. */
@@ -263,18 +269,17 @@ export function SessionDetail({ session, screen, notifications, links, noLinks, 
   readonly links: readonly SessionLink[]; readonly noLinks: string; readonly offset: number; readonly height: number;
   readonly onWheel: (direction: -1 | 1) => void; readonly onOpenLink: (index: number) => void;
 }): ReactNode {
-  const { pinned, body } = sessionDetailParts(session, screen, notifications, links, noLinks);
-  const rows = bodyRows(pinned, height);
-  const start = Math.max(0, Math.min(offset, Math.max(0, body.length - rows)));
+  const { fixed, scrolled, rows } = sessionDetailFrame(session, screen, notifications, links, noLinks, height);
+  const start = Math.max(0, Math.min(offset, Math.max(0, scrolled.length - rows)));
   const line = (entry: PanelLine, key: string): ReactNode => {
     const text = <Text bold={entry.heading === true} color={entry.heading ? "cyan" : "white"} wrap="truncate-end">{safeText(entry.text)}</Text>;
     const link = entry.link;
     return link === undefined ? <Box key={key}>{text}</Box> : <MouseZone key={key} width="100%" onClick={() => { onOpenLink(link); }}>{text}</MouseZone>;
   };
   return <MouseZone flexDirection="column" width="100%" onWheel={onWheel}>
-    {pinned.map((entry, index) => line(entry, `pinned-${String(index)}`))}
-    {body.slice(start, start + rows).map((entry, index) => line(entry, `body-${String(start + index)}`))}
-    {body.length > rows && <Text dimColor>{`${start + 1}–${Math.min(start + rows, body.length)} / ${body.length}  ·  scroll with wheel or PageUp/PageDown`}</Text>}
+    {fixed.map((entry, index) => line(entry, `fixed-${String(index)}`))}
+    {scrolled.slice(start, start + rows).map((entry, index) => line(entry, `body-${String(start + index)}`))}
+    {scrolled.length > rows && <Text dimColor>{`${start + 1}–${Math.min(start + rows, scrolled.length)} / ${scrolled.length}  ·  scroll with wheel or PageUp/PageDown`}</Text>}
   </MouseZone>;
 }
 

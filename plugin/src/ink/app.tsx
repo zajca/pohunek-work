@@ -210,7 +210,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [launcher, setLauncher] = useState(newLauncher);
   const [view, setView] = useState<ViewName>("Work");
   /** The last press on a list row, which a press on the same row within `doubleClickMs` turns into a double click. */
-  const rowClick = useRef<{ readonly view: ViewName; readonly index: number; readonly at: number } | null>(null);
+  const rowClick = useRef<{ readonly id: string; readonly at: number } | null>(null);
   const [overlay, setOverlay] = useState<Overlay>(options.mode === "new-session" ? "form" : "none");
   const [snapshot, setSnapshot] = useState<ControlSnapshot | null>(null);
   const [work, setWork] = useState<WorkSnapshot | null>(null);
@@ -258,7 +258,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [created, setCreated] = useState<CreatedSession | null>(null);
   const [workChoice, setWorkChoice] = useState(0);
   // The link chooser of `l`: the session, the highlighted line and the overlay it returns to on Esc or a pick.
-  const [linkChoice, setLinkChoice] = useState<{ session: ControlSession; index: number; returnTo: "none" | "session" } | null>(null);
+  // The highlighted link is kept by its URL, so a refresh that removes a link above it does not move the highlight.
+  const [linkChoice, setLinkChoice] = useState<{ session: ControlSession; url: string | null; returnTo: "none" | "session" } | null>(null);
   // Bumped when a mutation completes; a read that started before it must not replace the state the mutation showed.
   const mutationEpoch = useRef(0);
   // Counts the actions that started; a read that completes later checks it before it reports its own result.
@@ -808,7 +809,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (links.length === 0) { bumpStatus(`No link: ${noLinkReason(session, work, originOf(session))}`); return; }
     const only = links[0];
     if (links.length === 1 && only !== undefined) { openLink(only.url); return; }
-    setLinkChoice({ session, index: 0, returnTo });
+    setLinkChoice({ session, url: links[0]?.url ?? null, returnTo });
     setOverlay("links");
   }, [linksOf, openLink, originOf, work]);
 
@@ -961,15 +962,28 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [inspectHost, inspectSessionAt, openNotification, records, selectIndex, sessions, snapshot?.hosts, view, workRows]);
 
   /**
+   * The identity of the item drawn at `index` of `target`. A snapshot refresh can reorder a list between two presses,
+   * so a press pair counts as a double click only when both presses name the same item.
+   */
+  const rowIdentity = useCallback((target: ViewName, index: number): string | null => {
+    if (target === "Work") { const item = workRows?.[index]; return item === undefined ? null : `work:${rowId(item)}`; }
+    if (target === "Sessions") { const session = sessions[index]; return session === undefined ? null : `session:${session.host}/${session.id}`; }
+    if (target === "Hosts") { const host = snapshot?.hosts[index]; return host === undefined ? null : `host:${host.route}`; }
+    const record = records[index];
+    return record === undefined ? null : `activity:${record.host}/${record.id}`;
+  }, [records, sessions, snapshot?.hosts, workRows]);
+
+  /**
    * A press on a row selects it and never opens it. A second press on the same row of the same view within
    * `doubleClickMs` does what Enter does on that row: Sessions attaches when the side panel is visible.
    */
   const clickRow = useCallback((index: number): void => {
     const now = Date.now();
     const previous = rowClick.current;
-    rowClick.current = { view, index, at: now };
+    const id = rowIdentity(view, index);
+    rowClick.current = id === null ? null : { id, at: now };
     selectIndex(index);
-    if (previous === null || previous.view !== view || previous.index !== index || now - previous.at > options.doubleClickMs) return;
+    if (id === null || previous === null || previous.id !== id || now - previous.at > options.doubleClickMs) return;
     rowClick.current = null;
     if (view === "Sessions" && split) {
       const session = sessions[index];
@@ -977,7 +991,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     openRow(index);
-  }, [openRow, openSelected, options.doubleClickMs, selectIndex, sessions, split, view]);
+  }, [openRow, openSelected, options.doubleClickMs, rowIdentity, selectIndex, sessions, split, view]);
 
   const changeFormChoice = useCallback((delta: number): void => {
     if (launchOptions === null) return;
@@ -1139,22 +1153,32 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (choice === null) { setOverlay("none"); return; }
       const links = linksOf(choice.session);
       const close = (): void => { setLinkChoice(null); setOverlay(choice.returnTo); };
-      // A refresh can shrink the links while the chooser is open; an out-of-range pick says so instead of failing silently.
+      const highlighted = Math.max(0, links.findIndex((link) => link.url === choice.url));
+      const highlight = (index: number): void => { setLinkChoice({ ...choice, url: links[index]?.url ?? null }); };
+      // A refresh can change the links while the chooser is open; a pick that no longer has its link says so instead of failing silently.
       const missing = (number: number): void => {
         if (links.length === 0) { close(); bumpStatus(`No link ${String(number)} on this session anymore; none are left`); return; }
         bumpStatus(`No link ${String(number)} on this session anymore; choose 1–${String(links.length)}`);
       };
-      const pick = (index: number): void => {
+      const openNumbered = (index: number): void => {
         const link = links[index];
         if (link === undefined) { close(); missing(index + 1); return; }
         close();
         openLink(link.url);
       };
       if (key.escape) close();
-      else if (key.upArrow || key.downArrow) setLinkChoice({ ...choice, index: Math.max(0, Math.min(links.length - 1, choice.index + (key.downArrow ? 1 : -1))) });
-      else if (key.return) pick(choice.index);
-      else if (/^[1-9]$/.test(input)) {
-        if (Number(input) <= links.length) pick(Number(input) - 1);
+      else if (key.upArrow || key.downArrow) highlight(Math.max(0, Math.min(links.length - 1, highlighted + (key.downArrow ? 1 : -1))));
+      else if (key.return) {
+        const link = links.find((item) => item.url === choice.url);
+        if (link === undefined) {
+          highlight(0);
+          bumpStatus(links.length === 0 ? "The chooser has no links left on this session" : "The highlighted link is no longer on this session; choose again");
+          return;
+        }
+        close();
+        openLink(link.url);
+      } else if (/^[1-9]$/.test(input)) {
+        if (Number(input) <= links.length) openNumbered(Number(input) - 1);
         else missing(Number(input));
       }
       return;
@@ -1274,7 +1298,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work, originOf(sessionDetail))}
     offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
     onOpenLink={(index) => { openLinkNumber(sessionDetail, index + 1); }} />;
-  else if (overlay === "links" && linkChoice !== null) content = <LinkChooser links={linksOf(linkChoice.session)} selected={linkChoice.index} />;
+  else if (overlay === "links" && linkChoice !== null) content = <LinkChooser links={linksOf(linkChoice.session)} selected={Math.max(0, linksOf(linkChoice.session).findIndex((link) => link.url === linkChoice.url))} />;
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
