@@ -88,8 +88,9 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 - `pohunek-work tui` opens the full-screen Ink interface. Work lists items from
   the plugin's public CLI output and hands actions to `pohunek-work do`.
   Sessions, Hosts and Activity use public `pohunek --json` commands. Press
-  `1`–`4`, left/right arrows, or click a tab to switch views. Up/down arrows select a row; Enter or a
-  click opens its detail in every view, and Esc returns to the list. Opening a
+  `1`–`4`, Tab or Shift-Tab, or click a tab to switch views; arrows never switch views. Up/down arrows select a row;
+  Enter or a click opens the row, and Esc returns to the list. In Sessions, Enter attaches the highlighted session when
+  its side panel is visible (at or above `detail_min_width`) and opens its detail otherwise. Opening a
   Work item shows its next action and available choices before anything runs;
   click an action or select it with arrows and press Enter to preview its plan,
   then choose Run to execute it. Opening a notification keeps
@@ -115,8 +116,9 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   shown without starting a worker. Activity has
   Recent, Unread and Archived scopes. Partial host failures are shown in the
   interface and block writes on affected hosts;
-- `pohunek-work new-session` opens the session form alone, then attaches in the
-  same terminal. In the main TUI, `n` opens that form and `a` in Sessions opens
+- `pohunek-work new-session` opens the session form alone. With `attach_mode = "inline"` (or `--attach inline`)
+  it attaches in the same terminal; with `window` (or `--attach window`) it opens the session in a new window,
+  prints `opened <id> in a new window` and exits. In the main TUI, `n` opens that form and `a` in Sessions opens
   the Assistant form. Click a field or use Tab to change focus; click a visible
   choice to select it, use the wheel to browse longer choice lists, or use
   arrows to change a host, project, agent or action template. Clicking the
