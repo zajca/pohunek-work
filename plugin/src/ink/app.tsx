@@ -1330,9 +1330,19 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   };
 
+  // Ink passes a chunk of several presses as one input. Each press is handled after the render that committed the
+  // previous one, so it reads the state that press left; the handler closure of a render is current only for that render.
+  const pendingPresses = useRef<{ press: string; key: Key }[]>([]);
+  const [pressTick, setPressTick] = useState(0);
+  useEffect(() => {
+    const next = pendingPresses.current.shift();
+    if (next === undefined) return;
+    handleKey(next.press, next.key);
+    if (pendingPresses.current.length > 0) setPressTick((old) => old + 1);
+  }, [pressTick]);
   useInput((input, key) => {
-    // Ink passes a chunk of several presses as one input; each press is handled on its own, with the key flags its own.
-    for (const press of keyPresses(input)) handleKey(press, press === input ? key : splitKey(press, key));
+    for (const press of keyPresses(input)) pendingPresses.current.push({ press, key: press === input ? key : splitKey(press, key) });
+    setPressTick((old) => old + 1);
   });
 
   const footer = overlay === "none" ? editing !== null ? FILTER_FOOTER : stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · / filter · Enter open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :

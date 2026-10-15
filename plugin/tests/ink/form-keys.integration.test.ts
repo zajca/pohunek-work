@@ -151,6 +151,23 @@ test("a chunk of text and a Tab types the text and moves the focus", async () =>
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
 }, SCENARIO_TIMEOUT_MS);
 
+test("n and a Tab sent as one write open the form and move the focus to the second field", async () => {
+  scenario = await startTuiScenario();
+  // The Tab must read the form the n press opened, so the form stays open with its focus on Agent.
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "No sessions" },
+    keys("n\t"),
+    { expect: "NEW SESSION" },
+    { expect: "▸ Agent" },
+    { pause: 500 },
+    { expect: "▸ Agent" },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
+
 test("two ↓ sent as one write move the focus two fields", async () => {
   scenario = await startTuiScenario();
   const steps: PtyStep[] = [
