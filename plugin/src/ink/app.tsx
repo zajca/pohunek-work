@@ -968,6 +968,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setOverlay("confirm");
   }, []);
 
+  // A confirmation names one target; leaving the confirm overlay by any path (Esc, a view change, a click) drops it,
+  // so a later confirmation cannot act on a session the owner has stopped looking at.
+  useEffect(() => {
+    if (overlay !== "confirm") { setConfirm(null); setConfirmSession(null); }
+  }, [overlay]);
+
   const selectIndex = useCallback((index: number): void => {
     const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? hostRows.length : records.length;
     const next = Math.max(0, Math.min(count - 1, index));
@@ -1478,8 +1484,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     <ActionButton label="Copy path" onClick={() => void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd)} />
     {linksOf(sessionDetail).length === 1 && <ActionButton label="Open link" onClick={() => { chooseLink(sessionDetail, "session"); }} />}
     {sessionDetail.host === "local" && <ActionButton label="Open folder" onClick={() => void openFolder(sessionDetail)} />}
-    {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { setConfirm("stop"); setOverlay("confirm"); }} />}
-    {sessionWritable && <ActionButton label="Remove" onClick={() => { setConfirm("remove"); setOverlay("confirm"); }} />}
+    {sessionMutable && sessionActive && <ActionButton label="Stop" onClick={() => { requestConfirm(sessionDetail, "stop", "session"); }} />}
+    {sessionWritable && <ActionButton label="Remove" onClick={() => { requestConfirm(sessionDetail, "remove", "session"); }} />}
     <ActionButton label="Back" onClick={() => { setOverlay("none"); }} />
   </Box>;
   else if (overlay === "recovery" && recovery !== null) toolbar = <Box gap={1}>
