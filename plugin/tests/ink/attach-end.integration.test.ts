@@ -29,12 +29,14 @@ let relay: SocketRelay | null = null;
 let tcp: TcpRelay | null = null;
 
 afterEach(async () => {
-  await tcp?.stop();
+  // Every teardown step runs even when one rejects, so a leaked connection does not keep the daemon alive; the first
+  // rejection is rethrown afterwards so the leak still fails the test.
+  const steps = await Promise.allSettled([tcp?.stop(), relay?.stop(), scenario?.stop()]);
   tcp = null;
-  await relay?.stop();
   relay = null;
-  await scenario?.stop();
   scenario = null;
+  const failed = steps.find((step): step is PromiseRejectedResult => step.status === "rejected");
+  if (failed !== undefined) throw failed.reason;
 });
 
 /** Opens the Sessions view, attaches the first session (inline, in this terminal) and waits for the shell's answer. */
@@ -183,14 +185,20 @@ test("a SIGTERM from outside to the attach is reported and the session keeps run
 
 test("a session created from the form is attached, and its end brings the TUI back", async () => {
   scenario = await startTuiScenario(INLINE);
-  const tabs = (count: number): PtyStep[] => Array.from({ length: count }, (): PtyStep => ({ send: "09", settle: 100 }));
+  // Each Tab waits for the marker of the field it must reach: Tabs sent back to back can arrive as one read, and the
+  // form then takes them as text instead of moves. The last Tab reaches the submit row, which has no marker, so the
+  // Base branch marker must be gone before Enter.
+  const tab: PtyStep = { send: "09", settle: 100 };
+  const movesToBaseBranch = ["Agent", "Action/template", "Name", "Prompt", "Branch", "Base branch"].flatMap((label): PtyStep[] => [tab, { expect: `▸ ${label}` }]);
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
     { expect: "No sessions" },
     keys("n"),
     { expect: "NEW SESSION" },
-    ...tabs(7),
+    ...movesToBaseBranch,
+    tab,
+    { absent: "▸ Base branch", pause: 500 },
     keys("\r"),
     { expect: "sh-" },
     keys(ECHO_READY),
@@ -312,6 +320,16 @@ async function refusalCount(marker: string): Promise<number> {
   return (await readFile(marker, "utf8").catch(() => "")).split("\n").filter((line) => line !== "").length;
 }
 
+/** Waits until the relay refused a connection: the SDK's reads of the remote host failed at the TCP boundary. */
+async function untilConnectionRefused(relay: TcpRelay): Promise<void> {
+  const deadline = Date.now() + OUTPUT_WAIT_MS;
+  for (;;) {
+    if (relay.refusedCount() > 0) return;
+    if (Date.now() > deadline) throw new Error("no remote connection was refused during the outage");
+    await Bun.sleep(OUTPUT_POLL_MS);
+  }
+}
+
 /** Waits until the decisive read of the remote session failed, which the attach can only survive by not ending on it. */
 async function untilSessionReadRefused(marker: string): Promise<void> {
   const deadline = Date.now() + OUTPUT_WAIT_MS;
@@ -336,6 +354,7 @@ test("a remote host whose reads fail keeps its attach, and the attach ends once 
   // The attach ends only when a read after the recovery confirms the stop, so that first successful read ends it.
   const remote = untilPrinted(scenario, id, READY).then(async () => {
     relay.setFailing(true);
+    await untilConnectionRefused(relay);
     await proxy.setRules(remoteRules(relay.port, refusals));
     await untilSessionReadRefused(refusals);
     await Bun.sleep(REMOTE_FAILURE_MS);
@@ -360,8 +379,11 @@ test("a remote host whose reads fail keeps its attach, and the attach ends once 
     { pause: REMOTE_FAILURE_MS },
     { expect: "UNAVAILABLE" },
   ];
+  // A failed trigger is rethrown after the run, so the scenario is never abandoned while its pty run is still going.
+  const remoteOutcome = remote.then(() => null, (error: unknown) => ({ error }));
   const result = await scenario.run(steps, { timeoutS: 120 });
-  await remote;
+  const outcome = await remoteOutcome;
+  if (outcome !== null) throw outcome.error;
   expect(relay.refusedCount(), "no remote connection was refused").toBeGreaterThan(0);
   expect(await refusalCount(refusals), "no session read of the remote host failed").toBeGreaterThan(0);
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
