@@ -9,6 +9,7 @@ import { keys, type PtyStep } from "./support/pty.ts";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { startSocketRelay, type SocketRelay } from "./support/socket-relay.ts";
 import { startTcpRelay, type TcpRelay } from "./support/tcp-relay.ts";
+import type { ProxyRule } from "./support/cli-proxy.ts";
 import { daemonLocalSocket } from "../helpers/core-daemon.ts";
 
 const CTRL_BACKSLASH = "1c";
@@ -28,7 +29,7 @@ let relay: SocketRelay | null = null;
 let tcp: TcpRelay | null = null;
 
 afterEach(async () => {
-  tcp?.stop();
+  await tcp?.stop();
   tcp = null;
   await relay?.stop();
   relay = null;
@@ -286,21 +287,60 @@ test("a snapshot without the attached session does not end the attach while a re
 const REMOTE = "remote-peer";
 const REMOTE_FAILURE_MS = 6000;
 
+/** The host route the TUI names the remote peer by behind the relay port (the same form the launch-host scenario uses). */
+function remoteRoute(port: number): string {
+  return `netbird:peer~${Buffer.from(REMOTE).toString("base64url")}@${String(port)}`;
+}
+
+/**
+ * Rules of the remote host. During the outage the host is not listed and its session read is refused by a stand-in that
+ * counts the refusal: a read that fails keeps the last records, so the session leaves the snapshot only when its host does.
+ */
+function remoteRules(port: number, outageMarker: string | null): ProxyRule[] {
+  const discovery: ProxyRule = outageMarker === null
+    ? { match: ["host", "discover"], appendOk: [{ name: REMOTE, fqdn: "remote.netbird.example", address: "127.0.0.1", port, overlay: "netbird", peer_id: REMOTE, classification: "reachable_daemon", daemon_version: "0.34.2" }] }
+    : { match: ["host", "discover"], failWith: 1 };
+  const refusal: ProxyRule[] = outageMarker === null ? [] : [{
+    match: ["session", "inspect", remoteRoute(port)],
+    replaceWith: ["/bin/sh", "-c", `echo refused >> ${outageMarker}; exit 1`],
+  }];
+  return [discovery, ...refusal, { match: [], aliasPrefix: { from: "netbird:", to: "local" } }];
+}
+
+/** Number of session reads of the remote host that the stand-in refused, counted by the marker file. */
+async function refusalCount(marker: string): Promise<number> {
+  return (await readFile(marker, "utf8").catch(() => "")).split("\n").filter((line) => line !== "").length;
+}
+
+/** Waits until the decisive read of the remote session failed, which the attach can only survive by not ending on it. */
+async function untilSessionReadRefused(marker: string): Promise<void> {
+  const deadline = Date.now() + OUTPUT_WAIT_MS;
+  for (;;) {
+    if (await refusalCount(marker) > 0) return;
+    if (Date.now() > deadline) throw new Error("no read of the remote session was refused during the outage");
+    await Bun.sleep(OUTPUT_POLL_MS);
+  }
+}
+
 test("a remote host whose reads fail keeps its attach, and the attach ends once a read confirms the session stopped", async () => {
-  scenario = await startTuiScenario(INLINE);
+  // The refresh runs every second, so the session leaves the snapshot and the decisive read runs inside the outage.
+  scenario = await startTuiScenario({ overrides: { "tui.attach_mode": "inline", "tui.session_reconcile_secs": 1 } });
   const id = await createShellSession(scenario.daemon, "alpha");
   const daemon = scenario.daemon;
-  tcp = startTcpRelay(daemonLocalSocket(daemon));
-  await scenario.proxy.setRules([
-    { match: ["host", "discover"], appendOk: [{ name: REMOTE, fqdn: "remote.netbird.example", address: "127.0.0.1", port: tcp.port, overlay: "netbird", peer_id: REMOTE, classification: "reachable_daemon", daemon_version: "0.34.2" }] },
-    { match: [], aliasPrefix: { from: "netbird:", to: "local" } },
-  ]);
-  // The remote reads are refused for a window after the attach answers; then the relay recovers and the session is
-  // stopped, so the first successful read confirms the end.
+  const proxy = scenario.proxy;
+  const refusals = join(dirname(proxy.binary), "session-read-refused");
+  const relay = startTcpRelay(daemonLocalSocket(daemon));
+  tcp = relay;
+  await proxy.setRules(remoteRules(relay.port, null));
+  // The outage refuses the remote TCP connections, drops the host from discovery and refuses the CLI read of its session.
+  // The attach ends only when a read after the recovery confirms the stop, so that first successful read ends it.
   const remote = untilPrinted(scenario, id, READY).then(async () => {
-    tcp?.setFailing(true);
+    relay.setFailing(true);
+    await proxy.setRules(remoteRules(relay.port, refusals));
+    await untilSessionReadRefused(refusals);
     await Bun.sleep(REMOTE_FAILURE_MS);
-    tcp?.setFailing(false);
+    relay.setFailing(false);
+    await proxy.setRules(remoteRules(relay.port, null));
     await daemon.pohunek(["session", "stop", id]);
   });
   const steps: PtyStep[] = [
@@ -322,6 +362,7 @@ test("a remote host whose reads fail keeps its attach, and the attach ends once 
   ];
   const result = await scenario.run(steps, { timeoutS: 120 });
   await remote;
-  expect(tcp.refusedCount(), "no remote read was refused").toBeGreaterThan(0);
+  expect(relay.refusedCount(), "no remote connection was refused").toBeGreaterThan(0);
+  expect(await refusalCount(refusals), "no session read of the remote host failed").toBeGreaterThan(0);
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);
