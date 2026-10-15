@@ -13,6 +13,14 @@ def make_controlling():
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 child = subprocess.Popen(spec["cmd"], stdin=slave, stdout=slave, stderr=slave, env=spec["env"], cwd=spec.get("cwd"), start_new_session=True, preexec_fn=make_controlling)
 os.close(slave)
+# A terminated driver ends the command's whole process group, so no child survives it, even one that ignores SIGHUP.
+def end_on_signal(signum, frame):
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    os._exit(128 + signum)
+signal.signal(signal.SIGTERM, end_on_signal)
 os.set_blocking(master, False)
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[=>78]")
 output = bytearray()
