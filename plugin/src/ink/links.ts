@@ -24,7 +24,8 @@ export function sessionLinks(session: ControlSession, items: readonly ListItem[]
   const candidates: SessionLink[] = [];
   for (const item of joinedItems(session, items)) {
     if (item.pull_request !== null) candidates.push({ label: "GitHub PR", url: item.pull_request.url });
-    if (item.issue !== null) candidates.push({ label: item.issue.id.startsWith("linear:") ? "Linear issue" : "GitHub issue", url: item.issue.url });
+    const issue = issueOf(item, items ?? []);
+    if (issue !== null) candidates.push({ label: issue.id.startsWith("linear:") ? "Linear issue" : "GitHub issue", url: issue.url });
   }
   const core = workLinkOf(session);
   if (core !== null) candidates.push({ label: labelOfUrl(core), url: core });
@@ -49,11 +50,14 @@ const WARNING_REASON_MAX = 120;
  */
 export function noLinkReason(session: ControlSession, work: WorkSnapshot | null, originUrl: string | null): string {
   const reasons: string[] = [];
+  // The branch page is named first: the Links block cuts a long line at the panel width, and this cause is the rarer one.
+  if (session.branch !== null && session.branch !== "" && githubBranchUrl(originUrl, session.branch) === null) {
+    reasons.push(originUrl === null ? "no origin: no branch page" : "origin is not GitHub: no branch page");
+  }
   if (session.host !== "local") reasons.push("Work is read on the local host only");
   else if (work === null || work.payload === null) reasons.push(work?.warning ? `Work unavailable: ${warningText(work.warning)}` : "Work not loaded yet");
   else if (work.partial || work.warning !== null) reasons.push(`Work incomplete: ${work.warning === null ? "a source did not answer" : warningText(work.warning)}`);
   else reasons.push("no Work match for this session");
-  if (session.branch !== null && originUrl === null) reasons.push("the project has no GitHub origin for its branch page");
   return reasons.join("; ");
 }
 
@@ -61,6 +65,16 @@ export function noLinkReason(session: ControlSession, work: WorkSnapshot | null,
 function warningText(warning: string): string {
   const line = warning.split("\n")[0]?.trim() ?? "";
   return line.length > WARNING_REASON_MAX ? `${line.slice(0, WARNING_REASON_MAX - 1)}…` : line;
+}
+
+/**
+ * The issue of a joined item. Several pull requests can share one issue: the Work list then carries the issue on one
+ * of their rows only, and the others name it by `issue_key`, so the issue is taken from the row that carries it.
+ */
+function issueOf(item: ListItem, items: readonly ListItem[]): ListItem["issue"] {
+  if (item.issue !== null || item.issue_key === null) return item.issue;
+  const carrier = items.find((other) => other.project === item.project && other.issue_key === item.issue_key && other.issue !== null);
+  return carrier?.issue ?? null;
 }
 
 function joinedItems(session: ControlSession, items: readonly ListItem[] | null): readonly ListItem[] {

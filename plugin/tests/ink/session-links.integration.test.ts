@@ -361,3 +361,91 @@ test("a 16-row terminal with a session of three links still shows its output and
   const result = await tui.run(steps, { cols: 120, rows: 16, timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, REAL_SCENARIO_TIMEOUT_MS);
+
+/** Waits for the session list to drop a session the scenario removed while a chooser was open. */
+const SESSION_GONE_WAIT_MS = 10_000;
+/** Time into the run at which the chooser is open and the session is removed under it. */
+const CHOOSER_OPEN_WAIT_MS = 6_000;
+const PR2_URL = "https://github.com/acme/widgets/pull/13";
+
+test("a chooser whose session was removed while it was open opens no link", async () => {
+  const { stub, tui } = await startScriptedScenario({ envelope: true, stderr: "", exit: 0 }, { envelope: true, stderr: "", exit: 0 }, SWITCH_AFTER_CALLS);
+  const linked = await linkedSession("links-removed", { id: LINEAR_ITEM, url: LINEAR_URL }, "feature/links");
+  await writeWorkPhaseHere("before", workList([]));
+  await writeWorkPhaseHere("after", workList([]));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "[2] Branch on GitHub" },
+    keys("l"),
+    { expect: "Choose 1–2" },
+    // The session is removed under the open chooser; its stale links must not be offered.
+    { pause: SESSION_GONE_WAIT_MS },
+    keys(ENTER),
+    { expect: "The session of this chooser is no longer listed; no link opened" },
+    keys("q"),
+  ];
+  // The chooser is open a few seconds into the run; the session is removed while the run waits on its pause.
+  const running = tui.run(steps, { ...WIDE, timeoutS: 90 });
+  await Bun.sleep(CHOOSER_OPEN_WAIT_MS);
+  const removed = await tui.daemon.pohunek(["session", "rm", linked, "--json"]);
+  expect((JSON.parse(removed.stdout) as { ok?: unknown }).ok).toBeDefined();
+  const result = await running;
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  expect(await readFile(stub.trace, "utf8").then(() => true, () => false)).toBe(false);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("two pull requests sharing one issue: a session on the secondary PR shows and opens both the PR and the issue", async () => {
+  const { stub, tui } = await startScriptedScenario({ envelope: true, stderr: "", exit: 0 }, { envelope: true, stderr: "", exit: 0 }, SWITCH_AFTER_CALLS);
+  const linked = await linkedSession("links-secondary", null, null);
+  // The Work list carries the issue on the winning PR's row only; the session's row names it by issue_key.
+  const secondary = { ...workItem(linked, "github:acme/widgets#12", PR_URL, null), issue_key: LINEAR_ITEM };
+  const winner = workItem("none", "github:acme/widgets#13", PR2_URL, { id: LINEAR_ITEM, url: LINEAR_URL });
+  await writeWorkPhaseHere("before", workList([secondary, winner]));
+  await writeWorkPhaseHere("after", workList([secondary, winner]));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "[1] GitHub PR" },
+    { expect: "[2] Linear issue" },
+    keys("l"),
+    { expect: "Choose 1–2" },
+    keys(ARROW_DOWN),
+    keys(ENTER),
+    { pause: SETTLE_MS },
+    keys("l"),
+    keys(ENTER),
+    { pause: SETTLE_MS },
+    keys("q"),
+  ];
+  const result = await tui.run(steps, { ...WIDE, timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+  expect(await traced(stub.trace, 2)).toEqual([LINEAR_URL, PR_URL]);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a project whose origin is not GitHub says why its session has no branch page", async () => {
+  const { tui } = await startScriptedScenario({ envelope: true, stderr: "", exit: 0 }, { envelope: true, stderr: "", exit: 0 }, SWITCH_AFTER_CALLS);
+  if (directory === null) throw new Error("scenario directory missing");
+  await writeWorkPhaseHere("before", workList([]));
+  await writeWorkPhaseHere("after", workList([]));
+  // A project whose origin is a GitLab repository: the daemon fixture registers only GitHub origins.
+  const repo = join(directory, "gitlab-repo");
+  for (const args of [["init", "-q", "-b", "main", repo], ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "init"], ["-C", repo, "remote", "add", "origin", "https://gitlab.com/acme/widgets.git"]]) {
+    const git = Bun.spawn(["git", ...args], { stdout: "ignore", stderr: "ignore" });
+    expect(await git.exited).toBe(0);
+  }
+  const added = await tui.daemon.pohunek(["project", "add", repo, "--json"]);
+  const label = (JSON.parse(added.stdout) as { ok?: { label?: unknown } }).ok?.label;
+  if (typeof label !== "string") throw new Error(`project add failed: ${added.stdout}${added.stderr}`);
+  const created = await tui.daemon.pohunek(["session", "new", "--agent", "shell", "--project", label, "--name", "gitlab-branch", "--branch", "feature/gitlab", "--json"]);
+  expect((JSON.parse(created.stdout) as { ok?: unknown }).ok).toBeDefined();
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    // The only session is the GitLab one, so the panel shows its Links block with the reason.
+    { expect: "origin is not GitHub: no branch page" },
+    keys("q"),
+  ];
+  const result = await tui.run(steps, { ...WIDE, timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, REAL_SCENARIO_TIMEOUT_MS);

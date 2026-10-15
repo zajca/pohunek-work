@@ -258,8 +258,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [created, setCreated] = useState<CreatedSession | null>(null);
   const [workChoice, setWorkChoice] = useState(0);
   // The link chooser of `l`: the session, the highlighted line and the overlay it returns to on Esc or a pick.
-  // The highlighted link is kept by its URL, so a refresh that removes a link above it does not move the highlight.
-  const [linkChoice, setLinkChoice] = useState<{ session: ControlSession; url: string | null; returnTo: "none" | "session" } | null>(null);
+  // The chooser names its session by host and id and its highlight by URL, so a refresh re-resolves both.
+  const [linkChoice, setLinkChoice] = useState<{ host: string; id: string; url: string | null; returnTo: "none" | "session" } | null>(null);
   // Bumped when a mutation completes; a read that started before it must not replace the state the mutation showed.
   const mutationEpoch = useRef(0);
   // Counts the actions that started; a read that completes later checks it before it reports its own result.
@@ -809,7 +809,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (links.length === 0) { bumpStatus(`No link: ${noLinkReason(session, work, originOf(session))}`); return; }
     const only = links[0];
     if (links.length === 1 && only !== undefined) { openLink(only.url); return; }
-    setLinkChoice({ session, url: links[0]?.url ?? null, returnTo });
+    setLinkChoice({ host: session.host, id: session.id, url: links[0]?.url ?? null, returnTo });
     setOverlay("links");
   }, [linksOf, openLink, originOf, work]);
 
@@ -1151,8 +1151,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (overlay === "links") {
       const choice = linkChoice;
       if (choice === null) { setOverlay("none"); return; }
-      const links = linksOf(choice.session);
+      const chosen = snapshot?.sessions.find((session) => session.host === choice.host && session.id === choice.id) ?? null;
+      const links = chosen === null ? [] : linksOf(chosen);
       const close = (): void => { setLinkChoice(null); setOverlay(choice.returnTo); };
+      if (chosen === null) {
+        close();
+        bumpStatus("The session of this chooser is no longer listed; no link opened");
+        return;
+      }
       const highlighted = Math.max(0, links.findIndex((link) => link.url === choice.url));
       const highlight = (index: number): void => { setLinkChoice({ ...choice, url: links[index]?.url ?? null }); };
       // A refresh can change the links while the chooser is open; a pick that no longer has its link says so instead of failing silently.
@@ -1298,7 +1304,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work, originOf(sessionDetail))}
     offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
     onOpenLink={(index) => { openLinkNumber(sessionDetail, index + 1); }} />;
-  else if (overlay === "links" && linkChoice !== null) content = <LinkChooser links={linksOf(linkChoice.session)} selected={Math.max(0, linksOf(linkChoice.session).findIndex((link) => link.url === linkChoice.url))} />;
+  else if (overlay === "links" && linkChoice !== null) {
+    const chosen = snapshot?.sessions.find((session) => session.host === linkChoice.host && session.id === linkChoice.id) ?? null;
+    const chosenLinks = chosen === null ? [] : linksOf(chosen);
+    content = <LinkChooser links={chosenLinks} selected={Math.max(0, chosenLinks.findIndex((link) => link.url === linkChoice.url))} />;
+  }
   else if (overlay === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
   else if (overlay === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
   else if (overlay === "rename" || overlay === "metadata") content = <Text>{`${overlay === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
