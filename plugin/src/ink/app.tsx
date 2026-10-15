@@ -195,6 +195,8 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
     onFollowHighlight(listWindowStart(form.choice, highlight, choices.length, choiceLimit));
   }, [choiceLimit, choices.length, form.choice, form.search, highlight, matchKey, onFollowHighlight]);
   const fieldName = formFieldLabel(assistant, form.focus).toLowerCase();
+  // The submit row is the field after the last one; the Assistant form has one field fewer.
+  const submitFocused = created === null && form.focus === (assistant ? ASSISTANT_FIELDS : FORM_FIELDS) - 1;
   const hostChoices = options?.hosts.map((host) => host.label) ?? [];
   const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
   // A pick field shows its query in place of its value while the query is typed.
@@ -229,7 +231,8 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
       </MouseZone>)}
     </MouseZone>}
     <Box gap={1}>
-      <ActionButton label={created === null ? "Create and attach" : "Attach session"} onClick={onSubmit} primary />
+      {/* The focused submit row carries the same ▸ marker as the fields, so the focus on it is visible. */}
+      <ActionButton label={`${submitFocused ? "▸ " : ""}${created === null ? "Create and attach" : "Attach session"}`} onClick={onSubmit} primary />
       <ActionButton label={created === null ? "Cancel" : "Close"} onClick={onCancel} />
     </Box>
     {created === null && !compact && form.focus === 0 && <Text dimColor wrap="truncate-end">{`Hosts: ${hostChoices.join(", ") || "loading"}`}</Text>}

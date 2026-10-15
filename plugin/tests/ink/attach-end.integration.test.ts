@@ -185,9 +185,8 @@ test("a SIGTERM from outside to the attach is reported and the session keeps run
 
 test("a session created from the form is attached, and its end brings the TUI back", async () => {
   scenario = await startTuiScenario(INLINE);
-  // Each Tab waits for the marker of the field it must reach: Tabs sent back to back can arrive as one read, and the
-  // form then takes them as text instead of moves. The last Tab reaches the submit row, which has no marker, so the
-  // Base branch marker must be gone before Enter.
+  // Each Tab waits for the marker of the field it must reach, so Tabs are never sent faster than the form moves; the
+  // last Tab is confirmed by the marker of the submit row before Enter.
   const tab: PtyStep = { send: "09", settle: 100 };
   const movesToBaseBranch = ["Agent", "Action/template", "Name", "Prompt", "Branch", "Base branch"].flatMap((label): PtyStep[] => [tab, { expect: `▸ ${label}` }]);
   const steps: PtyStep[] = [
@@ -198,7 +197,7 @@ test("a session created from the form is attached, and its end brings the TUI ba
     { expect: "NEW SESSION" },
     ...movesToBaseBranch,
     tab,
-    { absent: "▸ Base branch", pause: 500 },
+    { expect: "▸ Create and attach" },
     keys("\r"),
     { expect: "sh-" },
     keys(ECHO_READY),
