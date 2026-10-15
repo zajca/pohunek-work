@@ -17,6 +17,7 @@ const READY = "ready-2";
 const ECHO_READY = "echo ready-$((1+1))\r";
 const ATTACH_SETTLE_MS = 2000;
 const RETURN_SETTLE_MS = 1000;
+const RETURN_WITHIN_MS = 12_000;
 const VIEW_SWITCH_MS = 500;
 const INLINE = { overrides: { "tui.attach_mode": "inline" } };
 const STOPPED_BY_SIGNAL = "stopped by SIGTERM";
@@ -212,44 +213,45 @@ function writeRules(tui: TuiScenario, rules: unknown): PtyStep {
   return keys(`printf '%s' '${JSON.stringify(rules)}' > ${proxyRulesFile(tui)}\r`);
 }
 
-/** Waits until the proxy refuses `host discover`, which the TUI's refresh runs; the failure is then in effect. */
-async function untilDiscoveryFails(tui: TuiScenario): Promise<void> {
+/**
+ * Waits until the proxy refused a `host discover` call: the rule answers with a stand-in that appends to a marker file
+ * and fails, so the marker counts the refusals the TUI's refresh received.
+ */
+async function untilDiscoveryRefused(marker: string): Promise<void> {
   const deadline = Date.now() + OUTPUT_WAIT_MS;
   for (;;) {
-    const proc = Bun.spawn([tui.proxy.binary, "host", "discover", "--json"], { env: tui.daemon.clientEnv, stdout: "pipe", stderr: "pipe" });
-    const exit = await proc.exited;
-    if (exit !== 0) return;
-    if (Date.now() > deadline) throw new Error("the proxy never refused host list");
+    if (await Bun.file(marker).exists()) return;
+    if (Date.now() > deadline) throw new Error("the TUI never asked host discover after the refusal was written");
     await Bun.sleep(OUTPUT_POLL_MS);
   }
 }
 
 const EMPTY_LIST_WINDOW_MS = 8000;
-const DISCOVERY_SETTLE_MS = 4000;
 
 test("discovery fails and the attached local session is removed: the attach ends and the TUI comes back", async () => {
-  scenario = await startTuiScenario(INLINE);
+  // Discovery runs with the periodic refresh, so the refresh interval is short enough to read the refusal while attached.
+  scenario = await startTuiScenario({ overrides: { "tui.attach_mode": "inline", "tui.session_reconcile_secs": 1 } });
   const id = await createShellSession(scenario.daemon, "alpha");
-  // The removal runs from the test once the proxy refuses discovery, so the snapshot has the discovery error.
+  const marker = join(dirname(scenario.proxy.binary), "discover-refused");
+  // The removal waits for a counted refusal of `host discover`, the command the TUI's refresh runs; the refresh reads the
+  // failure, so the removal snapshot carries the discovery error.
   const removing = untilPrinted(scenario, id, READY)
-    .then(() => untilDiscoveryFails(scenario as TuiScenario))
-    // The TUI's own refresh must read the failure before the removal, so the removal snapshot carries it. No output
-    // shows that read, so the wait is a settle time for the TUI's refresh.
-    .then(() => Bun.sleep(DISCOVERY_SETTLE_MS))
+    .then(() => untilDiscoveryRefused(marker))
     .then(() => scenario?.daemon.pohunek(["session", "rm", id]));
   const steps: PtyStep[] = [
     ...attachFirst(1),
-    writeRules(scenario, [{ match: ["host", "discover"], failWith: 1 }]),
-    // The TUI shows the discovery error in its header, so the failure is observed before the removal.
-    { expect: "host/source error" },
-    // The main footer comes back only when the TUI redraws after the attach; the list then shows the session gone.
-    { expect: "Tab views" },
-    // The list shows the session gone or kept as stopped, depending on the failed read; the toolbar is the same in both.
-    ...backInTui("Search /"),
+    writeRules(scenario, [{ match: ["host", "discover"], replaceWith: ["/bin/sh", "-c", `echo refused >> ${marker}; exit 1`] }]),
+    // The core ends the attach by itself after its retry window (about 20 s), so the TUI must be back well before that.
+    { pause: RETURN_SETTLE_MS },
+    keys("3"),
+    { expect: "HOSTS", timeout: RETURN_WITHIN_MS },
+    keys("2"),
+    { expect: "Search /", timeout: RETURN_WITHIN_MS },
   ];
   const result = await scenario.run(steps, { timeoutS: 90 });
   await removing;
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+  expect(result.output).not.toContain(BUSY_REFUSAL);
 }, REAL_SCENARIO_TIMEOUT_MS);
 
 test("a snapshot without the attached session does not end the attach while a read says it is running", async () => {
