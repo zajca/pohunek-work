@@ -64,3 +64,17 @@ test("arrows never switch views; Tab does", async () => {
   const result = await scenario.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
 }, SCENARIO_TIMEOUT_MS);
+
+test("three Tabs sent as one write move three views", async () => {
+  scenario = await startTuiScenario();
+  // Work to Activity is three views on: a run of Tabs must move each one from the view the previous one reached.
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("\t\t\t"),
+    { expect: "Scope: Recent" },
+    { absent: "SESSIONS  1", pause: 500 },
+    keys("q"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);

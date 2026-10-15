@@ -135,6 +135,22 @@ test("three Tabs sent as one write move the focus three fields and never enter a
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
 }, SCENARIO_TIMEOUT_MS);
 
+test("a chunk of text and a Tab types the text and moves the focus", async () => {
+  scenario = await startTuiScenario();
+  // Name is the fourth field: the text and the Tab arrive in one write, so the text lands in Name and the focus moves on.
+  const steps: PtyStep[] = [
+    ...openNewSession(),
+    keys("\t\t\t"),
+    { expect: "▸ Name" },
+    keys("abc\t"),
+    { expect: "▸ Prompt" },
+    keys(UP),
+    { expect: `▸ ${"Name".padEnd(16)} abc_` },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 60 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1200)}`).toBe(-1);
+}, SCENARIO_TIMEOUT_MS);
+
 test("two ↓ sent as one write move the focus two fields", async () => {
   scenario = await startTuiScenario();
   const steps: PtyStep[] = [

@@ -23,7 +23,7 @@ import { LiveOutput } from "./live-output.ts";
 import { ActivityView, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
-import { keyPresses } from "./key-presses.ts";
+import { keyPresses, splitKey } from "./key-presses.ts";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -1161,7 +1161,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const backward = key.shift || input === "\u001b[Z";
       const direction = backward ? -1 : 1;
       setOverlay("none");
-      setView(VIEWS[(VIEWS.indexOf(view) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
+      // The next view is read from the state the update applies to, so each Tab of a run moves one view further.
+      setView((old) => VIEWS[(VIEWS.indexOf(old) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
       return;
     }
     // While a filter is typed every key is text: x, D, 1-4 and the arrows never act on the list.
@@ -1330,8 +1331,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   };
 
   useInput((input, key) => {
-    // Ink passes a run of Tabs as one input; each press is handled on its own, with the Tab flag its own.
-    for (const press of keyPresses(input)) handleKey(press, press === input ? key : { ...key, tab: true });
+    // Ink passes a chunk of several presses as one input; each press is handled on its own, with the key flags its own.
+    for (const press of keyPresses(input)) handleKey(press, press === input ? key : splitKey(press, key));
   });
 
   const footer = overlay === "none" ? editing !== null ? FILTER_FOOTER : stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · / filter · Enter open · ? help" : view === "Sessions" && split ? SESSIONS_FOOTER : MAIN_FOOTER :
