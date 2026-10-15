@@ -31,3 +31,13 @@ export function typedText(input: string): string {
   }
   return input;
 }
+
+/** Pasted text as a query: line breaks become spaces and the other control characters are dropped. */
+export function pastedText(text: string): string {
+  let out = "";
+  for (const char of text.replaceAll("\r", " ").replaceAll("\n", " ")) {
+    const code = char.charCodeAt(0);
+    if (code >= FIRST_PRINTABLE && code !== DELETE) out += char;
+  }
+  return out;
+}

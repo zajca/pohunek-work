@@ -21,7 +21,7 @@ import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
 import { ActivityView, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
-import { fuzzyFilter, typedText } from "../tui/search.ts";
+import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 
 export interface InkTuiOptions {
   readonly mode: "main" | "new-session";
@@ -176,12 +176,14 @@ function changeTextField(form: LaunchForm, input: string, assistant: boolean, er
   return { ...form, [field]: erase ? value.slice(0, -1) : value + clean };
 }
 
-function FormView({ form, options, actions, assistant, created, busy, loading, onFocus, onPickChoice, onScrollChoices, onSubmit, onCancel }: {
+function FormView({ form, options, actions, assistant, created, busy, loading, onFocus, onPickChoice, onScrollChoices, onFollowHighlight, onSubmit, onCancel }: {
   readonly form: LaunchForm; readonly options: LaunchOptions | null; readonly actions: readonly ActionChoice[]; readonly assistant: boolean;
   readonly created: CreatedSession | null; readonly busy: boolean; readonly loading: boolean;
   readonly onFocus: (index: number) => void;
   readonly onPickChoice: (index: number) => void;
   readonly onScrollChoices: (direction: -1 | 1, max: number) => void;
+  /** Moves the choice window to start at this choice; called when the highlight moves, so it stays visible. */
+  readonly onFollowHighlight: (start: number) => void;
   readonly onSubmit: () => void;
   readonly onCancel: () => void;
 }): ReactNode {
@@ -192,7 +194,14 @@ function FormView({ form, options, actions, assistant, created, busy, loading, o
   const choices = pick?.matches ?? [];
   const highlight = pick?.highlight ?? -1;
   const choiceLimit = compact ? 2 : layout.visibleChoices;
-  const choiceStart = listWindowStart(form.choice, highlight, choices.length, choiceLimit);
+  // The window is where the wheel left it; the highlight pulls it along only when the highlight moves.
+  const choiceStart = Math.min(form.choice, Math.max(0, choices.length - choiceLimit));
+  const followedHighlight = useRef(highlight);
+  useEffect(() => {
+    if (followedHighlight.current === highlight) return;
+    followedHighlight.current = highlight;
+    onFollowHighlight(listWindowStart(form.choice, highlight, choices.length, choiceLimit));
+  }, [choiceLimit, choices.length, form.choice, highlight, onFollowHighlight]);
   const fieldName = formFieldLabel(assistant, form.focus).toLowerCase();
   const hostChoices = options?.hosts.map((host) => host.label) ?? [];
   const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
@@ -1082,7 +1091,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (overlay !== "form" && overlay !== "assistant") return;
     if (created !== null) return;
     const clean = text.replaceAll("\u0000", "");
-    setForm((old) => changeTextField(old, clean, overlay === "assistant", false));
+    const assistant = overlay === "assistant";
+    // A pick field takes the paste as its query, like typed text; a text field takes it as text.
+    setForm((old) => old.focus <= LAST_PICK_FIELD ? (pastedText(clean) === "" ? old : { ...old, search: old.search + pastedText(clean), highlight: 0 }) : changeTextField(old, clean, assistant, false));
   });
 
   // The refusal on the status line is for the action that was running, so it goes once that action ends.
@@ -1356,6 +1367,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       applyPick(form.focus, item, assistant);
     }}
     onScrollChoices={(direction, max) => { setForm((old) => ({ ...old, choice: Math.max(0, Math.min(Math.max(0, max), old.choice + direction)) })); }}
+    onFollowHighlight={(start) => { setForm((old) => ({ ...old, choice: start })); }}
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
   else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work, originOf(sessionDetail))}
