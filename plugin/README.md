@@ -89,7 +89,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   the plugin's public CLI output and hands actions to `pohunek-work do`.
   Sessions, Hosts and Activity use public `pohunek --json` commands. Press
   `1`–`4`, Tab or Shift-Tab, or click a tab to switch views; arrows never switch views. Up/down arrows select a row;
-  Enter or a click opens the row, and Esc returns to the list. In Sessions, Enter attaches the highlighted session when
+  a click selects a row; Enter or a double click (two presses on the same row within `double_click_ms`) opens it,
+  and Esc returns to the list. In Sessions, Enter or a double click attaches the highlighted session when
   its side panel is visible (at or above `detail_min_width`) and opens its detail otherwise. Opening a
   Work item shows its next action and available choices before anything runs;
   click an action or select it with arrows and press Enter to preview its plan,
@@ -102,7 +103,7 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   view lists sections (Needs you, Running, Ready, Unavailable) with their counts.
   At or above `detail_min_width` columns the highlighted session's flat panel sits
   beside the list and follows the selection (PgUp/PgDn or the wheel scroll it);
-  below that width Enter opens the same panel full screen and Esc returns. `←`/`→` or `[`/`]`
+  below that width Enter or a double click opens the same panel full screen and Esc returns. `←`/`→` or `[`/`]`
   jump between sections, `o` attaches, `x` stops and `D` removes the
   highlighted session after an inline confirmation that names it (a remove names
   its worktree too), `l` opens its work link, `u` its folder, `g` its branch on GitHub (from the project's GitHub
@@ -251,7 +252,9 @@ daemon event stream drops; while it is down the session list shows the last
 sessions with a "reconnecting to the daemon" error and commands fail as
 unavailable), `detail_min_width` (columns from which the session detail
 sits beside the list; narrower terminals show it full screen) and
-`action_capture_bytes` (output limit of a captured action child), `output_wait_ms`
+`action_capture_bytes` (output limit of a captured action child), `double_click_ms`
+(longest gap between two presses on one list row that counts as a double click;
+a single click only selects), `output_wait_ms`
 (longest wait of one live output read at the end of a session's output) and
 `output_max_bytes` (bytes of a session's output requested per live read),
 `attach_mode` (`"inline"` attaches in this terminal; `"window"` opens the session

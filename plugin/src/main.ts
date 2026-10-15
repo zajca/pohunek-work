@@ -459,6 +459,7 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       actionCaptureBytes: config.global.tui.actionCaptureBytes,
       outputWaitMs: config.global.tui.outputWaitMs,
       outputMaxBytes: config.global.tui.outputMaxBytes,
+      doubleClickMs: config.global.tui.doubleClickMs,
       detailMinWidth: config.global.tui.detailMinWidth,
       attachMode,
       ...(attachCommand === undefined || config.global.tui.attachLaunchCheckMs === undefined ? {} : {

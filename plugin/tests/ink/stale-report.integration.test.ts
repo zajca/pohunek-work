@@ -54,10 +54,12 @@ test("the last status is the newest action's, not a delayed earlier report", asy
   directory = await mkdtemp(join(tmpdir(), "pohunek-ink-stale-"));
   const stub = await workSourceStub(directory);
   scenario = await startTuiScenario({ overrides: { "tui.self_bin": stub.path, "tui.list_timeout_ms": 5000 } });
-  // A click opens the first row's detail; each run is previewed first, as the owner runs it.
+  // A double click opens the first row's detail; each run is previewed first, as the owner runs it.
   const steps: PtyStep[] = [
     { expect: "WORK  1 items" },
     { pause: 500 },
+    // A press opens nothing on its own: the second press on the row, within the fixture's double_click_ms, opens it.
+    { send: MOUSE_PRESS_ROW_SIX, settle: 100 },
     { send: MOUSE_PRESS_ROW_SIX, settle: 500 },
     { expect: "Run review" },
     { pause: 300 },

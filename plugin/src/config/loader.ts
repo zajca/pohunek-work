@@ -361,6 +361,7 @@ function parseTui(root: Table, file: string): TuiConfig {
       "action_capture_bytes",
       "output_wait_ms",
       "output_max_bytes",
+      "double_click_ms",
       "attach_mode",
       "attach_command",
       "attach_launch_check_ms",
@@ -392,6 +393,7 @@ function parseTui(root: Table, file: string): TuiConfig {
     actionCaptureBytes: readPositiveInt(table, "action_capture_bytes", file, path),
     outputWaitMs: readTimerValue(table, "output_wait_ms", 1, file, path),
     outputMaxBytes: readPositiveInt(table, "output_max_bytes", file, path),
+    doubleClickMs: readTimerValue(table, "double_click_ms", 1, file, path),
     attachMode,
     ...attach,
   };

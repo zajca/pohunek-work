@@ -38,7 +38,8 @@ export function activityRecords(snapshot: ControlSnapshot, scope: ActivityScope)
 }
 
 interface ListInteraction {
-  readonly onOpen: (index: number) => void;
+  /** A press on a row; the caller decides whether it only selects or also opens. */
+  readonly onRowClick: (index: number) => void;
   readonly onWheel: (direction: -1 | 1) => void;
   readonly width: number;
 }
@@ -50,7 +51,7 @@ function EmptyState({ title, hint }: { readonly title: string; readonly hint: st
   </Box>;
 }
 
-export function WorkView({ rows, selected, limit, filter, warning, searchActive, searchText, onOpen, onWheel, width }: { readonly rows: readonly ListItem[] | null; readonly selected: number; readonly limit: number; readonly filter: string; readonly warning: string | null; readonly searchActive: boolean; readonly searchText: string } & ListInteraction): ReactNode {
+export function WorkView({ rows, selected, limit, filter, warning, searchActive, searchText, onRowClick, onWheel, width }: { readonly rows: readonly ListItem[] | null; readonly selected: number; readonly limit: number; readonly filter: string; readonly warning: string | null; readonly searchActive: boolean; readonly searchText: string } & ListInteraction): ReactNode {
   const filterLine = <Text color={searchActive ? "cyan" : "gray"} wrap="truncate-end">{searchActive ? `Search  ${safeText(searchText)}_  ·  Enter apply  ·  Esc clear` : safeText(filter)}</Text>;
   if (rows === null) return <Box flexDirection="column">{filterLine}{warning === null ? <Message text="Loading work items…" /> : <EmptyState title="Work is unavailable" hint={warning} />}</Box>;
   if (rows.length === 0) return <Box flexDirection="column"><Text bold>WORK  0 items</Text>{filterLine}<EmptyState title="No work items match" hint="Change Mine or Search to see other work." /></Box>;
@@ -59,7 +60,7 @@ export function WorkView({ rows, selected, limit, filter, warning, searchActive,
     <Text bold>{`WORK  ${rows.length} items`}</Text>
     {filterLine}
     {rows.slice(start, start + limit).map((item: ListItem, index) => <MenuRow key={`${item.project}/${item.key}`} selected={start + index === selected}
-      onClick={() => { onOpen(start + index); }} onWheel={onWheel} width={width}
+      onClick={() => { onRowClick(start + index); }} onWheel={onWheel} width={width}
       primary={`${item.project} / ${item.key}  ${item.issue?.title ?? item.pull_request?.title ?? ""}`}
       badge={item.on_turn.actor === "me" ? "Needs you" : item.on_turn.actor}
       secondary={item.on_turn.reason} />)}
@@ -77,7 +78,7 @@ export function projectChips(snapshot: ControlSnapshot, project: string | null):
   return [`${project === null ? "[all]" : "all"} ${String(snapshot.sessions.length)}`, ...chips].join("  ");
 }
 
-export function SessionsView({ snapshot, sessions, selected, limit, project, onOpen, onWheel, width }: {
+export function SessionsView({ snapshot, sessions, selected, limit, project, onRowClick, onWheel, width }: {
   readonly snapshot: ControlSnapshot | null; readonly sessions: readonly ControlSession[]; readonly selected: number;
   readonly limit: number; readonly project: string | null;
 } & ListInteraction): ReactNode {
@@ -98,7 +99,7 @@ export function SessionsView({ snapshot, sessions, selected, limit, project, onO
       const count = sessions.filter((item) => groupOf(item) === groupOf(session)).length;
       return <Box key={`${session.host}/${session.id}`} flexDirection="column">
         {heading && <Text bold color={groupOf(session) === "Needs you" ? "yellow" : "cyan"}>{safeText(`${groupOf(session).toUpperCase()}  ${String(count)}`)}</Text>}
-        <MenuRow onClick={() => { onOpen(absolute); }} onWheel={onWheel} width={width}
+        <MenuRow onClick={() => { onRowClick(absolute); }} onWheel={onWheel} width={width}
           selected={absolute === selected}
           primary={`${session.projectLabel ?? session.projectId ?? "unassigned"}  ${session.name ?? session.id}${workLinkOf(session) === null ? "" : "  ⎘"}`}
           badge={session.branch}
@@ -108,15 +109,15 @@ export function SessionsView({ snapshot, sessions, selected, limit, project, onO
   </Box>;
 }
 
-export function HostsView({ hosts, selected, limit, onOpen, onWheel, width }: { readonly hosts: readonly ControlHost[]; readonly selected: number; readonly limit: number } & ListInteraction): ReactNode {
+export function HostsView({ hosts, selected, limit, onRowClick, onWheel, width }: { readonly hosts: readonly ControlHost[]; readonly selected: number; readonly limit: number } & ListInteraction): ReactNode {
   if (hosts.length === 0) return <EmptyState title="No hosts discovered" hint="Refresh after the local daemon starts." />;
   const start = Math.max(0, selected - Math.floor(limit / 2));
   return <Box flexDirection="column"><Text bold>{`HOSTS  ${hosts.length}`}</Text>{hosts.slice(start, start + limit).map((host, index) => <MenuRow key={host.route} selected={start + index === selected}
-    onClick={() => { onOpen(start + index); }} onWheel={onWheel} width={width}
+    onClick={() => { onRowClick(start + index); }} onWheel={onWheel} width={width}
     primary={`${host.name} (${host.route})`} badge={host.dialable ? host.classification : "unavailable"} secondary={host.dialable ? host.daemonVersion : "No dialable identity"} />)}</Box>;
 }
 
-export function ActivityView({ records, selected, scope, limit, onOpen, onWheel, width }: {
+export function ActivityView({ records, selected, scope, limit, onRowClick, onWheel, width }: {
   readonly records: readonly ControlNotification[]; readonly selected: number; readonly scope: ActivityScope; readonly limit: number;
 } & ListInteraction): ReactNode {
   if (records.length === 0) return <EmptyState title={`No ${scope.toLowerCase()} notifications`} hint="Choose another scope to see older activity." />;
@@ -125,7 +126,7 @@ export function ActivityView({ records, selected, scope, limit, onOpen, onWheel,
     <Text bold>{`ACTIVITY  ${records.length}`}</Text>
     <Text dimColor>{`Scope: ${scope}`}</Text>
     {records.slice(start, start + limit).map((record, index) => <MenuRow key={`${record.host}/${record.id}`}
-      onClick={() => { onOpen(start + index); }} onWheel={onWheel} width={width}
+      onClick={() => { onRowClick(start + index); }} onWheel={onWheel} width={width}
       selected={start + index === selected} primary={shorten(record.title, 65)}
       badge={record.status} secondary={`${record.host} · ${record.kind} · ${record.createdAt}`} />)}
   </Box>;

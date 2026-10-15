@@ -146,6 +146,8 @@ export interface TuiConfig {
   readonly attachLaunchCheckMs?: number;
   /** Bytes of a session's retained output requested per live read. */
   readonly outputMaxBytes: number;
+  /** Longest gap between two presses on one list row that still counts as a double click, in milliseconds. */
+  readonly doubleClickMs: number;
 }
 
 

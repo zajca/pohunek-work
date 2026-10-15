@@ -236,6 +236,7 @@ reconnect_max_secs = 30
 action_capture_bytes = 4194304
 output_wait_ms = 1000
 output_max_bytes = 65536
+double_click_ms = 500
 `;
 
 const PROJECT_CONFIG = `

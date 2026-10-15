@@ -40,6 +40,8 @@ export interface InkTuiOptions {
   readonly attachLaunchCheckMs?: number;
   readonly outputWaitMs: number;
   readonly outputMaxBytes: number;
+  /** Longest gap between two presses on one list row that counts as a double click. */
+  readonly doubleClickMs: number;
   readonly reconnectMaxMs: number;
   /** Columns from which the session detail is a panel beside the list. */
   readonly detailMinWidth: number;
@@ -210,6 +212,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const newLauncher = useCallback(() => createSessionLauncher({ bin: options.pohunekBin, queryTimeoutMs: options.timeoutMs, launchTimeoutMs: options.launchTimeoutMs, launchKillMarginMs: options.launchKillMarginMs }), [options.pohunekBin, options.timeoutMs, options.launchTimeoutMs, options.launchKillMarginMs]);
   const [launcher, setLauncher] = useState(newLauncher);
   const [view, setView] = useState<ViewName>("Work");
+  /** The last press on a list row, which a press on the same row within `doubleClickMs` turns into a double click. */
+  const rowClick = useRef<{ readonly view: ViewName; readonly index: number; readonly at: number } | null>(null);
   const [overlay, setOverlay] = useState<Overlay>(options.mode === "new-session" ? "form" : "none");
   const [snapshot, setSnapshot] = useState<ControlSnapshot | null>(null);
   const [work, setWork] = useState<WorkSnapshot | null>(null);
@@ -744,8 +748,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     void runSessionAction(action, request.session, request.session);
   }, [runSessionAction]);
 
-  const openSelected = useCallback(async (): Promise<void> => {
-    const target = overlay === "session" ? sessionDetail : selectedSession;
+  /** Attaches the given session, or the one on screen when none is given. */
+  const openSelected = useCallback(async (picked?: ControlSession): Promise<void> => {
+    const target = picked ?? (overlay === "session" ? sessionDetail : selectedSession);
     if (target === null) return;
     if (target.external || ["conflicting", "incompatible", "lost"].includes(target.runtimeState ?? "")) {
       bumpStatus("This session cannot be opened from the TUI"); return;
@@ -935,6 +940,25 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (record !== undefined) void openNotification(record);
     }
   }, [inspectHost, inspectSessionAt, openNotification, records, selectIndex, sessions, snapshot?.hosts, view, workRows]);
+
+  /**
+   * A press on a row selects it and never opens it. A second press on the same row of the same view within
+   * `doubleClickMs` does what Enter does on that row: Sessions attaches when the side panel is visible.
+   */
+  const clickRow = useCallback((index: number): void => {
+    const now = Date.now();
+    const previous = rowClick.current;
+    rowClick.current = { view, index, at: now };
+    selectIndex(index);
+    if (previous === null || previous.view !== view || previous.index !== index || now - previous.at > options.doubleClickMs) return;
+    rowClick.current = null;
+    if (view === "Sessions" && split) {
+      const session = sessions[index];
+      if (session !== undefined) void openSelected(session);
+      return;
+    }
+    openRow(index);
+  }, [openRow, openSelected, options.doubleClickMs, selectIndex, sessions, split, view]);
 
   const changeFormChoice = useCallback((delta: number): void => {
     if (launchOptions === null) return;
@@ -1164,12 +1188,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
   });
 
-  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/click open · ? help" : MAIN_FOOTER :
+  const footer = overlay === "none" ? stdout.columns < layout.compactColumns ? "Tab views · ↑↓ select · Enter/double-click open · ? help" : MAIN_FOOTER :
     overlay === "form" || overlay === "assistant" ? stdout.columns < layout.compactColumns ? "Click choice · Tab · Ctrl+Enter · Esc back" : FORM_FOOTER :
       overlay === "work-detail" ? "↑↓ choose · Enter/click preview · r or Run executes · Esc back" :
         overlay === "projects" ? "↑↓ choose · Enter selects · / filters · Esc back" : overlay === "work-preview" ? "↑↓ scroll plan · Enter or Run executes · Esc back" : "Esc back  ·  click a labeled action";
   const subtitle = stale ? "STALE: last good data; writes disabled" : snapshot?.errors.length ? `${snapshot.errors.length} host/source error(s); affected writes disabled` : null;
-  const listInteraction = { onOpen: openRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
+  const listInteraction = { onRowClick: clickRow, onWheel: move, width: Math.max(20, stdout.columns - 4) };
 
   let content: ReactNode;
   if (overlay === "form" || overlay === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay === "assistant"} created={created} busy={busy} loading={formLoading}
@@ -1224,7 +1248,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {workDetail.actions.length > 0 && <Text dimColor>Click or Enter previews the selected action; Run executes it</Text>}
   </Box>;
   else if (overlay === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
-  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ selects, Enter or click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
+  else if (overlay === "help") content = <Box flexDirection="column"><Text>Every list: ↑/↓ or a click selects; Enter or a double click opens (Sessions: attaches when the side panel is visible), Esc returns. Tab, Shift-Tab and 1–4 switch views; ←/→ never switch views and in a text field move the cursor.</Text><Text>Sessions: ←/→ or [ ] jump between sections; x stops and D removes the highlighted session; g opens its branch on GitHub; PgUp/PgDn scroll the side panel.</Text><Text>Work: choose an action in its detail; / search, m mine, f actor, P project, h stale.</Text><Text>Sessions: open detail, then choose Attach, Screen, Resume or other labeled actions.</Text><Text>Activity: ←/→ or c change the scope; open a notification; choose Open session, Acknowledge or Archive.</Text><Text>Forms: click a field and choice, Tab moves on, Ctrl+Enter creates.</Text></Box>;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={workSearch} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} limit={visibleRows} project={projectFilter} {...listInteraction} width={listWidth - 2} /></Box>

@@ -292,6 +292,9 @@ while time.monotonic() < deadline:
     if step == 0 and b"WORK  1 items" in output and b"\x1b[?1006h" in output:
         time.sleep(0.2)
         output.clear()
+        # One press selects the row; the second press on it, inside double_click_ms, opens it.
+        os.write(master, b"\x1b[<0;10;7M")
+        time.sleep(0.1)
         os.write(master, b"\x1b[<0;10;7M")
         step = 1
     elif step == 1 and b"WORK ITEM" in output and b"Run review" in output:
@@ -551,7 +554,7 @@ print(json.dumps({"exit": child.returncode, "step": step, **({"trace": trace()} 
 
 async function runPty(mode: "main" | "new-session", key: string): Promise<{ exit: number; sent: boolean; alternate: boolean; restored: boolean; screen: boolean }> {
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:${JSON.stringify(mode)},selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_PTY, Bun.which("bun") ?? "bun", source, mode === "main" ? "pohunek-work" : "pohunek-work new-session", Buffer.from(key).toString("hex")], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -578,7 +581,7 @@ test("click and Tab keys switch tabs and mouse tracking is restored on exit", as
   const daemon = await startCoreDaemon();
   stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -589,7 +592,7 @@ test("the standalone session form focuses a text field by click", async () => {
   const daemon = await startCoreDaemon();
   stopLater.push(() => daemon.stop());
   const app = join(import.meta.dir, "../../src/ink/app.tsx");
-  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+  const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"new-session",selfBin:"/missing/pohunek-work",pohunekBin:"/missing/pohunek",timeoutMs:100,listTimeoutMs:100,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
   const process = Bun.spawn(["python3", "-c", PYTHON_FORM_MOUSE_PTY, Bun.which("bun") ?? "bun", source], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(exit, stderr).toBe(0);
@@ -625,7 +628,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_TWO_FORMS_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -663,7 +666,7 @@ else process.exit(70);
 `);
     await chmod(binary, 0o700);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:${JSON.stringify(binary)},pohunekBin:${JSON.stringify(core)},timeoutMs:2000,listTimeoutMs:2000,launchTimeoutMs:100,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(daemonLocalSocket(daemon))},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_WORK_RESULT_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -705,7 +708,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_LOST_SESSION_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -746,7 +749,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_TEMPLATE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
@@ -791,7 +794,7 @@ else process.exit(70);
     const standIn = await startSdkStandIn(binary);
     stopLater.push(standIn.stop);
     const app = join(import.meta.dir, "../../src/ink/app.tsx");
-    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,outputMaxBytes:65536,detailMinWidth:120});`;
+    const source = `import {runInkTui} from ${JSON.stringify(app)}; process.exitCode = await runInkTui({mode:"main",selfBin:"/missing/pohunek-work",pohunekBin:${JSON.stringify(binary)},timeoutMs:2000,listTimeoutMs:100,launchTimeoutMs:2000,launchKillMarginMs:100,notificationsPageSize:10,refreshIntervalMs:100000,initialView:"mine",stalePrDays:14,openUrlHosts:["github.com"],openCommand:"/missing/open",localSocket:${JSON.stringify(standIn.socket)},reconnectMaxMs:1000,sessionReconcileMs:300000,actionCaptureBytes:4194304,outputWaitMs:1000,doubleClickMs:500,outputMaxBytes:65536,detailMinWidth:120});`;
     const process = Bun.spawn(["python3", "-c", PYTHON_FOCUSED_CHOICE_PTY, Bun.which("bun") ?? "bun", source, trace], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     expect(exit, stderr).toBe(0);
