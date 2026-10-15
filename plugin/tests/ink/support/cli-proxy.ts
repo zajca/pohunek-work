@@ -60,7 +60,18 @@ const edit = matched.some((rule) => rule.protocolRange !== undefined || rule.app
 const child = Bun.spawn([${JSON.stringify(realBinary)}, ...args], { stdio: edit ? ["inherit", "pipe", "inherit"] : ["inherit", "inherit", "inherit"] });
 // A stop sent to the proxy reaches the real CLI too; the attach it runs must not outlive the proxy.
 process.on("SIGTERM", () => { child.kill("SIGTERM"); });
-if (!edit) process.exit(await child.exited);
+// A child killed by a signal ends the proxy by the same signal, as a direct run of the CLI would.
+async function exitLikeChild(running: Bun.Subprocess): Promise<never> {
+  const code = await running.exited;
+  const signal = running.signalCode;
+  if (signal !== null) {
+    process.removeAllListeners("SIGTERM");
+    process.kill(process.pid, signal);
+    await Bun.sleep(1000);
+  }
+  process.exit(code ?? 1);
+}
+if (!edit) await exitLikeChild(child);
 const envelope = JSON.parse(await new Response(child.stdout).text());
 for (const rule of matched) {
   if (rule.protocolRange !== undefined) envelope.protocol = rule.protocolRange;

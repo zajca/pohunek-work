@@ -32,7 +32,12 @@ export class SpawnError extends Error {
 
 export type Exec = (argv: readonly string[], options: ExecOptions) => Promise<ExecResult>;
 
-/** Runs a child on the caller's terminal and resolves with its exit code (null when a signal ended it). */
+/** How an interactive child ended: its exit code, the end watch that stopped it, or a signal sent from elsewhere. */
+export type InteractiveOutcome =
+  | { readonly kind: "exited"; readonly code: number }
+  | { readonly kind: "ended" }
+  | { readonly kind: "signaled"; readonly signal: string };
+
 /**
  * Reports when the work an interactive child serves is over. `watch` calls `onEnded` at most once and returns the
  * function that stops watching; `graceMs` is how long the child has to exit after its SIGTERM before it is killed.
@@ -43,7 +48,7 @@ export interface ChildEnd {
 }
 
 /** Resolves with the exit code, or null when a signal or the `end` watch ended the child. */
-export type InteractiveExec = (argv: readonly string[], end?: ChildEnd) => Promise<number | null>;
+export type InteractiveExec = (argv: readonly string[], end?: ChildEnd) => Promise<InteractiveOutcome>;
 
 export interface InteractiveCaptureResult {
   readonly exitCode: number | null;
@@ -55,6 +60,7 @@ export interface InteractiveCaptureResult {
  * its own group would be stopped by SIGTTIN when it reads the terminal. There
  * is no timeout because the owner ends the child (for example by detaching).
  */
+/** Runs a child on the caller's terminal; the outcome says whether the end watch stopped it. */
 export const execInteractive: InteractiveExec = async (argv, end) => {
   const [binary, ...args] = argv;
   if (binary === undefined) {
@@ -68,7 +74,7 @@ export const execInteractive: InteractiveExec = async (argv, end) => {
   }
   if (end === undefined) {
     await child.exited;
-    return child.exitCode;
+    return outcomeOf(child, false);
   }
   // The child is asked to stop once its work is over; it is killed when it is still running after the grace time.
   const ending: { ended: boolean; killTimer?: ReturnType<typeof setTimeout> } = { ended: false };
@@ -84,8 +90,14 @@ export const execInteractive: InteractiveExec = async (argv, end) => {
     stopWatching();
     clearTimeout(ending.killTimer);
   }
-  return ending.ended ? null : child.exitCode;
+  return outcomeOf(child, ending.ended);
 };
+
+function outcomeOf(child: Bun.Subprocess, ended: boolean): InteractiveOutcome {
+  if (ended) return { kind: "ended" };
+  if (child.exitCode !== null) return { kind: "exited", code: child.exitCode };
+  return { kind: "signaled", signal: child.signalCode ?? "unknown" };
+}
 
 /** Keeps stdin on the terminal while forwarding and retaining bounded stdout. */
 export async function execInteractiveCapture(argv: readonly string[], maxOutputBytes: number): Promise<InteractiveCaptureResult> {

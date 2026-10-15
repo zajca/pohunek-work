@@ -116,8 +116,8 @@ test("creates a blank local session once and retries attach on the same terminal
   expect(first).toEqual(second);
   expect(first.sessionId).toBe("s-session");
   expect(service.status()).toEqual({ phase: "created", session: first });
-  expect((await service.attachSession()).exitCode).toBe(7);
-  expect((await service.attachSession()).exitCode).toBe(0);
+  expect((await service.attachSession()).outcome).toEqual({ kind: "exited", code: 7 });
+  expect((await service.attachSession()).outcome).toEqual({ kind: "exited", code: 0 });
   expect((await service.createSession(sessionRequest())).sessionId).toBe("s-session");
   const traceLines = await calls(trace);
   expect(traceLines.filter((call) => call.argv[0] === "session")).toHaveLength(1);

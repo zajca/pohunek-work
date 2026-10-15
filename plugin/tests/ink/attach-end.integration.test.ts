@@ -1,6 +1,7 @@
-// Regression: the inline attach ends when its session ends, however it ends. The attach child is the real
-// `pohunek attach` on real sessions. The owner's path is the attach menu (Ctrl-\ then t and y, or k and y).
-// After the session ends the TUI must draw its list again, read keys and clicks, and attach another session.
+// Regression: every inline attach ends with its session, and a failed attach is reported. The attach child is the
+// real `pohunek attach` on real sessions. The owner's path is the attach menu (Ctrl-\ then t and y, or k and y).
+// Other processes act from inside the attached shell, after the attach is confirmed by its output, so each trigger
+// happens at a known point of the run and not on a timer.
 import { afterEach, expect, test } from "bun:test";
 import { keys, type PtyStep } from "./support/pty.ts";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
@@ -12,6 +13,9 @@ const ECHO_READY = "echo ready-$((1+1))\r";
 const ATTACH_SETTLE_MS = 2000;
 const RETURN_SETTLE_MS = 1000;
 const INLINE = { overrides: { "tui.attach_mode": "inline" } };
+const STOPPED_BY_SIGNAL = "stopped by SIGTERM";
+const OUTPUT_WAIT_MS = 60_000;
+const OUTPUT_POLL_MS = 300;
 let scenario: TuiScenario | null = null;
 
 afterEach(async () => {
@@ -19,7 +23,7 @@ afterEach(async () => {
   scenario = null;
 });
 
-/** Opens the Sessions view, attaches the first session (inline, in this terminal) and waits until the shell answers inside the attach. */
+/** Opens the Sessions view, attaches the first session (inline, in this terminal) and waits for the shell's answer. */
 function attachFirst(sessions: number): PtyStep[] {
   return [
     { expect: "CONTROL CENTER" },
@@ -44,6 +48,20 @@ function backInTui(sessionsLeft: string): PtyStep[] {
     keys("2"),
     { expect: sessionsLeft },
   ];
+}
+
+/**
+ * Resolves once the session has printed `text`, which the attached shell prints only after the attach is answering.
+ * The daemon refuses a stop or removal sent from inside the session itself, so the trigger runs from the test.
+ */
+async function untilPrinted(tui: TuiScenario, id: string, text: string): Promise<void> {
+  const deadline = Date.now() + OUTPUT_WAIT_MS;
+  for (;;) {
+    const output = JSON.parse((await tui.daemon.pohunek(["session", "output", id, "--json"])).stdout) as { ok?: { data_base64?: string } };
+    if (Buffer.from(output.ok?.data_base64 ?? "", "base64").toString("utf8").includes(text)) return;
+    if (Date.now() > deadline) throw new Error(`session ${id} never printed ${text}`);
+    await Bun.sleep(OUTPUT_POLL_MS);
+  }
 }
 
 test("the owner's path: Ctrl-\\ then terminate (t, y) ends the attach and the TUI comes back", async () => {
@@ -97,14 +115,12 @@ test("the session exits inside the attach: the TUI comes back and shows it ended
   expect(result.output).not.toContain(BUSY_REFUSAL);
 }, REAL_SCENARIO_TIMEOUT_MS);
 
-test("the session is stopped from outside while attached: the TUI comes back and shows it ended", async () => {
+test("the session is stopped from outside once the attach answers: the TUI comes back and shows it ended", async () => {
   scenario = await startTuiScenario(INLINE);
   const id = await createShellSession(scenario.daemon, "alpha");
-  // Another process stops the session once the attach has answered; the shell is still in the foreground.
-  const stopping = new Promise((resolve) => setTimeout(resolve, STOP_OUTSIDE_MS)).then(() => scenario?.daemon.pohunek(["session", "stop", id]));
+  const stopping = untilPrinted(scenario, id, READY).then(() => scenario?.daemon.pohunek(["session", "stop", id]));
   const steps: PtyStep[] = [
     ...attachFirst(1),
-    { pause: STOP_OUTSIDE_MS },
     { expect: "UNAVAILABLE  1" },
     ...backInTui("UNAVAILABLE  1"),
   ];
@@ -114,13 +130,12 @@ test("the session is stopped from outside while attached: the TUI comes back and
   expect(result.output).not.toContain(BUSY_REFUSAL);
 }, REAL_SCENARIO_TIMEOUT_MS);
 
-test("the session is removed from outside while attached: the TUI comes back with the list drawn", async () => {
+test("the session is removed from outside once the attach answers: the TUI comes back with the list drawn", async () => {
   scenario = await startTuiScenario(INLINE);
   const id = await createShellSession(scenario.daemon, "alpha");
-  const removing = new Promise((resolve) => setTimeout(resolve, STOP_OUTSIDE_MS)).then(() => scenario?.daemon.pohunek(["session", "rm", id]));
+  const removing = untilPrinted(scenario, id, READY).then(() => scenario?.daemon.pohunek(["session", "rm", id]));
   const steps: PtyStep[] = [
     ...attachFirst(1),
-    { pause: STOP_OUTSIDE_MS },
     { expect: "No sessions" },
     ...backInTui("No sessions"),
   ];
@@ -130,5 +145,46 @@ test("the session is removed from outside while attached: the TUI comes back wit
   expect(result.output).not.toContain(BUSY_REFUSAL);
 }, REAL_SCENARIO_TIMEOUT_MS);
 
-/** When the outside stop or removal runs; the attach has answered by then because the steps wait for it first. */
-const STOP_OUTSIDE_MS = 6000;
+test("a SIGTERM from outside to the attach is reported and the session keeps running", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const id = await createShellSession(scenario.daemon, "alpha");
+  // The pids of the attach and of the proxy that starts it both match the pattern; the proxy passes the signal on.
+  const killAttach = keys(`kill -TERM $(/usr/bin/pgrep -f "attach --host local -- ${id}") 2>/dev/null\r`);
+  const steps: PtyStep[] = [
+    ...attachFirst(1),
+    killAttach,
+    { expect: STOPPED_BY_SIGNAL },
+    { pause: RETURN_SETTLE_MS },
+    keys("3"),
+    { expect: "HOSTS" },
+    keys("2"),
+    { expect: "READY  1" },
+  ];
+  const result = await scenario.run(steps, { timeoutS: 90 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+  const sessions = JSON.parse((await scenario.daemon.pohunek(["session", "list", "--json"])).stdout) as { ok?: { id: string; state: string }[] };
+  expect(sessions.ok?.find((item) => item.id === id)?.state).toBe("running");
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("a session created from the form is attached, and its end brings the TUI back", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const tabs = (count: number): PtyStep[] => Array.from({ length: count }, (): PtyStep => ({ send: "09", settle: 100 }));
+  const steps: PtyStep[] = [
+    { expect: "CONTROL CENTER" },
+    keys("2"),
+    { expect: "No sessions" },
+    keys("n"),
+    { expect: "NEW SESSION" },
+    ...tabs(7),
+    keys("\r"),
+    { expect: "sh-" },
+    keys(ECHO_READY),
+    { expect: READY },
+    keys("exit\r"),
+    { expect: "UNAVAILABLE  1" },
+    ...backInTui("UNAVAILABLE  1"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 90 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+  expect(result.output).not.toContain(BUSY_REFUSAL);
+}, REAL_SCENARIO_TIMEOUT_MS);

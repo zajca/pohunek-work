@@ -1,6 +1,6 @@
 import { SUPPORTED_PROTOCOL_VERSION } from "../sources/pohunek.ts";
 import { host as parseControlHost, InvalidControlResponse } from "../control/decode.ts";
-import { exec, execInteractive, SpawnError, type ChildEnd, type Exec, type InteractiveExec } from "../util/exec.ts";
+import { exec, execInteractive, SpawnError, type ChildEnd, type Exec, type InteractiveExec, type InteractiveOutcome } from "../util/exec.ts";
 
 export interface SessionLaunchConfig {
   readonly bin: string;
@@ -70,8 +70,7 @@ export type LaunchStatus =
 export interface AttachResult {
   readonly sessionId: string;
   readonly host: string;
-  /** Null when a signal ended the attach process. */
-  readonly exitCode: number | null;
+  readonly outcome: InteractiveOutcome;
 }
 
 export type LaunchErrorCode = "invalid_request" | "cli_unavailable" | "cli_failed" | "protocol_mismatch" | "invalid_response" | "creation_unknown" | "not_created" | "attach_failed";
@@ -436,8 +435,8 @@ export function createSessionLauncher(config: SessionLaunchConfig, deps: Session
     const session = current.session;
     attaching = (async () => {
       try {
-        const exitCode = await runInteractive([config.bin, "attach", "--host", session.host, "--", session.sessionId], end);
-        return { sessionId: session.sessionId, host: session.host, exitCode };
+        const outcome = await runInteractive([config.bin, "attach", "--host", session.host, "--", session.sessionId], end);
+        return { sessionId: session.sessionId, host: session.host, outcome };
       } catch (error) {
         if (error instanceof SpawnError) throw new LaunchError("attach_failed", `cannot start ${config.bin}; session ${session.sessionId} already exists on ${session.host}`);
         throw error;
