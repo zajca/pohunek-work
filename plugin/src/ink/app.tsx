@@ -729,19 +729,26 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const started = actionSeq.current;
     let report: string;
     try {
-      if (action === "attach" && options.attachMode === "window") {
-        // The window needs the session id, which the attach plan names; `do attach` itself runs inline.
+      if (action === "attach") {
+        // The attach plan names the session; both modes attach that id through the same path as the Sessions view.
         const preview = await previewWork(options.selfBin, options.listTimeoutMs, workDetail.key, "attach", workDetail.project);
         if (typeof preview === "string") throw new Error(preview);
         if (preview.kind === "error") throw new Error(`${preview.err.code}: ${preview.err.msg}`);
         if (preview.kind !== "ok") throw new Error(`the attach plan is ${preview.kind}`);
         const id = preview.plan.find((field) => field.label === "session_id")?.value;
         if (id === undefined) throw new Error("the attach plan names no session");
-        report = await openAttachWindowFor("local", id);
-      } else if (action === "attach") {
-        const outcome = await suspendForChild(() => execInteractive(checked.argv));
-        report = outcome.kind === "exited" && outcome.code === 0 ? "Detached from work session"
-          : outcome.kind === "exited" ? `Attach ended with exit ${String(outcome.code)}` : outcome.kind === "ended" ? "Attach ended with its session" : `Attach was stopped by ${outcome.signal}`;
+        const attached: { outcome?: InteractiveOutcome } = {};
+        const windowed = await attachSession("local", id, async (end) => {
+          attached.outcome = await execInteractive([options.pohunekBin, "attach", "--host", "local", "--", id], end);
+          return attached.outcome;
+        });
+        if (windowed !== null) report = windowed;
+        else if (attached.outcome === undefined) throw new Error("the attach did not run");
+        else {
+          const outcome = attached.outcome;
+          report = outcome.kind === "exited" && outcome.code === 0 ? "Detached from work session"
+            : outcome.kind === "exited" ? `Attach ended with exit ${String(outcome.code)}` : outcome.kind === "ended" ? "Attach ended with its session" : `Attach was stopped by ${outcome.signal}`;
+        }
       } else {
         const run = await suspendForChild(() => execInteractiveCapture(checked.argv, layout.actionCaptureBytes));
         if (run.stdout === null) report = "Action output exceeded the capture limit; inspect sessions before retrying";
@@ -766,7 +773,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     await refresh();
     // A mutation that started during the read may have set its own result; that result takes precedence.
     if (actionSeq.current === started) setStatus(report);
-  }, [busy, openAttachWindowFor, options.attachMode, options.listTimeoutMs, options.selfBin, refresh, suspendForChild, workDetail]);
+  }, [attachSession, busy, options.listTimeoutMs, options.pohunekBin, options.selfBin, refresh, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
     if (workDetail === null || busy) return;
