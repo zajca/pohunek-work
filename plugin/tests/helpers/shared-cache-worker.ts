@@ -52,6 +52,7 @@ if (spec.mode === "hold") {
   Bun.spawnSync(["mkdir", "-p", directory]);
   // Rollback-journal database, so the cache's switch to WAL needs the lock this process holds.
   const database = new Database(join(directory, "cache.sqlite"), { create: true });
+  database.run(`PRAGMA busy_timeout = ${spec.busyTimeoutMs.toString()}`);
   database.run("CREATE TABLE IF NOT EXISTS holder_probe (x INTEGER)");
   database.run("BEGIN EXCLUSIVE");
   writeFileSync(spec.markerFile, "held");
@@ -103,9 +104,11 @@ if (spec.mode === "twice") {
   console.log(JSON.stringify(answerOf(await readOnce())));
 }
 
+/** The answer as the scenarios read it; a cache warning is reported only when there is one. */
 function answerOf(result: SourceResult<readonly unknown[]>): unknown {
-  if (result.ok) return { data: result.data.map(itemText) };
-  return { failure: result.code, staleData: "stale" in result ? result.data.map(itemText) : null };
+  const warning = result.cacheWarning === undefined ? {} : { warning: result.cacheWarning };
+  if (result.ok) return { data: result.data.map(itemText), ...warning };
+  return { failure: result.code, staleData: "stale" in result ? result.data.map(itemText) : null, ...warning };
 }
 
 function itemText(item: unknown): string {

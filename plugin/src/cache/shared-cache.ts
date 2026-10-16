@@ -209,25 +209,51 @@ async function fetchAndStore<T>(
   const timer = setInterval(() => {
     db.heartbeat(keyDigest, token, now());
   }, config.lockPollMs);
+  let outcome: SourceResult<T>;
   try {
-    const answer = await request.fetch();
-    // A rate limit that names no reset is retried after the fallback, and that instant is what the caller reports.
-    const result = !answer.ok && answer.code === "rate_limited" && answer.retryAtMs === undefined
-      ? { ...answer, retryAtMs: now() + config.fallbackBackoffMs }
-      : answer;
-    try {
-      if (!result.ok && result.code === "rate_limited" && result.retryAtMs !== undefined) {
-        db.recordBackoff(request.provider, result.retryAtMs);
-      }
-      return db.complete(request, { keyDigest, token, startedAtMs, result });
-    } catch (error) {
-      // The provider answered but the store stayed busy: the caller gets the answer; the next read fetches again.
-      if (!isBusy(error)) throw error;
-      return result.ok ? { ...result, fetchedAtMs: startedAtMs } : result;
-    }
+    outcome = await fetchAndComplete(request, db, { keyDigest, token, startedAtMs, config, now });
+  } catch (error) {
+    releaseClaim(db, keyDigest, token);
+    throw error;
   } finally {
     clearInterval(timer);
+  }
+  // A claim the store could not release is left to expire through its heartbeat; the answer is not replaced by that.
+  const warning = releaseClaim(db, keyDigest, token);
+  return warning === null ? outcome : { ...outcome, cacheWarning: warning };
+}
+
+/** Releases the claim of `token`. A busy store does not fail the read: the claim expires with its heartbeat. */
+function releaseClaim(db: Store, keyDigest: string, token: string): string | null {
+  try {
     db.release(keyDigest, token);
+    return null;
+  } catch (error) {
+    if (!isBusy(error)) throw error;
+    return "the cache could not release its fetch claim; another read takes the key over after lock_timeout_ms";
+  }
+}
+
+async function fetchAndComplete<T>(
+  request: CacheRequest<T>,
+  db: Store,
+  input: { readonly keyDigest: string; readonly token: string; readonly startedAtMs: number; readonly config: CacheConfig; readonly now: () => number },
+): Promise<SourceResult<T>> {
+  const { keyDigest, token, startedAtMs, config, now } = input;
+  const answer = await request.fetch();
+  // A rate limit that names no reset is retried after the fallback, and that instant is what the caller reports.
+  const result = !answer.ok && answer.code === "rate_limited" && answer.retryAtMs === undefined
+    ? { ...answer, retryAtMs: now() + config.fallbackBackoffMs }
+    : answer;
+  try {
+    if (!result.ok && result.code === "rate_limited" && result.retryAtMs !== undefined) {
+      db.recordBackoff(request.provider, result.retryAtMs);
+    }
+    return db.complete(request, { keyDigest, token, startedAtMs, result });
+  } catch (error) {
+    // The provider answered but the store stayed busy: the caller gets the answer; the next read fetches again.
+    if (!isBusy(error)) throw error;
+    return result.ok ? { ...result, fetchedAtMs: startedAtMs } : result;
   }
 }
 
@@ -298,6 +324,8 @@ class Store {
         if (outcome !== null) return { kind: "served", result: outcome };
       }
       const good = lastGood(request, stored);
+      // Within max_age the stored result is the answer, even while another process refreshes it: only an expired
+      // read, or an explicit refresh, joins a live fetch.
       if (!input.refresh && good !== null && t - good.fetchedAtMs < input.config.maxAgeMs) {
         return { kind: "served", result: successOf(request, good) };
       }

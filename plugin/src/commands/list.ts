@@ -215,6 +215,9 @@ export async function collectRows(
   );
 
   for (const { project, github, merged, issues: issueResult } of perProject) {
+    for (const result of [github, merged, issueResult]) {
+      if (result.cacheWarning !== undefined) warnings.push(`project ${project.pohunekLabel}: ${result.cacheWarning}`);
+    }
     const issueSource = issueSourceStatusKey(project);
     const issueStatus = (key: typeof issueSource): SourceStatus => (key === issueSource ? statusOf(issueResult) : "unused");
     const sources: SourceStatuses = {

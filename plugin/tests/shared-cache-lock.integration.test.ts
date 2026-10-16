@@ -14,6 +14,8 @@ const MAX_AGE_MS = 60_000;
 const LOCK_TIMEOUT_MS = 400;
 const LOCK_POLL_MS = 50;
 const BUSY_TIMEOUT_MS = 5_000;
+/** Shorter than the lock holder's hold, so a completion that needs the write lock gives up. */
+const SHORT_BUSY_MS = 300;
 const HOLDER_FETCH_MS = 1_500;
 const OFFSET_MS = 50;
 const WAITERS = 4;
@@ -282,5 +284,22 @@ test("a read whose store open was busy past busy_timeout_ms succeeds on a later 
   const answers = await finishTwice(twice);
   expect(answers.reads[0]).toEqual({ failure: "unavailable", staleData: null });
   expect(answers.reads[1]).toEqual({ data: ["second"] });
+}, SCENARIO_TIMEOUT_MS);
+
+test("a completion that finds the store busy past busy_timeout_ms still returns the fetched result", async () => {
+  directory = await mkdtemp(join(tmpdir(), "shared-cache-lock-"));
+  const fetched = specFor("fetched", { value: "fresh", fetchMs: HOLDER_FETCH_MS, busyTimeoutMs: SHORT_BUSY_MS });
+  const worker = start(fetched);
+  await waitForFile(fetched.markerFile);
+
+  // Another process takes the write lock after the fetch started and keeps it past the fetch's completion.
+  const lockSpec = specFor("lock", { mode: "hold", fetchMs: 3 * HOLDER_FETCH_MS, markerFile: join(directory, "lock.held") });
+  const lock = start(lockSpec);
+  await waitForFile(lockSpec.markerFile);
+
+  const answer = await finish(worker);
+  await lock.exited;
+  expect(dataOf(answer)).toEqual(["fresh"]);
+  expect(typeof (answer as { readonly warning?: string }).warning).toBe("string");
 }, SCENARIO_TIMEOUT_MS);
 

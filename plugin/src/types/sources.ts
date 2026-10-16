@@ -18,6 +18,8 @@ export type SourceErrorCode =
 
 /** Timing of a result that came through the shared cache; absent for a result read from the provider directly. */
 export interface SourceTiming {
+  /** A problem of the cache that did not change the answer, e.g. a fetch claim the store could not release. */
+  readonly cacheWarning?: string;
   /** Instant the data was read from the provider (not the instant it was served from the cache). */
   readonly fetchedAtMs?: number;
   /** Instant before which the provider is not asked again, set by a rate-limit response. */
