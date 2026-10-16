@@ -1,7 +1,7 @@
 import { Box, Text, useStdout } from "ink";
 import { useEffect, useRef, type ReactNode } from "react";
 import type { ActionChoice, CreatedSession, LaunchOptions } from "../../session-launch/index.ts";
-import { ActionButton, Message, safeText, shorten } from "../components.tsx";
+import { ActionButton, ChoiceRow, Message, safeText, shorten } from "../components.tsx";
 import { FORM_FOOTER, useLayout } from "../layout.tsx";
 import { MouseZone } from "../mouse.tsx";
 import { formFieldLabel, formFields, formPick, LAST_PICK_FIELD, submitIndex } from "./fields.ts";
@@ -68,9 +68,7 @@ export function FormView({ form, options, actions, assistant, created, busy, loa
     {created === null && pick !== null && form.search !== "" && choices.length === 0 && <Text color="yellow" wrap="truncate-end">{safeText(`No ${fieldName} matches; Backspace edits the query, Esc clears it`)}</Text>}
     {created === null && choices.length > 0 && <MouseZone flexDirection="column" width="100%" onWheel={(direction) => { onScrollChoices(direction, choices.length - choiceLimit); }}>
       <Text dimColor>{`Choose ${fieldName}${choices.length > choiceLimit && !compact ? ` (${choiceStart + 1}–${Math.min(choiceStart + choiceLimit, choices.length)} / ${choices.length}; wheel for more)` : ""}`}</Text>
-      {choices.slice(choiceStart, choiceStart + choiceLimit).map((choice, index) => <MouseZone key={`${choiceStart + index}/${choice.label}`} onClick={() => { onPickChoice(choiceStart + index); }}>
-        <Text color={choiceStart + index === highlight ? "cyan" : "white"} bold={choiceStart + index === highlight}>{`${choiceStart + index === highlight ? "▸" : " "} ${choiceStart + index + 1}. ${shorten(choice.label, 65)}`}</Text>
-      </MouseZone>)}
+      {choices.slice(choiceStart, choiceStart + choiceLimit).map((choice, index) => <ChoiceRow key={`${choiceStart + index}/${choice.label}`} highlighted={choiceStart + index === highlight} text={`${choiceStart + index + 1}. ${shorten(choice.label, 65)}`} onClick={() => { onPickChoice(choiceStart + index); }} />)}
     </MouseZone>}
     <Box gap={1}>
       {/* The focused submit row carries the same ▸ marker as the fields, so the focus on it is visible. */}
