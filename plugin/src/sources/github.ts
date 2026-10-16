@@ -75,15 +75,39 @@ const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SLUG_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const LOGIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const GRAPHQL_ERROR_TYPE_PATTERN = /^[A-Z][A-Z_]{0,39}$/;
+const DECIMAL_SECONDS = /^[0-9]{1,12}$/;
+const MS_PER_SECOND = 1000;
 
 class SourceFailureError extends Error {
   public readonly code: SourceErrorCode;
+  /** Instant GitHub names for the end of a rate limit; undefined when no response header names one. */
+  public readonly retryAtMs: number | undefined;
 
-  public constructor(code: SourceErrorCode, message: string) {
+  public constructor(code: SourceErrorCode, message: string, retryAtMs?: number) {
     super(message);
     this.name = "SourceFailureError";
     this.code = code;
+    this.retryAtMs = retryAtMs;
   }
+}
+
+/** The retry timing of a failure result, present only for a rate limit that names its end. */
+function retryTiming(error: SourceFailureError): { readonly retryAtMs?: number } {
+  return error.retryAtMs === undefined ? {} : { retryAtMs: error.retryAtMs };
+}
+
+/**
+ * The instant a rate limit ends, from the headers GitHub sends with it: `retry-after` for a secondary
+ * limit, `x-ratelimit-reset` once `x-ratelimit-remaining` is 0. Undefined when neither names it.
+ */
+function rateLimitResetMs(headers: Headers, nowMs: number): number | undefined {
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter !== null && DECIMAL_SECONDS.test(retryAfter)) return nowMs + Number(retryAfter) * MS_PER_SECOND;
+  const reset = headers.get("x-ratelimit-reset");
+  if (headers.get("x-ratelimit-remaining") === "0" && reset !== null && DECIMAL_SECONDS.test(reset)) {
+    return Number(reset) * MS_PER_SECOND;
+  }
+  return undefined;
 }
 
 function schemaMismatch(label: string): SourceFailureError {
@@ -372,6 +396,7 @@ interface Transport {
   readonly token: string;
   readonly config: GithubConfig;
   readonly fetchFn: FetchLike;
+  readonly now: () => number;
 }
 
 function isTimeoutError(error: unknown): boolean {
@@ -398,13 +423,13 @@ function graphqlErrorLabel(raw: unknown): string | null {
   return joined === "" ? null : joined;
 }
 
-function graphqlErrorFailure(errors: unknown[]): SourceFailureError {
+function graphqlErrorFailure(errors: unknown[], retryAtMs: number | undefined): SourceFailureError {
   const labels = errors.map(graphqlErrorLabel).filter((label): label is string => label !== null);
   const hasRateLimit = errors.some(
     (raw) => typeof raw === "object" && raw !== null && (raw as JsonObject)["type"] === "RATE_LIMITED",
   );
   if (hasRateLimit) {
-    return new SourceFailureError("rate_limited", "GitHub GraphQL rate limit reached");
+    return new SourceFailureError("rate_limited", "GitHub GraphQL rate limit reached", retryAtMs);
   }
   const detail = labels.length > 0 ? `: ${[...new Set(labels)].slice(0, 5).join("; ")}` : "";
   return new SourceFailureError("invalid_response", `GitHub GraphQL returned errors${detail}`);
@@ -437,7 +462,12 @@ async function send(transport: Transport, request: GraphqlRequest, tolerated?: T
     throw new SourceFailureError("unauthenticated", "GitHub rejected the token (HTTP 401)");
   }
   if (response.status === 403 || response.status === 429) {
-    throw new SourceFailureError("rate_limited", `GitHub refused the request (HTTP ${response.status})`);
+    // A 403 without a rate-limit header is a refused permission, not a limit to back off from.
+    const retryAtMs = rateLimitResetMs(response.headers, transport.now());
+    if (response.status === 429 || retryAtMs !== undefined) {
+      throw new SourceFailureError("rate_limited", `GitHub refused the request (HTTP ${response.status})`, retryAtMs);
+    }
+    throw new SourceFailureError("unauthenticated", "GitHub refused the request (HTTP 403)");
   }
   if (response.status >= 500) {
     throw new SourceFailureError("unavailable", `GitHub is unavailable (HTTP ${response.status})`);
@@ -460,7 +490,7 @@ async function send(transport: Transport, request: GraphqlRequest, tolerated?: T
   if (errors !== undefined && errors !== null) {
     const list = Array.isArray(errors) ? (errors as unknown[]) : [];
     if (tolerated === undefined || list.length === 0 || !list.every(tolerated)) {
-      throw graphqlErrorFailure(list);
+      throw graphqlErrorFailure(list, rateLimitResetMs(response.headers, transport.now()));
     }
   }
   // rateLimit.remaining is the budget left after this query, so 0 on a complete response is valid;
@@ -1031,6 +1061,7 @@ export function createGithubSource(
   deps: GithubSourceDeps = {},
 ): GithubSource {
   const execFn = deps.exec ?? defaultExec;
+  const now = deps.now ?? Date.now;
 
   const fetchPullRequests = async (project: ProjectConfig): Promise<SourceResult<readonly PullRequest[]>> => {
     const startedAt = performance.now();
@@ -1053,6 +1084,7 @@ export function createGithubSource(
         token,
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+        now,
       };
       const collected = await runSearches(transport, searches, shape);
       const raws = [...collected.values()].map((entry) => entry.raw);
@@ -1063,7 +1095,7 @@ export function createGithubSource(
       return { ok: true, source: "github", data, durationMs: elapsed() };
     } catch (error) {
       if (error instanceof SourceFailureError) {
-        return { ok: false, source: "github", code: error.code, message: error.message, durationMs: elapsed() };
+        return { ok: false, source: "github", code: error.code, message: error.message, durationMs: elapsed(), ...retryTiming(error) };
       }
       // Anything else is a plugin bug and surfaces to the caller instead of masquerading as a provider failure.
       throw error;
@@ -1087,12 +1119,13 @@ export function createGithubSource(
         token,
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+        now,
       };
       const data = await runMergedSearch(transport, queryString);
       return { ok: true, source: "github", data, durationMs: elapsed() };
     } catch (error) {
       if (error instanceof SourceFailureError) {
-        return { ok: false, source: "github", code: error.code, message: error.message, durationMs: elapsed() };
+        return { ok: false, source: "github", code: error.code, message: error.message, durationMs: elapsed(), ...retryTiming(error) };
       }
       throw error;
     }
@@ -1109,6 +1142,7 @@ export function createGithubSource(
         token,
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+        now,
       };
       const status = project.issueSource.projectStatus;
       if (status !== null) {
@@ -1127,7 +1161,7 @@ export function createGithubSource(
       return { ok: true, source: "github_issues", data, durationMs: elapsed() };
     } catch (error) {
       if (error instanceof SourceFailureError) {
-        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed(), ...retryTiming(error) };
       }
       throw error;
     }
@@ -1160,6 +1194,7 @@ export function createGithubSource(
         token,
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+        now,
       };
       const numbers = [...byNumber.keys()];
       for (let start = 0; start < numbers.length; start += config.github.issuePageSize) {
@@ -1189,7 +1224,7 @@ export function createGithubSource(
       return { ok: true, source: "github_issues", data: ignored, durationMs: elapsed() };
     } catch (error) {
       if (error instanceof SourceFailureError) {
-        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed(), ...retryTiming(error) };
       }
       throw error;
     }
@@ -1209,13 +1244,14 @@ export function createGithubSource(
         token,
         config: config.github,
         fetchFn: deps.fetch ?? ((input, init) => fetch(input, init)),
+        now,
       };
       const data = await send(transport, buildIssueDetailRequest(owner, name, number));
       const detail = toIssueDetail(data, project, number);
       return { ok: true, source: "github_issues", data: detail, durationMs: elapsed() };
     } catch (error) {
       if (error instanceof SourceFailureError) {
-        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed() };
+        return { ok: false, source: "github_issues", code: error.code, message: error.message, durationMs: elapsed(), ...retryTiming(error) };
       }
       throw error;
     }

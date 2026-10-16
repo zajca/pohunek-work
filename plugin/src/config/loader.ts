@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import type {
   ActionsConfig,
+  CacheConfig,
   GlobalConfig,
   GithubConfig,
   GithubProjectStatus,
@@ -133,6 +134,23 @@ function parseGithub(root: Table, file: string): GithubConfig {
     );
   }
   return config;
+}
+
+function parseCache(root: Table, file: string): CacheConfig {
+  const table = requireTable(root, "cache", file);
+  const path = ["cache"];
+  rejectUnknownKeys(table, ["max_age_secs", "lock_timeout_ms", "lock_poll_ms", "fallback_backoff_secs"], file, path);
+  const lockTimeoutMs = readTimerValue(table, "lock_timeout_ms", 1, file, path);
+  const lockPollMs = readTimerValue(table, "lock_poll_ms", 1, file, path);
+  if (lockPollMs >= lockTimeoutMs) {
+    throw fail(file, [...path, "lock_poll_ms"], "must be below lock_timeout_ms");
+  }
+  return {
+    maxAgeMs: readPositiveInt(table, "max_age_secs", file, path) * MS_PER_SECOND,
+    lockTimeoutMs,
+    lockPollMs,
+    fallbackBackoffMs: readPositiveInt(table, "fallback_backoff_secs", file, path) * MS_PER_SECOND,
+  };
 }
 
 function parseLinear(root: Table, file: string): LinearConfig {
@@ -388,13 +406,14 @@ function parseManager(root: Table, file: string): ManagerConfig {
 function parseGlobal(root: Table, file: string): GlobalConfig {
   rejectUnknownKeys(
     root,
-    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui", "manager"],
+    ["identity", "github", "cache", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui", "manager"],
     file,
     [],
   );
   return {
     identity: parseIdentity(root, file),
     github: parseGithub(root, file),
+    cache: parseCache(root, file),
     linear: "linear" in root ? parseLinear(root, file) : null,
     pohunek: parsePohunek(root, file),
     watch: parseWatch(root, file),

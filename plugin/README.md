@@ -94,6 +94,22 @@ stays manual),
 and a path toward a managing agent that runs those actions for the owner under
 an explicit policy.
 
+## Shared GitHub and Linear cache
+
+Every `list`, `watch` and TUI refresh reads the GitHub and Linear sources through
+one cache in the state directory (`cache/`, files mode 0600). A result read from the
+provider is served to all local processes for `[cache] max_age_secs`; concurrent
+callers wait for the one fetch that holds the lock of its result instead of asking
+again. `list --refresh` (the TUI `r` key) bypasses the max age and stays coalesced.
+`do` refreshes before it acts. A failed refresh shows the last good data with its
+source marked failed (`stale` in `freshness`); a rate-limit response stops every
+process from asking the provider until the reset time GitHub reports, or
+`[cache] fallback_backoff_secs` when it reports none. The required keys are
+`max_age_secs`, `lock_timeout_ms` (a lock older than this is taken over),
+`lock_poll_ms` (below `lock_timeout_ms`) and `fallback_backoff_secs`. The `list
+--json` envelope carries the per-source `freshness` (fetch instant, stale, retry
+instant) from list contract version 5.
+
 ## Status
 
 M0 and M1 are merged: `pohunek-work list` and `doctor`. `list --project <label>`

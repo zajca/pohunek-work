@@ -11,6 +11,7 @@ import {
   type ListOnTurn,
   type ListPayload,
   type ListProjectStatus,
+  type SourceFreshness,
   type ListPullRequest,
   type ListSession,
   type OrphanedSession,
@@ -187,9 +188,35 @@ function unlinked(value: unknown, path: string): UnlinkedSession {
   };
 }
 
+function sourceFreshness(value: unknown, path: string): SourceFreshness {
+  const fields = object(value, path);
+  return {
+    fetched_at: nullableString(fields["fetched_at"], `${path}.fetched_at`),
+    stale: boolean(fields["stale"], `${path}.stale`),
+    retry_at: nullableString(fields["retry_at"], `${path}.retry_at`),
+  };
+}
+
+function freshness(value: unknown, path: string): ListProjectStatus["freshness"] {
+  const fields = object(value, path);
+  const nullable = (name: string): SourceFreshness | null =>
+    fields[name] === null ? null : sourceFreshness(fields[name], `${path}.${name}`);
+  return {
+    github: nullable("github"),
+    github_merged: nullable("github_merged"),
+    linear: nullable("linear"),
+    github_issues: nullable("github_issues"),
+    pohunek: nullable("pohunek"),
+  };
+}
+
 function projectStatus(value: unknown, path: string): ListProjectStatus {
   const fields = object(value, path);
-  return { project: string(fields["project"], `${path}.project`), sources: sources(fields["sources"], `${path}.sources`) };
+  return {
+    project: string(fields["project"], `${path}.project`),
+    sources: sources(fields["sources"], `${path}.sources`),
+    freshness: freshness(fields["freshness"], `${path}.freshness`),
+  };
 }
 
 function payload(value: unknown): ListPayload {

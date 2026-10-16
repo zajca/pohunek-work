@@ -6,7 +6,7 @@ import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAc
 import { runDo } from "./commands/do.ts";
 import { MANAGER_CONTRACT_VERSION } from "./actions/manager.ts";
 import { runManagerStart, type ManagerStartCommandOptions } from "./commands/manager.ts";
-import { runList } from "./commands/list.ts";
+import { runList, type ListDeps } from "./commands/list.ts";
 import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupStep } from "./commands/setup.ts";
 import { ISSUE_PICKER_SOURCES, SETUP_CONTRACT_VERSION } from "./setup/settings.ts";
 import { LIST_CONTRACT_VERSION } from "./types/item.ts";
@@ -19,7 +19,10 @@ import { createTerminal } from "./tui/terminal.ts";
 import { spawnDetached, spawnForeground } from "./tui/children.ts";
 import { createLogger } from "./log.ts";
 import { reportError, EXIT_ERROR } from "./cli-errors.ts";
-import { resolveConfigDir, resolveLogDir } from "./paths.ts";
+import { resolveConfigDir, resolveLogDir, resolveStateDir } from "./paths.ts";
+import { createSharedCache } from "./cache/shared-cache.ts";
+import type { PluginConfig } from "./types/config.ts";
+import { cachedGithubSource, cachedLinearSource } from "./sources/cached.ts";
 import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
 import { createPohunekClient } from "./sources/pohunek.ts";
@@ -31,7 +34,7 @@ import pkg from "../package.json" with { type: "json" };
 import managerGuide from "../prompts/manager-guide.md" with { type: "text" };
 
 const USAGE = `usage:
-  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--json] [--project <label>]...
+  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--refresh] [--json] [--project <label>]...
   pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
@@ -74,7 +77,7 @@ function projectSelection(labels: readonly string[] | undefined): string[] | nul
   return labels === undefined ? null : [...new Set(labels)];
 }
 
-function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; json: boolean; projects: string[] | null } {
+function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; refresh: boolean; json: boolean; projects: string[] | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
@@ -83,6 +86,7 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
         "stale-days": { type: "string" },
         "finished-hours": { type: "string" },
         "include-ignored": { type: "boolean", default: false },
+        refresh: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         project: { type: "string", multiple: true },
       },
@@ -90,11 +94,26 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], json: values.json, projects: projectSelection(values.project) };
+    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], refresh: values.refresh, json: values.json, projects: projectSelection(values.project) };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
   }
+}
+
+/**
+ * The GitHub and Linear sources read through the shared cache of the state directory. `refresh` bypasses
+ * the max age for this process; the cache still coalesces it with the other processes reading at the same time.
+ */
+function cachedSources(config: PluginConfig, refresh: boolean): Pick<ListDeps, "github" | "linear"> {
+  const cache = createSharedCache({ stateDir: resolveStateDir(), config: config.global.cache, refresh });
+  return {
+    github: cachedGithubSource(createGithubSource(config.global), config.global, { cache }),
+    linear:
+      config.global.linear === null
+        ? null
+        : cachedLinearSource(createLinearSource(config.global.linear), config.global.linear, { cache }),
+  };
 }
 
 async function listCommand(argv: readonly string[]): Promise<number> {
@@ -116,8 +135,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
   try {
     const output = await runList(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
-      github: createGithubSource(config.global),
-      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
+      ...cachedSources(config, options.refresh),
       logger,
       cliVersion: pkg.version,
     });
@@ -217,10 +235,10 @@ async function doCommand(argv: readonly string[]): Promise<number> {
     maxStringLength: config.global.log.maxStringLength,
   });
   try {
+    // `do` acts on the picture it reads, so it refreshes past the max age (still coalesced with other readers).
     const output = await runDo(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
-      github: createGithubSource(config.global),
-      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
+      ...cachedSources(config, true),
       logger,
       cliVersion: pkg.version,
       confirm: terminalConfirm(),
@@ -489,8 +507,7 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
   try {
     await runWatch(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
-      github: createGithubSource(config.global),
-      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
+      ...cachedSources(config, false),
       logger,
       exec,
       sleep,

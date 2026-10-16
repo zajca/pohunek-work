@@ -27,8 +27,8 @@ function target(action: string, key: string, project: string): string | null {
   return null;
 }
 
-export function listArgv(selfBin: string): Argv {
-  return [selfBin, "list", "--json"];
+export function listArgv(selfBin: string, refresh: boolean): Argv {
+  return refresh ? [selfBin, "list", "--refresh", "--json"] : [selfBin, "list", "--json"];
 }
 
 /** `do --dry-run --json`: read-only, piped. */

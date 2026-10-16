@@ -16,7 +16,15 @@ export type SourceErrorCode =
   | "origin_environment"
   | "not_configured";
 
-export interface SourceFailure {
+/** Timing of a result that came through the shared cache; absent for a result read from the provider directly. */
+export interface SourceTiming {
+  /** Instant the data was read from the provider (not the instant it was served from the cache). */
+  readonly fetchedAtMs?: number;
+  /** Instant before which the provider is not asked again, set by a rate-limit response. */
+  readonly retryAtMs?: number;
+}
+
+export interface SourceFailure extends SourceTiming {
   readonly ok: false;
   readonly source: SourceName;
   readonly code: SourceErrorCode;
@@ -25,14 +33,30 @@ export interface SourceFailure {
   readonly durationMs: number;
 }
 
-export interface SourceSuccess<T> {
+/**
+ * A failed fetch whose source still has its last good data. The data is shown as stale: `code`
+ * says why it was not refreshed and `fetchedAtMs` says how old it is.
+ */
+export interface SourceStale<T> extends Omit<SourceFailure, "fetchedAtMs"> {
+  readonly stale: true;
+  readonly data: T;
+  readonly fetchedAtMs: number;
+}
+
+export interface SourceSuccess<T> extends SourceTiming {
   readonly ok: true;
   readonly source: SourceName;
   readonly data: T;
   readonly durationMs: number;
 }
 
-export type SourceResult<T> = SourceSuccess<T> | SourceFailure;
+export type SourceResult<T> = SourceSuccess<T> | SourceFailure | SourceStale<T>;
+
+/** The data of a result that has any: fresh, or stale after a failed refresh. */
+export function resultData<T>(result: SourceResult<T>): T | null {
+  if (result.ok) return result.data;
+  return "stale" in result ? result.data : null;
+}
 
 // ---------------------------------------------------------------- GitHub
 
