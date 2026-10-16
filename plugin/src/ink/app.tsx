@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Box, render, Text, useApp, useInput, usePaste, useStdout, type Key } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlSession, type ControlSnapshot } from "../control/index.ts";
+import { createControlClient, type ControlAction, type ControlHost, type ControlNotification, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
 import { noLinkReason, sessionLinks, type SessionLink } from "./links.ts";
@@ -22,9 +22,9 @@ import { previewWork, workActionArgv } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, shorten } from "./components.tsx";
 import { MouseProvider, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
-import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
+import { decodeDoEnvelope } from "../tui/decode.ts";
 import { ActivityView, activityMatches, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
-import { changeTextField, formFieldLabel, formFields, formPick, INTENTS, LAST_PICK_FIELD, moveFocus, nextField, submitIndex, type PickItem } from "./form/fields.ts";
+import { changeTextField, formPick, INTENTS, LAST_PICK_FIELD, moveFocus, type PickItem } from "./form/fields.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
 import { isActive, isAttachBlocked, isMutable, isWritable } from "./session-policy.ts";
@@ -34,6 +34,9 @@ import { HelpOverlay } from "./overlays/help.tsx";
 import { HostOverlay } from "./overlays/host.tsx";
 import { NotificationOverlay } from "./overlays/notification.tsx";
 import { confirmText, type ConfirmAction } from "./overlays/session.tsx";
+import type { Overlay, RecoveryRequest, ReturnKind } from "./overlays/types.ts";
+import { handleOverlayKeys, type OverlayKeyContext } from "./overlays/keys.ts";
+import { handleFormKeys } from "./form/keys.ts";
 import { WorkDetailOverlay } from "./overlays/work.tsx";
 
 export interface InkTuiOptions {
@@ -73,29 +76,6 @@ export interface InkTuiOptions {
 
 /** An event waiting for its render: a key press of Ink's input channel or a paste of its paste channel. */
 type PendingEvent = { readonly kind: "key"; readonly press: string; readonly key: Key } | { readonly kind: "paste"; readonly text: string };
-/** The owner's own overlay kinds: a return or a pick names one of these. */
-type OverlayKind = "none" | "links" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help" | "projects";
-/** Where Esc or a finished action returns to. */
-type ReturnKind = "none" | "session";
-/** The open overlay; `kind` is what the views switch on. A confirm carries its target, so it cannot open without one. */
-/** The session and highlighted link of the link chooser; `url` is null when the session has no link to highlight. */
-interface LinkChoice { readonly host: string; readonly id: string; readonly url: string | null; readonly returnTo: ReturnKind }
-
-type Overlay =
-  | { readonly kind: Exclude<OverlayKind, "confirm" | "recovery" | "links" | "host" | "notification" | "work-detail" | "work-preview" | "projects"> }
-  | { readonly kind: "confirm"; readonly action: ConfirmAction; readonly session: ControlSession; readonly returnTo: ReturnKind }
-  | { readonly kind: "recovery"; readonly request: RecoveryRequest }
-  | { readonly kind: "links"; readonly chooser: LinkChoice }
-  | { readonly kind: "host"; readonly capabilities: ControlHostCapabilities | null; readonly governance: ControlGovernance | null }
-  | { readonly kind: "notification"; readonly record: ControlNotification }
-  | { readonly kind: "work-detail"; readonly key: string; readonly choice: number }
-  | { readonly kind: "work-preview"; readonly key: string; readonly choice: number; readonly preview: DoOutcome | string; readonly offset: number }
-  | { readonly kind: "projects"; readonly index: number; readonly search: string; readonly filtering: boolean };
-
-/** The project picker's highlight, query and whether the query is being typed. */
-type PickState = { readonly index: number; readonly search: string; readonly filtering: boolean };
-/** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
-interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: ReturnKind }
 
 const VIEWS: readonly ViewName[] = ["Work", "Sessions", "Hosts", "Activity"];
 const SCOPES: readonly ActivityScope[] = ["Recent", "Unread", "Archived"];
@@ -964,40 +944,22 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   /** Forms and the confirmation, recovery and rename overlays take every key, Tab included. */
   const modalKeys = (input: string, key: Key): boolean => {
     if (overlay.kind === "form" || overlay.kind === "assistant") {
-      const assistant = overlay.kind === "assistant";
-      const pickField = form.focus <= LAST_PICK_FIELD;
-      if (created !== null) { if (key.return) void attachCreated(); else if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" }); } return true; }
-      // Esc first clears the query of a pick field; the next Esc leaves the form.
-      if (key.escape) {
-        if (form.search !== "") { setForm((old) => ({ ...old, search: "", highlight: 0 })); return true; }
-        if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" });
-        return true;
-      }
-      if (key.ctrl && key.return) { void submitForm(); return true; }
-      if (key.return && form.focus === submitIndex(assistant)) { void submitForm(); return true; }
-      if (key.tab) { setForm((old) => moveFocus(old, nextField(old.focus, key.shift ? -1 : 1, assistant, true))); return true; }
-      if (key.upArrow || key.downArrow) { setForm((old) => moveFocus(old, nextField(old.focus, key.upArrow ? -1 : 1, assistant, false))); return true; }
-      if (key.leftArrow || key.rightArrow) { changeFormChoice(key.leftArrow ? -1 : 1); return true; }
-      if (key.return && pickField) {
-        if (form.search === "") { setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false))); return true; }
-        const pick = formPick(form, launchOptions, actions, assistant);
-        const item = pick?.matches[pick.highlight];
-        if (item === undefined) { bumpStatus(`No ${formFieldLabel(assistant, form.focus).toLowerCase()} matches "${form.search}"; Backspace edits the query`); return true; }
-        applyPick(form.focus, item, assistant);
-        setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false)));
-        return true;
-      }
-      if (key.return && overlay.kind === "form" && formFields(false)[form.focus]?.text === "prompt") { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return true; }
-      // The focus is read from the state the update applies to: a click that changed it may not have rendered yet.
-      if (key.backspace || key.delete) {
-        setForm((old) => old.focus <= LAST_PICK_FIELD ? (old.search === "" ? old : { ...old, search: old.search.slice(0, -1), highlight: 0 }) : changeTextField(old, "", assistant, true));
-        return true;
-      }
-      // Control characters are never text: an input without printable characters types nothing.
-      if (!key.ctrl && !key.meta && typedText(input) !== "") {
-        setForm((old) => old.focus <= LAST_PICK_FIELD ? (typedText(input) === "" ? old : { ...old, search: old.search + input, highlight: 0 }) : changeTextField(old, input, assistant, false));
-      }
-      return true;
+      return handleFormKeys({
+        overlay,
+        created,
+        attachCreated,
+        exit,
+        setOverlay,
+        setForm,
+        submitForm,
+        changeFormChoice,
+        applyPick,
+        form,
+        launchOptions,
+        actions,
+        bumpStatus,
+        newSessionMode: options.mode === "new-session",
+      }, input, key);
     }
     if (overlay.kind === "confirm") {
       if (input.toLowerCase() === "y") void runSessionAction({ kind: overlay.action, host: overlay.session.host, sessionId: overlay.session.id }, overlay.session);
@@ -1076,114 +1038,44 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   /** Non-modal overlays consume every key they are given. */
   const overlayKeys = (input: string, key: Key): boolean => {
-    if (overlay.kind === "help") { if (key.escape || input === "?" || input === "q") setOverlay({ kind: "none" }); return true; }
-    if (overlay.kind === "projects") {
-      // Changes the picker only while it is still the open overlay.
-      const editPick = (change: (old: PickState) => PickState): void => {
-        setOverlay((current) => current.kind === "projects" ? { ...current, ...change(current) } : current);
-      };
-      const chooseProject = (): void => {
-        const choice = pickChoices[overlay.index];
-        if (choice !== undefined) { setProjectFilter(choice.label); setCursor((old) => ({ ...old, Sessions: 0 })); }
-        setOverlay({ kind: "none" });
-      };
-      if (overlay.filtering) {
-        if (key.escape) editPick((old) => ({ ...old, search: "", index: 0, filtering: false }));
-        else if (key.return) chooseProject();
-        else if (key.backspace || key.delete) editPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
-        else if (input !== "" && !key.ctrl && !key.meta && !key.tab) editPick((old) => ({ ...old, search: old.search + input, index: 0 }));
-        return true;
-      }
-      if (key.escape) setOverlay({ kind: "none" });
-      else if (key.upArrow) editPick((old) => ({ ...old, index: Math.max(0, old.index - 1) }));
-      else if (key.downArrow) editPick((old) => ({ ...old, index: Math.min(pickChoices.length - 1, old.index + 1) }));
-      else if (input === "/") editPick((old) => ({ ...old, filtering: true }));
-      else if (key.return) chooseProject();
-      return true;
-    }
-    if (overlay.kind === "work-preview") {
-      if (key.escape) setOverlay({ kind: "work-detail", key: overlay.key, choice: overlay.choice });
-      else if (key.pageDown || key.downArrow) setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.min(previewMaxOffset, current.offset + Math.max(1, previewHeight - 1)) } : current);
-      else if (key.pageUp || key.upArrow) setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.max(0, current.offset - Math.max(1, previewHeight - 1)) } : current);
-      else if ((key.return || input === "r") && previewMatchesSelection) void workHandover(selectedWorkAction.name);
-      return true;
-    }
-    if (overlay.kind === "work-detail") {
-      if (key.escape) { setOverlay({ kind: "none" }); return true; }
-      if (key.upArrow || input === "k") setOverlay((current) => current.kind === "work-detail" ? { ...current, choice: Math.max(0, current.choice - 1) } : current);
-      else if (key.downArrow || input === "j") setOverlay((current) => current.kind === "work-detail" ? { ...current, choice: Math.min((workDetail?.actions.length ?? 1) - 1, current.choice + 1) } : current);
-      else if (key.return || input === "p") { if (selectedWorkAction !== undefined) void previewWorkAction(selectedWorkAction.name); }
-      else if (input === "r") { if (selectedWorkAction !== undefined) void workHandover(selectedWorkAction.name); }
-      else if (input === "o" && workDetail !== null) { const url = workDetail.pull_request?.url ?? workDetail.issue?.url; if (url !== undefined) openLink(url); }
-      return true;
-    }
-    if (overlay.kind === "links") {
-      const choice = overlay.chooser;
-      const chosen = snapshot?.sessions.find((session) => session.host === choice.host && session.id === choice.id) ?? null;
-      const links = chosen === null ? [] : linksOf(chosen);
-      const close = (): void => { setOverlay({ kind: choice.returnTo }); };
-      if (chosen === null) {
-        close();
-        bumpStatus("The session of this chooser is no longer listed; no link opened");
-        return true;
-      }
-      const highlighted = Math.max(0, links.findIndex((link) => link.url === choice.url));
-      const highlight = (index: number): void => { setOverlay({ kind: "links", chooser: { ...choice, url: links[index]?.url ?? null } }); };
-      // A refresh can change the links while the chooser is open; a pick that no longer has its link says so instead of failing silently.
-      const missing = (number: number): void => {
-        if (links.length === 0) { close(); bumpStatus(`No link ${String(number)} on this session anymore; none are left`); return; }
-        bumpStatus(`No link ${String(number)} on this session anymore; choose 1–${String(links.length)}`);
-      };
-      const openNumbered = (index: number): void => {
-        const link = links[index];
-        if (link === undefined) { close(); missing(index + 1); return; }
-        close();
-        openLink(link.url);
-      };
-      if (key.escape) close();
-      else if (key.upArrow || key.downArrow) highlight(Math.max(0, Math.min(links.length - 1, highlighted + (key.downArrow ? 1 : -1))));
-      else if (key.return) {
-        const link = links.find((item) => item.url === choice.url);
-        if (link === undefined) {
-          highlight(0);
-          bumpStatus(links.length === 0 ? "The chooser has no links left on this session" : "The highlighted link is no longer on this session; choose again");
-          return true;
-        }
-        close();
-        openLink(link.url);
-      } else if (/^[1-9]$/.test(input)) {
-        if (Number(input) <= links.length) openNumbered(Number(input) - 1);
-        else missing(Number(input));
-      }
-      return true;
-    }
-    if (overlay.kind === "session") {
-      if (key.escape) { setOverlay({ kind: "none" }); return true; }
-      if (sessionDetail === null) return true;
-      if (key.pageDown || key.downArrow) { scrollDetail(overlayOffset + Math.max(1, detailHeight - 1), detailMaxOffset); return true; }
-      if (key.pageUp || key.upArrow) { scrollDetail(overlayOffset - Math.max(1, detailHeight - 1), detailMaxOffset); return true; }
-      if (input === "o" && sessionAttachable) void openSelected();
-      else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
-      else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
-      else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
-      else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay({ kind: input === "e" ? "rename" : "metadata" }); }
-      else if (input === "p") restartOutput();
-      else if (input === "l") chooseLink(sessionDetail, "session");
-      else if (input === "u") void openFolder(sessionDetail);
-      else if (input === "g") openBranch(sessionDetail);
-      else if (input === "b") void copyValue(sessionDetail.branch ?? "");
-      else if (input === "c") void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd);
-      return true;
-    }
-    if (overlay.kind === "notification") {
-      const { record } = overlay;
-      if (key.escape) setOverlay({ kind: "none" });
-      else if (input === "o" && record.sessionId !== null) void inspectSessionAt(record.host, record.sessionId);
-      else if (input === "a" || input === "x") void updateNotification(record, input === "a" ? "ack" : "archive");
-      return true;
-    }
-    if (overlay.kind === "host") { if (key.escape) setOverlay({ kind: "none" }); return true; }
-    return false;
+    const ctx: OverlayKeyContext = {
+      overlay,
+      setOverlay,
+      pickChoices,
+      setProjectFilter,
+      setCursor,
+      selectedWorkAction,
+      workDetail,
+      workHandover,
+      previewWorkAction,
+      previewMaxOffset,
+      previewHeight,
+      previewMatchesSelection,
+      openLink,
+      bumpStatus,
+      snapshot,
+      linksOf,
+      sessionDetail,
+      scrollDetail,
+      overlayOffset,
+      detailMaxOffset,
+      detailHeight,
+      sessionAttachable,
+      sessionRecoverable,
+      sessionMutable,
+      openSelected,
+      requestRecovery,
+      requestConfirm,
+      setEdit,
+      restartOutput,
+      chooseLink,
+      openFolder,
+      openBranch,
+      copyValue,
+      inspectSessionAt,
+      updateNotification,
+    };
+    return handleOverlayKeys(ctx, input, key);
   };
 
   /** Keys that act the same in every view. */
