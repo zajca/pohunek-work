@@ -7,7 +7,6 @@ import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type Tu
 const WIDE = { cols: 100, rows: 40 };
 const ENTER = "\r";
 const ESCAPE = "\x1b";
-const SETTLE_MS = 2000;
 let scenario: TuiScenario | null = null;
 
 afterEach(async () => {
@@ -35,7 +34,7 @@ test("m opens the metadata line; a line without = is refused, Esc keeps the deta
     keys("team=core"),
     { expect: "Metadata key=value: team=core_" },
     keys(ENTER),
-    { pause: SETTLE_MS },
+    { expect: "metadata completed" },
     keys("q"),
   ];
   const result = await scenario.run(steps, { ...WIDE, timeoutS: 90 });
