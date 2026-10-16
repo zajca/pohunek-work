@@ -26,6 +26,7 @@ import { ActivityView, activityMatches, applyActivityChange, filterSessions, Hos
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
+import { isActive, isAttachBlocked, isMutable, isWritable } from "./session-policy.ts";
 import { FormView } from "./form/form-view.tsx";
 import { ASSISTANT_DISABLED_FIELD, ASSISTANT_FIELDS, FORM_FIELDS, formFieldLabel, type LaunchForm } from "./form/launch-form.ts";
 import { HelpOverlay } from "./overlays/help.tsx";
@@ -386,9 +387,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
   const previewWidth = Math.max(20, stdout.columns - 4);
   const previewMaxOffset = workPreview === null ? 0 : workPreviewMaxOffset(workPreview, previewWidth, previewHeight);
-  const sessionWritable = sessionDetail !== null && !sessionDetail.external && !["conflicting", "incompatible"].includes(sessionDetail.runtimeState ?? "");
-  const sessionMutable = sessionWritable && sessionDetail.runtimeState !== "lost";
-  const sessionActive = sessionDetail !== null && ["running", "working", "starting", "reconnecting", "blocked"].includes(sessionDetail.state);
+  const sessionWritable = sessionDetail !== null && isWritable(sessionDetail);
+  const sessionMutable = sessionDetail !== null && isMutable(sessionDetail);
+  const sessionActive = sessionDetail !== null && isActive(sessionDetail);
   const sessionAttachable = sessionMutable && (sessionActive || sessionDetail.canResume);
   const sessionRecoverable = sessionWritable && sessionDetail.canResume && (!sessionActive || sessionDetail.runtimeState === "lost");
 
@@ -735,7 +736,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (!latest.ok) { bumpStatus(latest.error.message); return; }
       if (!sameSession(expected, latest.data)) { setSessionDetail(latest.data); bumpStatus("Session changed; review the new state before acting"); return; }
       if (confirmed !== null && !sameRecoveryTarget(confirmed, latest.data)) { bumpStatus("Recovery target changed; review it before confirming again"); return; }
-      if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) {
+      if (!isWritable(latest.data)) {
         bumpStatus("This runtime is read-only"); return;
       }
       const outcome = await control.act(action);
@@ -791,7 +792,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const latest = await control.inspectSession(target.host, target.id);
       if (!latest.ok) { bumpStatus(latest.error.message); return; }
       if (!sameSession(target, latest.data)) { bumpStatus("Session changed; review the new state before recovering it"); return; }
-      if (latest.data.external || ["conflicting", "incompatible"].includes(latest.data.runtimeState ?? "")) { bumpStatus("This runtime is read-only"); return; }
+      if (!isWritable(latest.data)) { bumpStatus("This runtime is read-only"); return; }
       if (latest.data.nativeTarget.status === "invalid") { bumpStatus(`Recovery target unavailable: ${latest.data.nativeTarget.reason}`); return; }
       if (kind === "fork" ? !latest.data.canFork : !latest.data.canResume) { bumpStatus(`This session cannot be ${kind === "fork" ? "forked" : "resumed"}`); return; }
       setRecovery({ kind, session: latest.data, returnTo });
@@ -812,7 +813,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const openSelected = useCallback(async (picked?: ControlSession): Promise<void> => {
     const target = picked ?? (overlay === "session" ? sessionDetail : selectedSession);
     if (target === null) return;
-    if (target.external || ["conflicting", "incompatible", "lost"].includes(target.runtimeState ?? "")) {
+    if (isAttachBlocked(target)) {
       bumpStatus("This session cannot be opened from the TUI"); return;
     }
     if (target.canResume && target.state !== "running") {
@@ -955,9 +956,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   /** Asks for a stop or a remove of `target`; the flags are the ones the detail offers. */
   const requestConfirm = useCallback((target: ControlSession, kind: ConfirmAction, returnTo: Overlay): void => {
-    const writable = !target.external && !["conflicting", "incompatible"].includes(target.runtimeState ?? "");
-    const mutable = writable && target.runtimeState !== "lost";
-    const active = ["running", "working", "starting", "reconnecting", "blocked"].includes(target.state);
+    const writable = isWritable(target);
+    const mutable = isMutable(target);
+    const active = isActive(target);
     if (kind === "stop" ? !(mutable && active) : !writable) { bumpStatus(kind === "stop" ? "Only a live session can be stopped" : "This session cannot be removed"); return; }
     setConfirmSession(target);
     setConfirm(kind);
