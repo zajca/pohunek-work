@@ -24,12 +24,12 @@ import { MouseProvider, parseMouseEvent, setMouseTracking, useMouseDispatch } fr
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { ActivityView, activityMatches, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
-import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
+import { changeTextField, formFieldLabel, formFields, formPick, INTENTS, LAST_PICK_FIELD, moveFocus, nextField, submitIndex, type PickItem } from "./form/fields.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
 import { isActive, isAttachBlocked, isMutable, isWritable } from "./session-policy.ts";
 import { FormView } from "./form/form-view.tsx";
-import { ASSISTANT_DISABLED_FIELD, ASSISTANT_FIELDS, FORM_FIELDS, formFieldLabel, type LaunchForm } from "./form/launch-form.ts";
+import type { LaunchForm } from "./form/launch-form.ts";
 import { HelpOverlay } from "./overlays/help.tsx";
 import { HostOverlay } from "./overlays/host.tsx";
 import { NotificationOverlay } from "./overlays/notification.tsx";
@@ -103,20 +103,6 @@ const EMPTY_FORM: LaunchForm = { host: "local", project: null, agent: null, acti
 
 
 
-/** The field Tab (wrapping) or ↑/↓ (stopping at the first and last field) moves to; the disabled row is skipped. */
-function nextField(focus: number, step: 1 | -1, assistant: boolean, wrap: boolean): number {
-  const count = assistant ? ASSISTANT_FIELDS : FORM_FIELDS;
-  let next = focus + step;
-  if (wrap) next = (next + count) % count;
-  else if (next < 0 || next >= count) return focus;
-  return assistant && next === ASSISTANT_DISABLED_FIELD ? next + step : next;
-}
-
-/** Focus moves to another field; the query and highlight belong to the field they were typed in. */
-function moveFocus(form: LaunchForm, focus: number): LaunchForm {
-  return focus === form.focus ? form : { ...form, focus, search: "", highlight: 0, choice: 0 };
-}
-
 function nullable(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
@@ -141,15 +127,6 @@ function selectedAt<T>(items: readonly T[], index: number): T | null {
 }
 
 
-
-function changeTextField(form: LaunchForm, input: string, assistant: boolean, erase: boolean): LaunchForm {
-  const field = form.focus === 1 ? "search" : assistant ? form.focus === 5 ? "branch" : form.focus === 6 ? "baseBranch" : null :
-    form.focus === 4 ? "name" : form.focus === 5 ? "prompt" : form.focus === 6 ? "branch" : form.focus === 7 ? "baseBranch" : null;
-  if (field === null) return form;
-  const value = form[field];
-  const clean = field === "prompt" ? input : input.replaceAll("\r", " ").replaceAll("\n", " ");
-  return { ...form, [field]: erase ? value.slice(0, -1) : value + clean };
-}
 
 
 
@@ -986,7 +963,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         return true;
       }
       if (key.ctrl && key.return) { void submitForm(); return true; }
-      if (key.return && form.focus === (assistant ? 7 : 8)) { void submitForm(); return true; }
+      if (key.return && form.focus === submitIndex(assistant)) { void submitForm(); return true; }
       if (key.tab) { setForm((old) => moveFocus(old, nextField(old.focus, key.shift ? -1 : 1, assistant, true))); return true; }
       if (key.upArrow || key.downArrow) { setForm((old) => moveFocus(old, nextField(old.focus, key.upArrow ? -1 : 1, assistant, false))); return true; }
       if (key.leftArrow || key.rightArrow) { changeFormChoice(key.leftArrow ? -1 : 1); return true; }
@@ -999,7 +976,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false)));
         return true;
       }
-      if (key.return && overlay.kind === "form" && form.focus === 5) { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return true; }
+      if (key.return && overlay.kind === "form" && formFields(false)[form.focus]?.text === "prompt") { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return true; }
       // The focus is read from the state the update applies to: a click that changed it may not have rendered yet.
       if (key.backspace || key.delete) {
         setForm((old) => old.focus <= LAST_PICK_FIELD ? (old.search === "" ? old : { ...old, search: old.search.slice(0, -1), highlight: 0 }) : changeTextField(old, "", assistant, true));

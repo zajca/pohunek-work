@@ -4,9 +4,9 @@ import type { ActionChoice, CreatedSession, LaunchOptions } from "../../session-
 import { ActionButton, Message, safeText, shorten } from "../components.tsx";
 import { FORM_FOOTER, useLayout } from "../layout.tsx";
 import { MouseZone } from "../mouse.tsx";
-import { formPick, LAST_PICK_FIELD } from "../form-pick.ts";
+import { formFieldLabel, formFields, formPick, LAST_PICK_FIELD, submitIndex } from "./fields.ts";
 import { listWindowStart } from "../views.tsx";
-import { ASSISTANT_DISABLED_FIELD, ASSISTANT_FIELDS, FORM_FIELDS, formFieldLabel, type LaunchForm } from "./launch-form.ts";
+import type { LaunchForm } from "./launch-form.ts";
 
 export function FormView({ form, options, actions, assistant, created, busy, loading, onFocus, onPickChoice, onScrollChoices, onFollowHighlight, onSubmit, onCancel }: {
   readonly form: LaunchForm; readonly options: LaunchOptions | null; readonly actions: readonly ActionChoice[]; readonly assistant: boolean;
@@ -38,8 +38,7 @@ export function FormView({ form, options, actions, assistant, created, busy, loa
     onFollowHighlight(listWindowStart(form.choice, highlight, choices.length, choiceLimit));
   }, [choiceLimit, choices.length, form.choice, form.search, highlight, matchKey, onFollowHighlight]);
   const fieldName = formFieldLabel(assistant, form.focus).toLowerCase();
-  // The submit row is the field after the last one; the Assistant form has one field fewer.
-  const submitFocused = created === null && form.focus === (assistant ? ASSISTANT_FIELDS : FORM_FIELDS) - 1;
+  const submitFocused = created === null && form.focus === submitIndex(assistant);
   const hostChoices = options?.hosts.map((host) => host.label) ?? [];
   const agentChoices = options?.agents.filter((agent) => !assistant || agent.assistantCapable).map((agent) => agent.label) ?? [];
   // A pick field shows its query in place of its value while the query is typed.
@@ -60,8 +59,8 @@ export function FormView({ form, options, actions, assistant, created, busy, loa
     {created !== null && <Message color="green" text={`Created ${created.host}/${created.sessionId}. Creation is locked.`} />}
     {created?.warnings.map((warning, index) => <Message key={index} text={`Launch warning: ${warning}`} />)}
     {created === null && options?.warning !== null && options?.warning !== undefined && <Text color="yellow" wrap="truncate-end">{safeText(options.warning)}</Text>}
-    {created === null && fields.map((value, index) => <MouseZone key={index} onClick={assistant && index === ASSISTANT_DISABLED_FIELD ? undefined : () => { onFocus(index); }}>
-      <Text color={assistant && index === ASSISTANT_DISABLED_FIELD ? "gray" : form.focus === index ? "cyan" : "white"} bold={form.focus === index} wrap="truncate-end">
+    {created === null && fields.map((value, index) => <MouseZone key={index} onClick={formFields(assistant)[index]?.disabled === true ? undefined : () => { onFocus(index); }}>
+      <Text color={formFields(assistant)[index]?.disabled === true ? "gray" : form.focus === index ? "cyan" : "white"} bold={form.focus === index} wrap="truncate-end">
         {`${form.focus === index ? "▸" : " "} ${formFieldLabel(assistant, index).padEnd(16)} ${index <= LAST_PICK_FIELD ? "‹ " : ""}${shorten(value || (index <= LAST_PICK_FIELD ? "none" : "(empty)"), 60)}${index <= LAST_PICK_FIELD ? " ›" : form.focus === index ? "_" : ""}`}
       </Text>
     </MouseZone>)}
