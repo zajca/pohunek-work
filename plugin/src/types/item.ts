@@ -12,7 +12,7 @@ import type {
 } from "./sources.ts";
 
 /** Version of the `list --json` contract; bumped on any incompatible change. */
-export const LIST_CONTRACT_VERSION = 5;
+export const LIST_CONTRACT_VERSION = 4;
 
 /**
  * Per-source availability for one poll: `ok`, the stable failure code, or `unused`

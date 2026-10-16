@@ -108,7 +108,7 @@ process from asking the provider until the reset time GitHub reports, or
 `max_age_secs`, `lock_timeout_ms` (a lock older than this is taken over),
 `lock_poll_ms` (below `lock_timeout_ms`) and `fallback_backoff_secs`. The `list
 --json` envelope carries the per-source `freshness` (fetch instant, stale, retry
-instant) from list contract version 5.
+instant). The field is additive, so the list contract stays at version 4.
 
 ## Status
 
