@@ -24,7 +24,7 @@ import { MouseProvider, parseMouseEvent, setMouseTracking, useMouseDispatch } fr
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope } from "../tui/decode.ts";
 import { ActivityView, activityMatches, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
-import { changeTextField, formFieldLabel, formFields, formPick, INTENTS, LAST_PICK_FIELD, moveFocus, nextField, submitIndex, type PickItem } from "./form/fields.ts";
+import { changeTextField, formPick, INTENTS, LAST_PICK_FIELD, moveFocus, type PickItem } from "./form/fields.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
 import { isActive, isAttachBlocked, isMutable, isWritable } from "./session-policy.ts";
@@ -36,6 +36,7 @@ import { NotificationOverlay } from "./overlays/notification.tsx";
 import { confirmText, type ConfirmAction } from "./overlays/session.tsx";
 import type { Overlay, RecoveryRequest, ReturnKind } from "./overlays/types.ts";
 import { handleOverlayKeys, type OverlayKeyContext } from "./overlays/keys.ts";
+import { handleFormKeys } from "./form/keys.ts";
 import { WorkDetailOverlay } from "./overlays/work.tsx";
 
 export interface InkTuiOptions {
@@ -943,40 +944,22 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   /** Forms and the confirmation, recovery and rename overlays take every key, Tab included. */
   const modalKeys = (input: string, key: Key): boolean => {
     if (overlay.kind === "form" || overlay.kind === "assistant") {
-      const assistant = overlay.kind === "assistant";
-      const pickField = form.focus <= LAST_PICK_FIELD;
-      if (created !== null) { if (key.return) void attachCreated(); else if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" }); } return true; }
-      // Esc first clears the query of a pick field; the next Esc leaves the form.
-      if (key.escape) {
-        if (form.search !== "") { setForm((old) => ({ ...old, search: "", highlight: 0 })); return true; }
-        if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" });
-        return true;
-      }
-      if (key.ctrl && key.return) { void submitForm(); return true; }
-      if (key.return && form.focus === submitIndex(assistant)) { void submitForm(); return true; }
-      if (key.tab) { setForm((old) => moveFocus(old, nextField(old.focus, key.shift ? -1 : 1, assistant, true))); return true; }
-      if (key.upArrow || key.downArrow) { setForm((old) => moveFocus(old, nextField(old.focus, key.upArrow ? -1 : 1, assistant, false))); return true; }
-      if (key.leftArrow || key.rightArrow) { changeFormChoice(key.leftArrow ? -1 : 1); return true; }
-      if (key.return && pickField) {
-        if (form.search === "") { setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false))); return true; }
-        const pick = formPick(form, launchOptions, actions, assistant);
-        const item = pick?.matches[pick.highlight];
-        if (item === undefined) { bumpStatus(`No ${formFieldLabel(assistant, form.focus).toLowerCase()} matches "${form.search}"; Backspace edits the query`); return true; }
-        applyPick(form.focus, item, assistant);
-        setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false)));
-        return true;
-      }
-      if (key.return && overlay.kind === "form" && formFields(false)[form.focus]?.text === "prompt") { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return true; }
-      // The focus is read from the state the update applies to: a click that changed it may not have rendered yet.
-      if (key.backspace || key.delete) {
-        setForm((old) => old.focus <= LAST_PICK_FIELD ? (old.search === "" ? old : { ...old, search: old.search.slice(0, -1), highlight: 0 }) : changeTextField(old, "", assistant, true));
-        return true;
-      }
-      // Control characters are never text: an input without printable characters types nothing.
-      if (!key.ctrl && !key.meta && typedText(input) !== "") {
-        setForm((old) => old.focus <= LAST_PICK_FIELD ? (typedText(input) === "" ? old : { ...old, search: old.search + input, highlight: 0 }) : changeTextField(old, input, assistant, false));
-      }
-      return true;
+      return handleFormKeys({
+        overlay,
+        created,
+        attachCreated,
+        exit,
+        setOverlay,
+        setForm,
+        submitForm,
+        changeFormChoice,
+        applyPick,
+        form,
+        launchOptions,
+        actions,
+        bumpStatus,
+        newSessionMode: options.mode === "new-session",
+      }, input, key);
     }
     if (overlay.kind === "confirm") {
       if (input.toLowerCase() === "y") void runSessionAction({ kind: overlay.action, host: overlay.session.host, sessionId: overlay.session.id }, overlay.session);
