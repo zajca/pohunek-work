@@ -3,6 +3,7 @@
 // read: a stale snapshot, a failed discovery or an unreachable host is not evidence that the session ended.
 import type { ControlClient, ControlError, ControlSnapshot } from "../control/index.ts";
 import type { ChildEnd, InteractiveOutcome } from "../util/exec.ts";
+import { setMouseTracking } from "./mouse.tsx";
 
 /** Session states in which the session will not run again; an attach to it has nothing left to show. */
 const ENDED_STATES: readonly string[] = ["stopped", "done", "failed"];
@@ -73,4 +74,35 @@ export async function handover(
   const outcome = await run(sessionEnd(control, host, id, graceMs));
   if (outcome.kind === "exited" && outcome.code !== 0) throw new Error(`attach exited ${String(outcome.code)}`);
   if (outcome.kind === "signaled") throw new Error(`attach was stopped by ${outcome.signal} while its session may still run`);
+}
+
+/** Ink's `suspendTerminal`: runs `callback` with the renderer stopped, then restores it. */
+type SuspendTerminal = (callback: () => Promise<void>) => Promise<void>;
+
+/**
+ * Runs `action` while the terminal belongs to a child. Mouse reports are off meanwhile and come back only while the
+ * TUI is still alive. Ctrl-C is ignored here: the child shares the foreground group and still receives it.
+ */
+export async function suspendForChild<T>(
+  suspendTerminal: SuspendTerminal,
+  alive: { readonly current: boolean },
+  action: () => Promise<T>,
+): Promise<T> {
+  setMouseTracking(false);
+  const ignoreInterrupt = (): void => undefined;
+  process.on("SIGINT", ignoreInterrupt);
+  let result!: T;
+  try {
+    await suspendTerminal(async () => { result = await action(); });
+    return result;
+  } finally {
+    process.off("SIGINT", ignoreInterrupt);
+    if (alive.current) setMouseTracking(true);
+  }
+}
+
+/** Starts an opener for a link or a folder detached from the TUI, which does not wait for it or read its output. */
+export function openExternal(command: string, target: string): void {
+  const child = Bun.spawn([command, target], { stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
+  child.unref();
 }

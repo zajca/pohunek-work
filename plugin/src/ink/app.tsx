@@ -10,7 +10,7 @@ import type { TuiAttachMode } from "../types/config.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveOutcome } from "../util/exec.ts";
-import { handover } from "./handover.ts";
+import { handover, openExternal, suspendForChild as suspendChild } from "./handover.ts";
 import type { ControlActivityCursor, ControlActivityScope } from "../control/types.ts";
 import { compareActivityOrder } from "../control/order.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
@@ -246,22 +246,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const attachInline = useCallback((host: string, id: string, run: (end: ChildEnd) => Promise<InteractiveOutcome>): Promise<void> =>
     handover(run, control, host, id, options.timeoutMs), [control, options.timeoutMs]);
 
-  const suspendForChild = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
-    setMouseTracking(false);
-    // The child shares the foreground group, so Ctrl-C while the terminal is cooked also
-    // signals this process; the handler keeps the TUI alive and the child still receives it.
-    const ignoreInterrupt = (): void => undefined;
-    process.on("SIGINT", ignoreInterrupt);
-    let result!: T;
-    try {
-      await suspendTerminal(async () => { result = await action(); });
-      return result;
-    }
-    finally {
-      process.off("SIGINT", ignoreInterrupt);
-      if (alive.current) setMouseTracking(true);
-    }
-  }, [suspendTerminal]);
+  const suspendForChild = useCallback(<T,>(action: () => Promise<T>): Promise<T> => suspendChild(suspendTerminal, alive, action), [suspendTerminal]);
 
   const sessions = useMemo(() => snapshot === null ? [] : filterSessions(snapshot, orderedSessions(snapshot, projectFilter), queries.Sessions), [snapshot, projectFilter, queries.Sessions]);
   const pickChoices = useMemo(() => projectChoices(snapshot?.sessions ?? [], pick.search), [snapshot, pick.search]);
@@ -836,8 +821,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const checked = checkOpenUrl(raw, options.openUrlHosts);
     if (!checked.ok) { bumpStatus(`Not opened: ${checked.reason}`); return; }
     try {
-      const child = Bun.spawn([options.openCommand, checked.href], { stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
-      child.unref();
+      openExternal(options.openCommand, checked.href);
       bumpStatus(`Opened ${checked.host}`);
     } catch (error) { bumpStatus(`Open link: ${defaultStatus(error)}`); }
   }, [options.openCommand, options.openUrlHosts]);
@@ -879,8 +863,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (!isAbsolute(path)) { bumpStatus("The session path is not absolute"); return; }
     try {
       if (!(await stat(path)).isDirectory()) { bumpStatus("The session path is not a directory"); return; }
-      const child = Bun.spawn([options.openCommand, path], { stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
-      child.unref();
+      openExternal(options.openCommand, path);
       bumpStatus("Opened session folder");
     } catch (error) { bumpStatus(`Open folder: ${defaultStatus(error)}`); }
   }, [options.openCommand]);
