@@ -3,6 +3,7 @@
 // that counts the requests it receives. The server is a stand-in because GitHub cannot be rate-limited on demand
 // and cannot be asked for its request count; the plugin code path from the HTTP response onward is the real one.
 import { afterEach, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DAEMON_STOP_HOOK_TIMEOUT_MS, runPlugin, startCoreDaemon, writePluginConfig, type CoreDaemon, type PluginFixture } from "./helpers/core-daemon.ts";
 import {
@@ -21,6 +22,12 @@ const CONCURRENT_PROCESSES = 4;
 /** Length of the rate-limit window of the third scenario; long enough that the whole scenario ends inside it. */
 const RATE_LIMIT_WINDOW_MS = 600_000;
 const MS_PER_DAY = 86_400_000;
+/** `[cache] fallback_backoff_secs` of the fixture, and the margin of the back-off instant read back from the output. */
+const FALLBACK_BACKOFF_MS = 900_000;
+const FALLBACK_BACKOFF_FLOOR_MS = FALLBACK_BACKOFF_MS - 60_000;
+const CLOCK_TOLERANCE_MS = 60_000;
+/** Row key of the authored pull request of the stand-in. */
+const RECENT_KEY = "github:acme/widgets#21";
 const ISSUE: GithubIssue = { repo: "acme/widgets", number: 7, title: "Cache widgets", body: "Cache the widgets." };
 const now = Date.now();
 const RECENT: GithubPullRequest = {
@@ -157,4 +164,42 @@ test("a rate-limited refresh keeps the last good data as stale and no process as
   expect(explicit.payload.projects[0]?.sources["github"]).toBe("rate_limited");
   expect(explicit.payload.projects[0]?.freshness["github"]?.stale).toBe(true);
   expect(provider.requests).toEqual(beforeBackoff);
+}, SCENARIO_TIMEOUT_MS);
+
+test("a 403 secondary limit without headers records a back-off, and the next run makes no GitHub call", async () => {
+  const fixture = await setUp();
+  const provider = requireProvider();
+  provider.setSecondaryLimit(true);
+  const first = await listRun(fixture);
+  expect(first.code).not.toBe(0);
+  expect(first.err).toContain("github: rate_limited");
+  const afterFirst = { ...provider.requests };
+  for (const operation of SOURCE_OPERATIONS) expect(afterFirst[operation]).toBe(1);
+
+  // No reset is named, so the back-off is the fallback of `[cache] fallback_backoff_secs` (900 s in the fixture).
+  const retryAt = Date.parse(first.payload.projects[0]?.freshness["github"]?.retry_at ?? "");
+  expect(retryAt - Date.now()).toBeGreaterThan(FALLBACK_BACKOFF_FLOOR_MS);
+  expect(retryAt - Date.now()).toBeLessThanOrEqual(FALLBACK_BACKOFF_MS + CLOCK_TOLERANCE_MS);
+
+  const second = await listRun(fixture);
+  expect(second.payload.projects[0]?.sources["github"]).toBe("rate_limited");
+  expect(provider.requests).toEqual(afterFirst);
+}, SCENARIO_TIMEOUT_MS);
+
+test("do refuses an action while an issue source is stale, and gh runs no write", async () => {
+  const fixture = await setUp();
+  const provider = requireProvider();
+  expect((await listRun(fixture)).code).toBe(0);
+
+  // The refresh of the issue source fails, so its cached issue is only displayed.
+  provider.setFailingOperation("PohunekWorkIssues");
+  const result = await runPlugin(fixture, ["do", RECENT_KEY, "ready", "--json"], PROCESS_TIMEOUT_MS);
+  expect(result.code).not.toBe(0);
+  const envelope = JSON.parse(result.out) as { err?: { code: string; msg: string } };
+  expect(envelope.err?.code).toBe("source_unavailable");
+  expect(envelope.err?.msg).toContain("github_issues");
+  expect(envelope.err?.msg).toContain("stale or unavailable");
+
+  const calls = await readFile(provider.ghCallLog, "utf8").catch(() => "");
+  expect(calls).not.toContain("pr ready");
 }, SCENARIO_TIMEOUT_MS);

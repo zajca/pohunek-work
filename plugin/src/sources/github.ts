@@ -465,10 +465,12 @@ async function send(transport: Transport, request: GraphqlRequest, tolerated?: T
     throw new SourceFailureError("unauthenticated", "GitHub rejected the token (HTTP 401)");
   }
   if (response.status === 403 || response.status === 429) {
-    // A 403 without a rate-limit header is a refused permission, not a limit to back off from.
+    // GitHub answers a secondary or abuse limit with 403 or 429, named in the message; a 403 that names neither
+    // a limit nor a reset is a refused permission.
     const retryAtMs = rateLimitResetMs(response.headers, transport.now());
-    if (response.status === 429 || retryAtMs !== undefined) {
-      throw new SourceFailureError("rate_limited", `GitHub refused the request (HTTP ${response.status})`, retryAtMs);
+    const limited = response.status === 429 || retryAtMs !== undefined || (await namesLimit(response));
+    if (limited) {
+      throw new SourceFailureError("rate_limited", `GitHub refused the request (HTTP ${response.status}): rate limit`, retryAtMs);
     }
     throw new SourceFailureError("unauthenticated", "GitHub refused the request (HTTP 403)");
   }
@@ -499,6 +501,25 @@ async function send(transport: Transport, request: GraphqlRequest, tolerated?: T
   // rateLimit.remaining is the budget left after this query, so 0 on a complete response is valid;
   // exhaustion arrives as a RATE_LIMITED error or HTTP 403/429.
   return asObject(envelope["data"], "data");
+}
+
+/**
+ * Whether the body of a 403 names a secondary or abuse limit. The text itself is never copied into a failure;
+ * the classification is by its words: "secondary rate limit" (https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits)
+ * and "abuse" (GitHub's abuse detection answer), or a documentation link to the rate-limit section.
+ */
+async function namesLimit(response: Response): Promise<boolean> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return false;
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+  const fields = body as JsonObject;
+  const message = typeof fields["message"] === "string" ? fields["message"].toLowerCase() : "";
+  const documentation = typeof fields["documentation_url"] === "string" ? fields["documentation_url"] : "";
+  return message.includes("secondary rate limit") || message.includes("abuse") || documentation.includes("rate-limits");
 }
 
 async function obtainToken(config: GithubConfig, execFn: Exec): Promise<string> {

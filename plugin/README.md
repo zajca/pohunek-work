@@ -107,8 +107,9 @@ provider is served to all local processes for `[cache] max_age_secs`; a caller t
 arrives while a fetch is in flight takes that fetch's outcome instead of asking again.
 `list --refresh` (the TUI `r` key) bypasses the max age and joins a fetch in flight the
 same way.
-`do` refreshes before it acts. A failed refresh shows the last good data with its
-source marked failed (`stale` in `freshness`); a rate-limit response stops every
+`do` refreshes before it acts, and refuses an action while any source of its project is
+stale or unavailable in that run: stale data is displayed, never acted on. A failed refresh
+shows the last good data with its source marked failed (`stale` in `freshness`); a rate-limit response stops every
 process from asking the provider until the reset time GitHub reports, or
 `[cache] fallback_backoff_secs` when it reports none. The required keys are
 `max_age_secs`, `lock_timeout_ms` (a fetch whose holder has not refreshed its

@@ -85,6 +85,15 @@ export interface GithubProvider {
   setRateLimit(resetAtMs: number | null): void;
   /** Holds every later answer back by `ms`, so concurrent plugin processes overlap in the server. */
   setDelay(ms: number): void;
+  /** Answers HTTP 503 to the named GraphQL operation (null for none), as a failing source does. */
+  setFailingOperation(operation: string | null): void;
+  /**
+   * Answers every later request with HTTP 403 and GitHub's secondary-limit message and documentation link, and no
+   * rate-limit headers: the documented shape of a secondary limit that names no reset.
+   */
+  setSecondaryLimit(enabled: boolean): void;
+  /** File of the `gh` invocations, one argument line each; the token script records them. */
+  readonly ghCallLog: string;
   stop(): Promise<void>;
 }
 
@@ -190,7 +199,8 @@ export async function startGithubProvider(
   );
   if (generated.exitCode !== 0) throw new Error(`openssl failed (${String(generated.exitCode)}): ${generated.stderr}`);
   const ghBin = join(dir, "gh");
-  await writeFile(ghBin, `#!/bin/sh\necho ${TOKEN}\n`);
+  const ghCallLog = join(dir, "gh-calls.log");
+  await writeFile(ghBin, `#!/bin/sh\necho "$*" >> '${ghCallLog}'\necho ${TOKEN}\n`);
   await chmod(ghBin, 0o755);
 
   const issueUrl = `https://github.example/${issue.repo}/issues/${String(issue.number)}`;
@@ -198,6 +208,12 @@ export async function startGithubProvider(
   const requests: Record<string, number> = {};
   let rateLimitResetMs: number | null = null;
   let delayMs = 0;
+  let failingOperation: string | null = null;
+  let secondaryLimit = false;
+  const SECONDARY_LIMIT_BODY = {
+    message: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+    documentation_url: "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits",
+  };
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -207,6 +223,8 @@ export async function startGithubProvider(
       const operation = /query\s+(\w+)/.exec(body.query)?.[1] ?? "";
       requests[operation] = (requests[operation] ?? 0) + 1;
       if (delayMs > 0) await Bun.sleep(delayMs);
+      if (secondaryLimit) return Response.json(SECONDARY_LIMIT_BODY, { status: 403 });
+      if (operation === failingOperation) return new Response("unavailable", { status: 503 });
       if (rateLimitResetMs !== null) {
         const reset = Math.ceil(rateLimitResetMs / MS_PER_SECOND).toString();
         return Response.json(
@@ -235,6 +253,13 @@ export async function startGithubProvider(
     setDelay(ms: number): void {
       delayMs = ms;
     },
+    setFailingOperation(operation: string | null): void {
+      failingOperation = operation;
+    },
+    setSecondaryLimit(enabled: boolean): void {
+      secondaryLimit = enabled;
+    },
+    ghCallLog,
     async stop() {
       await server.stop(true);
     },

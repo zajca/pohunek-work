@@ -210,10 +210,14 @@ async function fetchAndStore<T>(
     db.heartbeat(keyDigest, token, now());
   }, config.lockPollMs);
   try {
-    const result = await request.fetch();
+    const answer = await request.fetch();
+    // A rate limit that names no reset is retried after the fallback, and that instant is what the caller reports.
+    const result = !answer.ok && answer.code === "rate_limited" && answer.retryAtMs === undefined
+      ? { ...answer, retryAtMs: now() + config.fallbackBackoffMs }
+      : answer;
     try {
-      if (!result.ok && result.code === "rate_limited") {
-        db.recordBackoff(request.provider, result.retryAtMs ?? now() + config.fallbackBackoffMs);
+      if (!result.ok && result.code === "rate_limited" && result.retryAtMs !== undefined) {
+        db.recordBackoff(request.provider, result.retryAtMs);
       }
       return db.complete(request, { keyDigest, token, startedAtMs, result });
     } catch (error) {
