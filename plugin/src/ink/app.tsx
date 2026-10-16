@@ -1198,37 +1198,42 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   };
 
   /** The keys of the view shown. */
-  const viewKeys = (input: string, key: Key): void => {
-    if (view === "Work") {
-      if (input === "m") setWorkFilters((old) => ({ ...old, actor: old.actor === "me" ? "all" : "me" }));
-      else if (input === "f") cycleActor();
-      else if (input === "P") cycleProject();
-      else if (input === "h") toggleStale();
-      else if (key.return || input === "a") openRow(selectedWorkIndex);
-      else if (input === "n") openForm(false);
-      else if (input === "s") setView("Sessions");
-    } else if (view === "Sessions") {
-      if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
-      else if (input === "o") void openSelected();
-      else if (input === "l" && selectedSession !== null) chooseLink(selectedSession, "none");
-      else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
-      else if (input === "g" && selectedSession !== null) openBranch(selectedSession);
-      else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
-      else if (input === "c" && selectedSession !== null) void copyValue(selectedSession.worktreePath ?? selectedSession.cwd);
-      else if (input === "x" && selectedSession !== null) requestConfirm(selectedSession, "stop", "none");
-      else if (input === "D" && selectedSession !== null) requestConfirm(selectedSession, "remove", "none");
-      else if (split && (key.pageDown || key.pageUp)) scrollDetail(panelOffset + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1), panelMaxOffset);
-      else if (input === "n") openForm(false);
-      else if (input === "a") openForm(true);
-      else if (input === "P" && snapshot !== null) openProjectPicker();
-    } else if (view === "Hosts") {
-      if (key.return) openRow(cursor.Hosts);
-    } else {
-      if (input === "c") cycleScope();
-      else if (input === "m") loadMoreActivity();
-      else if (key.return) openRow(cursor.Activity);
-    }
+  /** The keys of each view; the handler of the view shown runs. */
+  const viewKeyHandlers: Record<ViewName, (input: string, key: Key) => void> = {
+    Work: (input, key) => {
+        if (input === "m") setWorkFilters((old) => ({ ...old, actor: old.actor === "me" ? "all" : "me" }));
+        else if (input === "f") cycleActor();
+        else if (input === "P") cycleProject();
+        else if (input === "h") toggleStale();
+        else if (key.return || input === "a") openRow(selectedWorkIndex);
+        else if (input === "n") openForm(false);
+        else if (input === "s") setView("Sessions");
+    },
+    Sessions: (input, key) => {
+        if (key.return) { if (split) void openSelected(); else openRow(selectedSessionIndex); }
+        else if (input === "o") void openSelected();
+        else if (input === "l" && selectedSession !== null) chooseLink(selectedSession, "none");
+        else if (input === "u" && selectedSession !== null) void openFolder(selectedSession);
+        else if (input === "g" && selectedSession !== null) openBranch(selectedSession);
+        else if (input === "b" && selectedSession !== null) void copyValue(selectedSession.branch ?? "");
+        else if (input === "c" && selectedSession !== null) void copyValue(selectedSession.worktreePath ?? selectedSession.cwd);
+        else if (input === "x" && selectedSession !== null) requestConfirm(selectedSession, "stop", "none");
+        else if (input === "D" && selectedSession !== null) requestConfirm(selectedSession, "remove", "none");
+        else if (split && (key.pageDown || key.pageUp)) scrollDetail(panelOffset + (key.pageDown ? 1 : -1) * Math.max(1, detailHeight - 1), panelMaxOffset);
+        else if (input === "n") openForm(false);
+        else if (input === "a") openForm(true);
+        else if (input === "P" && snapshot !== null) openProjectPicker();
+    },
+    Hosts: (input, key) => {
+        if (key.return) openRow(cursor.Hosts);
+    },
+    Activity: (input, key) => {
+        if (input === "c") cycleScope();
+        else if (input === "m") loadMoreActivity();
+        else if (key.return) openRow(cursor.Activity);
+    },
   };
+  const viewKeys = (input: string, key: Key): void => { viewKeyHandlers[view](input, key); };
 
   const handleKey = (input: string, key: Key): void => {
     const mouse = parseMouseEvent(input);
@@ -1275,6 +1280,20 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       { Work: workStart, Sessions: sessionsStart, Hosts: hostsStart, Activity: activityStart });
   }, [workStart, sessionsStart, hostsStart, activityStart]);
 
+  // What each view draws in the list area.
+  const viewContent: Record<ViewName, () => ReactNode> = {
+    Work: () => <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={editing === "Work"} searchText={workFilters.text} {...listInteraction} />,
+    Sessions: () => split ? <Box flexDirection="row" width="100%">
+      <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} width={listWidth - 2} /></Box>
+      <Box width={stdout.columns - listWidth} flexDirection="column">
+        {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={detailNotifications} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work, originOf(selectedSession))} offset={panelOffset} height={detailHeight}
+          onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
+      </Box>
+    </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} />,
+    Hosts: () => <HostsView hosts={hostRows} selected={cursor.Hosts} start={hostsStart} limit={visibleRows} query={queries.Hosts} editing={editing === "Hosts"} {...listInteraction} />,
+    Activity: () => <ActivityView records={records} selected={cursor.Activity} start={activityStart} scope={scope} limit={visibleRows} query={queries.Activity} editing={editing === "Activity"} {...listInteraction} />,
+  };
+
   let content: ReactNode;
   if (overlay.kind === "form" || overlay.kind === "assistant") content = <FormView form={form} options={launchOptions} actions={actions} assistant={overlay.kind === "assistant"} created={created} busy={busy} loading={formLoading}
     onFocus={(focus) => { setForm((old) => ({ ...moveFocus(old, focus), choice: 0 })); }}
@@ -1307,46 +1326,41 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay.kind === "work-detail") content = workDetail === null ? <Message text="This work item is no longer available. Go back and refresh." /> : <WorkDetailOverlay detail={workDetail} choice={overlay.choice} onPick={(index, name) => { setOverlay({ kind: "work-detail", key: overlay.key, choice: index }); void previewWorkAction(name); }} />;
   else if (overlay.kind === "projects") content = <ProjectPicker choices={pickChoices} selected={overlay.index} search={overlay.search} filtering={overlay.filtering} limit={visibleRows} />;
   else if (overlay.kind === "help") content = <HelpOverlay />;
-  else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={editing === "Work"} searchText={workFilters.text} {...listInteraction} />;
-  else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
-    <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} width={listWidth - 2} /></Box>
-    <Box width={stdout.columns - listWidth} flexDirection="column">
-      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={detailNotifications} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work, originOf(selectedSession))} offset={panelOffset} height={detailHeight}
-        onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
-    </Box>
-  </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} />;
-  else if (view === "Hosts") content = <HostsView hosts={hostRows} selected={cursor.Hosts} start={hostsStart} limit={visibleRows} query={queries.Hosts} editing={editing === "Hosts"} {...listInteraction} />;
-  else content = <ActivityView records={records} selected={cursor.Activity} start={activityStart} scope={scope} limit={visibleRows} query={queries.Activity} editing={editing === "Activity"} {...listInteraction} />;
+  else content = viewContent[view]();
+
+  // The buttons of each view's toolbar; shown when no overlay is open.
+  const viewToolbar: Record<ViewName, () => ReactNode> = {
+    Work: () => <Box gap={1} flexWrap="wrap">
+        {selectedWork !== null && <ActionButton label="Open item" onClick={() => { openRow(selectedWorkIndex); }} primary />}
+        <ActionButton label="New session" onClick={() => { openForm(false); }} />
+        <ActionButton label={`Actor: ${workFilters.actor}`} onClick={cycleActor} />
+        <ActionButton label={`Project: ${shorten(workFilters.project ?? "all", 12)}`} onClick={cycleProject} />
+        <ActionButton label="Search /" onClick={() => { setEditing("Work"); }} />
+        <ActionButton label={`Stale: ${workFilters.hideStale ? "hide" : "show"}`} onClick={toggleStale} />
+        <ActionButton label="Refresh" onClick={() => void refresh()} />
+        <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
+      </Box>,
+    Sessions: () => <Box gap={1} flexWrap="wrap">
+        {selectedSession !== null && <ActionButton label="Open session" onClick={() => { openRow(selectedSessionIndex); }} primary />}
+        <ActionButton label="New session" onClick={() => { openForm(false); }} />
+        <ActionButton label="Assistant" onClick={() => { openForm(true); }} />
+        <ActionButton label="Search /" onClick={() => { setEditing("Sessions"); }} />
+        <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => { if (snapshot !== null) openProjectPicker(); }} />
+        <ActionButton label="Refresh" onClick={() => void refresh()} />
+        <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
+      </Box>,
+    Hosts: () => <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Search /" onClick={() => { setEditing("Hosts"); }} /><ActionButton label="Refresh" onClick={() => void refresh()} /></Box>,
+    Activity: () => <Box gap={1} flexWrap="wrap">
+        <ActionButton label={`Scope: ${scope}`} onClick={cycleScope} />
+        <ActionButton label="Search /" onClick={() => { setEditing("Activity"); }} />
+        {activity.cursor !== null && <ActionButton label="Load more" onClick={() => { loadMoreActivity(); }} />}
+        {selectedRecord !== null && <ActionButton label="Open notification" onClick={() => { openRow(cursor.Activity); }} primary />}
+      </Box>,
+  };
 
   let toolbar: ReactNode = null;
-  if (overlay.kind === "none") {
-    if (view === "Work") toolbar = <Box gap={1} flexWrap="wrap">
-      {selectedWork !== null && <ActionButton label="Open item" onClick={() => { openRow(selectedWorkIndex); }} primary />}
-      <ActionButton label="New session" onClick={() => { openForm(false); }} />
-      <ActionButton label={`Actor: ${workFilters.actor}`} onClick={cycleActor} />
-      <ActionButton label={`Project: ${shorten(workFilters.project ?? "all", 12)}`} onClick={cycleProject} />
-      <ActionButton label="Search /" onClick={() => { setEditing("Work"); }} />
-      <ActionButton label={`Stale: ${workFilters.hideStale ? "hide" : "show"}`} onClick={toggleStale} />
-      <ActionButton label="Refresh" onClick={() => void refresh()} />
-      <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
-    </Box>;
-    else if (view === "Sessions") toolbar = <Box gap={1} flexWrap="wrap">
-      {selectedSession !== null && <ActionButton label="Open session" onClick={() => { openRow(selectedSessionIndex); }} primary />}
-      <ActionButton label="New session" onClick={() => { openForm(false); }} />
-      <ActionButton label="Assistant" onClick={() => { openForm(true); }} />
-      <ActionButton label="Search /" onClick={() => { setEditing("Sessions"); }} />
-      <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => { if (snapshot !== null) openProjectPicker(); }} />
-      <ActionButton label="Refresh" onClick={() => void refresh()} />
-      <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
-    </Box>;
-    else if (view === "Hosts") toolbar = <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Search /" onClick={() => { setEditing("Hosts"); }} /><ActionButton label="Refresh" onClick={() => void refresh()} /></Box>;
-    else toolbar = <Box gap={1} flexWrap="wrap">
-      <ActionButton label={`Scope: ${scope}`} onClick={cycleScope} />
-      <ActionButton label="Search /" onClick={() => { setEditing("Activity"); }} />
-      {activity.cursor !== null && <ActionButton label="Load more" onClick={() => { loadMoreActivity(); }} />}
-      {selectedRecord !== null && <ActionButton label="Open notification" onClick={() => { openRow(cursor.Activity); }} primary />}
-    </Box>;
-  } else if (overlay.kind === "work-detail") toolbar = <Box gap={1} flexWrap="wrap">
+  if (overlay.kind === "none") toolbar = viewToolbar[view]();
+  else if (overlay.kind === "work-detail") toolbar = <Box gap={1} flexWrap="wrap">
     {selectedWorkAction !== undefined && <ActionButton label={`Run ${selectedWorkAction.name}`} onClick={() => { void workHandover(selectedWorkAction.name); }} primary />}
     {selectedWorkAction !== undefined && <ActionButton label="Preview plan" onClick={() => { void previewWorkAction(selectedWorkAction.name); }} />}
     {(workDetail?.pull_request?.url ?? workDetail?.issue?.url) !== undefined && <ActionButton label="Open link" onClick={() => { const url = workDetail?.pull_request?.url ?? workDetail?.issue?.url; if (url !== undefined) openLink(url); }} />}
