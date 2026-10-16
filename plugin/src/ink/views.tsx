@@ -33,12 +33,6 @@ export function orderedSessions(snapshot: ControlSnapshot, project: string | nul
   });
 }
 
-export function activityRecords(snapshot: ControlSnapshot, scope: ActivityScope): ControlNotification[] {
-  return snapshot.notifications.filter((notification) => scope === "Recent" ? notification.status !== "archived" && notification.status !== "deleted" :
-    scope === "Unread" ? notification.status === "unread" : notification.status === "archived")
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-}
-
 /** The fields of a session the Sessions `/` filter matches. */
 function sessionTerms(session: ControlSession): string[] {
   return [session.projectLabel ?? session.projectId ?? "unassigned", session.name ?? session.id, session.branch ?? "", session.agent, session.host];

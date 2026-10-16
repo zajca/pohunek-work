@@ -1,13 +1,24 @@
 // One daemon connection of the control client, on the public TypeScript SDK of the pinned core
-// release. A link lists sessions and notifications and follows the daemon's event stream; any
-// event asks the client to read the link again. The link never reports a failed read as empty.
+// release. A link lists sessions and notifications and follows the daemon's event stream; each
+// event is handed to the client with its payload. The link never reports a failed read as empty.
 import { ClientError, Client, nextRequestId, SUPPORTED_PROTOCOL_VERSIONS, type Subscription } from "@pohunek/sdk";
 import type { NotificationStatus } from "@pohunek/protocol";
 import { array, notification, object, session, sessionOutput, InvalidControlResponse } from "./decode.ts";
 import type { ControlError, ControlNotification, ControlOutput, ControlOutputRequest, ControlResult, ControlSession } from "./types.ts";
 
-/** Notification statuses the overview shows; every one is read on each listing. */
-export const VISIBLE_NOTIFICATION_STATUSES: readonly NotificationStatus[] = ["unread", "read", "acknowledged", "archived"];
+/** Statuses under which a notification can still need the owner; the attention list reads these only. */
+const ATTENTION_STATUSES: readonly NotificationStatus[] = ["unread", "read"];
+
+/**
+ * Server-side filters that together select every unresolved action among the attention statuses: the daemon filters
+ * one field per request, so each action condition of `isUnresolvedAction` is one request.
+ */
+const ATTENTION_FILTERS: readonly Readonly<Record<string, string>>[] = [
+  { severity: "action_required" }, { severity: "error" }, { kind: "agent_blocked" }, { kind: "approval_required" },
+];
+
+/** Notification scopes of the activity list; `recent` is every status but archived and deleted. */
+export type ActivityScope = "recent" | "unread" | "archived";
 
 /** A daemon call or connection that did not complete within its bound; the outcome of the call is unknown. */
 export class SdkTimeoutError extends Error {}
@@ -58,8 +69,11 @@ export class SdkLink {
   public constructor(
     public readonly route: string,
     private readonly connect: () => Promise<Client>,
-    /** Called with the event name; an empty name means the connection changed, so every scope is read again. */
-    private readonly onEvent: (kind: string) => void,
+    /**
+     * Called with the event name and its payload; an empty name means the connection changed, so every scope
+     * is read again.
+     */
+    private readonly onEvent: (kind: string, event: Readonly<Record<string, unknown>>) => void,
     private readonly timeoutMs: number,
     private readonly reconnectMaxMs: number,
     /** Whether the link also follows the daemon's event stream; a link that only polls reads does not. */
@@ -123,7 +137,7 @@ export class SdkLink {
       for (;;) {
         const event = await subscription.nextEvent();
         if (event === null) break;
-        if (!this.closed) this.onEvent(event.event);
+        if (!this.closed) this.onEvent(event.event, event);
       }
     } catch (error) {
       // The cause is kept for the outage message, which the retry loop shows until the link is back.
@@ -143,7 +157,7 @@ export class SdkLink {
     if (this.closed || this.reconnecting) return;
     this.reconnecting = true;
     this.attempt = 0;
-    this.onEvent("");
+    this.onEvent("", {});
     this.scheduleAttempt();
   }
 
@@ -169,7 +183,7 @@ export class SdkLink {
       if (error instanceof ClientError && REFUSAL_KINDS.has(error.kind)) {
         this.reconnecting = false;
         this.attempt = 0;
-        this.onEvent("");
+        this.onEvent("", {});
         return;
       }
       this.scheduleAttempt();
@@ -183,7 +197,7 @@ export class SdkLink {
     }
     this.reconnecting = false;
     this.attempt = 0;
-    this.onEvent("");
+    this.onEvent("", {});
   }
 
   private outageMessage(): string {
@@ -261,26 +275,66 @@ export class SdkLink {
     }
   }
 
-  public async notifications(pageSize: number): Promise<ControlResult<readonly ControlNotification[]>> {
-    const records: ControlNotification[] = [];
+  /** One page of `notification.list`; `next` is the cursor of the following page, or null when the list is complete. */
+  private async listPage(params: Readonly<Record<string, string>>, pageSize: number, cursor: string | null): Promise<{ readonly records: ControlNotification[]; readonly next: string | null }> {
+    const page: unknown = await this.call<unknown>("notification.list", { ...params, limit: pageSize, ...(cursor === null ? {} : { cursor }) });
+    const obj = object(page, "$");
+    const records = array(obj["notifications"], "$.notifications").map((item, index) => notification(item, `$.notifications[${String(index)}]`, this.route));
+    const next = obj["next_cursor"];
+    if (next !== undefined && next !== null && (typeof next !== "string" || next === "")) {
+      throw new InvalidControlResponse("$.next_cursor: expected a non-empty string");
+    }
+    return { records, next: typeof next === "string" ? next : null };
+  }
+
+  /** Every page of one filtered list; a repeated cursor is a daemon error. */
+  private async listAll(params: Readonly<Record<string, string>>, pageSize: number, visit: (record: ControlNotification) => void): Promise<void> {
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    do {
+      const page = await this.listPage(params, pageSize, cursor);
+      page.records.forEach(visit);
+      cursor = page.next;
+      if (cursor !== null && seen.has(cursor)) throw new InvalidControlResponse("daemon returned a repeated notifications cursor");
+      if (cursor !== null) seen.add(cursor);
+    } while (cursor !== null);
+  }
+
+  /** The notifications that still need the owner: the unresolved actions, read through the server-side filters. */
+  public async attention(pageSize: number): Promise<ControlResult<readonly ControlNotification[]>> {
+    const records = new Map<string, ControlNotification>();
     try {
-      for (const status of VISIBLE_NOTIFICATION_STATUSES) {
-        let cursor: string | null = null;
-        const seen = new Set<string>();
-        do {
-          const page: unknown = await this.call<unknown>("notification.list", { status, limit: pageSize, ...(cursor === null ? {} : { cursor }) });
-          const obj = object(page, "$");
-          records.push(...array(obj["notifications"], "$.notifications").map((item, index) => notification(item, `$.notifications[${String(index)}]`, this.route)));
-          const next = obj["next_cursor"];
-          if (next !== undefined && next !== null && (typeof next !== "string" || next === "")) {
-            throw new InvalidControlResponse("$.next_cursor: expected a non-empty string");
-          }
-          cursor = typeof next === "string" ? next : null;
-          if (cursor !== null && seen.has(cursor)) throw new InvalidControlResponse("daemon returned a repeated notifications cursor");
-          if (cursor !== null) seen.add(cursor);
-        } while (cursor !== null);
+      for (const status of ATTENTION_STATUSES) {
+        for (const filter of ATTENTION_FILTERS) {
+          await this.listAll({ status, ...filter }, pageSize, (record) => records.set(record.id, record));
+        }
       }
-      return { ok: true, data: records };
+      return { ok: true, data: [...records.values()] };
+    } catch (error) {
+      return { ok: false, error: sdkFailure(error) };
+    }
+  }
+
+  /**
+   * One page of an activity scope on this host. `cursor` is null for the first page and the page's `next` afterwards;
+   * `recent` filters out archived and deleted records client-side because the daemon lists them under no status filter.
+   */
+  public async activityPage(scope: ActivityScope, pageSize: number, cursor: string | null): Promise<ControlResult<{ readonly records: readonly ControlNotification[]; readonly next: string | null }>> {
+    try {
+      const params = scope === "recent" ? {} : { status: scope === "unread" ? "unread" : "archived" };
+      const page = await this.listPage(params, pageSize, cursor);
+      const records = scope === "recent" ? page.records.filter((record) => record.status !== "archived" && record.status !== "deleted") : page.records;
+      return { ok: true, data: { records, next: page.next } };
+    } catch (error) {
+      return { ok: false, error: sdkFailure(error) };
+    }
+  }
+
+  /** The first page of a session's notifications on this host, under every status. */
+  public async sessionNotifications(sessionId: string, pageSize: number): Promise<ControlResult<readonly ControlNotification[]>> {
+    try {
+      const page = await this.listPage({ session_id: sessionId }, pageSize, null);
+      return { ok: true, data: page.records };
     } catch (error) {
       return { ok: false, error: sdkFailure(error) };
     }
