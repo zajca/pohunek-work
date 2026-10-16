@@ -807,13 +807,45 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setOverlay({ kind: "confirm", action: kind, session: target, returnTo });
   }, []);
 
+  // Each view's rows: how many there are, and what opening one does. The selection, the keys and the drawing read the same count.
+  const viewRows: Record<ViewName, { readonly count: number; readonly open: (index: number) => void }> = {
+    Work: {
+      count: workRows?.length ?? 0,
+      open: (index) => {
+        const item = workRows?.[index];
+        if (item !== undefined) setOverlay({ kind: "work-detail", key: rowId(item), choice: 0 });
+      },
+    },
+    Sessions: {
+      count: sessions.length,
+      open: (index) => {
+        const session = sessions[index];
+        if (session !== undefined) void inspectSessionAt(session.host, session.id);
+      },
+    },
+    Hosts: {
+      count: hostRows.length,
+      open: (index) => {
+        const host = hostRows[index];
+        if (host !== undefined) void inspectHost(host);
+      },
+    },
+    Activity: {
+      count: records.length,
+      open: (index) => {
+        const record = records[index];
+        if (record !== undefined) void openNotification(record);
+      },
+    },
+  };
+
   const selectIndex = useCallback((index: number): void => {
-    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? hostRows.length : records.length;
+    const count = viewRows[view].count;
     const next = Math.max(0, Math.min(count - 1, index));
     setCursor((old) => ({ ...old, [view]: next }));
     if (view === "Sessions") { const session = sessions[next]; setSessionKey(session === undefined ? null : `${session.host}/${session.id}`); }
     if (view === "Work") { const item = workRows?.[next]; setWorkKey(item === undefined ? null : rowId(item)); }
-  }, [records.length, sessions, hostRows.length, view, workRows]);
+  }, [sessions, view, viewRows, workRows]);
 
   /** Moves the Sessions selection to the first row of the next (or the previous) group; the first row of the current group counts as its start. */
   const jumpSection = useCallback((direction: 1 | -1): void => {
@@ -835,25 +867,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [cursor, selectedSessionIndex, selectedWorkIndex, selectIndex, view]);
 
   const openRow = useCallback((index: number): void => {
-    const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? hostRows.length : records.length;
+    const { count, open } = viewRows[view];
     if (count === 0) return;
     const targetIndex = Math.max(0, Math.min(count - 1, index));
     selectIndex(targetIndex);
-    if (view === "Work") {
-      const item = workRows?.[targetIndex];
-      if (item === undefined) return;
-      setOverlay({ kind: "work-detail", key: rowId(item), choice: 0 });
-    } else if (view === "Sessions") {
-      const session = sessions[targetIndex];
-      if (session !== undefined) void inspectSessionAt(session.host, session.id);
-    } else if (view === "Hosts") {
-      const host = hostRows[targetIndex];
-      if (host !== undefined) void inspectHost(host);
-    } else {
-      const record = records[targetIndex];
-      if (record !== undefined) void openNotification(record);
-    }
-  }, [hostRows, inspectHost, inspectSessionAt, openNotification, records, selectIndex, sessions, view, workRows]);
+    open(targetIndex);
+  }, [selectIndex, view, viewRows]);
 
   /**
    * The identity of the item drawn at `index` of `target`. A snapshot refresh can reorder a list between two presses,
