@@ -30,6 +30,14 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
+Each project file also sets the required key `review_bot`: the GitHub login of the
+review bot (letters, digits and hyphens, for example `copilot-pull-request-reviewer`)
+or `none`. After `do <key> rebase` force-pushes a new head, the rebase session asks
+that bot to review the head again through the GraphQL mutation `requestReviewsByLogin`
+and checks the request in `reviewRequests`, because REST `requested_reviewers` lists
+users only; the session's summary says whether the request was confirmed. With `none`
+the prompt asks for no review. A value that is neither stops every command with the key named.
+
 A project file may set the optional table `[teardown]` with the required keys `argv`
 (an array whose first element is an absolute program path; no shell, no placeholders) and
 `timeout_ms` (positive integer). `do <key> cleanup` runs that command in the session worktree
@@ -45,6 +53,15 @@ JSON `omitted_ignored` counts the hidden rows that `--mine`, `--finished-hours`,
 `--stale-days` and `--project` would have listed (0 with the flag). `do <key> <action>` on an
 ignored row fails with `precondition_failed` unless `--include-ignored` is
 passed, also with `--dry-run`.
+
+A pull request row of `list --json` carries, besides its state, `created_at`,
+`base_branch`, `size` (`additions`, `deletions`, `changed_files`), `age_days` (days
+since `created_at`) and `idle_days` (days since `updated_at`). Both ages are fractional
+days measured at the payload's top-level `read_at` (ISO 8601, the instant the sources
+were read), on the same clock `--stale-days N` uses: that flag removes a row when
+`idle_days > N`, unless a session of the row is running: such a row is always kept and
+not counted. The payload's `omitted_stale` counts the rows the flag removed (0 without
+it), next to `omitted_ignored`; the table prints the count as well.
 
 Each session of a `list --json` row carries `indicator` (`waiting_input` when a
 blocked notification of the session is open, `lost`, `running`, or the raw state
@@ -76,6 +93,32 @@ actions (`implement`, `babysit`, `fix-ci`, `rebase`, `review`, `ready`,
 stays manual),
 and a path toward a managing agent that runs those actions for the owner under
 an explicit policy.
+
+## Shared GitHub and Linear cache
+
+Every `list`, `watch` and TUI refresh reads the GitHub and Linear sources through
+one cache in the state directory (`cache/cache.sqlite`, SQLite in WAL mode, file
+mode 0600). The store holds provider data and keys only. Each key holds an offline
+identity of the credential the source reads locally (the GitHub token of `gh auth
+token`, the Linear API key of the keyring): an HMAC under a random salt kept in
+`cache/identity.salt` (mode 0600). No provider is asked for it, so a provider outage
+still serves a cached result, and a changed credential is a cache miss. A result read from the
+provider is served to all local processes for `[cache] max_age_secs`; a caller that
+arrives while a fetch is in flight takes that fetch's outcome instead of asking again.
+`list --refresh` (the TUI `r` key) bypasses the max age and joins a fetch in flight the
+same way.
+`do` refreshes before it acts, and refuses an action while any source of its project is
+stale or unavailable in that run: stale data is displayed, never acted on. A failed refresh
+shows the last good data with its source marked failed (`stale` in `freshness`); a rate-limit response stops every
+process from asking the provider until the reset time GitHub reports, or
+`[cache] fallback_backoff_secs` when it reports none. The required keys are
+`max_age_secs`, `lock_timeout_ms` (a fetch whose holder has not refreshed its
+heartbeat for this long, or whose holder process is gone, may be taken over; a live
+holder refreshes its heartbeat every `lock_poll_ms`, so a slow fetch is never taken over), `lock_poll_ms`
+(below `lock_timeout_ms`), `fallback_backoff_secs` and `busy_timeout_ms` (how long a
+process waits for another one's write on the cache database). The `list
+--json` envelope carries the per-source `freshness` (fetch instant, stale, retry
+instant). The field is additive, so the list contract stays at version 4.
 
 ## Status
 
@@ -204,7 +247,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   `pohunek-work doctor` reports the launcher requirements (rofi, swaymsg,
   python3, terminal, installed scripts, sway include, and `pohunek_work_bin` for a
   GitHub issue project) as advisory `warn` lines
-  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
+  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md)), and
+  `doctor --json` prints the same checks and the exit code as one JSON envelope;
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.
 - `pohunek-work watch [--project <label>]...` (repeat `--project` to watch several

@@ -48,6 +48,8 @@ export interface PohunekClient {
   waitSession(request: WaitRequest): Promise<SourceResult<WaitedSession>>;
   /** Git worktrees of one project as `project show` reports them, with their head commits. */
   listWorktrees(project: string): Promise<SourceResult<readonly PohunekWorktree[]>>;
+  /** Runs `pohunek session inspect <id>`; the worktree link of a stopped session is only reported here. */
+  inspectSession(sessionId: string): Promise<SourceResult<InspectedSession>>;
   /** Runs `pohunek attach <id>` on the caller's terminal; resolves with its exit code when the owner detaches. */
   attach(sessionId: string): Promise<SourceResult<number | null>>;
   /** Runs `pohunek session stop <id>`. */
@@ -125,8 +127,16 @@ export interface PohunekWorktree {
   readonly branch: string | null;
   /** Full commit SHA of the worktree head. */
   readonly head: string;
-  /** Session that owns the worktree; null for worktrees pohunek did not create. */
+  /** Session that owns the worktree; null once the owner is stopped, or for worktrees pohunek did not create. */
   readonly sessionId: string | null;
+  /** Whether pohunek created the worktree; false for the main checkout and worktrees it did not create. */
+  readonly owned: boolean;
+}
+
+export interface InspectedSession {
+  readonly session: PohunekSession;
+  /** Whether the session's worktree is a linked worktree of its repository. */
+  readonly isLinkedWorktree: boolean;
 }
 
 export interface LaunchRequest {
@@ -295,6 +305,8 @@ function parseWorktree(raw: unknown, path: string): PohunekWorktree {
     branch: optString(obj, "branch", path),
     head: reqString(obj, "head", path),
     sessionId: optString(obj, "session_id", path),
+    // An absent flag is read as not owned, so the cleanup check refuses the worktree.
+    owned: obj["owned"] === true,
   };
 }
 
@@ -486,6 +498,21 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
   return {
     listProjects: () => listArray(["project", "list", "--json"], parseProject),
     listSessions: () => listArray(["session", "list", "--json"], parseSession),
+    inspectSession: (sessionId) =>
+      wrap(async () => {
+        const outcome = await call(["session", "inspect", sessionId, "--json"]);
+        if (!outcome.ok) {
+          return outcome;
+        }
+        const payload = asObject(outcome.payload, "$.ok");
+        return {
+          ok: true,
+          data: {
+            session: parseSession(payload, "$.ok"),
+            isLinkedWorktree: reqBoolean(payload, "is_linked_worktree", "$.ok"),
+          },
+        };
+      }),
     launchSession: (request) =>
       wrap(async () => {
         const outcome = await call(["session", "new", ...request.args, "--json"], {

@@ -356,18 +356,19 @@ export async function writePluginConfig(daemon: CoreDaemon, projects: readonly P
 }
 
 /**
- * Installs the host agent profile `name` of the daemon, based on agent `shell`, whose program is `script`
- * (the text of a `/bin/sh` script). The daemon reads profiles from `$XDG_CONFIG_HOME/pohunek/agents`; the
- * script lives in the daemon's `bin` directory, so it must name every other program by absolute path.
+ * Installs the host agent profile `name` of the daemon, based on agent `base` (`shell` when absent), whose
+ * program is `script` (the text of a `/bin/sh` script). The base decides how the daemon reads the session's
+ * screen. The daemon reads profiles from `$XDG_CONFIG_HOME/pohunek/agents`; the script lives in the daemon's
+ * `bin` directory, so it must name every other program by absolute path.
  */
-export async function installAgentProfile(daemon: CoreDaemon, name: string, script: string): Promise<void> {
+export async function installAgentProfile(daemon: CoreDaemon, name: string, script: string, base?: "shell" | "claude"): Promise<void> {
   if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`agent profile name ${JSON.stringify(name)} is not lowercase letters, digits and -`);
   const program = join(daemon.root, "bin", `agent-${name}`);
   await writeFile(program, script, { mode: 0o755 });
   await chmod(program, 0o755);
   const agents = join(daemon.root, "config", "pohunek", "agents");
   await mkdir(agents, { recursive: true, mode: 0o700 });
-  await writeFile(join(agents, `${name}.toml`), `base = "shell"\nprogram = ${JSON.stringify(program)}\nargs = []\n`, { mode: 0o600 });
+  await writeFile(join(agents, `${name}.toml`), `base = ${JSON.stringify(base ?? "shell")}\nprogram = ${JSON.stringify(program)}\nargs = []\n`, { mode: 0o600 });
 }
 
 /**

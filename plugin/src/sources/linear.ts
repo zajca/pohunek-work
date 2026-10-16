@@ -2,13 +2,15 @@
 // The API key is sent as the raw Authorization value (personal API key form).
 
 import type { LinearConfig, LinearProject } from "../types/config.ts";
-import type { Issue, SourceErrorCode, SourceResult } from "../types/sources.ts";
+import type { CredentialResult, Issue, SourceErrorCode, SourceResult } from "../types/sources.ts";
 import type { Exec } from "../util/exec.ts";
 import { canonicalPullRequestUrl, samePullRequestUrl } from "../util/pr-url.ts";
 import { readKeyringSecret } from "./keyring.ts";
 
 export interface LinearSource {
   fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>>;
+  /** The API key of the keyring entry, read locally; the issue queries answer for the account that owns it. */
+  credential(): Promise<CredentialResult>;
   /**
    * Of the issue keys and pull request URLs asked for, those whose issue carries the project's
    * ignore label: a key is the issue's own, a URL is a Linear attachment of the issue. The list
@@ -586,6 +588,17 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
         return new Set([...byKey, ...byUrl]);
       });
       return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
+    },
+    async credential(): Promise<CredentialResult> {
+      const keyringDeps = deps.exec === undefined ? {} : { exec: deps.exec };
+      const secret = await readKeyringSecret(config, keyringDeps);
+      if (!secret.ok) {
+        return { ok: false, source: "linear", code: "unauthenticated", message: `Linear token unavailable: keyring ${secret.kind} (${secret.message})`, durationMs: 0 };
+      }
+      if (!HEADER_SAFE.test(secret.secret)) {
+        return { ok: false, source: "linear", code: "unauthenticated", message: "Linear token from keyring is not a valid API key", durationMs: 0 };
+      }
+      return { ok: true, source: "linear", data: secret.secret, durationMs: 0 };
     },
     async fetchIssues(project) {
       const { team, pausedStates } = project.issueSource;
