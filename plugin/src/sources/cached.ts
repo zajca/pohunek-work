@@ -101,24 +101,40 @@ export function cachedLinearSource(
 ): LinearSource {
   const { cache } = options;
   const settings = { endpoint: config.endpoint, pageSize: config.pageSize };
+  // The account is part of every key: the keyring entry keeps its name when the owner's token is replaced
+  // by another account's, and the issue queries answer for whichever account the token belongs to.
+  // One lookup per source object, so a run reads the viewer once per process.
+  let viewer: ReturnType<LinearSource["viewerId"]> | null = null;
+  const viewerId = (): ReturnType<LinearSource["viewerId"]> => {
+    viewer ??= source.viewerId();
+    return viewer;
+  };
 
   return {
-    fetchIssues: (project: LinearProject): Promise<SourceResult<readonly Issue[]>> =>
-      cache.read<readonly Issue[]>({
+    viewerId,
+
+    async fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>> {
+      const account = await viewerId();
+      if (!account.ok) return account;
+      return cache.read<readonly Issue[]>({
         provider: LINEAR_PROVIDER,
         source: "linear",
-        key: JSON.stringify(["issues", settings, project]),
+        key: JSON.stringify(["issues", settings, account.data, project]),
         fetch: () => source.fetchIssues(project),
         ...listCodec<Issue>(),
-      }),
+      });
+    },
 
-    fetchIgnoredKeys: (project, keys, pullRequestUrls) =>
-      cache.read<ReadonlySet<string>>({
+    async fetchIgnoredKeys(project, keys, pullRequestUrls) {
+      const account = await viewerId();
+      if (!account.ok) return account;
+      return cache.read<ReadonlySet<string>>({
         provider: LINEAR_PROVIDER,
         source: "linear",
-        key: JSON.stringify(["ignored_keys", settings, project, [...keys].sort(), [...pullRequestUrls].sort()]),
+        key: JSON.stringify(["ignored_keys", settings, account.data, project, [...keys].sort(), [...pullRequestUrls].sort()]),
         fetch: () => source.fetchIgnoredKeys(project, keys, pullRequestUrls),
         ...keySetCodec(),
-      }),
+      });
+    },
   };
 }

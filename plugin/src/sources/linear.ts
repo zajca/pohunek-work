@@ -9,6 +9,8 @@ import { readKeyringSecret } from "./keyring.ts";
 
 export interface LinearSource {
   fetchIssues(project: LinearProject): Promise<SourceResult<readonly Issue[]>>;
+  /** Id of the account the keyring token belongs to; the issue queries answer for that account (`assignee.isMe`). */
+  viewerId(): Promise<SourceResult<string>>;
   /**
    * Of the issue keys and pull request URLs asked for, those whose issue carries the project's
    * ignore label: a key is the issue's own, a URL is a Linear attachment of the issue. The list
@@ -31,6 +33,8 @@ export interface LinearDeps {
 }
 
 // The label selection is added only when the project has an ignore label.
+const VIEWER_QUERY = "query WorkViewer { viewer { id } }";
+
 function issuesQuery(withLabels: boolean): string {
   return `
 query WorkIssues($first: Int!, $after: String, $teamKey: String!, $attachmentsFirst: Int!${withLabels ? ", $labelsFirst: Int!" : ""}) {
@@ -584,6 +588,13 @@ export function createLinearSource(config: LinearConfig, deps: LinearDeps = {}):
         const byKey = await collectIgnoredKeys(token, ignoreLabel, keys);
         const byUrl = await collectIgnoredUrls(token, ignoreLabel, [...new Set(pullRequestUrls)]);
         return new Set([...byKey, ...byUrl]);
+      });
+      return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
+    },
+    async viewerId() {
+      const result = await withToken(async (token) => {
+        const data = await post(token, VIEWER_QUERY, {});
+        return str(obj(data["viewer"], "viewer"), "id", "viewer.id");
       });
       return result.ok ? { ok: true, source: "linear", data: result.data, durationMs: result.durationMs } : result;
     },

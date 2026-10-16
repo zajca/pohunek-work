@@ -146,6 +146,8 @@ export interface CacheConfig {
   readonly lockPollMs: number;
   /** Back-off after a rate-limit response that names no reset time. */
   readonly fallbackBackoffMs: number;
+  /** How long a process waits for another process's write transaction on the cache database before it reports the cache busy. */
+  readonly busyTimeoutMs: number;
 }
 
 export interface GlobalConfig {

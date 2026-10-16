@@ -139,7 +139,7 @@ function parseGithub(root: Table, file: string): GithubConfig {
 function parseCache(root: Table, file: string): CacheConfig {
   const table = requireTable(root, "cache", file);
   const path = ["cache"];
-  rejectUnknownKeys(table, ["max_age_secs", "lock_timeout_ms", "lock_poll_ms", "fallback_backoff_secs"], file, path);
+  rejectUnknownKeys(table, ["max_age_secs", "lock_timeout_ms", "lock_poll_ms", "fallback_backoff_secs", "busy_timeout_ms"], file, path);
   const lockTimeoutMs = readTimerValue(table, "lock_timeout_ms", 1, file, path);
   const lockPollMs = readTimerValue(table, "lock_poll_ms", 1, file, path);
   if (lockPollMs >= lockTimeoutMs) {
@@ -150,6 +150,7 @@ function parseCache(root: Table, file: string): CacheConfig {
     lockTimeoutMs,
     lockPollMs,
     fallbackBackoffMs: readPositiveInt(table, "fallback_backoff_secs", file, path) * MS_PER_SECOND,
+    busyTimeoutMs: readTimerValue(table, "busy_timeout_ms", 1, file, path),
   };
 }
 

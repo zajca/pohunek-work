@@ -97,18 +97,23 @@ an explicit policy.
 ## Shared GitHub and Linear cache
 
 Every `list`, `watch` and TUI refresh reads the GitHub and Linear sources through
-one cache in the state directory (`cache/`, files mode 0600). A result read from the
-provider is served to all local processes for `[cache] max_age_secs`; concurrent
-callers wait for the one fetch that holds the lock of its result instead of asking
-again. `list --refresh` (the TUI `r` key) bypasses the max age and stays coalesced.
+one cache in the state directory (`cache/cache.sqlite`, SQLite in WAL mode, file
+mode 0600). The store holds only provider data and the cache keys, never a token;
+the Linear keys include the account id from `viewer { id }`, which costs one Linear
+request per run (it is read through the source, not the cache). A result read from the
+provider is served to all local processes for `[cache] max_age_secs`; a caller that
+arrives while a fetch is in flight takes that fetch's outcome instead of asking again.
+`list --refresh` (the TUI `r` key) bypasses the max age and joins a fetch in flight the
+same way.
 `do` refreshes before it acts. A failed refresh shows the last good data with its
 source marked failed (`stale` in `freshness`); a rate-limit response stops every
 process from asking the provider until the reset time GitHub reports, or
 `[cache] fallback_backoff_secs` when it reports none. The required keys are
-`max_age_secs`, `lock_timeout_ms` (a lock its holder has not refreshed for this
-long, or whose holder process is gone, is taken over; a live holder refreshes its
-lock every `lock_poll_ms`, so a slow fetch is never taken over), `lock_poll_ms`
-(below `lock_timeout_ms`) and `fallback_backoff_secs`. The `list
+`max_age_secs`, `lock_timeout_ms` (a fetch whose holder has not refreshed its
+heartbeat for this long, or whose holder process is gone, may be taken over; a live
+holder refreshes its heartbeat every `lock_poll_ms`, so a slow fetch is never taken over), `lock_poll_ms`
+(below `lock_timeout_ms`), `fallback_backoff_secs` and `busy_timeout_ms` (how long a
+process waits for another one's write on the cache database). The `list
 --json` envelope carries the per-source `freshness` (fetch instant, stale, retry
 instant). The field is additive, so the list contract stays at version 4.
 
