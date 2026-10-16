@@ -3,13 +3,14 @@
 // Other processes act from inside the attached shell, after the attach is confirmed by its output, so each trigger
 // happens at a known point of the run and not on a timer.
 import { afterEach, expect, test } from "bun:test";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { keys, type PtyStep } from "./support/pty.ts";
-import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
+import { createShellSession, PROJECT, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { startSocketRelay, type SocketRelay } from "./support/socket-relay.ts";
 import { startTcpRelay, type TcpRelay } from "./support/tcp-relay.ts";
 import type { ProxyRule } from "./support/cli-proxy.ts";
+import { workItem, workList } from "./support/work-source.ts";
 import { daemonLocalSocket } from "../helpers/core-daemon.ts";
 
 const CTRL_BACKSLASH = "1c";
@@ -209,6 +210,86 @@ test("a session created from the form is attached, and its end brings the TUI ba
     ...backInTui("UNAVAILABLE  1"),
   ];
   const result = await scenario.run(steps, { timeoutS: 90 });
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+  expect(result.output).not.toContain(BUSY_REFUSAL);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+/** The Work item whose attach the Work detail runs: a linked live session of the scenario's project. */
+const WORK_KEY = "github:acme/widgets#12";
+const WORK_DRY_RUN_PROTOCOL = 1;
+
+/**
+ * Writes the Work source of a Work detail attach: the list names the session as the item's, the attach plan's dry run
+ * names it as `session_id`, and the attach itself runs `pohunek attach` on it, as the real `do attach` does.
+ */
+async function workAttachSource(tui: TuiScenario, sessionId: string): Promise<void> {
+  const item = { ...workItem(sessionId, WORK_KEY, null, null), actions: [{ name: "attach", delegable: false }] };
+  await writeFile(tui.workListFile, JSON.stringify(workList([item])));
+  const plan = {
+    cli_version: "0.5.0",
+    protocol: { minimum: WORK_DRY_RUN_PROTOCOL, maximum: WORK_DRY_RUN_PROTOCOL },
+    ok: { dry_run: true, plan: { action: "attach", key: WORK_KEY, project: PROJECT, session_id: sessionId, argv: [] } },
+  };
+  const path = join(tui.daemon.root, "work-source");
+  await writeFile(path, `#!${process.execPath}
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2);
+if (args[0] === "list" && args[1] === "--json") {
+  process.stdout.write(readFileSync(${JSON.stringify(tui.workListFile)}, "utf8") + "\\n");
+} else if (args[0] === "do" && args.includes("--dry-run")) {
+  process.stdout.write(${JSON.stringify(JSON.stringify(plan))} + "\\n");
+} else if (args[0] === "do" && args[2] === "attach") {
+  const run = spawnSync(${JSON.stringify(tui.proxy.binary)}, ["attach", ${JSON.stringify(sessionId)}], { stdio: "inherit" });
+  process.exit(run.status ?? 1);
+} else process.exit(70);
+`);
+  await chmod(path, 0o700);
+}
+
+/** The Work detail's attach ends with its session: the status says so and the TUI is back on the Sessions view. */
+const WORK_ATTACH_ENDED = "Attach ended with its session";
+
+test("the Work detail's attach: the session is removed from outside once the attach answers: the attach ends and the TUI comes back", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const id = await createShellSession(scenario.daemon, "alpha");
+  await workAttachSource(scenario, id);
+  const removing = untilPrinted(scenario, id, READY).then(() => scenario?.daemon.pohunek(["session", "rm", id]));
+  const steps: PtyStep[] = [
+    { expect: "WORK  1 items" },
+    keys("\r"),
+    { expect: "WORK ITEM" },
+    keys("r"),
+    { pause: ATTACH_SETTLE_MS },
+    keys(ECHO_READY),
+    { expect: READY },
+    { expect: WORK_ATTACH_ENDED },
+    ...backInTui("No sessions"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 90 });
+  await removing;
+  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
+  expect(result.output).not.toContain(BUSY_REFUSAL);
+}, REAL_SCENARIO_TIMEOUT_MS);
+
+test("the Work detail's attach: the session is stopped from outside once the attach answers: the attach ends and the TUI comes back", async () => {
+  scenario = await startTuiScenario(INLINE);
+  const id = await createShellSession(scenario.daemon, "alpha");
+  await workAttachSource(scenario, id);
+  const stopping = untilPrinted(scenario, id, READY).then(() => scenario?.daemon.pohunek(["session", "stop", id]));
+  const steps: PtyStep[] = [
+    { expect: "WORK  1 items" },
+    keys("\r"),
+    { expect: "WORK ITEM" },
+    keys("r"),
+    { pause: ATTACH_SETTLE_MS },
+    keys(ECHO_READY),
+    { expect: READY },
+    { expect: WORK_ATTACH_ENDED },
+    ...backInTui("UNAVAILABLE  1"),
+  ];
+  const result = await scenario.run(steps, { timeoutS: 90 });
+  await stopping;
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-1500)}`).toBe(-1);
   expect(result.output).not.toContain(BUSY_REFUSAL);
 }, REAL_SCENARIO_TIMEOUT_MS);
