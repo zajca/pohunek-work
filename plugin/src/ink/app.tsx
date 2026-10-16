@@ -1085,7 +1085,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return true; }
     if (key.upArrow || input === "k") { move(-1); return true; }
     if (key.downArrow || input === "j") { move(1); return true; }
-    if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(); return true; }
+    if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(true); return true; }
     return false;
   };
 
@@ -1229,7 +1229,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         <ActionButton label={`Project: ${shorten(workFilters.project ?? "all", 12)}`} onClick={cycleProject} />
         <ActionButton label="Search /" onClick={() => { setEditing("Work"); }} />
         <ActionButton label={`Stale: ${workFilters.hideStale ? "hide" : "show"}`} onClick={toggleStale} />
-        <ActionButton label="Refresh" onClick={() => void refresh()} />
+        <ActionButton label="Refresh" onClick={() => void refresh(true)} />
         <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
       </Box>,
     Sessions: () => <Box gap={1} flexWrap="wrap">
@@ -1238,7 +1238,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         <ActionButton label="Assistant" onClick={() => { openForm(true); }} />
         <ActionButton label="Search /" onClick={() => { setEditing("Sessions"); }} />
         <ActionButton label={`Project: ${shorten(projectFilter ?? "all", 12)}`} onClick={() => { if (snapshot !== null) openProjectPicker(); }} />
-        <ActionButton label="Refresh" onClick={() => void refresh()} />
+        <ActionButton label="Refresh" onClick={() => void refresh(true)} />
         <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
       </Box>,
     Hosts: () => <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Search /" onClick={() => { setEditing("Hosts"); }} /><ActionButton label="Refresh" onClick={() => void refresh()} /></Box>,

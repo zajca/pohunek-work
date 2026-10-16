@@ -1,0 +1,12 @@
+## Review bot
+The force-push above moved the head, so the review of `${review_bot}` on the previous head no longer
+covers the code. Ask it again for the new head, and only after the push succeeded.
+- Read the node id of the pull request: `gh pr view ${pr_url} --json id --jq .id`.
+- Request the review with GraphQL, using that id as `PULL_REQUEST_ID`. A GitHub App bot is requested
+  with `botLogins`; the REST `requested_reviewers` field lists users only:
+  `gh api graphql -f query='mutation { requestReviewsByLogin(input: {pullRequestId: "PULL_REQUEST_ID", botLogins: ["${review_bot}[bot]"], union: true}) { clientMutationId } }'`
+- Verify the request by reading `reviewRequests` of the pull request (`requestedReviewer { ... on Bot { login } }`).
+  The login `${review_bot}` must be listed (GitHub may show it with the `[bot]` suffix). Do not retry more than once; if it is still not listed,
+  report it as not confirmed.
+- In the summary, state whether the review of `${review_bot}` was re-requested and whether GitHub
+  confirmed it, or that the request failed and why.

@@ -43,7 +43,7 @@ function pullRequestFragment(shape: SearchShape): string {
   const labels = shape.pullRequestLabels ? `\n  labels(first: $nested) { ${LABEL_FIELDS} }` : "";
   return `
 fragment PrFields on PullRequest {
-  id number url title isDraft isCrossRepository headRefName headRefOid baseRefName reviewDecision mergeable updatedAt
+  id number url title isDraft isCrossRepository headRefName headRefOid baseRefName reviewDecision mergeable createdAt updatedAt additions deletions changedFiles
   repository { nameWithOwner }
   ${ACTOR}
   reviews(first: $nested) { ${REVIEWS_FIELDS} }

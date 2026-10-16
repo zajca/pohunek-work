@@ -17,19 +17,21 @@ import {
   type ListItem,
   type ListProjectStatus,
   type OrphanedSession,
+  type SourceFreshness,
   type SourceStatus,
   type SourceStatuses,
   type UnlinkedSession,
   type WorkItem,
 } from "../types/item.ts";
-import type {
-  Issue,
-  MergedPullRequest,
-  PohunekNotification,
-  PohunekProject,
-  PohunekSession,
-  PullRequest,
-  SourceResult,
+import {
+  resultData,
+  type Issue,
+  type MergedPullRequest,
+  type PohunekNotification,
+  type PohunekProject,
+  type PohunekSession,
+  type PullRequest,
+  type SourceResult,
 } from "../types/sources.ts";
 import type { Logger } from "../log.ts";
 import { parseOriginRepo, type PohunekClient } from "../sources/pohunek.ts";
@@ -74,6 +76,15 @@ function statusOf(result: SourceResult<unknown>): SourceStatus {
   return result.ok ? "ok" : result.code;
 }
 
+/** The failure code, plus the age of the data shown instead and the instant of the next provider read when either is known. */
+function describeSource(result: SourceResult<unknown>): string {
+  if (result.ok) return "ok";
+  const parts: string[] = [result.code];
+  if ("stale" in result) parts.push(`showing data read at ${new Date(result.fetchedAtMs).toISOString()}`);
+  if (result.retryAtMs !== undefined) parts.push(`provider not asked before ${new Date(result.retryAtMs).toISOString()}`);
+  return parts.join("; ");
+}
+
 /** Issues come from the project's own issue source; the other issue source reports `unused`. */
 async function fetchProjectIssues(
   project: ProjectConfig,
@@ -83,6 +94,15 @@ async function fetchProjectIssues(
   if (!isLinearProject(project)) throw new Error(`project ${project.pohunekLabel} has an unknown issue source`);
   if (deps.linear === null) throw new Error(`project ${project.pohunekLabel} uses Linear but no Linear source is configured`);
   return deps.linear.fetchIssues(project);
+}
+
+/** When the data behind a cached source was read, whether it is shown stale, and when the provider is asked again. */
+function freshnessOf(result: SourceResult<unknown>): SourceFreshness {
+  return {
+    fetched_at: result.fetchedAtMs === undefined ? null : new Date(result.fetchedAtMs).toISOString(),
+    stale: "stale" in result,
+    retry_at: result.retryAtMs === undefined ? null : new Date(result.retryAtMs).toISOString(),
+  };
 }
 
 /** First failing pohunek call decides the pohunek status. */
@@ -140,6 +160,8 @@ export interface Collected {
   readonly warnings: string[];
   readonly sourceFailures: readonly string[];
   readonly sessions: readonly PohunekSession[];
+  /** Instant the sources were read: the clock of `--stale-days` and of every age in the output. */
+  readonly readAtMs: number;
 }
 
 /** Fetches every source once per selected project, joins and evaluates the rules. */
@@ -150,6 +172,7 @@ export async function collectRows(
 ): Promise<Collected> {
   const { logger } = deps;
   const global: GlobalConfig = config.global;
+  const readAtMs = (deps.now ?? Date.now)();
   const [registry, sessionsResult, notificationsResult] = await Promise.all([
     deps.pohunek.listProjects(),
     deps.pohunek.listSessions(),
@@ -192,6 +215,9 @@ export async function collectRows(
   );
 
   for (const { project, github, merged, issues: issueResult } of perProject) {
+    for (const result of [github, merged, issueResult]) {
+      if (result.cacheWarning !== undefined) warnings.push(`project ${project.pohunekLabel}: ${result.cacheWarning}`);
+    }
     const issueSource = issueSourceStatusKey(project);
     const issueStatus = (key: typeof issueSource): SourceStatus => (key === issueSource ? statusOf(issueResult) : "unused");
     const sources: SourceStatuses = {
@@ -201,18 +227,27 @@ export async function collectRows(
       github_issues: issueStatus("github_issues"),
       pohunek,
     };
-    projectStatuses.push({ project: project.pohunekLabel, sources });
-    if (sources.github !== "ok") sourceFailures.push(`${project.pohunekLabel} github: ${sources.github}`);
-    if (sources.github_merged !== "ok") sourceFailures.push(`${project.pohunekLabel} github_merged: ${sources.github_merged}`);
-    if (isSourceFailure(sources[issueSource])) sourceFailures.push(`${project.pohunekLabel} ${issueSource}: ${sources[issueSource]}`);
-    const pullRequests: readonly PullRequest[] = github.ok ? github.data : [];
-    const mergedPullRequests: readonly MergedPullRequest[] = merged.ok ? merged.data : [];
-    const issues: readonly Issue[] = issueResult.ok ? issueResult.data : [];
+    const issueFreshness = freshnessOf(issueResult);
+    const freshness: ListProjectStatus["freshness"] = {
+      github: freshnessOf(github),
+      github_merged: freshnessOf(merged),
+      linear: issueSource === "linear" ? issueFreshness : null,
+      github_issues: issueSource === "github_issues" ? issueFreshness : null,
+      pohunek: null,
+    };
+    projectStatuses.push({ project: project.pohunekLabel, sources, freshness });
+    if (sources.github !== "ok") sourceFailures.push(`${project.pohunekLabel} github: ${describeSource(github)}`);
+    if (sources.github_merged !== "ok") sourceFailures.push(`${project.pohunekLabel} github_merged: ${describeSource(merged)}`);
+    if (isSourceFailure(sources[issueSource])) sourceFailures.push(`${project.pohunekLabel} ${issueSource}: ${describeSource(issueResult)}`);
+    // Stale data is shown with its source marked failed, so rules that need a fresh source leave those rows unknown.
+    const pullRequests: readonly PullRequest[] = resultData(github) ?? [];
+    const mergedPullRequests: readonly MergedPullRequest[] = resultData(merged) ?? [];
+    const issues: readonly Issue[] = resultData(issueResult) ?? [];
     const joined = joinItems({ project, issues, pullRequests, mergedPullRequests, sessions, notifications, sources });
     const looked = await lookupUnlistedIssues(project, joined.items, sources, deps);
     if (looked.failure !== null) sourceFailures.push(`${project.pohunekLabel} ${issueSource} lookup: ${looked.failure}`);
     for (const item of looked.items) {
-      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles, sessions }) });
+      rows.push({ item, project, listItem: buildListItem(item, { sources, identity: global.identity, project, profiles: global.profiles, sessions, nowMs: readAtMs }) });
     }
     orphans.push(...joined.orphanedSessions);
     unlinked.push(
@@ -226,7 +261,7 @@ export async function collectRows(
     );
   }
   for (const failure of sourceFailures) logger.error("source_failed", { failure });
-  return { rows, orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions };
+  return { rows, orphans, unlinked, projectStatuses, warnings, sourceFailures, sessions, readAtMs };
 }
 
 export async function runList(
@@ -239,11 +274,12 @@ export async function runList(
   const { orphans, unlinked, projectStatuses, warnings, sourceFailures } = collected;
   const items = collected.rows.map((row) => row.listItem);
 
-  const now = (deps.now ?? Date.now)();
+  const now = collected.readAtMs;
   const finishedCut = options.mine && options.finishedHours !== null ? finishedCutoff(now, options.finishedHours) : null;
   const mineRows = options.mine ? filterMine(items, finishedCut) : items;
   const cutoff = options.staleDays === null ? null : staleCutoff(now, options.staleDays);
   const filtered = cutoff === null ? mineRows : mineRows.filter((item) => !isStalePullRequest(item, cutoff));
+  const omittedStale = mineRows.length - filtered.length;
   const shown = options.includeIgnored ? filtered : filtered.filter((item) => !item.ignored);
   const omittedIgnored = filtered.length - shown.length;
   logger.info("list_done", {
@@ -253,6 +289,7 @@ export async function runList(
     stale_days: options.staleDays,
     finished_hours: options.finishedHours,
     include_ignored: options.includeIgnored,
+    omitted_stale: omittedStale,
     omitted_ignored: omittedIgnored,
   });
   const stdout = options.json
@@ -262,12 +299,13 @@ export async function runList(
           options.mine ? [] : orphans,
           options.mine ? [] : unlinked,
           projectStatuses,
-          omittedIgnored,
+          { omittedIgnored, omittedStale, readAtMs: now },
         ), null, 2)
     : renderTable(
         shown,
         options.mine ? [] : orphans,
         options.mine ? [] : unlinked,
-        omittedIgnored);
+        omittedIgnored,
+        omittedStale);
   return { stdout, warnings, items: shown, sourceFailures };
 }

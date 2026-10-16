@@ -1,7 +1,7 @@
 import type { ListPayload } from "../types/item.ts";
 import { SpawnError, exec } from "../util/exec.ts";
 import { decodeDoEnvelope, decodeListEnvelope, type DoOutcome } from "../tui/decode.ts";
-import { attachArgv, previewArgv, writeArgv, type ArgvResult } from "../tui/actions.ts";
+import { attachArgv, listArgv, previewArgv, writeArgv, type ArgvResult } from "../tui/actions.ts";
 
 export interface WorkSnapshot {
   readonly payload: ListPayload | null;
@@ -9,9 +9,10 @@ export interface WorkSnapshot {
   readonly partial: boolean;
 }
 
-export async function loadWork(selfBin: string, timeoutMs: number): Promise<WorkSnapshot> {
+/** `refresh` makes `list` read past the cache max age; only an explicit refresh asks for it. */
+export async function loadWork(selfBin: string, timeoutMs: number, refresh: boolean): Promise<WorkSnapshot> {
   try {
-    const run = await exec([selfBin, "list", "--json"], { timeoutMs });
+    const run = await exec(listArgv(selfBin, refresh), { timeoutMs });
     if (run.timedOut) return { payload: null, warning: "Work list timed out", partial: false };
     if (run.stdout.trim() === "") return { payload: null, warning: run.stderr.trim() || "Work list returned no data", partial: false };
     const outcome = decodeListEnvelope(run.stdout);

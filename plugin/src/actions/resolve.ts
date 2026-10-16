@@ -1,5 +1,6 @@
 // Resolves one row by key from a fresh pipeline run; never from stale data.
 import { collectRows, type CollectedRow, type ListDeps } from "../commands/list.ts";
+import { isSourceFailure, type SourceStatus } from "../types/item.ts";
 import type { PluginConfig } from "../types/config.ts";
 import type { PohunekSession } from "../types/sources.ts";
 import { ActionError } from "./types.ts";
@@ -36,6 +37,17 @@ export async function resolveRow(
   if (matches.length > 1) {
     const projects = matches.map((m) => m.project.pohunekLabel).join(", ");
     throw new ActionError("ambiguous_item", `key ${key} appears in several projects (${projects}); pass --project`);
+  }
+  // A mutating action may only rest on data read in this run. Stale data (a failed refresh) is displayed by `list`,
+  // but a rule that finds an issue in it would decide on a state nobody checked, so every source of the row's
+  // project has to be fresh here.
+  const unavailable = Object.entries(row.listItem.sources).filter((entry): entry is [string, SourceStatus] => isSourceFailure(entry[1]));
+  if (unavailable.length > 0) {
+    const names = unavailable.map(([name, status]) => `${name} (${status})`).join(", ");
+    throw new ActionError(
+      "source_unavailable",
+      `${key} refused: source ${names} is stale or unavailable in this run; an action needs every source it reads fresh`,
+    );
   }
   // An ignored row is parked on purpose: acting on it needs an explicit opt-in, for every action.
   if (row.listItem.ignored && !includeIgnored) {

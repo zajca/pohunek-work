@@ -31,7 +31,7 @@ export interface ControlDataState {
   readonly setSnapshot: (update: (previous: ControlSnapshot | null) => ControlSnapshot | null) => void;
   readonly work: WorkSnapshot | null;
   readonly stale: boolean;
-  readonly refresh: () => Promise<void>;
+  readonly refresh: (bypassCache?: boolean) => Promise<void>;
 }
 
 /**
@@ -49,6 +49,8 @@ export function useControlData(
   const [snapshot, setSnapshot] = useState<ControlSnapshot | null>(null);
   const [work, setWork] = useState<WorkSnapshot | null>(null);
   const [stale, setStale] = useState(false);
+  // Set by an explicit refresh; the work read that starts next then asks `list` to read past the cache max age.
+  const bypassNextWork = useRef(false);
 
   // Snapshots from the reconcile and from the daemon's event stream share one path.
   // A read that started before a newer action may not replace that action's status; the snapshot itself is always applied.
@@ -87,8 +89,10 @@ export function useControlData(
 
   const refreshWork = useMemo(() => coalesce(async (): Promise<void> => {
     if (options.mode !== "main") return;
+    const bypassCache = bypassNextWork.current;
+    bypassNextWork.current = false;
     const started = actionSeq.current;
-    const nextWork = await loadWork(options.selfBin, options.listTimeoutMs).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
+    const nextWork = await loadWork(options.selfBin, options.listTimeoutMs, bypassCache).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
     if (!alive.current) return;
     if (nextWork.ok) {
       const latest = nextWork.value;
@@ -101,7 +105,8 @@ export function useControlData(
     }
   }), [options.listTimeoutMs, options.mode, options.selfBin]);
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (bypassCache = false): Promise<void> => {
+    if (bypassCache) bypassNextWork.current = true;
     await Promise.all([refreshControl(), refreshWork()]);
   }, [refreshControl, refreshWork]);
 
