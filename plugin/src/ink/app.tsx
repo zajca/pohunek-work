@@ -954,60 +954,56 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setCursor((old) => ({ ...old, Activity: 0 }));
   }, []);
 
-  const handleKey = (input: string, key: Key): void => {
-    const mouse = parseMouseEvent(input);
-    // Input that arrives while an action runs is refused on the status line, so the owner sees why nothing happened.
-    if (busy && (mouse !== null || !input.startsWith("[<"))) { setStatus(BUSY_REFUSAL); return; }
-    if (mouse !== null) { dispatchMouse(mouse); return; }
-    if (input.startsWith("[<")) return;
+  /** Forms and the confirmation, recovery and rename overlays take every key, Tab included. */
+  const modalKeys = (input: string, key: Key): boolean => {
     if (overlay.kind === "form" || overlay.kind === "assistant") {
       const assistant = overlay.kind === "assistant";
       const pickField = form.focus <= LAST_PICK_FIELD;
-      if (created !== null) { if (key.return) void attachCreated(); else if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" }); } return; }
+      if (created !== null) { if (key.return) void attachCreated(); else if (key.escape) { if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" }); } return true; }
       // Esc first clears the query of a pick field; the next Esc leaves the form.
       if (key.escape) {
-        if (form.search !== "") { setForm((old) => ({ ...old, search: "", highlight: 0 })); return; }
+        if (form.search !== "") { setForm((old) => ({ ...old, search: "", highlight: 0 })); return true; }
         if (options.mode === "new-session") exit(); else setOverlay({ kind: "none" });
-        return;
+        return true;
       }
-      if (key.ctrl && key.return) { void submitForm(); return; }
-      if (key.return && form.focus === (assistant ? 7 : 8)) { void submitForm(); return; }
-      if (key.tab) { setForm((old) => moveFocus(old, nextField(old.focus, key.shift ? -1 : 1, assistant, true))); return; }
-      if (key.upArrow || key.downArrow) { setForm((old) => moveFocus(old, nextField(old.focus, key.upArrow ? -1 : 1, assistant, false))); return; }
-      if (key.leftArrow || key.rightArrow) { changeFormChoice(key.leftArrow ? -1 : 1); return; }
+      if (key.ctrl && key.return) { void submitForm(); return true; }
+      if (key.return && form.focus === (assistant ? 7 : 8)) { void submitForm(); return true; }
+      if (key.tab) { setForm((old) => moveFocus(old, nextField(old.focus, key.shift ? -1 : 1, assistant, true))); return true; }
+      if (key.upArrow || key.downArrow) { setForm((old) => moveFocus(old, nextField(old.focus, key.upArrow ? -1 : 1, assistant, false))); return true; }
+      if (key.leftArrow || key.rightArrow) { changeFormChoice(key.leftArrow ? -1 : 1); return true; }
       if (key.return && pickField) {
-        if (form.search === "") { setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false))); return; }
+        if (form.search === "") { setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false))); return true; }
         const pick = formPick(form, launchOptions, actions, assistant);
         const item = pick?.matches[pick.highlight];
-        if (item === undefined) { bumpStatus(`No ${formFieldLabel(assistant, form.focus).toLowerCase()} matches "${form.search}"; Backspace edits the query`); return; }
+        if (item === undefined) { bumpStatus(`No ${formFieldLabel(assistant, form.focus).toLowerCase()} matches "${form.search}"; Backspace edits the query`); return true; }
         applyPick(form.focus, item, assistant);
         setForm((old) => moveFocus(old, nextField(old.focus, 1, assistant, false)));
-        return;
+        return true;
       }
-      if (key.return && overlay.kind === "form" && form.focus === 5) { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return; }
+      if (key.return && overlay.kind === "form" && form.focus === 5) { setForm((old) => ({ ...old, prompt: old.prompt + "\n" })); return true; }
       // The focus is read from the state the update applies to: a click that changed it may not have rendered yet.
       if (key.backspace || key.delete) {
         setForm((old) => old.focus <= LAST_PICK_FIELD ? (old.search === "" ? old : { ...old, search: old.search.slice(0, -1), highlight: 0 }) : changeTextField(old, "", assistant, true));
-        return;
+        return true;
       }
       // Control characters are never text: an input without printable characters types nothing.
       if (!key.ctrl && !key.meta && typedText(input) !== "") {
         setForm((old) => old.focus <= LAST_PICK_FIELD ? (typedText(input) === "" ? old : { ...old, search: old.search + input, highlight: 0 }) : changeTextField(old, input, assistant, false));
       }
-      return;
+      return true;
     }
     if (overlay.kind === "confirm") {
       if (input.toLowerCase() === "y") void runSessionAction({ kind: overlay.action, host: overlay.session.host, sessionId: overlay.session.id }, overlay.session);
-      setOverlay({ kind: overlay.returnTo }); return;
+      setOverlay({ kind: overlay.returnTo }); return true;
     }
     if (overlay.kind === "recovery") {
       const request = overlay.request;
       setOverlay({ kind: request.returnTo });
       if (input.toLowerCase() === "y") confirmRecovery(request);
-      return;
+      return true;
     }
     if (overlay.kind === "rename" || overlay.kind === "metadata") {
-      if (key.escape) { setOverlay({ kind: "session" }); setEdit(""); return; }
+      if (key.escape) { setOverlay({ kind: "session" }); setEdit(""); return true; }
       if (key.return && sessionDetail !== null) {
         if (overlay.kind === "rename") void runSessionAction({ kind: "rename", host: sessionDetail.host, sessionId: sessionDetail.id, name: nullable(edit) });
         else {
@@ -1015,12 +1011,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
           if (separator < 1) bumpStatus("Metadata needs key=value");
           else void runSessionAction({ kind: "metadata", host: sessionDetail.host, sessionId: sessionDetail.id, set: { [edit.slice(0, separator)]: edit.slice(separator + 1) } });
         }
-        return;
+        return true;
       }
       if (key.backspace || key.delete) setEdit((old) => old.slice(0, -1));
       else if (!key.ctrl && !key.meta) setEdit((old) => old + input);
-      return;
+      return true;
     }
+    return false;
+  };
+
+  /** Tab and Shift-Tab switch views unless a text field is focused or help is open. */
+  const tabKeys = (input: string, key: Key): boolean => {
     // Only Tab and Shift-Tab switch views. A list filter that is typed takes Tab for itself, as a text field does.
     const textFocused = editing !== null || (overlay.kind === "projects" && pick.filtering);
     if ((key.tab || input === "\u001b[Z") && !textFocused && overlay.kind !== "help" && options.mode === "main") {
@@ -1029,31 +1030,46 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setOverlay({ kind: "none" });
       // The next view is read from the state the update applies to, so each Tab of a run moves one view further.
       setView((old) => VIEWS[(VIEWS.indexOf(old) + direction + VIEWS.length) % VIEWS.length] ?? "Work");
-      return;
+      return true;
     }
+    return false;
+  };
+
+  /** While a list filter is typed, every key is text. */
+  const filterKeys = (input: string, key: Key): boolean => {
     // While a filter is typed every key is text: x, D, 1-4 and the arrows never act on the list.
     if (overlay.kind === "none" && editing !== null) {
-      if (key.escape) { editQuery(editing, () => ""); setEditing(null); return; }
-      if (key.return) { setEditing(null); return; }
-      if (key.tab) return;
-      if (key.backspace || key.delete) { editQuery(editing, (old) => old.slice(0, -1)); return; }
+      if (key.escape) { editQuery(editing, () => ""); setEditing(null); return true; }
+      if (key.return) { setEditing(null); return true; }
+      if (key.tab) return true;
+      if (key.backspace || key.delete) { editQuery(editing, (old) => old.slice(0, -1)); return true; }
       const typed = key.ctrl || key.meta ? "" : typedText(input);
       if (typed !== "") editQuery(editing, (old) => old + typed);
-      return;
+      return true;
     }
-    if (overlay.kind === "none" && key.escape && queryOf(view) !== "") { editQuery(view, () => ""); return; }
-    if (overlay.kind === "none" && input === "/") { setEditing(view); return; }
+    return false;
+  };
+
+  /** Escape clearing a query, `/`, and the section and scope arrows act only with no overlay open. */
+  const viewEditKeys = (input: string, key: Key): boolean => {
+    if (overlay.kind === "none" && key.escape && queryOf(view) !== "") { editQuery(view, () => ""); return true; }
+    if (overlay.kind === "none" && input === "/") { setEditing(view); return true; }
     if (overlay.kind === "none" && view === "Sessions" && (key.leftArrow || key.rightArrow || input === "[" || input === "]")) {
       jumpSection(key.rightArrow || input === "]" ? 1 : -1);
-      return;
+      return true;
     }
     if (overlay.kind === "none" && view === "Activity" && (key.leftArrow || key.rightArrow)) {
       const step = key.rightArrow ? 1 : -1;
       setScope((old) => SCOPES[(SCOPES.indexOf(old) + step + SCOPES.length) % SCOPES.length] ?? "Recent");
       setCursor((old) => ({ ...old, Activity: 0 }));
-      return;
+      return true;
     }
-    if (overlay.kind === "help") { if (key.escape || input === "?" || input === "q") setOverlay({ kind: "none" }); return; }
+    return false;
+  };
+
+  /** Non-modal overlays consume every key they are given. */
+  const overlayKeys = (input: string, key: Key): boolean => {
+    if (overlay.kind === "help") { if (key.escape || input === "?" || input === "q") setOverlay({ kind: "none" }); return true; }
     if (overlay.kind === "projects") {
       const chooseProject = (): void => {
         const choice = pickChoices[pick.index];
@@ -1065,30 +1081,30 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         else if (key.return) chooseProject();
         else if (key.backspace || key.delete) setPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
         else if (input !== "" && !key.ctrl && !key.meta && !key.tab) setPick((old) => ({ ...old, search: old.search + input, index: 0 }));
-        return;
+        return true;
       }
       if (key.escape) setOverlay({ kind: "none" });
       else if (key.upArrow) setPick((old) => ({ ...old, index: Math.max(0, old.index - 1) }));
       else if (key.downArrow) setPick((old) => ({ ...old, index: Math.min(pickChoices.length - 1, old.index + 1) }));
       else if (input === "/") setPick((old) => ({ ...old, filtering: true }));
       else if (key.return) chooseProject();
-      return;
+      return true;
     }
     if (overlay.kind === "work-preview") {
       if (key.escape) setOverlay({ kind: "work-detail", key: overlay.key, choice: overlay.choice });
       else if (key.pageDown || key.downArrow) setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.min(previewMaxOffset, current.offset + Math.max(1, previewHeight - 1)) } : current);
       else if (key.pageUp || key.upArrow) setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.max(0, current.offset - Math.max(1, previewHeight - 1)) } : current);
       else if ((key.return || input === "r") && previewMatchesSelection) void workHandover(selectedWorkAction.name);
-      return;
+      return true;
     }
     if (overlay.kind === "work-detail") {
-      if (key.escape) { setOverlay({ kind: "none" }); return; }
+      if (key.escape) { setOverlay({ kind: "none" }); return true; }
       if (key.upArrow || input === "k") setOverlay((current) => current.kind === "work-detail" ? { ...current, choice: Math.max(0, current.choice - 1) } : current);
       else if (key.downArrow || input === "j") setOverlay((current) => current.kind === "work-detail" ? { ...current, choice: Math.min((workDetail?.actions.length ?? 1) - 1, current.choice + 1) } : current);
       else if (key.return || input === "p") { if (selectedWorkAction !== undefined) void previewWorkAction(selectedWorkAction.name); }
       else if (input === "r") { if (selectedWorkAction !== undefined) void workHandover(selectedWorkAction.name); }
       else if (input === "o" && workDetail !== null) { const url = workDetail.pull_request?.url ?? workDetail.issue?.url; if (url !== undefined) openLink(url); }
-      return;
+      return true;
     }
     if (overlay.kind === "links") {
       const choice = overlay.chooser;
@@ -1098,7 +1114,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (chosen === null) {
         close();
         bumpStatus("The session of this chooser is no longer listed; no link opened");
-        return;
+        return true;
       }
       const highlighted = Math.max(0, links.findIndex((link) => link.url === choice.url));
       const highlight = (index: number): void => { setOverlay({ kind: "links", chooser: { ...choice, url: links[index]?.url ?? null } }); };
@@ -1120,7 +1136,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if (link === undefined) {
           highlight(0);
           bumpStatus(links.length === 0 ? "The chooser has no links left on this session" : "The highlighted link is no longer on this session; choose again");
-          return;
+          return true;
         }
         close();
         openLink(link.url);
@@ -1128,13 +1144,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if (Number(input) <= links.length) openNumbered(Number(input) - 1);
         else missing(Number(input));
       }
-      return;
+      return true;
     }
     if (overlay.kind === "session") {
-      if (key.escape) { setOverlay({ kind: "none" }); return; }
-      if (sessionDetail === null) return;
-      if (key.pageDown || key.downArrow) { scrollDetail(overlayOffset + Math.max(1, detailHeight - 1), detailMaxOffset); return; }
-      if (key.pageUp || key.upArrow) { scrollDetail(overlayOffset - Math.max(1, detailHeight - 1), detailMaxOffset); return; }
+      if (key.escape) { setOverlay({ kind: "none" }); return true; }
+      if (sessionDetail === null) return true;
+      if (key.pageDown || key.downArrow) { scrollDetail(overlayOffset + Math.max(1, detailHeight - 1), detailMaxOffset); return true; }
+      if (key.pageUp || key.upArrow) { scrollDetail(overlayOffset - Math.max(1, detailHeight - 1), detailMaxOffset); return true; }
       if (input === "o" && sessionAttachable) void openSelected();
       else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
       else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
@@ -1146,22 +1162,32 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "g") openBranch(sessionDetail);
       else if (input === "b") void copyValue(sessionDetail.branch ?? "");
       else if (input === "c") void copyValue(sessionDetail.worktreePath ?? sessionDetail.cwd);
-      return;
+      return true;
     }
     if (overlay.kind === "notification") {
       const { record } = overlay;
       if (key.escape) setOverlay({ kind: "none" });
       else if (input === "o" && record.sessionId !== null) void inspectSessionAt(record.host, record.sessionId);
       else if (input === "a" || input === "x") void updateNotification(record, input === "a" ? "ack" : "archive");
-      return;
+      return true;
     }
-    if (overlay.kind === "host") { if (key.escape) setOverlay({ kind: "none" }); return; }
-    if (input === "q" || (key.ctrl && input === "c")) { exit(); return; }
-    if (input === "?") { setOverlay({ kind: "help" }); return; }
-    if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return; }
-    if (key.upArrow || input === "k") { move(-1); return; }
-    if (key.downArrow || input === "j") { move(1); return; }
-    if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(); return; }
+    if (overlay.kind === "host") { if (key.escape) setOverlay({ kind: "none" }); return true; }
+    return false;
+  };
+
+  /** Keys that act the same in every view. */
+  const globalKeys = (input: string, key: Key): boolean => {
+    if (input === "q" || (key.ctrl && input === "c")) { exit(); return true; }
+    if (input === "?") { setOverlay({ kind: "help" }); return true; }
+    if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return true; }
+    if (key.upArrow || input === "k") { move(-1); return true; }
+    if (key.downArrow || input === "j") { move(1); return true; }
+    if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(); return true; }
+    return false;
+  };
+
+  /** The keys of the view shown. */
+  const viewKeys = (input: string, key: Key): void => {
     if (view === "Work") {
       if (input === "m") setWorkFilters((old) => ({ ...old, actor: old.actor === "me" ? "all" : "me" }));
       else if (input === "f") cycleActor();
@@ -1191,6 +1217,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       else if (input === "m") loadMoreActivity();
       else if (key.return) openRow(cursor.Activity);
     }
+  };
+
+  const handleKey = (input: string, key: Key): void => {
+    const mouse = parseMouseEvent(input);
+    // Input that arrives while an action runs is refused on the status line, so the owner sees why nothing happened.
+    if (busy && (mouse !== null || !input.startsWith("[<"))) { setStatus(BUSY_REFUSAL); return; }
+    if (mouse !== null) { dispatchMouse(mouse); return; }
+    if (input.startsWith("[<")) return;
+    // The tiers run in this order; the first one that consumes the key ends the dispatch.
+    if (modalKeys(input, key) || tabKeys(input, key) || filterKeys(input, key) || viewEditKeys(input, key) || overlayKeys(input, key) || globalKeys(input, key)) return;
+    viewKeys(input, key);
   };
 
   // Ink passes a chunk of several presses as one input, and pastes on a channel of their own. Key presses and pastes
