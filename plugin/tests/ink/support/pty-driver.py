@@ -1,5 +1,6 @@
 # Runs a command in a pseudo-terminal and drives it with a list of steps read from a JSON spec.
-# Steps: {"expect": text} waits for text after the previous expect; {"send": hex} writes bytes;
+# Steps: {"expect": text, "timeout": seconds} waits for text after the previous expect, for at most the step's timeout and
+# the run's timeoutS; {"send": hex} writes bytes;
 # {"clear": true} makes later expectations match only output printed after it; {"pause": ms} sleeps.
 # The plain output (ANSI sequences removed) is printed as JSON with the index of the failing step, or -1 when every step completed.
 import fcntl, json, os, pty, re, select, signal, struct, subprocess, sys, termios, time
@@ -26,6 +27,8 @@ ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[=>78]")
 output = bytearray()
 mark = 0
 failed = -1
+# No step outlives the run: a step that never matches ends the run with its frame, before the test runner kills the driver.
+run_deadline = time.monotonic() + spec.get("timeoutS", 20)
 def pump(seconds):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
@@ -43,7 +46,7 @@ def plain():
     return ANSI.sub(b"", bytes(output)).decode("utf-8", "replace")
 for index, step in enumerate(spec["steps"]):
     if "expect" in step:
-        deadline = time.monotonic() + step.get("timeout", spec.get("timeoutS", 20))
+        deadline = min(time.monotonic() + step.get("timeout", spec.get("timeoutS", 20)), run_deadline)
         needle = step["expect"]
         while True:
             text = plain()

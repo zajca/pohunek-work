@@ -18,7 +18,7 @@ function record(id: string, kind: string, severity: string): ControlNotification
 function snapshot(notifications: readonly ControlNotification[], failed = false): ControlSnapshot {
   return {
     hosts: [{ route: "local", dialable: true, name: "Local", classification: "local", daemonVersion: "0.33.1", address: null, port: null }],
-    sessions: [], projects: [], notifications,
+    sessions: [], projects: [], notifications, pendingNotifications: [],
     errors: failed ? [{ host: "local", scope: "notifications", error: { code: "unavailable", message: "offline" } }] : [],
   };
 }

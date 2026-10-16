@@ -18,6 +18,8 @@ export class NotificationAnnouncer {
   /** First complete snapshot per host is a baseline; later IDs notify only once. */
   public async announce(snapshot: ControlSnapshot): Promise<void> {
     const failedHosts = new Set(snapshot.errors.filter((failure) => failure.scope === "notifications").map((failure) => failure.host));
+    // A host whose notifications are not read yet has no baseline; its records would all look new.
+    const pendingHosts = new Set(snapshot.pendingNotifications);
     const byHost = new Map<string, ControlNotification[]>();
     for (const record of snapshot.notifications) {
       const records = byHost.get(record.host) ?? [];
@@ -25,7 +27,7 @@ export class NotificationAnnouncer {
       byHost.set(record.host, records);
     }
     for (const host of snapshot.hosts) {
-      if (failedHosts.has(host.route)) continue;
+      if (failedHosts.has(host.route) || pendingHosts.has(host.route)) continue;
       const records = byHost.get(host.route) ?? [];
       let seen = this.seen.get(host.route);
       if (seen === undefined) {

@@ -2,7 +2,8 @@ import { Box, Text } from "ink";
 import type { ReactNode } from "react";
 import type { ListItem } from "../types/item.ts";
 import type { DoOutcome } from "../tui/decode.ts";
-import type { ControlHost, ControlNotification, ControlScreen, ControlSession, ControlSnapshot, ControlSubagent } from "../control/types.ts";
+import type { ControlHost, ControlNotification, ControlNotificationChange, ControlScreen, ControlSession, ControlSnapshot, ControlSubagent } from "../control/types.ts";
+import { compareActivityOrder } from "../control/order.ts";
 import { MenuRow, Message, safeText, Section, shorten } from "./components.tsx";
 import { MouseZone } from "./mouse.tsx";
 import { isUnresolvedAction } from "./attention.ts";
@@ -11,6 +12,31 @@ import { fuzzyFilter } from "../tui/search.ts";
 
 export type ViewName = "Work" | "Sessions" | "Hosts" | "Activity";
 export type ActivityScope = "Recent" | "Unread" | "Archived";
+
+/** Whether a notification belongs to an Activity scope, by the same statuses the daemon's scope queries select. */
+export function activityMatches(scope: ActivityScope, record: ControlNotification): boolean {
+  if (scope === "Recent") return record.status !== "archived" && record.status !== "deleted";
+  return scope === "Unread" ? record.status === "unread" : record.status === "archived";
+}
+
+/**
+ * Applies a live change to a loaded page: a record that enters the scope goes to the top, one already shown changes in
+ * place, and a record that left the scope or was deleted is removed.
+ */
+export function applyActivityChange(records: readonly ControlNotification[], scope: ActivityScope, change: ControlNotificationChange, complete: boolean): ControlNotification[] {
+  const index = records.findIndex((item) => item.host === change.host && item.id === change.id);
+  if (change.record === null || !activityMatches(scope, change.record)) {
+    return index < 0 ? [...records] : records.filter((_, position) => position !== index);
+  }
+  const record = change.record;
+  if (index >= 0) return records.map((item, position) => position === index ? record : item);
+  // A record enters at its place in time order. Older records are read by the next page, so one older than the loaded
+  // tail is left for that page.
+  const last = records[records.length - 1];
+  if (!complete && last !== undefined && compareActivityOrder(record, last) > 0) return [...records];
+  const at = records.findIndex((item) => compareActivityOrder(item, record) > 0);
+  return at < 0 ? [...records, record] : [...records.slice(0, at), record, ...records.slice(at)];
+}
 
 export function sessionGroup(session: ControlSession, notifications: readonly ControlNotification[]): string {
   if (session.external || session.runtimeState === "lost" || session.runtimeState === "conflicting" || session.runtimeState === "incompatible") return "Unavailable";
@@ -31,12 +57,6 @@ export function orderedSessions(snapshot: ControlSnapshot, project: string | nul
     return byGroup || (left.projectLabel ?? left.projectId ?? "").localeCompare(right.projectLabel ?? right.projectId ?? "") ||
       (left.name ?? left.id).localeCompare(right.name ?? right.id, undefined, { numeric: true }) || left.host.localeCompare(right.host) || left.id.localeCompare(right.id);
   });
-}
-
-export function activityRecords(snapshot: ControlSnapshot, scope: ActivityScope): ControlNotification[] {
-  return snapshot.notifications.filter((notification) => scope === "Recent" ? notification.status !== "archived" && notification.status !== "deleted" :
-    scope === "Unread" ? notification.status === "unread" : notification.status === "archived")
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 /** The fields of a session the Sessions `/` filter matches. */

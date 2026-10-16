@@ -12,10 +12,21 @@ interface Pipe {
   readonly client: Socket<Pipe>;
   upstream: Socket<Pipe> | null;
   readonly early: Buffer[];
+  /** Client bytes of a request line that has not ended yet; only read when a refusal is configured. */
+  pending: string;
   closed: boolean;
   /** The daemon connection opened (the connect callback ran); only an opened connection is counted. */
   upstreamOpen: boolean;
   released: boolean;
+}
+
+function parseLine(line: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(line);
+    return typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface TcpRelay {
@@ -31,7 +42,15 @@ export interface TcpRelay {
   stop(): Promise<void>;
 }
 
-export function startTcpRelay(unixTarget: string): TcpRelay {
+export interface TcpRelayOptions {
+  /**
+   * The 1-based number of the `notification.list` request without a cursor that is refused: it gets an error reply and is
+   * not forwarded. Only that one request fails, so the first page of a host can fail while a later page succeeds.
+   */
+  readonly refuseNoCursorListAt?: number;
+}
+
+export function startTcpRelay(unixTarget: string, options: TcpRelayOptions = {}): TcpRelay {
   let failing = false;
   let refused = 0;
   let connecting = 0;
@@ -44,7 +63,7 @@ export function startTcpRelay(unixTarget: string): TcpRelay {
     socket: {
       open(client) {
         // A refused connection is closed before any byte moves; its pipe is marked closed so later callbacks are no-ops.
-        const pipe: Pipe = { client, upstream: null, early: [], closed: failing, upstreamOpen: false, released: false };
+        const pipe: Pipe = { client, upstream: null, early: [], pending: "", closed: failing, upstreamOpen: false, released: false };
         client.data = pipe;
         if (failing) { refused += 1; client.end(); return; }
         pipes.add(pipe);
@@ -74,13 +93,41 @@ export function startTcpRelay(unixTarget: string): TcpRelay {
       },
       data(client, chunk) {
         const pipe = client.data;
-        if (pipe.upstream === null) pipe.early.push(Buffer.from(chunk));
-        else pipe.upstream.write(chunk);
+        if (options.refuseNoCursorListAt === undefined) { forward(pipe, Buffer.from(chunk)); return; }
+        pipe.pending += Buffer.from(chunk).toString("utf8");
+        for (let newline = pipe.pending.indexOf("\n"); newline >= 0; newline = pipe.pending.indexOf("\n")) {
+          const line = pipe.pending.slice(0, newline + 1);
+          pipe.pending = pipe.pending.slice(newline + 1);
+          if (isRefusedList(line)) { refuse(pipe, line); continue; }
+          forward(pipe, Buffer.from(line));
+        }
       },
       close(client) { closePipe(client.data); },
       error(client) { closePipe(client.data); },
     },
   });
+
+  function forward(pipe: Pipe, bytes: Buffer): void {
+    if (pipe.upstream === null) pipe.early.push(bytes);
+    else pipe.upstream.write(bytes);
+  }
+
+  // The counter is per relay: every connection of the host shares it, so the Nth list of the host is the one refused.
+  let noCursorLists = 0;
+  function isRefusedList(line: string): boolean {
+    const request = parseLine(line);
+    if (request === null || request["method"] !== "notification.list") return false;
+    const params = request["params"] as { cursor?: unknown } | null | undefined;
+    if (typeof params?.cursor === "string") return false;
+    noCursorLists += 1;
+    return noCursorLists === options.refuseNoCursorListAt;
+  }
+
+  function refuse(pipe: Pipe, line: string): void {
+    const request = parseLine(line) ?? {};
+    const reply = { v: request["v"], id: request["id"], err: { class: "daemon", code: "relay_refused", msg: "the relay refuses this list", recover: "" } };
+    pipe.client.write(JSON.stringify(reply) + "\n");
+  }
 
   function closePipe(pipe: Pipe): void {
     if (pipe.closed) return;

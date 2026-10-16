@@ -126,7 +126,7 @@ test("a new-session that creates its session opens it in a window and prints the
       ...Array.from({ length: TABS_TO_CREATE }, (): PtyStep => ({ send: TAB, settle: 150 })),
       { send: ENTER },
       // Creating the session takes a while on the daemon; the window status comes before the process exits.
-      { expect: "opened", timeout: 30000 },
+      { expect: "opened", timeout: 30 },
       // The process exits once the window is open; the line is printed after the screen is restored.
       { pause: 2000 },
     ],

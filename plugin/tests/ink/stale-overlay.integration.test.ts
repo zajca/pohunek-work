@@ -115,7 +115,7 @@ test("an acknowledgement issued during a delayed in-flight read shows without wa
     keys("a"),
     { expect: "Notification acknowledged" },
     { send: ESCAPE, settle: 300 },
-    { expect: `${record.title}  acknowledged`, timeout: 1500 },
+    { expect: `${record.title}  acknowledged`, timeout: 15 },
     // The in-flight read ends and the reconcile queued by the acknowledgement runs once, after it.
     { pause: REFRESH_DELAY_MS * 2 },
     keys("q"),

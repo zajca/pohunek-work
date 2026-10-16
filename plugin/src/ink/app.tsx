@@ -11,6 +11,8 @@ import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveOutcome } from "../util/exec.ts";
 import { handover } from "./handover.ts";
+import type { ControlActivityCursor, ControlActivityScope } from "../control/types.ts";
+import { compareActivityOrder } from "../control/order.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
 import { ATTACH_HOST, ATTACH_VALUE, renderAttachArgv } from "../tui/attach-template.ts";
 import { coalesce } from "./coalesce.ts";
@@ -20,7 +22,7 @@ import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDi
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, activityRecords, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, activityMatches, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
@@ -70,6 +72,8 @@ type ConfirmAction = "stop" | "remove";
 export const BUSY_REFUSAL = "Still working on the last action; input was not applied, try again when it finishes";
 const VIEWS: readonly ViewName[] = ["Work", "Sessions", "Hosts", "Activity"];
 const SCOPES: readonly ActivityScope[] = ["Recent", "Unread", "Archived"];
+const CONTROL_SCOPE: Readonly<Record<ActivityScope, ControlActivityScope>> = { Recent: "recent", Unread: "unread", Archived: "archived" };
+const SOURCE_WARNING = /source\(s\) unavailable; mutating actions are paused$/;
 
 interface LaunchForm {
   readonly host: string;
@@ -282,6 +286,11 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [pick, setPick] = useState({ index: 0, search: "", filtering: false });
   const [scope, setScope] = useState<ActivityScope>("Recent");
+  // The records of the Activity scope shown, one page at a time; `cursor` is null when the list is complete.
+  const [activity, setActivity] = useState<{ scope: ActivityScope; records: readonly ControlNotification[]; cursor: ControlActivityCursor | null }>({ scope: "Recent", records: [], cursor: null });
+  const activityGeneration = useRef(0);
+  // The notifications of the session the detail or the panel shows, read by session; `key` says which session they belong to.
+  const [sessionNotes, setSessionNotes] = useState<{ key: string; records: readonly ControlNotification[] }>({ key: "", records: [] });
   const [sessionDetail, setSessionDetail] = useState<ControlSession | null>(null);
   const [detailOffset, setDetailOffset] = useState(0);
   const [screen, setScreen] = useState<ControlScreen | null>(null);
@@ -346,7 +355,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   const sessions = useMemo(() => snapshot === null ? [] : filterSessions(snapshot, orderedSessions(snapshot, projectFilter), queries.Sessions), [snapshot, projectFilter, queries.Sessions]);
   const pickChoices = useMemo(() => projectChoices(snapshot?.sessions ?? [], pick.search), [snapshot, pick.search]);
-  const records = useMemo(() => snapshot === null ? [] : fuzzyFilter(activityRecords(snapshot, scope), queries.Activity, recordTerms), [snapshot, scope, queries.Activity]);
+  const records = useMemo(() => fuzzyFilter(activity.scope === scope ? activity.records : [], queries.Activity, recordTerms), [activity, scope, queries.Activity]);
   const hostRows = useMemo(() => snapshot === null ? [] : fuzzyFilter(snapshot.hosts, queries.Hosts, hostTerms), [snapshot, queries.Hosts]);
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
   const selectedWork = workRows?.find((item) => rowId(item) === workKey) ?? selectedAt(workRows ?? [], cursor.Work);
@@ -366,12 +375,99 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
   // The side panel shows the highlighted session; its screen is kept only for that session.
   const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
-  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, snapshot?.notifications ?? [], linksOf(selectedSession), noLinkReason(selectedSession, work, originOf(selectedSession)));
+  const noteSession = overlay === "session" && sessionDetail !== null ? sessionDetail : selectedSession;
+  const noteHost = noteSession?.host ?? null;
+  const noteId = noteSession?.id ?? null;
+  const detailNotifications = useMemo(() => {
+    const byId = new Map<string, ControlNotification>();
+    for (const record of snapshot?.notifications ?? []) byId.set(`${record.host}/${record.id}`, record);
+    if (noteHost !== null && noteId !== null && sessionNotes.key === `${noteHost}/${noteId}`) {
+      for (const record of sessionNotes.records) if (!byId.has(`${record.host}/${record.id}`)) byId.set(`${record.host}/${record.id}`, record);
+    }
+    return [...byId.values()];
+  }, [snapshot, sessionNotes, noteHost, noteId]);
+  useEffect(() => {
+    if (noteHost === null || noteId === null) return undefined;
+    const key = `${noteHost}/${noteId}`;
+    let current = true;
+    void control.sessionNotifications(noteHost, noteId).then((result) => {
+      if (!current || !alive.current) return;
+      if (result.ok) setSessionNotes({ key, records: result.data });
+      else {
+        setSessionNotes((previous) => previous.key === key ? previous : { key, records: [] });
+        bumpStatus(`Session notifications unavailable: ${result.error.message}`);
+      }
+    });
+    return () => { current = false; };
+  }, [control, noteHost, noteId, bumpStatus]);
+
+  // The Activity list reads its scope's first page when the view or the scope is shown; more pages are read on demand.
+  const readActivityPage = useCallback(async (target: ActivityScope, cursor: ControlActivityCursor | null): Promise<void> => {
+    const generation = ++activityGeneration.current;
+    const result = await control.activity(CONTROL_SCOPE[target], cursor);
+    if (!alive.current || generation !== activityGeneration.current) return;
+    // A failed read keeps the records already shown.
+    if (!result.ok) { bumpStatus(`Activity read failed: ${result.error.message}`); return; }
+    // The records of the hosts that answered are shown; a failed host is read again by the next load or refresh.
+    const [firstError] = result.data.errors;
+    if (firstError !== undefined) bumpStatus(`Activity read failed on ${firstError.host}: ${firstError.error.message}`);
+    setActivity((previous) => {
+      if (cursor === null || previous.scope !== target) return { scope: target, records: result.data.records, cursor: result.data.cursor };
+      // A page can repeat a record a refresh already put in the list; each record is shown once.
+      const shown = new Set(previous.records.map((record) => `${record.host}/${record.id}`));
+      const more = result.data.records.filter((record) => !shown.has(`${record.host}/${record.id}`));
+      return { scope: target, records: [...previous.records, ...more].sort(compareActivityOrder), cursor: result.data.cursor };
+    });
+  }, [bumpStatus, control]);
+  // A refresh re-reads the first page of the open scope. The loaded records after that page in the activity order are
+  // kept, minus any that left the scope, because the next page reads from where the first page ends. The records of a
+  // host the refresh could not read are kept too, since the refresh does not show them again.
+  const reconcileActivity = useCallback(async (target: ActivityScope): Promise<void> => {
+    const generation = ++activityGeneration.current;
+    const result = await control.activity(CONTROL_SCOPE[target], null);
+    if (!alive.current || generation !== activityGeneration.current || !result.ok) return;
+    setActivity((previous) => {
+      if (previous.scope !== target) return previous;
+      if (result.data.cursor === null) return { scope: target, records: result.data.records, cursor: null };
+      const fresh = result.data.records;
+      const tail = fresh[fresh.length - 1];
+      const failedHosts = new Set(result.data.errors.map((item) => item.host));
+      const shown = new Set(fresh.map((record) => `${record.host}/${record.id}`));
+      const older = previous.records.filter((record) => !shown.has(`${record.host}/${record.id}`) && activityMatches(target, record)
+        && (failedHosts.has(record.host) || (tail !== undefined && compareActivityOrder(record, tail) > 0)));
+      return { scope: target, records: [...fresh, ...older].sort(compareActivityOrder), cursor: result.data.cursor };
+    });
+  }, [control]);
+  const activityView = useRef<{ view: ViewName; scope: ActivityScope }>({ view: "Work", scope: "Recent" });
+  activityView.current = { view, scope };
+  useEffect(() => {
+    if (view !== "Activity") return;
+    setActivity({ scope, records: [], cursor: null });
+    void readActivityPage(scope, null);
+  }, [view, scope, readActivityPage]);
+  const loadMoreActivity = useCallback((): void => {
+    if (activity.cursor !== null && activity.scope === scope) void readActivityPage(scope, activity.cursor);
+  }, [activity, readActivityPage, scope]);
+
+  // A notification that changes while Activity is open updates the loaded page; the page is not read again.
+  // The session notes follow the same events: a change to the session's record replaces it, and a removal drops it.
+  useEffect(() => control.subscribeNotifications((change) => {
+    if (!alive.current) return;
+    setActivity((previous) => ({ ...previous, records: applyActivityChange(previous.records, previous.scope, change, previous.cursor === null) }));
+    setSessionNotes((previous) => {
+      const others = previous.records.filter((record) => !(record.host === change.host && record.id === change.id));
+      const record = change.record;
+      if (record !== null && `${record.host}/${record.sessionId}` === previous.key) return { key: previous.key, records: [...others, record] };
+      return { key: previous.key, records: others };
+    });
+  }), [control]);
+
+  const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, detailNotifications, linksOf(selectedSession), noLinkReason(selectedSession, work, originOf(selectedSession)));
   // Following the output keeps the end of the text in view; a scroll that reaches the end resumes following.
   const panelOffset = followOutput ? panelMaxOffset : Math.min(detailOffset, panelMaxOffset);
   // The list takes half of a split terminal; the panel takes the rest. Each row keeps a margin of one column.
   const listWidth = split ? Math.floor(stdout.columns / 2) : stdout.columns;
-  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, snapshot?.notifications ?? [], linksOf(sessionDetail), noLinkReason(sessionDetail, work, originOf(sessionDetail)));
+  const detailMaxOffset = sessionDetail === null ? 0 : sessionDetailMaxOffset(sessionDetail, screen, detailHeight, detailNotifications, linksOf(sessionDetail), noLinkReason(sessionDetail, work, originOf(sessionDetail)));
   const overlayOffset = followOutput ? detailMaxOffset : Math.min(detailOffset, detailMaxOffset);
   const scrollDetail = (next: number, max: number): void => {
     const clamped = Math.max(0, Math.min(max, next));
@@ -440,15 +536,20 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   // Snapshots from the reconcile and from the daemon's event stream share one path.
   // A read that started before a newer action may not replace that action's status; the snapshot itself is always applied.
-  const applySnapshot = useCallback((next: ControlSnapshot, mayReport = true): void => {
+  // A background publish (an event or a per-host read) reports a new outage only over an empty status or an earlier
+  // outage warning, so an action outcome is never overwritten by it.
+  const applySnapshot = useCallback((next: ControlSnapshot, mayReport = true, background = false): void => {
     setSnapshot((previous) => retainUnavailable(previous, next));
     try { options.onSnapshot?.(next); }
     catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
     setStale(false);
-    if (mayReport && next.errors.length > 0 && mutationNotice.current === null) setStatus(`${next.errors.length} source(s) unavailable; mutating actions are paused`);
+    if (next.errors.length === 0 || mutationNotice.current !== null) return;
+    const warning = `${next.errors.length} source(s) unavailable; mutating actions are paused`;
+    if (mayReport) setStatus(warning);
+    else if (background) setStatus((old) => old === null || SOURCE_WARNING.test(old) ? warning : old);
   }, [options.log, options.onSnapshot]);
 
-  useEffect(() => control.subscribe((next) => { if (alive.current) applySnapshot(next); }), [applySnapshot, control]);
+  useEffect(() => control.subscribe((next) => { if (alive.current) applySnapshot(next, false, true); }), [applySnapshot, control]);
   useEffect(() => () => { void control.close(); }, [control]);
 
   // Sessions and the work list refresh on their own intervals; a manual refresh runs both.
@@ -461,11 +562,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (nextControl.ok) {
       // A read that started before a mutation completed is superseded by the follow-up read that the mutation queued.
       if (mutationEpoch.current === epoch) applySnapshot(nextControl.value, actionSeq.current === started);
+      if (activityView.current.view === "Activity") void reconcileActivity(activityView.current.scope);
     } else {
       setStale(true);
       if (actionSeq.current === started) setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
     }
-  }), [applySnapshot, control]);
+  }), [applySnapshot, control, reconcileActivity]);
 
   const refreshWork = useMemo(() => coalesce(async (): Promise<void> => {
     if (options.mode !== "main") return;
@@ -695,6 +797,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if ("notification" in result.data) {
           const updated = result.data.notification;
           setSnapshot((previous) => previous === null ? previous : { ...previous, notifications: previous.notifications.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) });
+          setActivity((previous) => ({ ...previous, records: previous.records.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) }));
           setNotificationDetail((current) => current !== null && current.host === updated.host && current.id === updated.id ? updated : current);
         }
         bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
@@ -1332,6 +1435,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (key.return) openRow(cursor.Hosts);
     } else {
       if (input === "c") { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }
+      else if (input === "m") loadMoreActivity();
       else if (key.return) openRow(cursor.Activity);
     }
   };
@@ -1384,7 +1488,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     onFollowHighlight={(start) => { setForm((old) => ({ ...old, choice: start })); }}
     onSubmit={() => { if (created === null) void submitForm(); else void attachCreated(); }}
     onCancel={() => { if (options.mode === "new-session") exit(); else setOverlay("none"); }} />;
-  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={snapshot?.notifications ?? []} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work, originOf(sessionDetail))}
+  else if (overlay === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={detailNotifications} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work, originOf(sessionDetail))}
     offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
     onOpenLink={(index) => { openLinkNumber(sessionDetail, index + 1); }} />;
   else if (overlay === "links" && linkChoice !== null) {
@@ -1426,7 +1530,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
     <Box width={listWidth} flexDirection="column"><SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} width={listWidth - 2} /></Box>
     <Box width={stdout.columns - listWidth} flexDirection="column">
-      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={snapshot?.notifications ?? []} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work, originOf(selectedSession))} offset={panelOffset} height={detailHeight}
+      {selectedSession === null ? <Message text="No session is selected." /> : <SessionDetail session={selectedSession} screen={panelScreen} notifications={detailNotifications} links={linksOf(selectedSession)} noLinks={noLinkReason(selectedSession, work, originOf(selectedSession))} offset={panelOffset} height={detailHeight}
         onWheel={(direction) => { scrollDetail(panelOffset + direction * Math.max(1, detailHeight - 1), panelMaxOffset); }} onOpenLink={(index) => { openLinkNumber(selectedSession, index + 1); }} />}
     </Box>
   </Box> : <SessionsView snapshot={snapshot} sessions={sessions} selected={selectedSessionIndex} start={sessionsStart} limit={visibleRows} project={projectFilter} query={queries.Sessions} editing={editing === "Sessions"} {...listInteraction} />;
@@ -1463,6 +1567,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     else toolbar = <Box gap={1} flexWrap="wrap">
       <ActionButton label={`Scope: ${scope}`} onClick={() => { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }} />
       <ActionButton label="Search /" onClick={() => { setEditing("Activity"); }} />
+      {activity.cursor !== null && <ActionButton label="Load more" onClick={() => { loadMoreActivity(); }} />}
       {selectedRecord !== null && <ActionButton label="Open notification" onClick={() => { openRow(cursor.Activity); }} primary />}
     </Box>;
   } else if (overlay === "work-detail") toolbar = <Box gap={1} flexWrap="wrap">

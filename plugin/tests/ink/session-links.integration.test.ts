@@ -180,7 +180,8 @@ const SHRINK_WAIT_MS = 10_000;
 /** The branch page of the scenario's session on the GitHub origin the project has. */
 const BRANCH_URL = "https://github.com/acme/widgets/tree/feature/links";
 /** Waits for a refresh that the scenario expects to change the Links block. */
-const REFRESH_WAIT_MS = 30_000;
+/** Seconds the TUI waits for the work list to be refreshed; the driver takes its timeouts in seconds. */
+const REFRESH_WAIT_S = 30;
 
 /** Writes the envelope of a scripted phase into the scenario directory. */
 async function writeWorkPhaseHere(name: "before" | "after", envelope: unknown): Promise<void> {
@@ -278,7 +279,7 @@ test("a refresh that fails after a good load keeps the rows and says the Work li
     keys("2"),
     { expect: "no Work match for this session" },
     // The next refreshes fail; the last good rows stay and the Links block says the list is incomplete.
-    { expect: "Work incomplete: gh: unavailable", timeout: REFRESH_WAIT_MS },
+    { expect: "Work incomplete: gh: unavailable", timeout: REFRESH_WAIT_S },
     keys("q"),
   ];
   const result = await tui.run(steps, { ...WIDE, timeoutS: 90 });

@@ -75,8 +75,12 @@ export interface ControlOutputRequest { readonly after: string | null; readonly 
 export interface ControlSnapshotError { readonly host: string; readonly scope: "discovery" | "sessions" | "projects" | "notifications"; readonly error: ControlError }
 export interface ControlSnapshot {
   readonly hosts: readonly ControlHost[]; readonly sessions: readonly ControlSession[];
-  readonly projects: readonly ControlProject[]; readonly notifications: readonly ControlNotification[];
+  readonly projects: readonly ControlProject[];
+  /** The notifications that still need the owner (unresolved actions); the activity list is read on demand. */
+  readonly notifications: readonly ControlNotification[];
   readonly errors: readonly ControlSnapshotError[];
+  /** Hosts whose notifications have not been read yet; their notifications are missing from the snapshot until they are. */
+  readonly pendingNotifications: readonly string[];
 }
 export type ControlAction =
   | { readonly kind: "stop" | "remove" | "resume"; readonly host: string; readonly sessionId: string }
@@ -101,6 +105,33 @@ export interface ControlClientOptions {
   /** Environment of the CLI children; the process environment when absent. */
   readonly env?: Readonly<Record<string, string>>;
 }
+/** A notification that a daemon event changed; `record` is null when the event removed it. */
+export interface ControlNotificationChange { readonly host: string; readonly id: string; readonly record: ControlNotification | null }
+
+/** Scope of the activity list; `recent` is every notification but the archived and deleted ones. */
+export type ControlActivityScope = "recent" | "unread" | "archived";
+
+/**
+ * Where an activity list continues. Each host that has records left keeps the records it has read and not yet shown
+ * (newest first) and the daemon cursor of its next page; `done` means the host has no further page.
+ */
+export interface ControlActivityCursor {
+  readonly hosts: Readonly<Record<string, { readonly buffered: readonly ControlNotification[]; readonly next: string | null; readonly done: boolean }>>;
+}
+
+/** A host whose activity records could not be read; its records are missing from the page and it is read again on the next load. */
+export interface ControlActivityError { readonly host: string; readonly error: ControlError }
+
+/**
+ * One page of the activity list across hosts, globally newest first; `cursor` is null when the list is complete.
+ * `errors` names the hosts that failed; the records of the other hosts are still shown.
+ */
+export interface ControlActivityPage {
+  readonly records: readonly ControlNotification[];
+  readonly cursor: ControlActivityCursor | null;
+  readonly errors: readonly ControlActivityError[];
+}
+
 export interface ControlClient {
   refresh(): Promise<ControlSnapshot>;
   /** Calls the listener with each snapshot the event stream produces; returns the unsubscribe. */
@@ -114,4 +145,10 @@ export interface ControlClient {
   output(host: string, id: string, request: ControlOutputRequest): Promise<ControlResult<ControlOutput>>;
   showProject(host: string, reference: string): Promise<ControlResult<ControlProjectDetail>>;
   act(action: ControlAction): Promise<ControlResult<ControlActionOutcome>>;
+  /** Calls the listener with each notification change the event stream carries; returns the unsubscribe. */
+  subscribeNotifications(listener: (change: ControlNotificationChange) => void): () => void;
+  /** One page of an activity scope across the hosts, newest first; `cursor` is null for the first page. */
+  activity(scope: ControlActivityScope, cursor: ControlActivityCursor | null): Promise<ControlResult<ControlActivityPage>>;
+  /** The first page of a session's notifications on its host. */
+  sessionNotifications(host: string, sessionId: string): Promise<ControlResult<readonly ControlNotification[]>>;
 }

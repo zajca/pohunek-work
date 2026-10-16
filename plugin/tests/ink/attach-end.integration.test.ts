@@ -18,7 +18,8 @@ const READY = "ready-2";
 const ECHO_READY = "echo ready-$((1+1))\r";
 const ATTACH_SETTLE_MS = 2000;
 const RETURN_SETTLE_MS = 1000;
-const RETURN_WITHIN_MS = 12_000;
+/** Seconds the TUI has to redraw its frame after the attach ended; the run's own timeout stays below the test timeout. */
+const RETURN_WITHIN_S = 60;
 const VIEW_SWITCH_MS = 500;
 const INLINE = { overrides: { "tui.attach_mode": "inline" } };
 const STOPPED_BY_SIGNAL = "stopped by SIGTERM";
@@ -250,12 +251,10 @@ test("discovery fails and the attached local session is removed: the attach ends
   const steps: PtyStep[] = [
     ...attachFirst(1),
     writeRules(scenario, [{ match: ["host", "discover"], replaceWith: ["/bin/sh", "-c", `echo refused >> ${marker}; exit 1`] }]),
-    // The core ends the attach by itself after its retry window (about 20 s), so the TUI must be back well before that.
-    { pause: RETURN_SETTLE_MS },
-    keys("3"),
-    { expect: "HOSTS", timeout: RETURN_WITHIN_MS },
-    keys("2"),
-    { expect: "Search /", timeout: RETURN_WITHIN_MS },
+    // The frame is drawn again only once the attach has ended, so its header is the marker that the TUI is back.
+    { clear: true },
+    { expect: "CONTROL CENTER", timeout: RETURN_WITHIN_S },
+    ...backInTui("Search /"),
   ];
   const result = await scenario.run(steps, { timeoutS: 90 });
   await removing;

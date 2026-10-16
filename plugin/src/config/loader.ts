@@ -167,6 +167,20 @@ function linearPageSizeError(file: string, pageSize: number, labels: boolean): C
   );
 }
 
+/**
+ * Largest notifications page the daemon is asked for. A page is one control line, which the core caps at 1 MiB; the
+ * pinned release returned 1000 records in one line and failed the line limit at 2000, so the bound keeps half of that.
+ */
+const NOTIFICATIONS_MAX_PAGE_SIZE = 500;
+
+function readNotificationsPageSize(table: Table, file: string, path: KeyPath): number {
+  const value = readPositiveInt(table, "notifications_page_size", file, path);
+  if (value > NOTIFICATIONS_MAX_PAGE_SIZE) {
+    throw fail(file, [...path, "notifications_page_size"], `must not exceed ${NOTIFICATIONS_MAX_PAGE_SIZE.toString()} (one control line holds one page)`);
+  }
+  return value;
+}
+
 function parsePohunek(root: Table, file: string): PohunekConfig {
   const table = requireTable(root, "pohunek", file);
   const path = ["pohunek"];
@@ -174,7 +188,7 @@ function parsePohunek(root: Table, file: string): PohunekConfig {
   return {
     bin: readAbsolutePath(table, "bin", file, path),
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
-    notificationsPageSize: readPositiveInt(table, "notifications_page_size", file, path),
+    notificationsPageSize: readNotificationsPageSize(table, file, path),
   };
 }
 
