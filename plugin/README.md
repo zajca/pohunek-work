@@ -98,9 +98,11 @@ an explicit policy.
 
 Every `list`, `watch` and TUI refresh reads the GitHub and Linear sources through
 one cache in the state directory (`cache/cache.sqlite`, SQLite in WAL mode, file
-mode 0600). The store holds only provider data and the cache keys, never a token;
-the Linear keys include the account id from `viewer { id }`, which costs one Linear
-request per run (it is read through the source, not the cache). A result read from the
+mode 0600). The store holds provider data and keys only. Each key holds an offline
+identity of the credential the source reads locally (the GitHub token of `gh auth
+token`, the Linear API key of the keyring): an HMAC under a random salt kept in
+`cache/identity.salt` (mode 0600). No provider is asked for it, so a provider outage
+still serves a cached result, and a changed credential is a cache miss. A result read from the
 provider is served to all local processes for `[cache] max_age_secs`; a caller that
 arrives while a fetch is in flight takes that fetch's outcome instead of asking again.
 `list --refresh` (the TUI `r` key) bypasses the max age and joins a fetch in flight the

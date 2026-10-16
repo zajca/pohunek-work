@@ -8,6 +8,7 @@
 import type { GithubConfig, GithubProject, GithubProjectStatus, IdentityConfig, ProjectConfig } from "../types/config.ts";
 import type {
   Actor,
+  CredentialResult,
   Check,
   CheckOutcome,
   Issue,
@@ -53,6 +54,8 @@ export interface GithubSourceDeps {
 }
 
 export interface GithubSource {
+  /** The token `gh auth token` reports, read locally; no provider is asked. Never logged or cached. */
+  credential(): Promise<CredentialResult>;
   fetchPullRequests(project: ProjectConfig): Promise<SourceResult<readonly PullRequest[]>>;
   /** Pull requests of the owner merged within `merged_lookback_days`. */
   fetchMergedPullRequests(project: ProjectConfig): Promise<SourceResult<readonly MergedPullRequest[]>>;
@@ -1257,5 +1260,17 @@ export function createGithubSource(
     }
   };
 
-  return { fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIgnoredKeys, fetchIssueDetail };
+  const credential = async (): Promise<CredentialResult> => {
+    try {
+      const token = await obtainToken(config.github, execFn);
+      return { ok: true, source: "github", data: token, durationMs: 0 };
+    } catch (error) {
+      if (error instanceof SourceFailureError) {
+        return { ok: false, source: "github", code: error.code, message: error.message, durationMs: 0 };
+      }
+      throw error;
+    }
+  };
+
+  return { credential, fetchPullRequests, fetchMergedPullRequests, fetchIssues, fetchIgnoredKeys, fetchIssueDetail };
 }

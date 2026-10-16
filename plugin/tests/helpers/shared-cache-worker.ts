@@ -4,7 +4,9 @@
 // fetch must never run, so a scenario that sees its value has a bug. The Linear worker goes through the real
 // cachedLinearSource; the Linear source behind it is a stand-in for the account behind the keyring token,
 // because the scenario has no Linear account to switch.
+import { Database } from "bun:sqlite";
 import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createSharedCache, type CacheRequest } from "../../src/cache/shared-cache.ts";
 import { cachedLinearSource } from "../../src/sources/cached.ts";
 import type { LinearProject } from "../../src/types/config.ts";
@@ -12,8 +14,13 @@ import type { Issue, SourceResult } from "../../src/types/sources.ts";
 import type { LinearSource } from "../../src/sources/linear.ts";
 
 interface WorkerSpec {
-  /** `read`: the fetch must not run. `write`: the fetch runs and answers with `outcome`. */
-  readonly mode: "write" | "read";
+  /**
+   * `read`: the fetch must not run. `write`: the fetch runs and answers with `outcome`. `hold`: takes an exclusive
+   * lock on the cache database for `fetchMs` and touches `markerFile` once held. `twice`: two reads with the
+   * given fetch behaviour, the second one after `gateFile` exists.
+   */
+  readonly mode: "write" | "read" | "hold" | "twice";
+  readonly gateFile: string | null;
   readonly outcome: "ok" | "unavailable" | "rate_limited";
   /** Absolute instant the rate-limit response names as its reset. */
   readonly resetAtMs: number;
@@ -40,6 +47,20 @@ const cacheConfig = {
   fallbackBackoffMs: 900_000,
   busyTimeoutMs: spec.busyTimeoutMs,
 };
+if (spec.mode === "hold") {
+  const directory = join(spec.stateDir, "cache");
+  Bun.spawnSync(["mkdir", "-p", directory]);
+  // Rollback-journal database, so the cache's switch to WAL needs the lock this process holds.
+  const database = new Database(join(directory, "cache.sqlite"), { create: true });
+  database.run("CREATE TABLE IF NOT EXISTS holder_probe (x INTEGER)");
+  database.run("BEGIN EXCLUSIVE");
+  writeFileSync(spec.markerFile, "held");
+  await Bun.sleep(spec.fetchMs);
+  database.run("COMMIT");
+  database.close();
+  process.exit(0);
+}
+
 const cache = createSharedCache({ stateDir: spec.stateDir, config: cacheConfig, refresh: spec.refresh });
 
 /** The provider answer of this worker's fetch; the same for every source the worker reads. */
@@ -59,27 +80,42 @@ function listCodec<T>(): Pick<CacheRequest<readonly T[]>, "encode" | "decode"> {
   return { encode: (data) => data, decode: (raw) => (Array.isArray(raw) ? (raw as T[]) : null) };
 }
 
-function report(result: SourceResult<readonly unknown[]>, pick: (item: unknown) => string): void {
-  if (result.ok) {
-    console.log(JSON.stringify({ data: result.data.map(pick) }));
-    return;
+/** One read of the worker's source, as the reported answer. */
+async function readOnce(): Promise<SourceResult<readonly unknown[]>> {
+  if (spec.linearViewer === null) {
+    return cache.read<readonly string[]>({
+      provider: "github",
+      source: "github",
+      key: spec.key,
+      fetch: () => answer("github", [spec.value]),
+      ...listCodec<string>(),
+    });
   }
-  console.log(JSON.stringify({ failure: result.code, staleData: "stale" in result ? result.data.map(pick) : null }));
+  return readLinear();
 }
 
-if (spec.linearViewer === null) {
-  const result = await cache.read<readonly string[]>({
-    provider: "github",
-    source: "github",
-    key: spec.key,
-    fetch: () => answer("github", [spec.value]),
-    ...listCodec<string>(),
-  });
-  report(result, (item) => String(item));
+if (spec.mode === "twice") {
+  const first = await readOnce();
+  while (spec.gateFile !== null && !(await Bun.file(spec.gateFile).exists())) await Bun.sleep(spec.lockPollMs);
+  const second = await readOnce();
+  console.log(JSON.stringify({ reads: [answerOf(first), answerOf(second)] }));
 } else {
-  // The stand-in source: the account's own viewer id, and one issue per fetch that carries that account.
+  console.log(JSON.stringify(answerOf(await readOnce())));
+}
+
+function answerOf(result: SourceResult<readonly unknown[]>): unknown {
+  if (result.ok) return { data: result.data.map(itemText) };
+  return { failure: result.code, staleData: "stale" in result ? result.data.map(itemText) : null };
+}
+
+function itemText(item: unknown): string {
+  return typeof item === "string" ? item : (item as { id: string }).id;
+}
+
+/** The stand-in Linear source of this worker: the account of the token is its credential, and one issue per fetch. */
+async function readLinear(): Promise<SourceResult<readonly unknown[]>> {
   const account: LinearSource = {
-    viewerId: () => Promise.resolve({ ok: true, source: "linear", data: spec.linearViewer ?? "", durationMs: 0 }),
+    credential: () => Promise.resolve({ ok: true, source: "linear", data: spec.linearViewer ?? "", durationMs: 0 }),
     fetchIssues: async () =>
       answer("linear", [{ id: `${spec.linearViewer ?? ""}-${spec.value}` } as unknown as Issue]),
     fetchIgnoredKeys: () => Promise.resolve({ ok: true, source: "linear", data: new Set<string>(), durationMs: 0 }),
@@ -92,7 +128,5 @@ if (spec.linearViewer === null) {
     timeoutMs: 15_000,
     pageSize: 40,
   };
-  const linear = cachedLinearSource(account, linearConfig, { cache });
-  const result = await linear.fetchIssues({} as LinearProject);
-  report(result, (item) => (item as { id: string }).id);
+  return cachedLinearSource(account, linearConfig, { cache }).fetchIssues({} as LinearProject);
 }

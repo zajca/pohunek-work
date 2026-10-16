@@ -12,8 +12,8 @@
 // heartbeat is older than `lock_timeout_ms` may be taken over. Concurrent readers of a key share one fetch.
 
 import { Database } from "bun:sqlite";
-import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, open } from "node:fs/promises";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { chmod, link, mkdir, open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { CacheConfig } from "../types/config.ts";
 import type { SourceErrorCode, SourceName, SourceResult } from "../types/sources.ts";
@@ -23,6 +23,7 @@ const FILE_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
 const CACHE_SUBDIRECTORY = "cache";
 const DATABASE_FILE = "cache.sqlite";
+const SALT_FILE = "identity.salt";
 /** Files SQLite keeps beside the database in WAL mode; they receive the same mode once they exist. */
 const SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
 
@@ -70,6 +71,12 @@ export interface SharedCache {
    * the call arrived, or a new fetch made by this call. `refresh` bypasses the max age but still joins a fetch in flight.
    */
   read<T>(request: CacheRequest<T>): Promise<SourceResult<T>>;
+  /**
+   * Opaque identity of the account a credential belongs to, for a cache key. It is an HMAC of the credential under a
+   * random salt kept in the cache directory, so the store holds neither the credential nor an unsalted digest of it.
+   * Computed locally; no provider is asked.
+   */
+  identityOf(credential: string): Promise<string>;
 }
 
 export interface SharedCacheOptions {
@@ -135,11 +142,29 @@ export function createSharedCache(options: SharedCacheOptions): SharedCache {
 
   /** One store per cache object: the database is opened on first use and shared by its reads. */
   function openStore(): Promise<Store> {
-    store ??= Store.open(join(options.stateDir, CACHE_SUBDIRECTORY), config);
+    // A failed open is not kept: the next read opens the database again.
+    store ??= Store.open(join(options.stateDir, CACHE_SUBDIRECTORY), config).catch((error: unknown) => {
+      store = null;
+      throw error;
+    });
     return store;
   }
 
+  let salt: Promise<string> | null = null;
+  function loadSalt(): Promise<string> {
+    salt ??= readOrCreateSalt(join(options.stateDir, CACHE_SUBDIRECTORY)).catch((error: unknown) => {
+      salt = null;
+      throw error;
+    });
+    return salt;
+  }
+
   return {
+    async identityOf(credential: string): Promise<string> {
+      const key = await loadSalt();
+      return createHmac("sha256", key).update(credential).digest("hex").slice(0, IDENTITY_HEX_LENGTH);
+    },
+
     async read<T>(request: CacheRequest<T>): Promise<SourceResult<T>> {
       const requestedAtMs = now();
       let db: Store;
@@ -326,7 +351,8 @@ class Store {
              ON CONFLICT(cache_key) DO UPDATE SET
                fetched_at_ms = excluded.fetched_at_ms, value = excluded.value,
                failed_started_at_ms = NULL, failed_code = NULL, failed_message = NULL, failed_retry_at_ms = NULL
-             WHERE entries.fetched_at_ms IS NULL OR excluded.fetched_at_ms > entries.fetched_at_ms`,
+             WHERE (entries.fetched_at_ms IS NULL OR excluded.fetched_at_ms > entries.fetched_at_ms)
+               AND (entries.failed_started_at_ms IS NULL OR excluded.fetched_at_ms > entries.failed_started_at_ms)`,
           )
           .run(keyDigest, startedAtMs, JSON.stringify(request.encode(result.data)));
       } else {
@@ -345,8 +371,8 @@ class Store {
       this.db.query("DELETE FROM inflight WHERE cache_key = ? AND token = ?").run(keyDigest, input.token);
       const stored = this.readStored(keyDigest);
       if (result.ok) {
-        // A newer stored success wins over this one; the caller reports what is stored.
-        return successOf(request, lastGood(request, stored) ?? { data: result.data, fetchedAtMs: startedAtMs });
+        // The caller gets the answer it fetched; the store keeps only what is newer than what it holds.
+        return { ...result, fetchedAtMs: startedAtMs };
       }
       const failure: StoredFailure = { startedAtMs, code: result.code, message: result.message, retryAtMs: result.retryAtMs ?? null };
       return failureOf(request, failure, lastGood(request, stored));
@@ -466,6 +492,40 @@ function digest(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+/** Hex characters of the identity digest: 128 bits, enough to tell accounts apart in a per-user cache. */
+const IDENTITY_HEX_LENGTH = 32;
+/** Bytes of the random salt behind `identityOf`. */
+const SALT_BYTES = 32;
+
+/**
+ * The salt is written to a temporary file and linked into place, so the file appears complete or not at all.
+ * Every process reads the same salt once it exists.
+ */
+async function readOrCreateSalt(directory: string): Promise<string> {
+  await mkdir(directory, { recursive: true, mode: DIRECTORY_MODE });
+  const file = join(directory, SALT_FILE);
+  const candidate = randomBytes(SALT_BYTES).toString("hex");
+  const temporary = `${file}.${process.pid.toString()}.${randomBytes(6).toString("hex")}.tmp`;
+  const handle = await open(temporary, "wx", FILE_MODE);
+  try {
+    await handle.writeFile(candidate);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await link(temporary, file);
+    return candidate;
+  } catch (error) {
+    if (!isErrnoCode(error, "EEXIST")) throw error;
+  } finally {
+    await unlinkIfPresent(temporary);
+  }
+  const text = (await readFile(file, "utf8")).trim();
+  if (!/^[0-9a-f]{64}$/.test(text)) throw new Error("the cache identity salt is damaged; remove the cache directory to recreate it");
+  return text;
+}
+
 /** The database is locked by another connection: SQLITE_BUSY, or the message SQLite gives for it. */
 function isBusy(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -491,6 +551,14 @@ async function chmodSidecars(file: string): Promise<void> {
     await chmod(`${file}${suffix}`, FILE_MODE).catch((error: unknown) => {
       if (!isErrnoCode(error, "ENOENT")) throw error;
     });
+  }
+}
+
+async function unlinkIfPresent(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if (!isErrnoCode(error, "ENOENT")) throw error;
   }
 }
 

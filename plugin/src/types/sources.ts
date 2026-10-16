@@ -52,6 +52,9 @@ export interface SourceSuccess<T> extends SourceTiming {
 
 export type SourceResult<T> = SourceSuccess<T> | SourceFailure | SourceStale<T>;
 
+/** The credential a source reads locally (keyring or `gh auth token`); no provider is asked. Never logged or cached. */
+export type CredentialResult = SourceSuccess<string> | SourceFailure;
+
 /** The data of a result that has any: fresh, or stale after a failed refresh. */
 export function resultData<T>(result: SourceResult<T>): T | null {
   if (result.ok) return result.data;
