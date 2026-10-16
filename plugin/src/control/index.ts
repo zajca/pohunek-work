@@ -8,7 +8,7 @@ import { isUnresolvedAction } from "../ink/attention.ts";
 import { sdkFailure, SdkLink } from "./sdk-link.ts";
 import type {
   ControlAction, ControlActionOutcome, ControlClient, ControlClientOptions, ControlError,
-  ControlActivityPage, ControlActivityScope, ControlHost, ControlNotification, ControlProject, ControlResult, ControlSession, ControlSnapshot, ControlSnapshotError,
+  ControlActivityPage, ControlActivityScope, ControlHost, ControlNotificationChange, ControlNotification, ControlProject, ControlResult, ControlSession, ControlSnapshot, ControlSnapshotError,
 } from "./types.ts";
 
 export type * from "./types.ts";
@@ -113,13 +113,13 @@ interface NotificationChange {
   readonly record: ControlNotification | null;
 }
 
-/** The change a notification event carries, or null when the event does not carry enough to apply it. */
+/** The change a notification event carries (its record in any status, null when it is deleted), or null when the event does not carry enough to apply it. */
 function notificationChange(kind: string, event: Readonly<Record<string, unknown>>, route: string): NotificationChange | null {
   try {
     if (kind === "notification_deleted") return { id: string(event, "notification_id", "$"), record: null };
     if (kind !== "notification_created" && kind !== "notification_updated") return null;
     const record = notification(event["record"], "$.record", route);
-    return { id: record.id, record: isUnresolvedAction(record) ? record : null };
+    return { id: record.id, record };
   } catch (error) {
     if (error instanceof InvalidControlResponse) return null;
     throw error;
@@ -195,6 +195,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   // Output polls get their own connection, so a long poll never queues behind the reads and mutations of the route.
   const outputLinks = new Map<string, SdkLink>();
   const listeners = new Set<(snapshot: ControlSnapshot) => void>();
+  const notificationListeners = new Set<(change: ControlNotificationChange) => void>();
   let hosts: ControlHost[] = [LOCAL_HOST];
   let discoveryError: ControlError | null = null;
   // Set by close(); a read that was pending when the client closed must not open a connection afterwards.
@@ -368,9 +369,12 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     if (!kind.startsWith("notification")) { scheduleRead(route, false); return; }
     const change = notificationChange(kind, event, route);
     if (change === null) { scheduleRead(route, true); return; }
+    for (const listener of notificationListeners) listener({ host: route, id: change.id, record: change.record });
+    // The attention list keeps the unresolved actions only; a change to any other record removes it from the list.
+    const attention: NotificationChange = { id: change.id, record: change.record !== null && isUnresolvedAction(change.record) ? change.record : null };
     const buffer = bufferedChanges.get(route);
     if (buffer !== undefined) {
-      buffer.push(change);
+      buffer.push(attention);
       return;
     }
     const current = notificationReads.get(route);
@@ -378,7 +382,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       void readNotifications(route).then(publish, () => undefined);
       return;
     }
-    notificationReads.set(route, scopeRead({ ok: true, data: applyNotificationChange(current.result.data, change) }, current));
+    notificationReads.set(route, scopeRead({ ok: true, data: applyNotificationChange(current.result.data, attention) }, current));
     schedulePublish();
   }
 
@@ -536,6 +540,10 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     subscribe(listener) {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
+    },
+    subscribeNotifications(listener) {
+      notificationListeners.add(listener);
+      return () => { notificationListeners.delete(listener); };
     },
     async close() {
       closed = true;

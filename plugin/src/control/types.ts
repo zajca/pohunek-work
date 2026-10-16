@@ -105,6 +105,9 @@ export interface ControlClientOptions {
   /** Environment of the CLI children; the process environment when absent. */
   readonly env?: Readonly<Record<string, string>>;
 }
+/** A notification that a daemon event changed; `record` is null when the event removed it. */
+export interface ControlNotificationChange { readonly host: string; readonly id: string; readonly record: ControlNotification | null }
+
 /** Scope of the activity list; `recent` is every notification but the archived and deleted ones. */
 export type ControlActivityScope = "recent" | "unread" | "archived";
 
@@ -124,6 +127,8 @@ export interface ControlClient {
   output(host: string, id: string, request: ControlOutputRequest): Promise<ControlResult<ControlOutput>>;
   showProject(host: string, reference: string): Promise<ControlResult<ControlProjectDetail>>;
   act(action: ControlAction): Promise<ControlResult<ControlActionOutcome>>;
+  /** Calls the listener with each notification change the event stream carries; returns the unsubscribe. */
+  subscribeNotifications(listener: (change: ControlNotificationChange) => void): () => void;
   /** One page of an activity scope across the hosts, newest first; `cursor` is null for the first page. */
   activity(scope: ControlActivityScope, cursor: string | null): Promise<ControlResult<ControlActivityPage>>;
   /** The first page of a session's notifications on its host. */

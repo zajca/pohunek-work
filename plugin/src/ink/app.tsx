@@ -21,7 +21,7 @@ import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDi
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
@@ -421,6 +421,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const loadMoreActivity = useCallback((): void => {
     if (activity.cursor !== null && activity.scope === scope) void readActivityPage(scope, activity.cursor);
   }, [activity, readActivityPage, scope]);
+
+  // A notification that changes while Activity is open updates the loaded page; the page is not read again.
+  useEffect(() => control.subscribeNotifications((change) => {
+    if (!alive.current) return;
+    setActivity((previous) => ({ ...previous, records: applyActivityChange(previous.records, previous.scope, change) }));
+  }), [control]);
 
   const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, detailNotifications, linksOf(selectedSession), noLinkReason(selectedSession, work, originOf(selectedSession)));
   // Following the output keeps the end of the text in view; a scroll that reaches the end resumes following.
