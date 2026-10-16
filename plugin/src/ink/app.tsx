@@ -77,8 +77,10 @@ type PendingEvent = { readonly kind: "key"; readonly press: string; readonly key
 type OverlayKind = "none" | "links" | "session" | "host" | "notification" | "form" | "assistant" | "confirm" | "recovery" | "rename" | "metadata" | "work-detail" | "work-preview" | "help" | "projects";
 /** Where Esc or a finished action returns to. */
 type ReturnKind = "none" | "session";
-/** The open overlay; `kind` is what the views switch on. */
-type Overlay = { readonly kind: OverlayKind };
+/** The open overlay; `kind` is what the views switch on. A confirm carries its target, so it cannot open without one. */
+type Overlay =
+  | { readonly kind: Exclude<OverlayKind, "confirm"> }
+  | { readonly kind: "confirm"; readonly action: ConfirmAction; readonly session: ControlSession; readonly returnTo: ReturnKind };
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: ReturnKind }
 
@@ -187,9 +189,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [governance, setGovernance] = useState<ControlGovernance | null>(null);
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
   const notificationSelectionGeneration = useRef(0);
-  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
-  const [confirmSession, setConfirmSession] = useState<ControlSession | null>(null);
-  const [confirmReturn, setConfirmReturn] = useState<ReturnKind>("session");
   const [formLoading, setFormLoading] = useState(false);
   const formLoadingRef = useRef(false);
   const formGeneration = useRef(0);
@@ -809,17 +808,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const mutable = isMutable(target);
     const active = isActive(target);
     if (kind === "stop" ? !(mutable && active) : !writable) { bumpStatus(kind === "stop" ? "Only a live session can be stopped" : "This session cannot be removed"); return; }
-    setConfirmSession(target);
-    setConfirm(kind);
-    setConfirmReturn(returnTo);
-    setOverlay({ kind: "confirm" });
+    setOverlay({ kind: "confirm", action: kind, session: target, returnTo });
   }, []);
-
-  // A confirmation names one target; leaving the confirm overlay by any path (Esc, a view change, a click) drops it,
-  // so a later confirmation cannot act on a session the owner has stopped looking at.
-  useEffect(() => {
-    if (overlay.kind !== "confirm") { setConfirm(null); setConfirmSession(null); }
-  }, [overlay.kind]);
 
   const selectIndex = useCallback((index: number): void => {
     const count = view === "Work" ? workRows?.length ?? 0 : view === "Sessions" ? sessions.length : view === "Hosts" ? hostRows.length : records.length;
@@ -997,8 +987,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     if (overlay.kind === "confirm") {
-      if (input.toLowerCase() === "y" && confirm !== null && confirmSession !== null) void runSessionAction({ kind: confirm, host: confirmSession.host, sessionId: confirmSession.id }, confirmSession);
-      setOverlay({ kind: confirmReturn }); setConfirm(null); setConfirmSession(null); return;
+      if (input.toLowerCase() === "y") void runSessionAction({ kind: overlay.action, host: overlay.session.host, sessionId: overlay.session.id }, overlay.session);
+      setOverlay({ kind: overlay.returnTo }); return;
     }
     if (overlay.kind === "recovery") {
       const request = recovery;
@@ -1254,7 +1244,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     content = <LinkChooser links={chosenLinks} selected={Math.max(0, chosenLinks.findIndex((link) => link.url === linkChoice.url))} />;
   }
   else if (overlay.kind === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
-  else if (overlay.kind === "confirm" && confirmReturn !== "none") content = <Message color="red" text={confirmText(confirm, confirmSession)} />;
+  else if (overlay.kind === "confirm" && overlay.returnTo !== "none") content = <Message color="red" text={confirmText(overlay.action, overlay.session)} />;
   else if (overlay.kind === "rename" || overlay.kind === "metadata") content = <Text>{`${overlay.kind === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
   else if (overlay.kind === "host") content = <HostOverlay capabilities={hostDetail} governance={governance} />;
   else if (overlay.kind === "notification" && notificationDetail !== null) content = <NotificationOverlay record={notificationDetail} />;
@@ -1342,8 +1332,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     <ActionButton label="Cancel" onClick={() => { const returnTo = recovery.returnTo; setRecovery(null); setOverlay({ kind: returnTo }); }} />
   </Box>;
   else if (overlay.kind === "confirm") toolbar = <Box gap={1}>
-    <ActionButton label={`Confirm ${confirm ?? "action"}`} onClick={() => { const target = confirmSession; const kind = confirm; const returnTo = confirmReturn; setConfirm(null); setConfirmSession(null); setOverlay({ kind: returnTo }); if (kind !== null && target !== null) void runSessionAction({ kind, host: target.host, sessionId: target.id }, target); }} primary />
-    <ActionButton label="Cancel" onClick={() => { const returnTo = confirmReturn; setConfirm(null); setConfirmSession(null); setOverlay({ kind: returnTo }); }} />
+    <ActionButton label={`Confirm ${overlay.action}`} onClick={() => { const { action, session, returnTo } = overlay; setOverlay({ kind: returnTo }); void runSessionAction({ kind: action, host: session.host, sessionId: session.id }, session); }} primary />
+    <ActionButton label="Cancel" onClick={() => { setOverlay({ kind: overlay.returnTo }); }} />
   </Box>;
   else if (overlay.kind !== "form" && overlay.kind !== "assistant") toolbar = <Box gap={1}>
     {(overlay.kind === "rename" || overlay.kind === "metadata") && sessionDetail !== null && <ActionButton label="Save" onClick={() => {
@@ -1357,7 +1347,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {...(options.mode === "main" ? { tabs: VIEWS, activeTab: VIEWS.indexOf(view), onTab: (index: number) => { setOverlay({ kind: "none" }); setView(VIEWS[index] ?? "Work"); } } : {})}
     subtitle={subtitle} footer={footer} status={status ?? work?.warning ?? null}>
     {content}
-    {overlay.kind === "confirm" && confirmReturn === "none" && <Message color="red" text={confirmText(confirm, confirmSession)} />}
+    {overlay.kind === "confirm" && overlay.returnTo === "none" && <Message color="red" text={confirmText(overlay.action, overlay.session)} />}
     {toolbar}
   </ScreenFrame>;
 }
