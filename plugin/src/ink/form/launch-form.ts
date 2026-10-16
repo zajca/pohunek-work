@@ -18,12 +18,3 @@ export interface LaunchForm {
   readonly choice: number;
 }
 
-export const FORM_FIELDS = 9;
-export const ASSISTANT_FIELDS = 8;
-/** The Assistant form's Request row is disabled, so focus never stops on it. */
-export const ASSISTANT_DISABLED_FIELD = 4;
-
-export function formFieldLabel(assistant: boolean, index: number): string {
-  return assistant ? ["Host", "Project", "Agent", "Intent", "Request", "Branch", "Base branch"][index] ?? "" :
-    ["Host", "Project", "Agent", "Action/template", "Name", "Prompt", "Branch", "Base branch"][index] ?? "";
-}
