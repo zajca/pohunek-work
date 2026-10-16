@@ -94,6 +94,32 @@ stays manual),
 and a path toward a managing agent that runs those actions for the owner under
 an explicit policy.
 
+## Shared GitHub and Linear cache
+
+Every `list`, `watch` and TUI refresh reads the GitHub and Linear sources through
+one cache in the state directory (`cache/cache.sqlite`, SQLite in WAL mode, file
+mode 0600). The store holds provider data and keys only. Each key holds an offline
+identity of the credential the source reads locally (the GitHub token of `gh auth
+token`, the Linear API key of the keyring): an HMAC under a random salt kept in
+`cache/identity.salt` (mode 0600). No provider is asked for it, so a provider outage
+still serves a cached result, and a changed credential is a cache miss. A result read from the
+provider is served to all local processes for `[cache] max_age_secs`; a caller that
+arrives while a fetch is in flight takes that fetch's outcome instead of asking again.
+`list --refresh` (the TUI `r` key) bypasses the max age and joins a fetch in flight the
+same way.
+`do` refreshes before it acts, and refuses an action while any source of its project is
+stale or unavailable in that run: stale data is displayed, never acted on. A failed refresh
+shows the last good data with its source marked failed (`stale` in `freshness`); a rate-limit response stops every
+process from asking the provider until the reset time GitHub reports, or
+`[cache] fallback_backoff_secs` when it reports none. The required keys are
+`max_age_secs`, `lock_timeout_ms` (a fetch whose holder has not refreshed its
+heartbeat for this long, or whose holder process is gone, may be taken over; a live
+holder refreshes its heartbeat every `lock_poll_ms`, so a slow fetch is never taken over), `lock_poll_ms`
+(below `lock_timeout_ms`), `fallback_backoff_secs` and `busy_timeout_ms` (how long a
+process waits for another one's write on the cache database). The `list
+--json` envelope carries the per-source `freshness` (fetch instant, stale, retry
+instant). The field is additive, so the list contract stays at version 4.
+
 ## Status
 
 M0 and M1 are merged: `pohunek-work list` and `doctor`. `list --project <label>`

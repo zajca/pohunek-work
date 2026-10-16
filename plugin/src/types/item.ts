@@ -236,10 +236,22 @@ export interface ListItem {
   readonly sources: SourceStatuses;
 }
 
+/** Age and retry instant of the data behind one source; both are ISO-8601 or null. */
+export interface SourceFreshness {
+  /** Instant the provider was read for the data in use; null when no data was ever read. */
+  readonly fetched_at: string | null;
+  /** True when the data in use is older than the last read, which failed: the rows show it as stale. */
+  readonly stale: boolean;
+  /** Instant before which the provider is not asked again after a rate limit; null otherwise. */
+  readonly retry_at: string | null;
+}
+
 /** Source availability of one project's poll, independent of any row filter. */
 export interface ListProjectStatus {
   readonly project: string;
   readonly sources: SourceStatuses;
+  /** Null for a source the project does not use. */
+  readonly freshness: Readonly<Record<SourceName | "github_merged", SourceFreshness | null>>;
 }
 
 export interface ListPayload {

@@ -136,9 +136,24 @@ export interface ManagerConfig {
   readonly workdir: string;
 }
 
+/** The shared cache of GitHub and Linear source results in the state directory. */
+export interface CacheConfig {
+  /** A result read from the provider is served to every caller for this long without a new read. */
+  readonly maxAgeMs: number;
+  /** A lock its holder has not refreshed for this long is abandoned and taken over; a live holder refreshes it every `lockPollMs`. */
+  readonly lockTimeoutMs: number;
+  /** Pause between two checks of a lock by a waiter, and between two refreshes of a lock by its holder; below `lockTimeoutMs`. */
+  readonly lockPollMs: number;
+  /** Back-off after a rate-limit response that names no reset time. */
+  readonly fallbackBackoffMs: number;
+  /** How long a process waits for another process's write transaction on the cache database before it reports the cache busy. */
+  readonly busyTimeoutMs: number;
+}
+
 export interface GlobalConfig {
   readonly identity: IdentityConfig;
   readonly github: GithubConfig;
+  readonly cache: CacheConfig;
   /** Present only when the global file has a `[linear]` table; required whenever a project uses Linear. */
   readonly linear: LinearConfig | null;
   readonly pohunek: PohunekConfig;

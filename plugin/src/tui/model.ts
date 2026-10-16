@@ -233,9 +233,10 @@ function withNote(state: State, row: string, note: Note): State {
   return { ...state, notes, detailTop: state.selected === row ? 0 : state.detailTop };
 }
 
-function startRefresh(state: State): Update {
+/** `refresh` asks `list` to read past the cache's max age; only an explicit `r` does, timers and startup use the cache. */
+function startRefresh(state: State, refresh = false): Update {
   if (state.refreshing) return [{ ...state, status: status("refresh already running") }, []];
-  return [{ ...state, refreshing: true, refreshQueued: false }, [{ kind: "list", argv: listArgv(state.settings.selfBin) }]];
+  return [{ ...state, refreshing: true, refreshQueued: false }, [{ kind: "list", argv: listArgv(state.settings.selfBin, refresh) }]];
 }
 
 function nextWake(state: State): Effect[] {
@@ -425,7 +426,7 @@ function listKey(state: State, key: Key): Update {
     case "o":
       return openUrl(state);
     case "r":
-      return startRefresh(state);
+      return startRefresh(state, true);
     case "m":
       return [setFilters(state, { actor: state.filters.actor === "me" ? "all" : "me" }), []];
     case "h":
@@ -459,7 +460,7 @@ function onKey(pressed: State, key: Key): Update {
   if (state.fatal !== null || state.data === null) {
     if (isChar(key, "q")) return [state, [{ kind: "quit" }]];
     if (isChar(key, "?")) return [{ ...state, overlay: "help" }, []];
-    if (isChar(key, "r") && state.fatal !== null) return startRefresh(state);
+    if (isChar(key, "r") && state.fatal !== null) return startRefresh(state, true);
     return [state, []];
   }
   return listKey(state, key);

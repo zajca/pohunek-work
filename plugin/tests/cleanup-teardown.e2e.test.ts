@@ -147,6 +147,13 @@ nested_page_size = 50
 thread_comment_page_size = 10
 merged_lookback_days = 30
 
+[cache]
+max_age_secs = 300
+lock_timeout_ms = 120000
+lock_poll_ms = 100
+fallback_backoff_secs = 900
+busy_timeout_ms = 5000
+
 [pohunek]
 bin = "${pohunekBin}"
 timeout_ms = 20000
