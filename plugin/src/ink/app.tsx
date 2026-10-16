@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Box, render, Text, useApp, useInput, usePaste, useStdout, type Key } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlRuntime, type ControlScreen, type ControlSession, type ControlSnapshot } from "../control/index.ts";
+import { createControlClient, type ControlAction, type ControlGovernance, type ControlHost, type ControlHostCapabilities, type ControlNotification, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
 import { checkOpenUrl, githubBranchUrl } from "../tui/actions.ts";
 import { noLinkReason, sessionLinks, type SessionLink } from "./links.ts";
@@ -11,17 +11,18 @@ import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveOutcome } from "../util/exec.ts";
 import { handover, openExternal, suspendForChild as suspendChild } from "./handover.ts";
+import { useControlData } from "./use-control-data.ts";
+import { useLiveOutput } from "./use-live-output.ts";
+import { BUSY_REFUSAL, defaultStatus, useStatus } from "./use-status.ts";
 import type { ControlActivityCursor, ControlActivityScope } from "../control/types.ts";
 import { compareActivityOrder } from "../control/order.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
 import { ATTACH_HOST, ATTACH_VALUE, renderAttachArgv } from "../tui/attach-template.ts";
-import { coalesce } from "./coalesce.ts";
-import { loadWork, previewWork, workActionArgv, type WorkSnapshot } from "./work.ts";
+import { previewWork, workActionArgv } from "./work.ts";
 import { ActionButton, Message, ScreenFrame, safeText, shorten } from "./components.tsx";
 import { MouseProvider, parseMouseEvent, setMouseTracking, useMouseDispatch } from "./mouse.tsx";
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
-import { LiveOutput } from "./live-output.ts";
 import { ActivityView, activityMatches, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
@@ -76,12 +77,9 @@ type Overlay = "none" | "links" | "session" | "host" | "notification" | "form" |
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: Overlay }
 
-/** Status line text for input refused while an action is still running. */
-export const BUSY_REFUSAL = "Still working on the last action; input was not applied, try again when it finishes";
 const VIEWS: readonly ViewName[] = ["Work", "Sessions", "Hosts", "Activity"];
 const SCOPES: readonly ActivityScope[] = ["Recent", "Unread", "Archived"];
 const CONTROL_SCOPE: Readonly<Record<ActivityScope, ControlActivityScope>> = { Recent: "recent", Unread: "unread", Archived: "archived" };
-const SOURCE_WARNING = /source\(s\) unavailable; mutating actions are paused$/;
 
 
 
@@ -122,25 +120,6 @@ function sameRecoveryTarget(a: ControlSession, b: ControlSession): boolean {
   return JSON.stringify(a.nativeTarget) === JSON.stringify(b.nativeTarget) && a.nativeLastActivityAt === b.nativeLastActivityAt;
 }
 
-function retainUnavailable(previous: ControlSnapshot | null, current: ControlSnapshot): ControlSnapshot {
-  if (previous === null || current.errors.length === 0) return current;
-  const failed = (host: string, scope: string): boolean => current.errors.some((error) =>
-    error.scope === "discovery" || (error.host === host && error.scope === scope));
-  const presentSession = new Set(current.sessions.map((session) => `${session.host}/${session.id}`));
-  const presentProject = new Set(current.projects.map((project) => `${project.host}/${project.id}`));
-  const presentNotification = new Set(current.notifications.map((notification) => `${notification.host}/${notification.id}`));
-  return {
-    ...current,
-    sessions: [...current.sessions, ...previous.sessions.filter((session) => failed(session.host, "sessions") && !presentSession.has(`${session.host}/${session.id}`))],
-    projects: [...current.projects, ...previous.projects.filter((project) => failed(project.host, "projects") && !presentProject.has(`${project.host}/${project.id}`))],
-    notifications: [...current.notifications, ...previous.notifications.filter((notification) => failed(notification.host, "notifications") && !presentNotification.has(`${notification.host}/${notification.id}`))],
-  };
-}
-
-function defaultStatus(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function selectedAt<T>(items: readonly T[], index: number): T | null {
   return items[Math.max(0, Math.min(index, items.length - 1))] ?? null;
 }
@@ -170,8 +149,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   /** The last press on a list row, which a press on the same row within `doubleClickMs` turns into a double click. */
   const rowClick = useRef<{ readonly id: string; readonly at: number } | null>(null);
   const [overlay, setOverlay] = useState<Overlay>(options.mode === "new-session" ? "form" : "none");
-  const [snapshot, setSnapshot] = useState<ControlSnapshot | null>(null);
-  const [work, setWork] = useState<WorkSnapshot | null>(null);
   const [workFilters, setWorkFilters] = useState<Filters>({ actor: options.initialView === "mine" ? "me" : "all", project: null, text: "", hideStale: false });
   // The view whose `/` filter takes the text keys; Work keeps its query in workFilters.
   const [editing, setEditing] = useState<ViewName | null>(null);
@@ -182,13 +159,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [workDetailKey, setWorkDetailKey] = useState<string | null>(null);
   const [workPreview, setWorkPreview] = useState<DoOutcome | string | null>(null);
   const [previewOffset, setPreviewOffset] = useState(0);
-  const [stale, setStale] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const { status, setStatus, busy, setBusy, mutationNotice, mutationEpoch, actionSeq, bumpStatus } = useStatus();
   // Set when a fork did not answer: its outcome is unknown, so another fork waits for the owner to look at the list.
   const [forkUnknown, setForkUnknown] = useState(false);
-  // The message of the last mutation that failed. Snapshots that arrive afterwards keep it on the status line.
-  const mutationNotice = useRef<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   // The first row each list was last drawn from; a selection inside that window never scrolls it.
   const [windowStarts, setWindowStarts] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
@@ -203,10 +176,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [sessionNotes, setSessionNotes] = useState<{ key: string; records: readonly ControlNotification[] }>({ key: "", records: [] });
   const [sessionDetail, setSessionDetail] = useState<ControlSession | null>(null);
   const [detailOffset, setDetailOffset] = useState(0);
-  const [screen, setScreen] = useState<ControlScreen | null>(null);
   // The panel and the session overlay follow the newest output until the owner scrolls away from its end.
   const [followOutput, setFollowOutput] = useState(true);
-  const [liveRound, setLiveRound] = useState(0);
   const [hostDetail, setHostDetail] = useState<ControlHostCapabilities | null>(null);
   const [governance, setGovernance] = useState<ControlGovernance | null>(null);
   const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
@@ -227,13 +198,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   // The link chooser of `l`: the session, the highlighted line and the overlay it returns to on Esc or a pick.
   // The chooser names its session by host and id and its highlight by URL, so a refresh re-resolves both.
   const [linkChoice, setLinkChoice] = useState<{ host: string; id: string; url: string | null; returnTo: "none" | "session" } | null>(null);
-  // Bumped when a mutation completes; a read that started before it must not replace the state the mutation showed.
-  const mutationEpoch = useRef(0);
-  // Counts the actions that started; a read that completes later checks it before it reports its own result.
-  const actionSeq = useRef(0);
-  // A status written by a user action; it counts as newer than any refresh read that started before it.
-  const bumpStatus = useCallback((message: string | null): void => { actionSeq.current += 1; setStatus(message); }, []);
-  const alive = useRef(true);
+  // The ref the control data calls after each control read. It is set below, once the activity page is declared.
+  const afterControlRead = useRef<() => void>(() => undefined);
+  const { alive, snapshot, setSnapshot, work, stale, refresh } = useControlData(control, options, { setStatus, actionSeq, mutationEpoch, mutationNotice }, afterControlRead);
 
   useEffect(() => {
     const restore = (): void => { setMouseTracking(false); };
@@ -263,13 +230,18 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const selectedWorkIndex = selectedWork === null ? 0 : workRows?.indexOf(selectedWork) ?? 0;
   const selectedSession = sessions.find((session) => `${session.host}/${session.id}` === sessionKey) ?? selectedAt(sessions, cursor.Sessions);
   const split = options.mode === "main" && stdout.columns >= options.detailMinWidth;
+  // The session shown beside the list or in the overlay is read live; a read for a session the owner has left is dropped.
+  const liveSession = overlay === "session" ? sessionDetail : split && view === "Sessions" ? selectedSession : null;
+  const liveHost = liveSession?.host ?? null;
+  const liveId = liveSession?.id ?? null;
+  const { screen, setScreen, restartOutput } = useLiveOutput(control, options, liveHost, liveId);
+  // The side panel shows the highlighted session; its screen is kept only for that session.
+  const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
   const selectedSessionIndex = selectedSession === null ? 0 : sessions.indexOf(selectedSession);
   const selectedHost = selectedAt(hostRows, cursor.Hosts);
   const selectedRecord = selectedAt(records, cursor.Activity);
   const visibleRows = Math.max(2, Math.floor((stdout.rows - layout.listReservedRows) / 2));
   const detailHeight = Math.max(4, stdout.rows - layout.detailReservedRows);
-  // The side panel shows the highlighted session; its screen is kept only for that session.
-  const panelScreen = screen !== null && selectedSession !== null && screen.sessionId === selectedSession.id ? screen : null;
   const noteSession = overlay === "session" && sessionDetail !== null ? sessionDetail : selectedSession;
   const noteHost = noteSession?.host ?? null;
   const noteId = noteSession?.id ?? null;
@@ -335,6 +307,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [control]);
   const activityView = useRef<{ view: ViewName; scope: ActivityScope }>({ view: "Work", scope: "Recent" });
   activityView.current = { view, scope };
+  afterControlRead.current = (): void => { if (activityView.current.view === "Activity") void reconcileActivity(activityView.current.scope); };
   useEffect(() => {
     if (view !== "Activity") return;
     setActivity({ scope, records: [], cursor: null });
@@ -380,118 +353,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
 
   useEffect(() => { setDetailOffset(0); setFollowOutput(true); }, [sessionKey]);
 
-  // The session shown beside the list or in the overlay is read live; a read for a session the owner has left is dropped.
-  const liveSession = overlay === "session" ? sessionDetail : split && view === "Sessions" ? selectedSession : null;
-  const liveHost = liveSession?.host ?? null;
-  const liveId = liveSession?.id ?? null;
-  useEffect(() => {
-    setScreen(null);
-    if (liveHost === null || liveId === null) return;
-    let active = true;
-    // A function call, so the check after each await is not narrowed to the value the flag had before the await.
-    const isActive = (): boolean => active;
-    const live = new LiveOutput(options.outputMaxBytes);
-    let wake: (() => void) | null = null;
-    // Resolves with the next snapshot, or when the effect is cleaned up first.
-    const nextSnapshot = (): Promise<void> => new Promise((resolve) => {
-      const unsubscribe = control.subscribe(() => { unsubscribe(); wake = null; resolve(); });
-      wake = () => { unsubscribe(); wake = null; resolve(); };
-    });
-    const read = async (): Promise<void> => {
-      // The cursor is only valid with the runtime it was read from, so both move together.
-      let cursor: { readonly after: string; readonly runtime: ControlRuntime } | null = null;
-      // A read that failed leaves the panel showing the failure until a read succeeds, even one with no new output.
-      let failed = false;
-      for (;;) {
-        const result = await control.output(liveHost, liveId, { after: cursor?.after ?? null, runtime: cursor?.runtime ?? null, maxBytes: options.outputMaxBytes, waitMs: options.outputWaitMs });
-        if (!isActive()) return;
-        // The output block says why nothing is shown; the status line stays free for actions.
-        if (!result.ok) {
-          failed = true;
-          setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: [`output unavailable: ${result.error.message}`] });
-          // The read is tried again when the control client publishes a snapshot, which follows a reconnect.
-          await nextSnapshot();
-          if (!isActive()) return;
-          continue;
-        }
-        // A new worker instance or generation starts a new output history, so the output before it is a gap.
-        if (cursor !== null && (cursor.runtime.workerInstanceId !== result.data.runtime.workerInstanceId || cursor.runtime.runtimeGeneration !== result.data.runtime.runtimeGeneration)) live.markGap();
-        cursor = { after: result.data.nextOffset, runtime: result.data.runtime };
-        if (result.data.gap) live.markGap();
-        if (result.data.bytes.length === 0 && !result.data.gap && !failed) continue;
-        failed = false;
-        live.append(result.data.bytes);
-        setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: live.lines() });
-      }
-    };
-    read().catch((error: unknown) => { if (active) setScreen({ sessionId: liveId, title: null, progress: null, visibleLines: [`output unavailable: ${defaultStatus(error)}`] }); });
-    return () => { active = false; wake?.(); };
-  }, [control, liveHost, liveId, liveRound, options.outputMaxBytes, options.outputWaitMs]);
-  const restartOutput = useCallback((): void => { setLiveRound((round) => round + 1); }, []);
 
-  // Snapshots from the reconcile and from the daemon's event stream share one path.
-  // A read that started before a newer action may not replace that action's status; the snapshot itself is always applied.
-  // A background publish (an event or a per-host read) reports a new outage only over an empty status or an earlier
-  // outage warning, so an action outcome is never overwritten by it.
-  const applySnapshot = useCallback((next: ControlSnapshot, mayReport = true, background = false): void => {
-    setSnapshot((previous) => retainUnavailable(previous, next));
-    try { options.onSnapshot?.(next); }
-    catch (error) { options.log?.("snapshot_callback_failed", defaultStatus(error)); }
-    setStale(false);
-    if (next.errors.length === 0 || mutationNotice.current !== null) return;
-    const warning = `${next.errors.length} source(s) unavailable; mutating actions are paused`;
-    if (mayReport) setStatus(warning);
-    else if (background) setStatus((old) => old === null || SOURCE_WARNING.test(old) ? warning : old);
-  }, [options.log, options.onSnapshot]);
-
-  useEffect(() => control.subscribe((next) => { if (alive.current) applySnapshot(next, false, true); }), [applySnapshot, control]);
-  useEffect(() => () => { void control.close(); }, [control]);
-
-  // Sessions and the work list refresh on their own intervals; a manual refresh runs both.
-  // A request during an in-flight read is answered by one follow-up read (see coalesce.ts).
-  const refreshControl = useMemo(() => coalesce(async (): Promise<void> => {
-    const started = actionSeq.current;
-    const epoch = mutationEpoch.current;
-    const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
-    if (!alive.current) return;
-    if (nextControl.ok) {
-      // A read that started before a mutation completed is superseded by the follow-up read that the mutation queued.
-      if (mutationEpoch.current === epoch) applySnapshot(nextControl.value, actionSeq.current === started);
-      if (activityView.current.view === "Activity") void reconcileActivity(activityView.current.scope);
-    } else {
-      setStale(true);
-      if (actionSeq.current === started) setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
-    }
-  }), [applySnapshot, control, reconcileActivity]);
-
-  const refreshWork = useMemo(() => coalesce(async (): Promise<void> => {
-    if (options.mode !== "main") return;
-    const started = actionSeq.current;
-    const nextWork = await loadWork(options.selfBin, options.listTimeoutMs).then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
-    if (!alive.current) return;
-    if (nextWork.ok) {
-      const latest = nextWork.value;
-      setWork((previous) => latest.payload === null && previous?.payload !== null && previous !== null ?
-        { ...previous, partial: true, warning: latest.warning ?? "Work refresh unavailable; showing last good rows" } : latest);
-    } else {
-      const warning = `Work refresh failed: ${defaultStatus(nextWork.reason)}`;
-      setWork((previous) => previous === null ? null : { ...previous, partial: true, warning });
-      if (actionSeq.current === started) setStatus(warning);
-    }
-  }), [options.listTimeoutMs, options.mode, options.selfBin]);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    await Promise.all([refreshControl(), refreshWork()]);
-  }, [refreshControl, refreshWork]);
-
-  useEffect(() => {
-    alive.current = true;
-    void refreshControl();
-    void refreshWork();
-    const controlTimer = setInterval(() => { void refreshControl(); }, options.sessionReconcileMs);
-    const workTimer = setInterval(() => { void refreshWork(); }, options.refreshIntervalMs);
-    return () => { alive.current = false; clearInterval(controlTimer); clearInterval(workTimer); };
-  }, [options.refreshIntervalMs, options.sessionReconcileMs, refreshControl, refreshWork]);
 
   const loadForm = useCallback(async (host: string, preferredProject: string | null = null, assistant = false): Promise<void> => {
     // The form targets the requested host at once; a response for an earlier request is dropped.
@@ -1086,8 +948,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setPressTick((old) => old + 1);
   });
 
-  // The refusal on the status line is for the action that was running, so it goes once that action ends.
-  useEffect(() => { if (!busy) setStatus((old) => old === BUSY_REFUSAL ? null : old); }, [busy]);
 
   const handleKey = (input: string, key: Key): void => {
     const mouse = parseMouseEvent(input);
