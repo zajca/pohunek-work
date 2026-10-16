@@ -178,6 +178,13 @@ nested_page_size = 50
 thread_comment_page_size = 10
 merged_lookback_days = 30
 
+[cache]
+max_age_secs = 300
+lock_timeout_ms = 120000
+lock_poll_ms = 100
+fallback_backoff_secs = 900
+busy_timeout_ms = 5000
+
 [pohunek]
 bin = "${pohunekBin}"
 timeout_ms = 20000
@@ -219,6 +226,7 @@ implement = "profile-a"
 review = "profile-b"
 
 [tui]
+attach_mode = "inline"
 self_bin = "/usr/local/bin/pohunek-work"
 refresh_interval_secs = 300
 list_timeout_ms = 60000
@@ -230,6 +238,12 @@ open_command = "/usr/bin/xdg-open"
 open_url_hosts = ["github.com"]
 stderr_max_lines = 10
 detail_min_width = 120
+session_reconcile_secs = 300
+reconnect_max_secs = 30
+action_capture_bytes = 4194304
+output_wait_ms = 1000
+output_max_bytes = 65536
+double_click_ms = 500
 `;
 
 const PROJECT_CONFIG = `
@@ -237,6 +251,7 @@ const PROJECT_CONFIG = `
 pohunek_label = "widgets"
 repo = "acme/widgets"
 reviews = "session"
+review_bot = "none"
 issue_source = "github"
 issue_signal = "labels"
 started_labels = ["in-progress"]

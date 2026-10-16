@@ -93,7 +93,7 @@ export interface CleanupResult {
 
 /** What the checks read: the pohunek calls that gather evidence and git. */
 export interface EvidenceDeps {
-  readonly pohunek: Pick<PohunekClient, "listWorktrees" | "listNotifications" | "diffSession" | "listSessions">;
+  readonly pohunek: Pick<PohunekClient, "listWorktrees" | "inspectSession" | "listNotifications" | "diffSession" | "listSessions">;
   /** Runs git. */
   readonly exec: Exec;
 }
@@ -190,14 +190,31 @@ function sessionFinished(session: PohunekSession): CleanupCheck {
   return { name: "session_finished", ok: false, detail: `session state is ${quoted(state)} with activity ${quoted(activity)}; only a finished or idle session is cleaned up` };
 }
 
-async function worktreeOwned(target: Target, deps: EvidenceDeps): Promise<CleanupCheck> {
+/**
+ * Core keeps `session_id` on a worktree only while its session runs: once the session is stopped, `project show`
+ * reports the worktree as owned with no session. The stopped session still names the worktree as its linked
+ * worktree, so ownership then rests on that link, and only when no other session claims the path.
+ */
+async function worktreeOwned(target: Target, sharers: readonly PohunekSession[], deps: EvidenceDeps): Promise<CleanupCheck> {
   const name = "worktree_owned";
   const worktrees = await deps.pohunek.listWorktrees(target.project);
   if (!worktrees.ok) return { name, ok: false, detail: describeFailure(worktrees) };
-  const owned = worktrees.data.some((w) => w.path === target.worktreePath && w.sessionId === target.id);
-  return owned
-    ? { name, ok: true, detail: "project show lists the worktree as owned by the session" }
-    : { name, ok: false, detail: "project show does not list the worktree as owned by the session" };
+  const entry = worktrees.data.find((w) => w.path === target.worktreePath);
+  if (entry === undefined) return { name, ok: false, detail: "project show does not list the worktree" };
+  if (entry.sessionId === target.id) return { name, ok: true, detail: "project show lists the worktree as owned by the session" };
+  if (entry.sessionId !== null) return { name, ok: false, detail: "project show lists the worktree as owned by another session" };
+  if (!entry.owned) return { name, ok: false, detail: "project show does not list the worktree as created by pohunek" };
+
+  const inspected = await deps.pohunek.inspectSession(target.id);
+  if (!inspected.ok) return { name, ok: false, detail: `session inspect failed: ${describeFailure(inspected)}` };
+  const { session, isLinkedWorktree } = inspected.data;
+  if (session.worktreePath !== target.worktreePath || !isLinkedWorktree) {
+    return { name, ok: false, detail: "project show lists the worktree without an owner, and session inspect does not report it as the session's linked worktree" };
+  }
+  if (sharers.length > 0) {
+    return { name, ok: false, detail: `project show lists the worktree without an owner, and ${String(sharers.length)} other session(s) also claim it: ${sharers.map((s) => quoted(s.id)).join(", ")}` };
+  }
+  return { name, ok: true, detail: "project show lists the worktree as owned by no session; session inspect reports it as the session's linked worktree, and no other session claims it" };
 }
 
 /** Index entries of `ls-files -z --stage` with mode 160000 (submodules); null when the output is not that format. */
@@ -368,10 +385,10 @@ export async function gatherEvidence(
   deps: EvidenceDeps,
 ): Promise<Evidence> {
   const finished = sessionFinished(session);
-  const owned = await worktreeOwned(target, deps);
+  const sharers = sharersOf(target, sessions);
+  const owned = await worktreeOwned(target, sharers, deps);
   const clean = await worktreeClean(target, config, deps);
   const sync = await branchInSync(target, config, deps);
-  const sharers = sharersOf(target, sessions);
   const notShared = worktreeNotShared(sharers);
   const awaiting = await notAwaitingOwner(session, sharers, deps);
   const diff = await diffComplete(target, config, deps);

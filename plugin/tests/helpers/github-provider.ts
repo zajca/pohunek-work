@@ -16,6 +16,7 @@ const CERTIFICATE_DAYS = "1";
 const STARTED_LABEL = "in-progress";
 /** `rateLimit.remaining` every answer reports; well above anything the plugin warns about. */
 const RATE_LIMIT_REMAINING = 4900;
+const MS_PER_SECOND = 1000;
 
 /**
  * Project file of a GitHub-issue project whose issues are started by `STARTED_LABEL`. The branch pattern
@@ -25,6 +26,7 @@ export const GITHUB_ISSUE_PROJECT = `[project]
 pohunek_label = "widgets"
 repo = "acme/widgets"
 reviews = "session"
+review_bot = "none"
 issue_source = "github"
 issue_signal = "labels"
 started_labels = [${JSON.stringify(STARTED_LABEL)}]
@@ -43,6 +45,26 @@ export interface GithubIssue {
   readonly body: string;
 }
 
+/**
+ * An open pull request of the owner that conflicts with its base and has no checks, reviews or threads. The
+ * authored search returns every pull request of the fixture, so each one needs its own number.
+ */
+export interface GithubPullRequest {
+  readonly number: number;
+  readonly title: string;
+  /** Head branch; the project's branch pattern decides whether the pull request joins an issue. */
+  readonly headRefName: string;
+  /** Login of the author, the owner of the configured identity. */
+  readonly authorLogin: string;
+  /** ISO-8601 times and sizes GitHub reports for the pull request. */
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly baseRefName: string;
+}
+
 export interface GithubProvider {
   /** `[github] endpoint` of the server. */
   readonly endpoint: string;
@@ -54,11 +76,67 @@ export interface GithubProvider {
   readonly issueUrl: string;
   /** GraphQL operations the server had no answer for. */
   readonly unexpectedOperations: readonly string[];
+  /** Requests received per GraphQL operation name, counted when the request arrives. */
+  readonly requests: Readonly<Record<string, number>>;
+  /**
+   * Answers every later request with a rate-limit error that names `resetAtMs` (GitHub's GraphQL limit
+   * arrives as HTTP 200 with a `RATE_LIMITED` error and `x-ratelimit-*` headers); null answers normally again.
+   */
+  setRateLimit(resetAtMs: number | null): void;
+  /** Holds every later answer back by `ms`, so concurrent plugin processes overlap in the server. */
+  setDelay(ms: number): void;
+  /** Answers HTTP 503 to the named GraphQL operation (null for none), as a failing source does. */
+  setFailingOperation(operation: string | null): void;
+  /**
+   * Answers every later request with HTTP 403 and GitHub's secondary-limit message and documentation link, and no
+   * rate-limit headers: the documented shape of a secondary limit that names no reset.
+   */
+  setSecondaryLimit(enabled: boolean): void;
+  /** File of the `gh` invocations, one argument line each; the token script records them. */
+  readonly ghCallLog: string;
   stop(): Promise<void>;
 }
 
-/** Answers the plugin's queries for one open, started issue without a pull request. */
-function graphqlData(issue: GithubIssue, url: string, operation: string, variables: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+/** The pull request node of the GraphQL schema, with every connection the plugin selects empty. */
+function pullRequestNode(repo: string, pullRequest: GithubPullRequest): Record<string, unknown> {
+  const pageInfo = { hasNextPage: false, endCursor: "end" };
+  const empty = { nodes: [], pageInfo };
+  return {
+    id: `PR_node_${String(pullRequest.number)}`,
+    number: pullRequest.number,
+    url: `https://github.example/${repo}/pull/${String(pullRequest.number)}`,
+    title: pullRequest.title,
+    isDraft: false,
+    isCrossRepository: false,
+    headRefName: pullRequest.headRefName,
+    headRefOid: "a".repeat(40),
+    baseRefName: pullRequest.baseRefName,
+    reviewDecision: null,
+    mergeable: "CONFLICTING",
+    createdAt: pullRequest.createdAt,
+    updatedAt: pullRequest.updatedAt,
+    additions: pullRequest.additions,
+    deletions: pullRequest.deletions,
+    changedFiles: pullRequest.changedFiles,
+    repository: { nameWithOwner: repo },
+    author: { __typename: "User", login: pullRequest.authorLogin },
+    reviews: empty,
+    reviewThreads: empty,
+    timelineItems: empty,
+    reviewRequests: empty,
+    closingIssuesReferences: empty,
+    commits: { nodes: [{ commit: { id: "C_head", statusCheckRollup: { contexts: empty } } }] },
+  };
+}
+
+/** Answers the plugin's queries for one open, started issue and for the pull requests of the owner. */
+function graphqlData(
+  issue: GithubIssue,
+  url: string,
+  pullRequests: readonly GithubPullRequest[],
+  operation: string,
+  variables: Readonly<Record<string, unknown>>,
+): Record<string, unknown> | null {
   const rateLimit = { remaining: RATE_LIMIT_REMAINING };
   const pageInfo = { hasNextPage: false, endCursor: "end" };
   const empty = { issueCount: 0, pageInfo, nodes: [] };
@@ -66,7 +144,12 @@ function graphqlData(issue: GithubIssue, url: string, operation: string, variabl
     case "PohunekWorkPullRequests": {
       const searches = Object.keys(variables)
         .filter((name) => name.startsWith("q_"))
-        .map((name) => [name.slice(2), empty] as const);
+        .map((name): [string, unknown] => {
+          const alias = name.slice(2);
+          if (alias !== "authored") return [alias, empty];
+          const nodes = pullRequests.map((pullRequest) => pullRequestNode(issue.repo, pullRequest));
+          return [alias, { issueCount: nodes.length, pageInfo, nodes }];
+        });
       return { rateLimit, ...Object.fromEntries(searches) };
     }
     case "PohunekWorkMergedPullRequests":
@@ -96,7 +179,11 @@ function graphqlData(issue: GithubIssue, url: string, operation: string, variabl
 }
 
 /** Starts the server and writes the certificate and the `gh` script below `dir`, which is created with mode 0700. */
-export async function startGithubProvider(dir: string, issue: GithubIssue): Promise<GithubProvider> {
+export async function startGithubProvider(
+  dir: string,
+  issue: GithubIssue,
+  pullRequests: readonly GithubPullRequest[] = [],
+): Promise<GithubProvider> {
   const openssl = Bun.which("openssl");
   if (openssl === null) throw new Error("openssl is not on PATH; the local GitHub server needs a self-signed certificate");
   await mkdir(dir, { mode: 0o700 });
@@ -112,11 +199,21 @@ export async function startGithubProvider(dir: string, issue: GithubIssue): Prom
   );
   if (generated.exitCode !== 0) throw new Error(`openssl failed (${String(generated.exitCode)}): ${generated.stderr}`);
   const ghBin = join(dir, "gh");
-  await writeFile(ghBin, `#!/bin/sh\necho ${TOKEN}\n`);
+  const ghCallLog = join(dir, "gh-calls.log");
+  await writeFile(ghBin, `#!/bin/sh\necho "$*" >> '${ghCallLog}'\necho ${TOKEN}\n`);
   await chmod(ghBin, 0o755);
 
   const issueUrl = `https://github.example/${issue.repo}/issues/${String(issue.number)}`;
   const unexpectedOperations: string[] = [];
+  const requests: Record<string, number> = {};
+  let rateLimitResetMs: number | null = null;
+  let delayMs = 0;
+  let failingOperation: string | null = null;
+  let secondaryLimit = false;
+  const SECONDARY_LIMIT_BODY = {
+    message: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+    documentation_url: "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits",
+  };
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -124,7 +221,18 @@ export async function startGithubProvider(dir: string, issue: GithubIssue): Prom
     async fetch(request) {
       const body = (await request.json()) as { query: string; variables: Record<string, unknown> };
       const operation = /query\s+(\w+)/.exec(body.query)?.[1] ?? "";
-      const data = graphqlData(issue, issueUrl, operation, body.variables);
+      requests[operation] = (requests[operation] ?? 0) + 1;
+      if (delayMs > 0) await Bun.sleep(delayMs);
+      if (secondaryLimit) return Response.json(SECONDARY_LIMIT_BODY, { status: 403 });
+      if (operation === failingOperation) return new Response("unavailable", { status: 503 });
+      if (rateLimitResetMs !== null) {
+        const reset = Math.ceil(rateLimitResetMs / MS_PER_SECOND).toString();
+        return Response.json(
+          { data: null, errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] },
+          { headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset } },
+        );
+      }
+      const data = graphqlData(issue, issueUrl, pullRequests, operation, body.variables);
       if (data === null) {
         unexpectedOperations.push(operation);
         return Response.json({ errors: [{ message: `unexpected operation ${operation}` }] });
@@ -138,6 +246,20 @@ export async function startGithubProvider(dir: string, issue: GithubIssue): Prom
     caFile,
     issueUrl,
     unexpectedOperations,
+    requests,
+    setRateLimit(resetAtMs: number | null): void {
+      rateLimitResetMs = resetAtMs;
+    },
+    setDelay(ms: number): void {
+      delayMs = ms;
+    },
+    setFailingOperation(operation: string | null): void {
+      failingOperation = operation;
+    },
+    setSecondaryLimit(enabled: boolean): void {
+      secondaryLimit = enabled;
+    },
+    ghCallLog,
     async stop() {
       await server.stop(true);
     },

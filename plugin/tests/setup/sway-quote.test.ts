@@ -60,9 +60,12 @@ test("the generated switcher command line runs the installed script from every n
     const dir = join(root, `${String(index)} ${name}`);
     const out = await recorder(dir, "pohunek-rofi");
     await recorder(dir, "pohunek-rofi-issue");
+    const newSession = await recorder(dir, "pohunek-new-session");
     const snippet = buildSwaySnippet(pathsIn(dir), { keybind: "$mod+p", issueKeybind: "$mod+i", issueProject: null, issueSource: null });
     expect(await run(execText(snippet, "$mod+p"))).toBe(0);
     expect((await readFile(out, "utf8")).split("\n").slice(0, 2)).toEqual([join(dir, "pohunek-rofi"), "0"]);
+    expect(await run(execText(snippet, "$mod+n"))).toBe(0);
+    expect((await readFile(newSession, "utf8")).split("\n").slice(0, 2)).toEqual([join(dir, "pohunek-new-session"), "0"]);
   }
 });
 

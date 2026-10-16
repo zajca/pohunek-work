@@ -10,12 +10,13 @@ import implementGithub from "../../prompts/work-implement-github.tmpl" with { ty
 import implement from "../../prompts/work-implement.tmpl" with { type: "text" };
 import manager from "../../prompts/work-manager.tmpl" with { type: "text" };
 import rebase from "../../prompts/work-rebase.tmpl" with { type: "text" };
+import rebaseReview from "../../prompts/work-rebase-review.tmpl" with { type: "text" };
 import review from "../../prompts/work-review.tmpl" with { type: "text" };
 
 const FENCE_HASH_LENGTH = 16;
 const PLACEHOLDER = /\$\{([a-z_]+)\}/g;
 
-export type PromptName = "work-adopt-head-check" | "work-implement" | "work-implement-github" | "work-babysit" | "work-fix-ci" | "work-rebase" | "work-review" | "work-manager";
+export type PromptName = "work-adopt-head-check" | "work-implement" | "work-implement-github" | "work-babysit" | "work-fix-ci" | "work-rebase" | "work-rebase-review" | "work-review" | "work-manager";
 
 /** Templates are bundled into the program text, so a compiled binary needs no files beside it. */
 const TEMPLATES: Readonly<Record<PromptName, string>> = {
@@ -25,6 +26,7 @@ const TEMPLATES: Readonly<Record<PromptName, string>> = {
   "work-babysit": babysit,
   "work-fix-ci": fixCi,
   "work-rebase": rebase,
+  "work-rebase-review": rebaseReview,
   "work-review": review,
   "work-manager": manager,
 };

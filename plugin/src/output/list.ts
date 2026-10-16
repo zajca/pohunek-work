@@ -6,6 +6,7 @@ import { isIssueRowOf } from "../config/row-key.ts";
 import { isLiveSession, worktreeOf } from "../sources/pohunek.ts";
 import { adoptRefusal } from "../actions/adopt.ts";
 import { isRecentlyFinished } from "./finished.ts";
+import { daysBetween } from "./stale.ts";
 import { toAscii } from "./sanitize.ts";
 import { sessionLabel } from "./session-label.ts";
 import type { IdentityConfig, ProfilesConfig, ProjectConfig } from "../types/config.ts";
@@ -16,9 +17,9 @@ import {
   type ListEnvelope,
   type ListError,
   type ListItem,
-  type ListPayload,
+  type ListOutputPayload,
   type ListProjectStatus,
-  type ListPullRequest,
+  type ListPullRequestDetails,
   type OnTurn,
   type OrphanedSession,
   type SourceStatuses,
@@ -35,6 +36,8 @@ export interface RowContext {
   readonly profiles: ProfilesConfig;
   /** Every session pohunek knows, linked or not: an unlinked session may hold a pull request's head branch. */
   readonly sessions: readonly PohunekSession[];
+  /** Instant the sources were read; ages of pull requests are measured at it. */
+  readonly nowMs: number;
 }
 
 /**
@@ -105,7 +108,7 @@ export function rowActions(item: WorkItem, onTurn: OnTurn, context: Pick<RowCont
 export function buildListItem(item: WorkItem, context: RowContext): ListItem {
   const { onTurn, progress } = evaluateOnTurn({ item, ...context });
   const pr = item.pullRequest;
-  const pullRequest: ListPullRequest | null =
+  const pullRequest: ListPullRequestDetails | null =
     pr === null
       ? null
       : {
@@ -120,6 +123,11 @@ export function buildListItem(item: WorkItem, context: RowContext): ListItem {
           fix_delivered: progress?.fixDelivered ?? null,
           threads_answered: progress?.threadsAnswered ?? null,
           rerequested: progress?.rerequested ?? null,
+          created_at: pr.createdAt,
+          base_branch: pr.baseRefName,
+          size: { additions: pr.additions, deletions: pr.deletions, changed_files: pr.changedFiles },
+          age_days: daysBetween(context.nowMs, pr.createdAt),
+          idle_days: daysBetween(context.nowMs, pr.updatedAt),
         };
   const issue = item.issue;
   return {
@@ -155,20 +163,29 @@ export function filterMine(items: readonly ListItem[], finishedCutoffMs: number 
   );
 }
 
+/** What `list` reports besides the rows: the hidden-row counts and the instant the sources were read. */
+export interface ListReport {
+  readonly omittedIgnored: number;
+  readonly omittedStale: number;
+  readonly readAtMs: number;
+}
+
 export function buildListEnvelope(
   cliVersion: string,
   items: readonly ListItem[],
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
   projects: readonly ListProjectStatus[],
-  omittedIgnored: number,
+  report: ListReport,
 ): ListEnvelope {
-  const ok: ListPayload = {
+  const ok: ListOutputPayload = {
     items,
     orphaned_sessions: orphanedSessions,
     unlinked_sessions: unlinkedSessions,
     projects,
-    omitted_ignored: omittedIgnored,
+    omitted_ignored: report.omittedIgnored,
+    omitted_stale: report.omittedStale,
+    read_at: new Date(report.readAtMs).toISOString(),
   };
   return {
     cli_version: cliVersion,
@@ -213,6 +230,7 @@ export function renderTable(
   orphanedSessions: readonly OrphanedSession[],
   unlinkedSessions: readonly UnlinkedSession[],
   omittedIgnored: number,
+  omittedStale: number,
 ): string {
   const rows = items.map((item) => {
     const pr = item.pull_request;
@@ -244,6 +262,7 @@ export function renderTable(
       ),
     );
   }
+  if (omittedStale > 0) lines.push(`${omittedStale.toString()} stale row(s) hidden (--stale-days)`);
   if (omittedIgnored > 0) lines.push(`${omittedIgnored.toString()} ignored row(s) hidden (use --include-ignored)`);
   return lines.join("\n");
 }

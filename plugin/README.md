@@ -30,6 +30,14 @@ review is requested from the owner is on the agent's turn (`external review`,
 rule 3), offers no `review` action, is not notified by `watch`, and
 `do <key> review` refuses with `not_supported`.
 
+Each project file also sets the required key `review_bot`: the GitHub login of the
+review bot (letters, digits and hyphens, for example `copilot-pull-request-reviewer`)
+or `none`. After `do <key> rebase` force-pushes a new head, the rebase session asks
+that bot to review the head again through the GraphQL mutation `requestReviewsByLogin`
+and checks the request in `reviewRequests`, because REST `requested_reviewers` lists
+users only; the session's summary says whether the request was confirmed. With `none`
+the prompt asks for no review. A value that is neither stops every command with the key named.
+
 A project file may set the optional table `[teardown]` with the required keys `argv`
 (an array whose first element is an absolute program path; no shell, no placeholders) and
 `timeout_ms` (positive integer). `do <key> cleanup` runs that command in the session worktree
@@ -45,6 +53,15 @@ JSON `omitted_ignored` counts the hidden rows that `--mine`, `--finished-hours`,
 `--stale-days` and `--project` would have listed (0 with the flag). `do <key> <action>` on an
 ignored row fails with `precondition_failed` unless `--include-ignored` is
 passed, also with `--dry-run`.
+
+A pull request row of `list --json` carries, besides its state, `created_at`,
+`base_branch`, `size` (`additions`, `deletions`, `changed_files`), `age_days` (days
+since `created_at`) and `idle_days` (days since `updated_at`). Both ages are fractional
+days measured at the payload's top-level `read_at` (ISO 8601, the instant the sources
+were read), on the same clock `--stale-days N` uses: that flag removes a row when
+`idle_days > N`, unless a session of the row is running: such a row is always kept and
+not counted. The payload's `omitted_stale` counts the rows the flag removed (0 without
+it), next to `omitted_ignored`; the table prints the count as well.
 
 Each session of a `list --json` row carries `indicator` (`waiting_input` when a
 blocked notification of the session is open, `lost`, `running`, or the raw state
@@ -77,6 +94,32 @@ stays manual),
 and a path toward a managing agent that runs those actions for the owner under
 an explicit policy.
 
+## Shared GitHub and Linear cache
+
+Every `list`, `watch` and TUI refresh reads the GitHub and Linear sources through
+one cache in the state directory (`cache/cache.sqlite`, SQLite in WAL mode, file
+mode 0600). The store holds provider data and keys only. Each key holds an offline
+identity of the credential the source reads locally (the GitHub token of `gh auth
+token`, the Linear API key of the keyring): an HMAC under a random salt kept in
+`cache/identity.salt` (mode 0600). No provider is asked for it, so a provider outage
+still serves a cached result, and a changed credential is a cache miss. A result read from the
+provider is served to all local processes for `[cache] max_age_secs`; a caller that
+arrives while a fetch is in flight takes that fetch's outcome instead of asking again.
+`list --refresh` (the TUI `r` key) bypasses the max age and joins a fetch in flight the
+same way.
+`do` refreshes before it acts, and refuses an action while any source of its project is
+stale or unavailable in that run: stale data is displayed, never acted on. A failed refresh
+shows the last good data with its source marked failed (`stale` in `freshness`); a rate-limit response stops every
+process from asking the provider until the reset time GitHub reports, or
+`[cache] fallback_backoff_secs` when it reports none. The required keys are
+`max_age_secs`, `lock_timeout_ms` (a fetch whose holder has not refreshed its
+heartbeat for this long, or whose holder process is gone, may be taken over; a live
+holder refreshes its heartbeat every `lock_poll_ms`, so a slow fetch is never taken over), `lock_poll_ms`
+(below `lock_timeout_ms`), `fallback_backoff_secs` and `busy_timeout_ms` (how long a
+process waits for another one's write on the cache database). The `list
+--json` envelope carries the per-source `freshness` (fetch instant, stale, retry
+instant). The field is additive, so the list contract stays at version 4.
+
 ## Status
 
 M0 and M1 are merged: `pohunek-work list` and `doctor`. `list --project <label>`
@@ -85,10 +128,70 @@ restricts the listing to that pohunek project label and repeats to select severa
 stderr). M2a and M2b are in
 progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 
-- `pohunek-work tui` opens the current full-screen work-item view in a terminal.
-  It lists items from the plugin's public CLI output and hands actions to
-  `pohunek-work do`. Session, host and activity views and a standalone new-session
-  dialog are not available yet;
+- `pohunek-work tui` opens the full-screen Ink interface. Work lists items from
+  the plugin's public CLI output and hands actions to `pohunek-work do`.
+  Sessions, Hosts and Activity use public `pohunek --json` commands. Press
+  `1`–`4`, Tab or Shift-Tab, or click a tab to switch views; arrows never switch views. Up/down arrows select a row;
+  a click selects a row; Enter or a double click (two presses on the same row within `double_click_ms`) opens it,
+  and Esc returns to the list. In Sessions, Enter or a double click attaches the highlighted session when
+  its side panel is visible (at or above `detail_min_width`) and opens its detail otherwise. Opening a
+  Work item shows its next action and available choices before anything runs;
+  click an action or select it with arrows and press Enter to preview its plan,
+  then choose Run to execute it. Opening a notification keeps
+  its message visible and offers an explicit Open session action. Use the wheel
+  to move through lists and click labeled actions in each detail. Press `?` for
+  the available keys. The Work view supports
+  `m` (mine/all), `f` (actor), `P` (project) and `h` (hide stale pull requests).
+  Tab and Shift-Tab cycle the views; 1–4 jump to one. ←/→ never switch views: they move the cursor in a text field and do the view's own horizontal movement (Sessions sections, Activity scope), and do nothing elsewhere. The Sessions
+  view lists sections (Needs you, Running, Ready, Unavailable) with their counts.
+  At or above `detail_min_width` columns the highlighted session's flat panel sits
+  beside the list and follows the selection (PgUp/PgDn or the wheel scroll the part below its head);
+  below that width Enter or a double click opens the same panel full screen and Esc returns. `←`/`→` or `[`/`]`
+  jump between sections, `o` attaches, `x` stops and `D` removes the
+  highlighted session after an inline confirmation that names it (a remove names
+  its worktree too), `u` opens its folder, `g` its branch on GitHub (from the project's GitHub
+  origin; the status says so when there is none), `b` copies the branch and `c` the path.
+  The panel's head holds a Links block: one numbered line per known link of the session (its
+  GitHub pull request and issue from the Work join, its core work link, its branch page on GitHub), each
+  clickable: a click on its line opens it. `l` opens the only link directly; with several it opens a chooser
+  where `1`–`9` or the arrows and Enter pick a link and Esc closes it. Every link goes through the `open_url_hosts` allowlist: a link on another host is refused in the
+  status line and nothing is run. A session with no core work link and no Work item shows none; the branch line is
+  omitted when the project's origin is not a GitHub repository. Session actions through the SDK are stop, remove, resume,
+  rename, metadata and fork; notifications are read, acknowledged and archived
+  through the SDK too. Fork and resume ask for confirmation after the session is
+  inspected again. Resume, fork and
+  attach to a stopped session first show the native conversation the core will
+  recover (ID or path, last native activity, or Unknown) and wait for `y`; an
+  ambiguous reference is refused before the confirmation and a core refusal is
+  shown without starting a worker. Activity has
+  Recent, Unread and Archived scopes.
+
+  Key model, the same in this README, `?` and every footer: `/` filters the
+  current list (Work, Sessions, Hosts, Activity) and the project picker `P`
+  filters the projects. The query is a fuzzy subsequence matched by one shared
+  matcher (`src/tui/search.ts`, the fzf ranking: letters in order, case-insensitive,
+  consecutive and word-start matches first). While the filter is typed every key is
+  text, so `x`, `D` and `1`–`4` do not act; Enter keeps the filter, Esc clears it, and
+  the header shows the query with its match count. In the forms the same query
+  narrows a pick field (see below). Partial host failures are shown in the
+  interface and block writes on affected hosts;
+- `pohunek-work new-session` opens the session form alone. With `attach_mode = "inline"` (or `--attach inline`)
+  it attaches in the same terminal; with `window` (or `--attach window`) it opens the session in a new window,
+  prints `opened <id> in a new window` and exits. In the main TUI, `n` opens that form and `a` in Sessions opens
+  the Assistant form. ↑/↓ and Tab move between fields: ↑/↓ stop at the first and
+  last field, Tab wraps, and the Assistant's disabled Request row is skipped. In a
+  pick field (Host, Project, Agent, Action/template or, in the Assistant, Intent)
+  typing narrows its choices with the query and the match count is shown; Backspace
+  edits the query; ←/→ move the highlight through the matches and pick it; Enter picks
+  the highlighted match, clears the query and moves to the next field; with no match
+  the form shows a status and keeps the field; Esc clears the query first. Clicking a
+  visible choice selects it, and the wheel browses longer lists. Text fields keep
+  their text input, and ←/→ never change a pick field from a text field. Click Create and attach or focus it and
+  press Enter. The Assistant
+  currently supports intent-only launch: the core CLI exposes a free-form
+  request only as a process argument, so the form does not send private request
+  text through it. Esc cancels before creation; after creation, Enter retries
+  attach without creating another session;
 - `pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--dry-run]`
   launches a linked session; `implement` also launches a `github-issue:` row: the
   branch is `<branch_prefix>/<issue_number_prefix><n>/<slug>` (the project's
@@ -144,7 +247,8 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   `pohunek-work doctor` reports the launcher requirements (rofi, swaymsg,
   python3, terminal, installed scripts, sway include, and `pohunek_work_bin` for a
   GitHub issue project) as advisory `warn` lines
-  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md));
+  (see [launchers/docs/launcher.md](../launchers/docs/launcher.md)), and
+  `doctor --json` prints the same checks and the exit code as one JSON envelope;
 - `pohunek-work do <key> merge` is refused (`not_supported`): merging stays
   manual.
 - `pohunek-work watch [--project <label>]...` (repeat `--project` to watch several
@@ -200,6 +304,56 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
 Every action plans from fresh data and refuses with a typed code when its rule
 no longer holds; every write action asks for confirmation unless `--yes` is
 given.
+
+## Terminal setup
+
+The required `[tui]` table in `config.toml` controls `self_bin`, refresh and
+list timeouts, initial Work view, stale pull-request days, URL opener and allowed
+hosts. Its TUI keys are all required, with no built-in fallbacks:
+`refresh_interval_secs` (Work list), `session_reconcile_secs` (session and
+notification reconcile), `reconnect_max_secs` (cap of the retry backoff after the
+daemon event stream drops; while it is down the session list shows the last
+sessions with a "reconnecting to the daemon" error and commands fail as
+unavailable), `detail_min_width` (columns from which the session detail
+sits beside the list; narrower terminals show it full screen) and
+`action_capture_bytes` (output limit of a captured action child), `double_click_ms`
+(longest gap between two presses on one list row that counts as a double click;
+a single click only selects), `output_wait_ms`
+(longest wait of one live output read at the end of a session's output) and
+`output_max_bytes` (bytes of a session's output requested per live read),
+`attach_mode` (`"inline"` attaches in this terminal; `"window"` opens the session
+in a terminal window started by `attach_command`). Window mode also requires
+`attach_launch_check_ms`: a terminal that exits within that many milliseconds is
+a failed launch, reported with its exit status; one that keeps running counts as
+opened, and the TUI does not wait for it. The terminal runs with null stdio. Inline mode
+rejects both window keys. `attach_command` is an argv template, split with POSIX
+quoting and run without a shell: the program word must be an absolute path, and
+`{bin}` (the `pohunek` CLI), `{host}` and `{id}` (the session) each fill exactly one
+argument; `$VAR`, `~` and globs stay literal, and `{id}` must appear. The owner's
+native line works unchanged:
+`attach_command = "/usr/bin/alacritty -e {bin} --host={host} attach -- {id}"`.
+`pohunek-work tui --attach inline|window` and `new-session --attach` override the mode
+for one run; `--attach window` without `attach_command` fails at startup. A new-session
+in window mode exits once its session is open in a window and prints
+`opened <id> in a new window`. On macOS
+window mode needs a terminal that takes a command as arguments (kitty, alacritty,
+wezterm, ghostty); Terminal.app is not supported yet. Layout sizes
+(compact and full tab rows, reserved rows, visible choices, scroll steps) are not
+configured: they derive from the rendered chrome and the terminal size. `clipboard_command` is optional and must be an absolute executable
+path; without it, the TUI displays branch and path text for manual selection.
+The new session form calls the public core CLI with prompt text on stdin. Core
+and the plugin binary must be installed separately. The plugin depends on the
+`@pohunek/protocol` and `@pohunek/sdk` tarballs of its core release
+(`plugin/core-release.json`); `packaging/core-pin` fails when they name another
+release. The plugin release archive
+starts with `bun plugin/pohunek-work.js`.
+
+On Sway, `pohunek-work setup sway` installs `$mod+n` for the standalone form
+through `pohunek-new-session`, using `terminal` and `pohunek_work_bin` from
+`launcher.conf`. Change the binding with `--new-session-keybind`. Run
+`pohunek-work setup scripts --force` after an upgrade to install the launcher.
+See [the launcher guide](../launchers/docs/launcher.md) and
+[the native-to-TUI plan](docs/native-to-tui-plan.md) for the interaction model.
 
 ## Design principles
 

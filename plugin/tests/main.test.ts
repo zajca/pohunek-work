@@ -157,6 +157,7 @@ test("setup rejects unknown steps and options that do not apply", async () => {
     ["setup", "scripts", "extra"],
     ["setup", "scripts", "--print"],
     ["setup", "config", "--keybind", "$mod+x"],
+    ["setup", "config", "--new-session-keybind", "$mod+x"],
     ["setup", "sway", "--print", "--force"],
     ["setup", "scripts", "--issue-project", "ui"],
     ["setup", "sway", "--issue-keybind", "$mod+g"],
@@ -171,6 +172,14 @@ test("setup rejects unknown steps and options that do not apply", async () => {
     expect(result.code).toBe(2);
     expect(result.err).toContain("usage:");
   }
+});
+
+test("setup sway prints a custom standalone session binding", async () => {
+  const dir = await tempDir();
+  const result = await run(["setup", "sway", "--print", "--new-session-keybind", "$mod+Shift+n"], dir);
+  expect(result.code).toBe(0);
+  expect(result.out).toContain("bindsym $mod+Shift+n exec exec ");
+  expect(result.out).toContain("pohunek-new-session");
 });
 
 test("setup installs into the XDG locations and reports JSON on stdout", async () => {
@@ -218,6 +227,25 @@ test("--include-ignored is accepted by list and do (parsing passes, the missing 
     const envelope = JSON.parse(result.out) as { err: { class: string } };
     expect(envelope.err.class).toBe("configuration");
   }
+});
+
+test("doctor takes only --json: any other argument is a usage error, an envelope of the doctor contract under --json", async () => {
+  const dir = await tempDir();
+  for (const args of [["doctor", "--json", "--bogus"], ["doctor", "extra", "--json"]]) {
+    const result = await run(args, dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toBe("");
+    const envelope = JSON.parse(result.out) as { protocol: { minimum: number; maximum: number }; err: { class: string; code: string; msg: string } };
+    expect(envelope.protocol).toEqual({ minimum: 1, maximum: 1 });
+    expect(envelope.err.class).toBe("usage");
+    expect(envelope.err.code).toBe("usage");
+    expect(envelope.err.msg).toContain("doctor takes only --json");
+    expect(envelope.err.msg).toContain("pohunek-work doctor [--json]");
+  }
+  const text = await run(["doctor", "--bogus"], dir);
+  expect(text.code).toBe(2);
+  expect(text.out).toBe("");
+  expect(text.err).toContain("doctor takes only --json: --bogus");
 });
 
 test("--include-ignored is a usage error for commands that do not take it", async () => {

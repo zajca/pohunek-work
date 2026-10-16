@@ -3,7 +3,7 @@
 // XDG locations. Local filesystem writes only; nothing here talks to pohunek.
 import { installConfig, installScripts, installSway, type ConfigResult, type FileResult, type ScriptsResult, type SwayResult } from "../setup/install.ts";
 import { resolveSetupPaths, type SetupPaths } from "../setup/paths.ts";
-import { DEFAULT_SWAY_ISSUE_KEYBIND, DEFAULT_SWAY_KEYBIND, SETUP_CONTRACT_VERSION, SWAY_DROPIN_DIR, type IssuePickerSource } from "../setup/settings.ts";
+import { DEFAULT_SWAY_ISSUE_KEYBIND, DEFAULT_SWAY_KEYBIND, DEFAULT_SWAY_NEW_SESSION_KEYBIND, SETUP_CONTRACT_VERSION, SWAY_DROPIN_DIR, type IssuePickerSource } from "../setup/settings.ts";
 
 export const SETUP_STEPS = ["all", "scripts", "config", "sway"] as const;
 export type SetupStep = (typeof SETUP_STEPS)[number];
@@ -14,6 +14,7 @@ export interface SetupOptions {
   /** `sway` only: print the drop-in instead of writing it. */
   readonly print: boolean;
   readonly keybind: string;
+  readonly newSessionKeybind?: string;
   readonly issueKeybind: string;
   /** `sway` only: bind the issue picker for this project; without it no issue binding is generated. */
   readonly issueProject: string | null;
@@ -44,7 +45,7 @@ interface SwaySkipped {
 }
 
 /** Keybinds the options default to; one source for the command line and the full setup. */
-export const DEFAULT_KEYBINDS = { keybind: DEFAULT_SWAY_KEYBIND, issueKeybind: DEFAULT_SWAY_ISSUE_KEYBIND } as const;
+export const DEFAULT_KEYBINDS = { keybind: DEFAULT_SWAY_KEYBIND, newSessionKeybind: DEFAULT_SWAY_NEW_SESSION_KEYBIND, issueKeybind: DEFAULT_SWAY_ISSUE_KEYBIND } as const;
 
 const SCRIPTS_SKIPPED_REASON =
   "the rofi launcher scripts need rofi and sway, which are Linux capabilities; run 'pohunek-work setup scripts' to install them anyway";
@@ -122,7 +123,7 @@ function nextSteps(platform: NodeJS.Platform, paths: SetupPaths): string[] {
     "Pass a project id/label to launchers, for example `pohunek-launch-issue <project> <issue-id> [action]` for Linear issues.",
     `Bind the issue picker with \`pohunek-work setup sway --force --issue-project <project> --issue-source <linear|github>\` (${DEFAULT_SWAY_ISSUE_KEYBIND} by default); it needs a project and the project's issue source.`,
     `Ensure your sway config has: include ${paths.swayConfigDir}/${SWAY_DROPIN_DIR}/*`,
-    `Reload sway (swaymsg reload): ${DEFAULT_SWAY_KEYBIND} opens the session switcher.`,
+    `Reload sway (swaymsg reload): ${DEFAULT_SWAY_KEYBIND} opens the session switcher and ${DEFAULT_SWAY_NEW_SESSION_KEYBIND} opens the new session form.`,
     "Run `pohunek-work doctor` to verify rofi, swaymsg, python3, the terminal and the installed scripts.",
   ];
 }

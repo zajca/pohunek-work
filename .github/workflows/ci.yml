@@ -160,7 +160,7 @@ jobs:
         if: ${{ matrix.render }}
         run: |
           set -euo pipefail
-          core_ref="$(../packaging/core-pin --web ../web/core-sdk.json --plugin ../plugin/core-release.json --ci-workflow ../.github/workflows/ci.yml | sed -n 's/^core_ref=//p')"
+          core_ref="$(../packaging/core-pin --web ../web/core-sdk.json --plugin ../plugin/core-release.json --plugin-package ../plugin/package.json --ci-workflow ../.github/workflows/ci.yml | sed -n 's/^core_ref=//p')"
           if [[ "$core_ref" == v* && "$POHUNEK_RELEASE" != "$core_ref" ]]; then
             echo "::error::launcher release $POHUNEK_RELEASE differs from core pin $core_ref"
             exit 1

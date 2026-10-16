@@ -6,6 +6,7 @@ import libSh from "../../../launchers/lib.sh" with { type: "text" };
 import pohunekLaunchIssue from "../../../launchers/pohunek-launch-issue" with { type: "text" };
 import pohunekLaunchPr from "../../../launchers/pohunek-launch-pr" with { type: "text" };
 import pohunekRofi from "../../../launchers/pohunek-rofi" with { type: "text" };
+import pohunekNewSession from "../../../launchers/pohunek-new-session" with { type: "text" };
 import pohunekRofiIssue from "../../../launchers/pohunek-rofi-issue" with { type: "text" };
 import launcherConf from "../../../launchers/templates/launcher.conf" with { type: "text" };
 import issueTemplate from "../../../launchers/templates/prompts/issue.tmpl" with { type: "text" };
@@ -23,6 +24,7 @@ export interface Asset {
 export const SCRIPT_ASSETS: readonly Asset[] = [
   { name: "lib.sh", body: libSh },
   { name: "pohunek-rofi", body: pohunekRofi },
+  { name: "pohunek-new-session", body: pohunekNewSession },
   { name: "pohunek-launch-issue", body: pohunekLaunchIssue },
   { name: "pohunek-rofi-issue", body: pohunekRofiIssue },
   { name: "pohunek-launch-pr", body: pohunekLaunchPr },
@@ -39,6 +41,7 @@ export interface SwayDropinValues {
   /** Quoted command words of the session switcher. */
   readonly launcher: string;
   readonly keybind: string;
+  readonly newSession: { readonly keybind: string; readonly launcher: string };
   /** The issue picker binding; null leaves it out. */
   readonly issue?: {
     readonly keybind: string;
@@ -73,5 +76,5 @@ export function renderSwayDropin(values: SwayDropinValues): string {
           project: values.issue.project,
           source: values.issue.source,
         });
-  return fill(swayDropinTemplate, { keybind: values.keybind, launcher: values.launcher, issue_binding: issueBinding });
+  return fill(swayDropinTemplate, { keybind: values.keybind, launcher: values.launcher, new_session_keybind: values.newSession.keybind, new_session_launcher: values.newSession.launcher, issue_binding: issueBinding });
 }

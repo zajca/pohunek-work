@@ -30,6 +30,7 @@ LAUNCHER_FILES = (
     "pohunek-launch-pr",
     "pohunek-rofi",
     "pohunek-rofi-issue",
+    "pohunek-new-session",
     "templates/launcher.conf",
     "templates/sway-dropin.conf.tmpl",
     "templates/prompts/issue.tmpl",
@@ -45,6 +46,7 @@ PLUGIN_LAUNCHER_FILES = (
     "pohunek-launch-pr",
     "pohunek-rofi",
     "pohunek-rofi-issue",
+    "pohunek-new-session",
     "templates/launcher.conf",
     "templates/sway-dropin.conf.tmpl",
     "templates/sway-issue-binding.conf.tmpl",
@@ -55,6 +57,7 @@ PLUGIN_FILES = (
     "plugin/package.json",
     "plugin/tsconfig.json",
     "plugin/README.md",
+    "plugin/pohunek-work.js",
     "plugin/src/main.ts",
     "plugin/src/setup/assets.ts",
     "plugin/prompts/work-review.tmpl",
@@ -136,6 +139,8 @@ def plugin_workspace(test):
     (ws.root / "plugin" / "bun.lock").write_text("x\n")
     (ws.root / "plugin" / "docs").mkdir()
     (ws.root / "plugin" / "docs" / "rfc.md").write_text("x\n")
+    (ws.root / "plugin" / "node_modules").mkdir()
+    (ws.root / "plugin" / "node_modules" / "excluded.js").write_text("x\n")
     return ws
 
 
@@ -179,6 +184,7 @@ class StageArchiveTest(unittest.TestCase):
         for member in LAUNCHER_FILES + ("README.md", "LICENSES/pohunek-core-MIT.txt"):
             self.assertTrue((staging / member).is_file(), member)
         self.assertTrue(os.access(staging / "pohunek-rofi", os.X_OK))
+        self.assertTrue(os.access(staging / "pohunek-new-session", os.X_OK))
         self.assertFalse((staging / "package.json").exists())
         self.assertFalse((staging / "tests").exists())
 
@@ -190,11 +196,21 @@ class StageArchiveTest(unittest.TestCase):
         members = PLUGIN_FILES + tuple(f"launchers/{m}" for m in PLUGIN_LAUNCHER_FILES)
         for member in members + ("README.md", "LICENSES/pohunek-core-MIT.txt"):
             self.assertTrue((staging / member).is_file(), member)
-        for absent in ("plugin/tests", "plugin/bun.lock", "plugin/docs", "launchers/docs", "packaging"):
+        self.assertTrue(os.access(staging / "launchers/pohunek-new-session", os.X_OK))
+        for absent in ("plugin/tests", "plugin/bun.lock", "plugin/docs", "plugin/node_modules", "launchers/docs", "packaging"):
             self.assertFalse((staging / absent).exists(), absent)
 
     def test_a_missing_plugin_input_is_refused(self):
         ws = plugin_workspace(self)
+        (ws.root / "plugin" / "pohunek-work.js").unlink()
+        result = run(
+            [PACKAGING / "stage-archive", "plugin", VERSION, "noarch", ws.root, ws.out],
+            cwd=ws.root,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("plugin/pohunek-work.js", result.stderr)
+        (ws.root / "plugin" / "pohunek-work.js").write_text("text\n")
         (ws.launchers / "templates" / "sway-issue-binding.conf.tmpl").unlink()
         result = run(
             [PACKAGING / "stage-archive", "plugin", VERSION, "noarch", ws.root, ws.out],
@@ -212,10 +228,10 @@ class StageArchiveTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_the_real_plugin_archive_resolves_every_relative_import(self):
-        out = Path(tempfile.mkdtemp(prefix="pohunek-plugin-stage-"))
-        self.addCleanup(shutil.rmtree, out, ignore_errors=True)
-        name = run([PACKAGING / "stage-archive", "plugin", VERSION, "noarch", ROOT, out], cwd=ROOT).stdout.strip()
-        staging = out / name
+        ws = plugin_workspace(self)
+        shutil.copytree(ROOT / "plugin" / "src", ws.root / "plugin" / "src", dirs_exist_ok=True)
+        shutil.copytree(ROOT / "plugin" / "prompts", ws.root / "plugin" / "prompts", dirs_exist_ok=True)
+        staging = ws.out / ws.stage("plugin", "noarch", ws.root)
         statement = re.compile(r"""(?:from|import\()\s*["'](\.{1,2}/[^"']+)["']""")
         checked = 0
         for source in sorted((ROOT / "plugin" / "src").rglob("*.ts")):
@@ -519,6 +535,7 @@ class MakeArchiveTest(unittest.TestCase):
         self.assertIn("target noarch\n", manifest)
         self.assertIn(f"core {CORE_REF}\n", manifest)
         self.assertIn(f"{name}/plugin/src/main.ts", names)
+        self.assertIn(f"{name}/plugin/pohunek-work.js", names)
         check = run(
             [PACKAGING / "check-archive", archive, "--component", "plugin", "--version", VERSION,
              "--target", "noarch", "--core", CORE_REF],

@@ -103,6 +103,8 @@ export interface PolicyConfig {
 export type ProfilesConfig = Readonly<Record<string, string>>;
 
 export type TuiInitialView = "mine" | "all";
+/** How `attach` opens a session: in this terminal, or in a window started by `attach_command`. */
+export type TuiAttachMode = "inline" | "window";
 
 export interface TuiConfig {
   /** Absolute path of the `pohunek-work` binary the TUI runs `list` and `do` with. */
@@ -120,13 +122,34 @@ export interface TuiConfig {
   readonly bellOnTransition: boolean;
   /** Absolute path of the URL opener (`o`). */
   readonly openCommand: string;
+  /** Optional executable that copies stdin to the clipboard. */
+  readonly clipboardCommand?: string;
   /** Hosts `o` may open; compared exactly against the URL host name. */
   readonly openUrlHosts: readonly string[];
   /** Child stderr lines kept for display. */
   readonly stderrMaxLines: number;
-  /** Columns below which the detail pane is shown full screen on Tab. */
+  /** Columns from which the session detail sits beside the list; narrower terminals show it full screen. */
   readonly detailMinWidth: number;
+  /** Interval of the full session and notification reconcile, in seconds. */
+  readonly sessionReconcileSecs: number;
+  /** Cap of the retry backoff after the daemon event subscription drops, in seconds. */
+  readonly reconnectMaxSecs: number;
+  /** Output limit of a captured action child, in bytes. */
+  readonly actionCaptureBytes: number;
+  /** Longest wait of one live output read at the end of a session's output, in milliseconds. */
+  readonly outputWaitMs: number;
+  /** Inline attaches in this terminal; window attaches in the terminal that `attachCommand` starts. */
+  readonly attachMode: TuiAttachMode;
+  /** Window mode: the terminal's argv template, split with POSIX quoting; placeholders are filled per attach. */
+  readonly attachCommand?: readonly string[];
+  /** Window mode: a terminal that exits within this many milliseconds is a failed launch. */
+  readonly attachLaunchCheckMs?: number;
+  /** Bytes of a session's retained output requested per live read. */
+  readonly outputMaxBytes: number;
+  /** Longest gap between two presses on one list row that still counts as a double click, in milliseconds. */
+  readonly doubleClickMs: number;
 }
+
 
 /** `pohunek-work manager start`: where the manager session runs and which agent it starts. */
 export interface ManagerConfig {
@@ -136,9 +159,24 @@ export interface ManagerConfig {
   readonly workdir: string;
 }
 
+/** The shared cache of GitHub and Linear source results in the state directory. */
+export interface CacheConfig {
+  /** A result read from the provider is served to every caller for this long without a new read. */
+  readonly maxAgeMs: number;
+  /** A lock its holder has not refreshed for this long is abandoned and taken over; a live holder refreshes it every `lockPollMs`. */
+  readonly lockTimeoutMs: number;
+  /** Pause between two checks of a lock by a waiter, and between two refreshes of a lock by its holder; below `lockTimeoutMs`. */
+  readonly lockPollMs: number;
+  /** Back-off after a rate-limit response that names no reset time. */
+  readonly fallbackBackoffMs: number;
+  /** How long a process waits for another process's write transaction on the cache database before it reports the cache busy. */
+  readonly busyTimeoutMs: number;
+}
+
 export interface GlobalConfig {
   readonly identity: IdentityConfig;
   readonly github: GithubConfig;
+  readonly cache: CacheConfig;
   /** Present only when the global file has a `[linear]` table; required whenever a project uses Linear. */
   readonly linear: LinearConfig | null;
   readonly pohunek: PohunekConfig;
@@ -220,6 +258,11 @@ export interface ProjectConfig {
   readonly policyChecks: readonly string[];
   /** GitHub logins of AI reviewer accounts; compared case-insensitively, `[bot]` suffix ignored. */
   readonly aiReviewers: readonly string[];
+  /**
+   * Login of the review bot that is asked again for a review after a force-push (rebase); null when the
+   * project file says `review_bot = "none"`, which turns the request off.
+   */
+  readonly reviewBot: string | null;
   /**
    * Label that parks a pull request or issue: rows carrying it are hidden from `list` and refused
    * by `do`. Compared case-insensitively. Null when the key is absent, which turns the feature off.

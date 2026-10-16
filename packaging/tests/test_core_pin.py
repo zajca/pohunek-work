@@ -78,15 +78,34 @@ class CorePinTest(unittest.TestCase):
         path.write_text(json.dumps(pin))
         return path
 
+    def sdk_package(self, release="v1.2.3", *, repo="zajca/pohunek", dependencies=None):
+        """A plugin package.json whose SDK dependencies are the tarballs of `release`."""
+        asset = f"{release[1:]}.tgz"
+        pins = dependencies if dependencies is not None else {
+            "@pohunek/protocol": f"https://github.com/{repo}/releases/download/{release}/pohunek-ts-protocol-{asset}",
+            "@pohunek/sdk": f"https://github.com/{repo}/releases/download/{release}/pohunek-ts-sdk-{asset}",
+        }
+        path = self.dir / f"package-{release}.json"
+        path.write_text(json.dumps({"dependencies": pins}))
+        return path
+
     def workflow(self, *releases):
         """A workflow file with one `POHUNEK_RELEASE` line per release given."""
         path = self.dir / "ci.yml"
         path.write_text("".join(f"    env:\n      POHUNEK_RELEASE: {release}\n" for release in releases))
         return path
 
-    def pin(self, *args, cwd=None, env=None, plugin=None, workflow=None):
-        """Runs core-pin with the plugin and workflow fixtures unless the test passes its own."""
-        extra = [] if cwd is not None else ["--plugin", str(plugin or self.plugin()), "--ci-workflow", str(workflow or self.workflow("v1.2.3"))]
+    def pin(self, *args, cwd=None, env=None, plugin=None, workflow=None, package=None):
+        """Runs core-pin with the plugin, its package and the workflow fixtures unless the test passes its own."""
+        plugin = plugin if plugin is not None else self.plugin()
+        try:
+            release = json.loads(Path(plugin).read_text())["release"]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            release = "v1.2.3"
+        package = package if package is not None else self.sdk_package(release)
+        extra = [] if cwd is not None else [
+            "--plugin", str(plugin), "--plugin-package", str(package), "--ci-workflow", str(workflow or self.workflow("v1.2.3")),
+        ]
         git_config = dict(
             os.environ,
             GIT_CONFIG_COUNT="1",
@@ -224,6 +243,23 @@ class CorePinTest(unittest.TestCase):
             self.assertEqual(result.returncode, 1, message)
             self.assertIn(message, result.stderr)
 
+    def test_the_plugin_sdk_must_be_the_tarball_of_the_plugin_release(self):
+        for dependencies, message in (
+            ({"@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v1.2.4/pohunek-ts-protocol-1.2.4.tgz",
+              "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v1.2.3/pohunek-ts-sdk-1.2.3.tgz"}, "@pohunek/protocol must be"),
+            ({"@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v1.2.3/pohunek-ts-protocol-1.2.3.tgz"}, "@pohunek/sdk must be"),
+            ({"@pohunek/protocol": "https://github.com/other/repo/releases/download/v1.2.3/pohunek-ts-protocol-1.2.3.tgz",
+              "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v1.2.3/pohunek-ts-sdk-1.2.3.tgz"}, "@pohunek/protocol must be"),
+            ({"@pohunek/protocol": "0.34.2", "@pohunek/sdk": "0.34.2"}, "@pohunek/protocol must be"),
+        ):
+            package = self.sdk_package(dependencies=dependencies)
+            result, _ = self.pin("--web", self.web(), package=package)
+            self.assertEqual(result.returncode, 1, message)
+            self.assertIn(message, result.stderr)
+        result, _ = self.pin("--web", self.web(), package=self.dir / "absent-package.json")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot read", result.stderr)
+
     def test_the_plugin_pin_must_download_from_the_core_repository(self):
         plugin = self.plugin(base="https://github.com/other/repo/releases/download")
         result, _ = self.pin("--web", self.web(), plugin=plugin)
@@ -244,6 +280,7 @@ class CorePinTest(unittest.TestCase):
         (self.dir / "web" / "package.json").write_text(json.dumps({"version": "0.5.1"}))
         (self.dir / "plugin").mkdir()
         (self.dir / "plugin" / "core-release.json").write_bytes(self.plugin().read_bytes())
+        (self.dir / "plugin" / "package.json").write_bytes(self.sdk_package().read_bytes())
         (self.dir / ".github" / "workflows").mkdir(parents=True)
         (self.dir / ".github" / "workflows" / "ci.yml").write_bytes(self.workflow("v1.2.3").read_bytes())
         result, values = self.pin(cwd=self.dir)
@@ -258,7 +295,8 @@ class CorePinTest(unittest.TestCase):
         launchers = self.dir / "launchers"
         launchers.mkdir()
         result, values = self.pin(
-            "--web", "../web/core-sdk.json", "--plugin", str(self.plugin()), "--ci-workflow", str(self.workflow("v1.2.3")), cwd=launchers
+            "--web", "../web/core-sdk.json", "--plugin", str(self.plugin()), "--plugin-package", str(self.sdk_package()),
+            "--ci-workflow", str(self.workflow("v1.2.3")), cwd=launchers,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(values["web_version"], "0.5.1")
@@ -276,7 +314,11 @@ class CorePinTest(unittest.TestCase):
     def test_the_repository_pins_resolve(self):
         result = subprocess.run(
             [str(CORE_PIN), "--web", str(ROOT / "web" / "core-sdk.json")]
-            + ["--plugin", str(ROOT / "plugin" / "core-release.json"), "--ci-workflow", str(ROOT / ".github" / "workflows" / "ci.yml")],
+            + [
+                "--plugin", str(ROOT / "plugin" / "core-release.json"),
+                "--plugin-package", str(ROOT / "plugin" / "package.json"),
+                "--ci-workflow", str(ROOT / ".github" / "workflows" / "ci.yml"),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

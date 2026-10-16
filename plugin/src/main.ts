@@ -1,25 +1,28 @@
 #!/usr/bin/env bun
 // Command line entry point: `pohunek-work list`, `do`, `doctor`, `manager`, `setup`, `tui` and `watch`.
+import { resolveDaemonSocket } from "@pohunek/sdk";
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig } from "./config/index.ts";
 import { ActionError, DO_ACTIONS, DO_CONTRACT_VERSION, isLaunchAction, type DoAction } from "./actions/types.ts";
 import { runDo } from "./commands/do.ts";
 import { MANAGER_CONTRACT_VERSION } from "./actions/manager.ts";
 import { runManagerStart, type ManagerStartCommandOptions } from "./commands/manager.ts";
-import { runList } from "./commands/list.ts";
+import { runList, type ListDeps } from "./commands/list.ts";
 import { DEFAULT_KEYBINDS, runSetup, SETUP_STEPS, type SetupOptions, type SetupStep } from "./commands/setup.ts";
 import { ISSUE_PICKER_SOURCES, SETUP_CONTRACT_VERSION } from "./setup/settings.ts";
 import { LIST_CONTRACT_VERSION } from "./types/item.ts";
 import { SetupIoError } from "./setup/install.ts";
 import { SetupPathError } from "./setup/paths.ts";
-import { EXIT_TUI_ERROR, runTui } from "./commands/tui.ts";
+import { runInkTui, type InkTuiOptions } from "./ink/app.tsx";
+import { NotificationAnnouncer } from "./ink/notices.ts";
 import { runWatch, unknownProjects } from "./commands/watch.ts";
-import { formatDoctorReport, runDoctor } from "./doctor.ts";
-import { createTerminal } from "./tui/terminal.ts";
-import { spawnDetached, spawnForeground } from "./tui/children.ts";
+import { DOCTOR_CONTRACT_VERSION, formatDoctorJson, formatDoctorReport, runDoctor } from "./doctor.ts";
 import { createLogger } from "./log.ts";
 import { reportError, EXIT_ERROR } from "./cli-errors.ts";
-import { resolveConfigDir, resolveLogDir } from "./paths.ts";
+import { resolveConfigDir, resolveLogDir, resolveStateDir } from "./paths.ts";
+import { createSharedCache } from "./cache/shared-cache.ts";
+import type { PluginConfig } from "./types/config.ts";
+import { cachedGithubSource, cachedLinearSource } from "./sources/cached.ts";
 import { createGithubSource } from "./sources/github.ts";
 import { createLinearSource } from "./sources/linear.ts";
 import { createPohunekClient } from "./sources/pohunek.ts";
@@ -31,19 +34,20 @@ import pkg from "../package.json" with { type: "json" };
 import managerGuide from "../prompts/manager-guide.md" with { type: "text" };
 
 const USAGE = `usage:
-  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--json] [--project <label>]...
+  pohunek-work list [--mine] [--stale-days <n>] [--finished-hours <n>] [--include-ignored] [--refresh] [--json] [--project <label>]...
   pohunek-work do <key> <implement|babysit|fix-ci|rebase|review> [--profile <name>] [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> ready [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
   pohunek-work do <key> attach [--project <label>] [--include-ignored] [--dry-run [--json]]
   pohunek-work do <key> cleanup [--project <label>] [--include-ignored] [--dry-run] [--yes] [--json]
-  pohunek-work doctor
+  pohunek-work doctor [--json]
   pohunek-work manager guide
   pohunek-work manager start (--project <label>... | --all) [--profile <name>] [--dry-run] [--yes] [--json]
   pohunek-work setup [--force] [--json]
   pohunek-work setup scripts [--force] [--json]
   pohunek-work setup config [--force] [--json]
-  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--issue-project <project> --issue-source <linear|github>] [--issue-keybind <key>] [--json]
-  pohunek-work tui
+  pohunek-work setup sway [--force] [--print] [--keybind <key>] [--new-session-keybind <key>] [--issue-project <project> --issue-source <linear|github>] [--issue-keybind <key>] [--json]
+  pohunek-work tui [--attach inline|window]
+  pohunek-work new-session [--attach inline|window]
   pohunek-work watch [--project <label>]...
 
 --project on list, watch and manager start repeats to select several projects; do takes one.
@@ -74,7 +78,7 @@ function projectSelection(labels: readonly string[] | undefined): string[] | nul
   return labels === undefined ? null : [...new Set(labels)];
 }
 
-function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; json: boolean; projects: string[] | null } {
+function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: number | null; finishedHours: number | null; includeIgnored: boolean; refresh: boolean; json: boolean; projects: string[] | null } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
@@ -83,6 +87,7 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
         "stale-days": { type: "string" },
         "finished-hours": { type: "string" },
         "include-ignored": { type: "boolean", default: false },
+        refresh: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         project: { type: "string", multiple: true },
       },
@@ -90,11 +95,26 @@ function parseListArgs(argv: readonly string[]): { mine: boolean; staleDays: num
       strict: true,
     });
     if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals.join(" ")}`);
-    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], json: values.json, projects: projectSelection(values.project) };
+    return { mine: values.mine, staleDays: parseStaleDays(values["stale-days"]), finishedHours: parseFinishedHours(values["finished-hours"], values.mine), includeIgnored: values["include-ignored"], refresh: values.refresh, json: values.json, projects: projectSelection(values.project) };
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(error instanceof Error ? error.message : "invalid arguments");
   }
+}
+
+/**
+ * The GitHub and Linear sources read through the shared cache of the state directory. `refresh` bypasses
+ * the max age for this process; the cache still coalesces it with the other processes reading at the same time.
+ */
+function cachedSources(config: PluginConfig, refresh: boolean): Pick<ListDeps, "github" | "linear"> {
+  const cache = createSharedCache({ stateDir: resolveStateDir(), config: config.global.cache, refresh });
+  return {
+    github: cachedGithubSource(createGithubSource(config.global), config.global, { cache }),
+    linear:
+      config.global.linear === null
+        ? null
+        : cachedLinearSource(createLinearSource(config.global.linear), config.global.linear, { cache }),
+  };
 }
 
 async function listCommand(argv: readonly string[]): Promise<number> {
@@ -116,8 +136,7 @@ async function listCommand(argv: readonly string[]): Promise<number> {
   try {
     const output = await runList(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
-      github: createGithubSource(config.global),
-      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
+      ...cachedSources(config, options.refresh),
       logger,
       cliVersion: pkg.version,
     });
@@ -217,10 +236,10 @@ async function doCommand(argv: readonly string[]): Promise<number> {
     maxStringLength: config.global.log.maxStringLength,
   });
   try {
+    // `do` acts on the picture it reads, so it refreshes past the max age (still coalesced with other readers).
     const output = await runDo(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
-      github: createGithubSource(config.global),
-      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
+      ...cachedSources(config, true),
       logger,
       cliVersion: pkg.version,
       confirm: terminalConfirm(),
@@ -249,6 +268,7 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
         force: { type: "boolean", default: false },
         print: { type: "boolean", default: false },
         keybind: { type: "string" },
+        "new-session-keybind": { type: "string" },
         "issue-keybind": { type: "string" },
         "issue-project": { type: "string" },
         "issue-source": { type: "string" },
@@ -262,8 +282,8 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
     const step: SetupStep | undefined = sub === undefined ? "all" : SETUP_STEPS.find((name) => name === sub && name !== "all");
     if (step === undefined) throw new UsageError(`unknown setup step: ${String(sub)} (known: ${SETUP_STEPS.filter((name) => name !== "all").join(", ")})`);
     const sway = step === "sway";
-    if (!sway && (values.print || values.keybind !== undefined || values["issue-keybind"] !== undefined || values["issue-project"] !== undefined || values["issue-source"] !== undefined)) {
-      throw new UsageError("--print, --keybind, --issue-keybind, --issue-project and --issue-source apply to `setup sway` only");
+    if (!sway && (values.print || values.keybind !== undefined || values["new-session-keybind"] !== undefined || values["issue-keybind"] !== undefined || values["issue-project"] !== undefined || values["issue-source"] !== undefined)) {
+      throw new UsageError("--print, --keybind, --new-session-keybind, --issue-keybind, --issue-project and --issue-source apply to `setup sway` only");
     }
     if (values["issue-keybind"] !== undefined && values["issue-project"] === undefined) {
       throw new UsageError("--issue-keybind needs --issue-project: the issue picker is bound for one project");
@@ -285,6 +305,7 @@ function parseSetupArgs(argv: readonly string[]): SetupOptions {
       force: values.force,
       print: values.print,
       keybind: values.keybind ?? DEFAULT_KEYBINDS.keybind,
+      newSessionKeybind: values["new-session-keybind"] ?? DEFAULT_KEYBINDS.newSessionKeybind,
       issueKeybind: values["issue-keybind"] ?? DEFAULT_KEYBINDS.issueKeybind,
       issueProject: values["issue-project"] ?? null,
       issueSource,
@@ -310,9 +331,10 @@ async function setupCommand(argv: readonly string[]): Promise<number> {
 }
 
 async function doctorCommand(argv: readonly string[]): Promise<number> {
-  if (argv.length > 0) throw new UsageError(`doctor takes no arguments: ${argv.join(" ")}`);
+  const unexpected = argv.filter((arg) => arg !== "--json");
+  if (unexpected.length > 0) throw new UsageError(`doctor takes only --json: ${unexpected.join(" ")}`);
   const report = await runDoctor({ configDir: resolveConfigDir(), launcher: { env: process.env, platform: process.platform } });
-  console.log(formatDoctorReport(report));
+  console.log(argv.includes("--json") ? formatDoctorJson(report, pkg.version) : formatDoctorReport(report));
   return report.exitCode;
 }
 
@@ -392,9 +414,31 @@ async function managerCommand(argv: readonly string[]): Promise<number> {
   process.stdout.write(managerGuide);
   return 0;
 }
+/** Socket of the local daemon: POHUNEK_SOCKET_PATH when the environment names one, else the runtime directory's. */
+function resolveLocalSocket(): string | null {
+  const named = process.env["POHUNEK_SOCKET_PATH"];
+  if (named !== undefined && named !== "") return named;
+  try {
+    return resolveDaemonSocket({ platform: process.platform === "darwin" ? "macos" : "linux", effectiveUid: process.getuid?.() ?? 0 }, process.env);
+  } catch {
+    return null;
+  }
+}
 
-async function tuiCommand(argv: readonly string[]): Promise<number> {
-  if (argv.length > 0) throw new UsageError(`tui takes no arguments: ${argv.join(" ")}`);
+async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly string[]): Promise<number> {
+  const command = mode === "main" ? "tui" : "new-session";
+  let values: { attach?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({ args: [...argv], strict: true, allowPositionals: true, options: { attach: { type: "string" } } }));
+  } catch (error) {
+    if (argv.includes("--attach")) throw new UsageError("--attach takes inline or window");
+    throw new UsageError(`${command} takes no arguments: ${argv.join(" ")} (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (positionals.length > 0) throw new UsageError(`${command} takes no arguments: ${positionals.join(" ")}`);
+  if (values.attach !== undefined && values.attach !== "inline" && values.attach !== "window") {
+    throw new UsageError(`--attach takes inline or window, got ${JSON.stringify(values.attach)}`);
+  }
   let config;
   try {
     config = await loadConfig(resolveConfigDir());
@@ -402,40 +446,67 @@ async function tuiCommand(argv: readonly string[]): Promise<number> {
     if (!(error instanceof ConfigError)) throw error;
     return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", error.message);
   }
+  const attachMode = values.attach ?? config.global.tui.attachMode;
+  const attachCommand = config.global.tui.attachCommand;
+  if (attachMode === "window" && attachCommand === undefined) {
+    return reportError(false, LIST_CONTRACT_VERSION, "configuration", "config_invalid", `${command}: window attach needs attach_command in the [tui] table of config.toml`);
+  }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return reportError(false, LIST_CONTRACT_VERSION, "usage", "no_terminal", "tui needs a terminal on stdin and stdout");
+    return reportError(false, LIST_CONTRACT_VERSION, "usage", "no_terminal", `${command} needs a terminal on stdin and stdout`);
   }
   const logger = createLogger({
     logDir: resolveLogDir(),
-    command: "tui",
+    command,
     maxStringLength: config.global.log.maxStringLength,
   });
-  const terminal = createTerminal(process.stdin, process.stdout, process);
-  // Safety net for an error outside the reducer's own handling: the terminal must never stay in raw mode.
-  const onFatal = (error: unknown): void => {
-    terminal.restore();
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    console.error(`pohunek-work tui: internal error: ${toAscii(message)}`);
-    process.exit(EXIT_TUI_ERROR);
-  };
-  process.on("uncaughtException", onFatal);
-  process.on("unhandledRejection", onFatal);
+  const announcer = mode === "main" ? new NotificationAnnouncer(config.global.notify, logger) : null;
+  const noticeTasks = new Set<Promise<void>>();
+  const opened: { line: string | null } = { line: null };
   try {
-    return await runTui({
-      config: config.global.tui,
-      cliVersion: pkg.version,
-      logger,
-      terminal,
-      exec,
-      spawnForeground,
-      spawnDetached,
-      now: () => Date.now(),
-      timers: { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>); } },
-      report: (message) => {
-        console.error(message);
+    const code = await runInkTui({
+      mode,
+      selfBin: config.global.tui.selfBin,
+      pohunekBin: config.global.pohunek.bin,
+      timeoutMs: config.global.pohunek.timeoutMs,
+      listTimeoutMs: config.global.tui.listTimeoutMs,
+      launchTimeoutMs: config.global.actions.launchTimeoutMs,
+      launchKillMarginMs: config.global.actions.launchKillMarginMs,
+      notificationsPageSize: config.global.pohunek.notificationsPageSize,
+      reconnectMaxMs: config.global.tui.reconnectMaxSecs * 1000,
+      refreshIntervalMs: config.global.tui.refreshIntervalSecs * 1000,
+      sessionReconcileMs: config.global.tui.sessionReconcileSecs * 1000,
+      actionCaptureBytes: config.global.tui.actionCaptureBytes,
+      outputWaitMs: config.global.tui.outputWaitMs,
+      outputMaxBytes: config.global.tui.outputMaxBytes,
+      doubleClickMs: config.global.tui.doubleClickMs,
+      detailMinWidth: config.global.tui.detailMinWidth,
+      attachMode,
+      ...(attachCommand === undefined || config.global.tui.attachLaunchCheckMs === undefined ? {} : {
+        attachCommand,
+        attachLaunchCheckMs: config.global.tui.attachLaunchCheckMs,
+      }),
+      localSocket: resolveLocalSocket(),
+      initialView: config.global.tui.initialView,
+      stalePrDays: config.global.tui.stalePrDays,
+      openUrlHosts: config.global.tui.openUrlHosts,
+      openCommand: config.global.tui.openCommand,
+      ...(config.global.tui.clipboardCommand === undefined ? {} : { clipboardCommand: config.global.tui.clipboardCommand }),
+      onSnapshot: (snapshot) => {
+        if (announcer === null) return;
+        const task = announcer.announce(snapshot).catch((error: unknown) => {
+          logger.error("tui_notice_failed", { error: error instanceof Error ? error : String(error) });
+        });
+        noticeTasks.add(task);
+        void task.finally(() => { noticeTasks.delete(task); });
       },
+      log: (event, detail) => { logger.info(event, detail === undefined ? {} : { detail }); },
+      onWindowOpened: (line) => { opened.line = line; },
     });
+    // Printed after the screen is restored, so the launching terminal shows where the session went.
+    if (opened.line !== null) console.log(opened.line);
+    return code;
   } finally {
+    await Promise.allSettled([...noticeTasks]);
     await logger.close();
     const logFailure = logger.failure();
     if (logFailure !== null) console.error(`log write failed: ${logFailure.message}`);
@@ -488,8 +559,7 @@ async function watchCommand(argv: readonly string[]): Promise<number> {
   try {
     await runWatch(config, options, {
       pohunek: createPohunekClient(config.global.pohunek),
-      github: createGithubSource(config.global),
-      linear: config.global.linear === null ? null : createLinearSource(config.global.linear),
+      ...cachedSources(config, false),
       logger,
       exec,
       sleep,
@@ -512,6 +582,7 @@ async function main(argv: readonly string[]): Promise<number> {
     command === "do" ? DO_CONTRACT_VERSION
     : command === "manager" ? MANAGER_CONTRACT_VERSION
     : command === "setup" ? SETUP_CONTRACT_VERSION
+    : command === "doctor" ? DOCTOR_CONTRACT_VERSION
     : LIST_CONTRACT_VERSION;
   try {
     switch (command) {
@@ -526,7 +597,9 @@ async function main(argv: readonly string[]): Promise<number> {
       case "setup":
         return await setupCommand(rest);
       case "tui":
-        return await tuiCommand(rest);
+        return await terminalUiCommand("main", rest);
+      case "new-session":
+        return await terminalUiCommand("new-session", rest);
       case "watch":
         return await watchCommand(rest);
       default:
@@ -546,5 +619,5 @@ async function main(argv: readonly string[]): Promise<number> {
 const exitCode = await main(process.argv.slice(2));
 // A list child still running when the owner quits the TUI must not keep the
 // process alive until its timeout; it runs in its own process group and ends on its own.
-if (process.argv[2] === "tui") process.exit(exitCode);
+if (process.argv[2] === "tui" || process.argv[2] === "new-session") process.exit(exitCode);
 process.exitCode = exitCode;

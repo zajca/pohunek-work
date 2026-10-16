@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import type {
   ActionsConfig,
+  CacheConfig,
   GlobalConfig,
   GithubConfig,
   GithubProjectStatus,
@@ -20,12 +21,14 @@ import type {
   ReviewsMode,
   TeardownConfig,
   TuiConfig,
+  TuiAttachMode,
   TuiInitialView,
   WatchConfig,
 } from "../types/config.ts";
 import { fitsLinearComplexity, LINEAR_MAX_COMPLEXITY } from "../util/linear-budget.ts";
 import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
+import { checkAttachWords, splitAttachTemplate } from "../tui/attach-template.ts";
 import {
   fail,
   readStringAllowEmpty,
@@ -135,6 +138,24 @@ function parseGithub(root: Table, file: string): GithubConfig {
   return config;
 }
 
+function parseCache(root: Table, file: string): CacheConfig {
+  const table = requireTable(root, "cache", file);
+  const path = ["cache"];
+  rejectUnknownKeys(table, ["max_age_secs", "lock_timeout_ms", "lock_poll_ms", "fallback_backoff_secs", "busy_timeout_ms"], file, path);
+  const lockTimeoutMs = readTimerValue(table, "lock_timeout_ms", 1, file, path);
+  const lockPollMs = readTimerValue(table, "lock_poll_ms", 1, file, path);
+  if (lockPollMs >= lockTimeoutMs) {
+    throw fail(file, [...path, "lock_poll_ms"], "must be below lock_timeout_ms");
+  }
+  return {
+    maxAgeMs: readPositiveInt(table, "max_age_secs", file, path) * MS_PER_SECOND,
+    lockTimeoutMs,
+    lockPollMs,
+    fallbackBackoffMs: readPositiveInt(table, "fallback_backoff_secs", file, path) * MS_PER_SECOND,
+    busyTimeoutMs: readTimerValue(table, "busy_timeout_ms", 1, file, path),
+  };
+}
+
 function parseLinear(root: Table, file: string): LinearConfig {
   const table = requireTable(root, "linear", file);
   const path = ["linear"];
@@ -165,6 +186,20 @@ function linearPageSizeError(file: string, pageSize: number, labels: boolean): C
   );
 }
 
+/**
+ * Largest notifications page the daemon is asked for. A page is one control line, which the core caps at 1 MiB; the
+ * pinned release returned 1000 records in one line and failed the line limit at 2000, so the bound keeps half of that.
+ */
+const NOTIFICATIONS_MAX_PAGE_SIZE = 500;
+
+function readNotificationsPageSize(table: Table, file: string, path: KeyPath): number {
+  const value = readPositiveInt(table, "notifications_page_size", file, path);
+  if (value > NOTIFICATIONS_MAX_PAGE_SIZE) {
+    throw fail(file, [...path, "notifications_page_size"], `must not exceed ${NOTIFICATIONS_MAX_PAGE_SIZE.toString()} (one control line holds one page)`);
+  }
+  return value;
+}
+
 function parsePohunek(root: Table, file: string): PohunekConfig {
   const table = requireTable(root, "pohunek", file);
   const path = ["pohunek"];
@@ -172,7 +207,7 @@ function parsePohunek(root: Table, file: string): PohunekConfig {
   return {
     bin: readAbsolutePath(table, "bin", file, path),
     timeoutMs: readPositiveInt(table, "timeout_ms", file, path),
-    notificationsPageSize: readPositiveInt(table, "notifications_page_size", file, path),
+    notificationsPageSize: readNotificationsPageSize(table, file, path),
   };
 }
 
@@ -331,6 +366,7 @@ function readTimerValue(table: Table, key: string, unitMs: number, file: string,
 const ISSUE_SOURCES: readonly IssueSource["kind"][] = ["linear", "github"];
 const REVIEWS_MODES: readonly ReviewsMode[] = ["session", "external"];
 const TUI_INITIAL_VIEWS: readonly TuiInitialView[] = ["mine", "all"];
+const TUI_ATTACH_MODES: readonly TuiAttachMode[] = ["inline", "window"];
 
 /** A host name as `URL.hostname` returns it: lowercase labels, no port, no scheme. */
 const HOST_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
@@ -349,13 +385,25 @@ function parseTui(root: Table, file: string): TuiConfig {
       "initial_view",
       "bell_on_transition",
       "open_command",
+      "clipboard_command",
       "open_url_hosts",
       "stderr_max_lines",
       "detail_min_width",
+      "session_reconcile_secs",
+      "reconnect_max_secs",
+      "action_capture_bytes",
+      "output_wait_ms",
+      "output_max_bytes",
+      "double_click_ms",
+      "attach_mode",
+      "attach_command",
+      "attach_launch_check_ms",
     ],
     file,
     path,
   );
+  const attachMode = readEnum(table, "attach_mode", TUI_ATTACH_MODES, file, path);
+  const attach = parseTuiAttach(table, attachMode, file, path);
   const openUrlHosts = readNonEmptyStringArray(table, "open_url_hosts", file, path);
   if (!openUrlHosts.every((host) => HOST_NAME.test(host))) {
     throw fail(file, [...path, "open_url_hosts"], "must contain only lowercase host names (no scheme, port or path)");
@@ -369,9 +417,40 @@ function parseTui(root: Table, file: string): TuiConfig {
     initialView: readEnum(table, "initial_view", TUI_INITIAL_VIEWS, file, path),
     bellOnTransition: readBoolean(table, "bell_on_transition", file, path),
     openCommand: readAbsolutePath(table, "open_command", file, path),
+    ...(table["clipboard_command"] === undefined ? {} : { clipboardCommand: readAbsolutePath(table, "clipboard_command", file, path) }),
     openUrlHosts,
     stderrMaxLines: readPositiveInt(table, "stderr_max_lines", file, path),
     detailMinWidth: readPositiveInt(table, "detail_min_width", file, path),
+    sessionReconcileSecs: readTimerValue(table, "session_reconcile_secs", MS_PER_SECOND, file, path),
+    reconnectMaxSecs: readTimerValue(table, "reconnect_max_secs", MS_PER_SECOND, file, path),
+    actionCaptureBytes: readPositiveInt(table, "action_capture_bytes", file, path),
+    outputWaitMs: readTimerValue(table, "output_wait_ms", 1, file, path),
+    outputMaxBytes: readPositiveInt(table, "output_max_bytes", file, path),
+    doubleClickMs: readTimerValue(table, "double_click_ms", 1, file, path),
+    attachMode,
+    ...attach,
+  };
+}
+
+/** Window mode requires `attach_command` and `attach_launch_check_ms`; inline mode rejects both. */
+function parseTuiAttach(table: Table, mode: TuiAttachMode, file: string, path: KeyPath): Pick<TuiConfig, "attachCommand" | "attachLaunchCheckMs"> {
+  const hasCommand = table["attach_command"] !== undefined;
+  const hasCheck = table["attach_launch_check_ms"] !== undefined;
+  if (mode === "inline") {
+    if (hasCommand) throw fail(file, [...path, "attach_command"], "is only used with attach_mode = \"window\"");
+    if (hasCheck) throw fail(file, [...path, "attach_launch_check_ms"], "is only used with attach_mode = \"window\"");
+    return {};
+  }
+  if (!hasCommand) throw fail(file, [...path, "attach_command"], "is required with attach_mode = \"window\"");
+  if (!hasCheck) throw fail(file, [...path, "attach_launch_check_ms"], "is required with attach_mode = \"window\"");
+  const command = readString(table, "attach_command", file, path);
+  const split = splitAttachTemplate(command);
+  if (!split.ok) throw fail(file, [...path, "attach_command"], split.message);
+  const problem = checkAttachWords(split.words);
+  if (problem !== null) throw fail(file, [...path, "attach_command"], problem);
+  return {
+    attachCommand: split.words,
+    attachLaunchCheckMs: readTimerValue(table, "attach_launch_check_ms", 1, file, path),
   };
 }
 
@@ -388,13 +467,14 @@ function parseManager(root: Table, file: string): ManagerConfig {
 function parseGlobal(root: Table, file: string): GlobalConfig {
   rejectUnknownKeys(
     root,
-    ["identity", "github", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui", "manager"],
+    ["identity", "github", "cache", "linear", "pohunek", "watch", "notify", "log", "actions", "policy", "profiles", "tui", "manager"],
     file,
     [],
   );
   return {
     identity: parseIdentity(root, file),
     github: parseGithub(root, file),
+    cache: parseCache(root, file),
     linear: "linear" in root ? parseLinear(root, file) : null,
     pohunek: parsePohunek(root, file),
     watch: parseWatch(root, file),
@@ -516,6 +596,20 @@ function parseIssueSource(table: Table, file: string, path: readonly string[]): 
   };
 }
 
+/** A GitHub login: letters, digits and single hyphens, neither at the start nor at the end. */
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const NO_REVIEW_BOT = "none";
+
+function readReviewBot(table: Table, file: string, path: KeyPath): string | null {
+  const key = "review_bot";
+  const value = readString(table, key, file, path);
+  if (value === NO_REVIEW_BOT) return null;
+  if (!GITHUB_LOGIN.test(value)) {
+    throw fail(file, [...path, key], `must be "${NO_REVIEW_BOT}" or the GitHub login of the review bot (letters, digits and hyphens)`);
+  }
+  return value;
+}
+
 function parseProject(root: Table, name: string): ProjectConfig {
   const file = `${PROJECTS_DIR}/${name}${TOML_SUFFIX}`;
   rejectUnknownKeys(root, ["project", "policy", "profiles", "teardown"], file, []);
@@ -523,7 +617,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
   const path = ["project"];
   rejectUnknownKeys(
     table,
-    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "linear_team", "paused_states", "issue_signal", "started_labels", "paused_labels", "status_project_owner", "status_project_number", "status_field", "status_started_options", "status_paused_options", "ignore_label"],
+    ["pohunek_label", "repo", "issue_source", "reviews", "branch_pattern", "ignored_checks", "policy_checks", "ai_reviewers", "review_bot", "linear_team", "paused_states", "issue_signal", "started_labels", "paused_labels", "status_project_owner", "status_project_number", "status_field", "status_started_options", "status_paused_options", "ignore_label"],
     file,
     path,
   );
@@ -554,6 +648,7 @@ function parseProject(root: Table, name: string): ProjectConfig {
     ignoredChecks,
     policyChecks,
     aiReviewers: readStringArray(table, "ai_reviewers", file, path),
+    reviewBot: readReviewBot(table, file, path),
     ignoreLabel: "ignore_label" in table ? readString(table, "ignore_label", file, path) : null,
     policy: "policy" in root ? parsePolicy(root, file) : null,
     profiles: "profiles" in root ? parseProfiles(root, file) : null,
