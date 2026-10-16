@@ -575,16 +575,22 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     return `Session ${id} opened in a new window`;
   }, [options.attachCommand, options.attachLaunchCheckMs, options.pohunekBin]);
 
+  /** Attaches a session in the window or inline, as attach_mode says; returns the window's status line, or null when it ran inline. */
+  const attachSession = useCallback(async (host: string, id: string, inline: (end: ChildEnd) => Promise<InteractiveOutcome>): Promise<string | null> => {
+    if (options.attachMode === "window") return openAttachWindowFor(host, id);
+    await suspendForChild(() => attachInline(host, id, inline));
+    return null;
+  }, [attachInline, openAttachWindowFor, options.attachMode, suspendForChild]);
+
   const attachCreated = useCallback(async (): Promise<void> => {
     if (created === null || busy) return;
     actionSeq.current += 1;
     setBusy(true);
     try {
-      if (options.attachMode === "window") {
-        bumpStatus(await openAttachWindowFor(created.host, created.sessionId));
+      const windowed = await attachSession(created.host, created.sessionId, (end) => launcher.attachSession(end).then((attached) => attached.outcome));
+      if (windowed !== null) {
+        bumpStatus(windowed);
         if (options.mode === "new-session") options.onWindowOpened?.(`opened ${created.sessionId} in a new window`);
-      } else {
-        await suspendForChild(() => attachInline(created.host, created.sessionId, (end) => launcher.attachSession(end).then((attached) => attached.outcome)));
       }
       if (options.mode === "new-session") { setExitCode(0); exit(); }
       else { setCreated(null); setOverlay("none"); void refresh(); }
@@ -594,7 +600,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } finally {
       setBusy(false);
     }
-  }, [attachInline, busy, created, exit, launcher, openAttachWindowFor, options.attachMode, options.mode, refresh, setExitCode, suspendForChild]);
+  }, [attachSession, busy, created, exit, launcher, options.mode, refresh, setExitCode]);
 
   const submitForm = useCallback(async (): Promise<void> => {
     if (formLoadingRef.current) { bumpStatus("Host options are still loading; submit when they finish"); return; }
@@ -617,11 +623,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       }
       bumpStatus(`Created ${result.host}/${result.sessionId}; attaching…`);
       try {
-        if (options.attachMode === "window") {
-          bumpStatus(await openAttachWindowFor(result.host, result.sessionId));
+        const windowed = await attachSession(result.host, result.sessionId, (end) => launcher.attachSession(end).then((attached) => attached.outcome));
+        if (windowed !== null) {
+          bumpStatus(windowed);
           if (options.mode === "new-session") options.onWindowOpened?.(`opened ${result.sessionId} in a new window`);
-        } else {
-          await suspendForChild(() => attachInline(result.host, result.sessionId, (end) => launcher.attachSession(end).then((attached) => attached.outcome)));
         }
         if (options.mode === "new-session") { setExitCode(0); exit(); }
         else { setCreated(null); setOverlay("none"); void refresh(); }
@@ -635,7 +640,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } finally {
       setBusy(false);
     }
-  }, [attachInline, busy, created, exit, form, launcher, options.mode, overlay, refresh, setExitCode, suspendForChild]);
+  }, [attachSession, busy, created, exit, form, launcher, options.mode, overlay, refresh, setExitCode]);
 
   const inspectSessionAt = useCallback(async (host: string, id: string): Promise<void> => {
     setBusy(true);
@@ -771,17 +776,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       {
         const resumed = outcome.data.session;
         try {
-          if (options.attachMode === "window") {
-            bumpStatus(await openAttachWindowFor(resumed.host, resumed.id));
-          } else {
-            await suspendForChild(() => attachInline(resumed.host, resumed.id, (end) => execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id], end)));
-          }
+          const windowed = await attachSession(resumed.host, resumed.id, (end) => execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id], end));
+          if (windowed !== null) bumpStatus(windowed);
         } catch (error) { bumpStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
       }
       void refresh();
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
-  }, [attachInline, busy, control, openAttachWindowFor, options.attachMode, options.pohunekBin, refresh, sessionDetail, snapshot, stale, suspendForChild]);
+  }, [attachSession, busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale]);
 
   const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: Overlay): Promise<void> => {
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
@@ -822,16 +824,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     setBusy(true);
     try {
-      if (options.attachMode === "window") {
-        bumpStatus(await openAttachWindowFor(target.host, target.id));
-      } else {
-        await suspendForChild(() => attachInline(target.host, target.id, (end) => execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id], end)));
-      }
+      const windowed = await attachSession(target.host, target.id, (end) => execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id], end));
+      if (windowed !== null) bumpStatus(windowed);
       // Not awaited inside the busy window: the work list can take seconds, and input must not wait for it.
       void refresh();
     } catch (error) { bumpStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
-  }, [attachInline, openAttachWindowFor, options.attachMode, options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail, suspendForChild]);
+  }, [attachSession, options.pohunekBin, overlay, refresh, requestRecovery, selectedSession, sessionDetail]);
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);
