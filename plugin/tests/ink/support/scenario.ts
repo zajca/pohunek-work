@@ -18,6 +18,8 @@ export const REAL_SCENARIO_TIMEOUT_MS = 120_000;
  */
 const NO_OVERLAY_RULES: readonly ProxyRule[] = [{ match: ["host", "discover"], appendOk: [] }];
 const MAIN = new URL("../../../src/main.ts", import.meta.url).pathname;
+/** The file, in the scenario directory, that lists the mode of each work-list call: `cached` or `refresh`. */
+export const LIST_ARGV_FILE = "list-argv";
 
 export interface TuiScenario {
   readonly daemon: CoreDaemon;
@@ -25,6 +27,8 @@ export interface TuiScenario {
   readonly fixture: PluginFixture;
   /** File the work source answers `list --json` with; a test writes the envelope of the work items it needs here. */
   readonly workListFile: string;
+  /** File that lists the mode of each work-list call the TUI made: `cached` or `refresh`, one per line. */
+  readonly listArgvFile: string;
   run(steps: readonly PtyStep[], options?: { readonly cols?: number; readonly rows?: number; readonly timeoutS?: number; readonly env?: Readonly<Record<string, string>> }): Promise<PtyResult>;
   stop(): Promise<void>;
 }
@@ -43,9 +47,10 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
     proxy = await startCliProxy(join(daemon.coreDir, "pohunek"), [...NO_OVERLAY_RULES, ...(options.rules ?? [])]);
     const started = proxy;
     const workListFile = join(daemon.root, "work-list.json");
+    const listArgvFile = join(daemon.root, LIST_ARGV_FILE);
     await writeFile(workListFile, JSON.stringify(EMPTY_WORK_LIST));
     const fixture = await writePluginConfig(daemon, [{ label: PROJECT, repo: "acme/widgets" }], {
-      overrides: { "pohunek.bin": started.binary, "tui.self_bin": await workSourceStub(daemon.root, workListFile), ...(options.overrides ?? {}) },
+      overrides: { "pohunek.bin": started.binary, "tui.self_bin": await workSourceStub(daemon.root, workListFile, listArgvFile), ...(options.overrides ?? {}) },
       ...(options.extraGlobal === undefined ? {} : { extraGlobal: options.extraGlobal }),
     });
     const env: Record<string, string> = { ...fixture.env, TERM: "xterm-256color", CI: "true" };
@@ -54,6 +59,7 @@ export async function startTuiScenario(options: { readonly rules?: readonly Prox
       proxy: started,
       fixture,
       workListFile,
+      listArgvFile,
       run: (steps, run = {}) => runPty({
         cmd: [Bun.which("bun") ?? "bun", MAIN, "tui"],
         env: { ...env, ...(run.env ?? {}) },
@@ -83,12 +89,14 @@ export const EMPTY_WORK_LIST = { cli_version: "0.5.0", protocol: { minimum: 4, m
  * can answer with work items once its sessions exist. The stand-in is needed because the work items come from
  * GitHub and Linear, which the daemon does not reach; every other command is refused.
  */
-async function workSourceStub(root: string, workListFile: string): Promise<string> {
+async function workSourceStub(root: string, workListFile: string, listArgvFile: string): Promise<string> {
   const path = join(root, "work-source");
   await writeFile(path, `#!${process.execPath}
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "list" && args[1] === "--json") {
+const refresh = args.join(" ") === "list --refresh --json";
+if (refresh || args.join(" ") === "list --json") {
+  appendFileSync(${JSON.stringify(listArgvFile)}, (refresh ? "refresh" : "cached") + "\\n");
   process.stdout.write(readFileSync(${JSON.stringify(workListFile)}, "utf8") + "\\n");
 } else process.exit(70);
 `);

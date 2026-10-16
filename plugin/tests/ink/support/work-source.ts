@@ -4,7 +4,7 @@
 // phase's code, the way the real command does for a failed or incomplete source.
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { EMPTY_WORK_LIST, PROJECT } from "./scenario.ts";
+import { EMPTY_WORK_LIST, LIST_ARGV_FILE, PROJECT } from "./scenario.ts";
 
 /** A work item of the `list --json` envelope joined to one local session. */
 export function workItem(sessionId: string, key: string, pullRequestUrl: string | null, issue: { id: string; url: string } | null): Record<string, unknown> {
@@ -40,17 +40,20 @@ export const REFRESH_SECS = 1;
 /**
  * Writes the stand-in script into `dir` and returns its path. The envelopes are read from `dir/work-before.json` and
  * `dir/work-after.json` at each call, so a test can write them once its session exists; the calls are counted in
- * `dir/list-calls`.
+ * `dir/list-calls`, and each call is recorded as `cached` or `refresh` in `dir/list-argv`, the mode the TUI asked for.
  */
 export async function scriptedWorkSource(dir: string, before: WorkPhase, after: WorkPhase, switchAfter: number): Promise<string> {
   const path = join(dir, "work-source-scripted");
   const callsFile = join(dir, "list-calls");
+  const argvFile = join(dir, LIST_ARGV_FILE);
   const phaseOf = (phase: WorkPhase, name: "before" | "after"): unknown => ({ ...phase, file: phase.envelope ? join(dir, `work-${name}.json`) : null });
   await writeFile(path, `#!${process.execPath}
 import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "list" && args[1] === "--json") {
+const refresh = args.join(" ") === "list --refresh --json";
+if (refresh || args.join(" ") === "list --json") {
   appendFileSync(${JSON.stringify(callsFile)}, "list\\n");
+  appendFileSync(${JSON.stringify(argvFile)}, (refresh ? "refresh" : "cached") + "\\n");
   const calls = readFileSync(${JSON.stringify(callsFile)}, "utf8").split("\\n").length - 1;
   const phase = calls <= ${String(switchAfter)} ? ${JSON.stringify(phaseOf(before, "before"))} : ${JSON.stringify(phaseOf(after, "after"))};
   if (phase.file !== null) process.stdout.write(readFileSync(phase.file, "utf8") + "\\n");
