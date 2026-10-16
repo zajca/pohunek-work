@@ -76,6 +76,13 @@ export function MenuRow({ selected, primary, secondary, badge, onClick, onWheel,
   );
 }
 
+/** A row of a short choice list: the highlighted row is marked and drawn cyan and bold, and a click picks the row. */
+export function ChoiceRow({ highlighted, text, onClick }: { readonly highlighted: boolean; readonly text: string; readonly onClick: () => void }): ReactNode {
+  return <MouseZone onClick={onClick}>
+    <Text color={highlighted ? "cyan" : "white"} bold={highlighted}>{`${highlighted ? "▸" : " "} ${text}`}</Text>
+  </MouseZone>;
+}
+
 export function ActionButton({ label, onClick, primary = false }: { readonly label: string; readonly onClick: () => void; readonly primary?: boolean }): ReactNode {
   return <MouseZone onClick={onClick}><Text color={primary ? "black" : "cyan"} {...(primary ? { backgroundColor: "cyan" } : {})}>{` ${safeText(label)} `}</Text></MouseZone>;
 }
