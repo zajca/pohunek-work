@@ -19,7 +19,7 @@ test("an outage that arrives through an event-driven publish shows the source wa
   const stopping = Bun.sleep(STOP_AFTER_MS).then(() => running.daemon.stop());
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
-    { expect: "source(s) unavailable; mutating actions are paused", timeout: 30_000 },
+    { expect: "source(s) unavailable; mutating actions are paused", timeout: 30 },
   ];
   const result = await running.run(steps, { timeoutS: 60 });
   await stopping;

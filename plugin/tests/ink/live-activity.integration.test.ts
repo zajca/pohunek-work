@@ -39,7 +39,7 @@ test("a notification created while Activity is open appears in its list without 
     { send: TAB, settle: 800 },
     { send: TAB, settle: 800 },
     { expect: "No recent notifications" },
-    { expect: "ACTIVITY  1", timeout: 30_000 },
+    { expect: "ACTIVITY  1", timeout: 30 },
   ];
   const result = await running.run(steps, { timeoutS: 60 });
   await creating;
@@ -69,7 +69,7 @@ test("opening an unread notification marks it read and it leaves the Unread list
     // Enter opens the notification, which the TUI marks read; the record leaves the Unread list.
     { send: ENTER, settle: 800 },
     { send: ESCAPE, settle: 800 },
-    { expect: "No unread notifications", timeout: 30_000 },
+    { expect: "No unread notifications", timeout: 30 },
   ];
   const result = await running.run(steps, { timeoutS: 60 });
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-2500)}`).toBe(-1);
