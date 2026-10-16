@@ -82,14 +82,18 @@ type ReturnKind = "none" | "session";
 interface LinkChoice { readonly host: string; readonly id: string; readonly url: string | null; readonly returnTo: ReturnKind }
 
 type Overlay =
-  | { readonly kind: Exclude<OverlayKind, "confirm" | "recovery" | "links" | "host" | "notification" | "work-detail" | "work-preview"> }
+  | { readonly kind: Exclude<OverlayKind, "confirm" | "recovery" | "links" | "host" | "notification" | "work-detail" | "work-preview" | "projects"> }
   | { readonly kind: "confirm"; readonly action: ConfirmAction; readonly session: ControlSession; readonly returnTo: ReturnKind }
   | { readonly kind: "recovery"; readonly request: RecoveryRequest }
   | { readonly kind: "links"; readonly chooser: LinkChoice }
   | { readonly kind: "host"; readonly capabilities: ControlHostCapabilities | null; readonly governance: ControlGovernance | null }
   | { readonly kind: "notification"; readonly record: ControlNotification }
   | { readonly kind: "work-detail"; readonly key: string; readonly choice: number }
-  | { readonly kind: "work-preview"; readonly key: string; readonly choice: number; readonly preview: DoOutcome | string; readonly offset: number };
+  | { readonly kind: "work-preview"; readonly key: string; readonly choice: number; readonly preview: DoOutcome | string; readonly offset: number }
+  | { readonly kind: "projects"; readonly index: number; readonly search: string; readonly filtering: boolean };
+
+/** The project picker's highlight, query and whether the query is being typed. */
+type PickState = { readonly index: number; readonly search: string; readonly filtering: boolean };
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: ReturnKind }
 
@@ -157,7 +161,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [windowStarts, setWindowStarts] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const [pick, setPick] = useState({ index: 0, search: "", filtering: false });
   const [scope, setScope] = useState<ActivityScope>("Recent");
   // The records of the Activity scope shown, one page at a time; `cursor` is null when the list is complete.
   const [activity, setActivity] = useState<{ scope: ActivityScope; records: readonly ControlNotification[]; cursor: ControlActivityCursor | null }>({ scope: "Recent", records: [], cursor: null });
@@ -197,7 +200,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const suspendForChild = useCallback(<T,>(action: () => Promise<T>): Promise<T> => suspendChild(suspendTerminal, alive, action), [suspendTerminal]);
 
   const sessions = useMemo(() => snapshot === null ? [] : filterSessions(snapshot, orderedSessions(snapshot, projectFilter), queries.Sessions), [snapshot, projectFilter, queries.Sessions]);
-  const pickChoices = useMemo(() => projectChoices(snapshot?.sessions ?? [], pick.search), [snapshot, pick.search]);
+  // The picker's query narrows its choices only while the picker is open.
+  const pickSearch = overlay.kind === "projects" ? overlay.search : "";
+  const pickChoices = useMemo(() => projectChoices(snapshot?.sessions ?? [], pickSearch), [snapshot, pickSearch]);
   const records = useMemo(() => fuzzyFilter(activity.scope === scope ? activity.records : [], queries.Activity, recordTerms), [activity, scope, queries.Activity]);
   const hostRows = useMemo(() => snapshot === null ? [] : fuzzyFilter(snapshot.hosts, queries.Hosts, hostTerms), [snapshot, queries.Hosts]);
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
@@ -693,8 +698,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   // The picker opens on the current project filter with its full list, so a stale search cannot hide that project.
   const openProjectPicker = useCallback((): void => {
     const index = projectChoices(snapshot?.sessions ?? [], "").findIndex((choice) => choice.label === projectFilter);
-    setPick({ index: Math.max(0, index), search: "", filtering: false });
-    setOverlay({ kind: "projects" });
+    setOverlay({ kind: "projects", index: Math.max(0, index), search: "", filtering: false });
   }, [projectFilter, snapshot]);
 
   const openFolder = useCallback(async (session: ControlSession): Promise<void> => {
@@ -1019,7 +1023,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   /** Tab and Shift-Tab switch views unless a text field is focused or help is open. */
   const tabKeys = (input: string, key: Key): boolean => {
     // Only Tab and Shift-Tab switch views. A list filter that is typed takes Tab for itself, as a text field does.
-    const textFocused = editing !== null || (overlay.kind === "projects" && pick.filtering);
+    const textFocused = editing !== null || (overlay.kind === "projects" && overlay.filtering);
     if ((key.tab || input === "\u001b[Z") && !textFocused && overlay.kind !== "help" && options.mode === "main") {
       const backward = key.shift || input === "\u001b[Z";
       const direction = backward ? -1 : 1;
@@ -1067,22 +1071,26 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const overlayKeys = (input: string, key: Key): boolean => {
     if (overlay.kind === "help") { if (key.escape || input === "?" || input === "q") setOverlay({ kind: "none" }); return true; }
     if (overlay.kind === "projects") {
+      // Changes the picker only while it is still the open overlay.
+      const editPick = (change: (old: PickState) => PickState): void => {
+        setOverlay((current) => current.kind === "projects" ? { ...current, ...change(current) } : current);
+      };
       const chooseProject = (): void => {
-        const choice = pickChoices[pick.index];
+        const choice = pickChoices[overlay.index];
         if (choice !== undefined) { setProjectFilter(choice.label); setCursor((old) => ({ ...old, Sessions: 0 })); }
         setOverlay({ kind: "none" });
       };
-      if (pick.filtering) {
-        if (key.escape) setPick((old) => ({ ...old, search: "", index: 0, filtering: false }));
+      if (overlay.filtering) {
+        if (key.escape) editPick((old) => ({ ...old, search: "", index: 0, filtering: false }));
         else if (key.return) chooseProject();
-        else if (key.backspace || key.delete) setPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
-        else if (input !== "" && !key.ctrl && !key.meta && !key.tab) setPick((old) => ({ ...old, search: old.search + input, index: 0 }));
+        else if (key.backspace || key.delete) editPick((old) => ({ ...old, search: old.search.slice(0, -1), index: 0 }));
+        else if (input !== "" && !key.ctrl && !key.meta && !key.tab) editPick((old) => ({ ...old, search: old.search + input, index: 0 }));
         return true;
       }
       if (key.escape) setOverlay({ kind: "none" });
-      else if (key.upArrow) setPick((old) => ({ ...old, index: Math.max(0, old.index - 1) }));
-      else if (key.downArrow) setPick((old) => ({ ...old, index: Math.min(pickChoices.length - 1, old.index + 1) }));
-      else if (input === "/") setPick((old) => ({ ...old, filtering: true }));
+      else if (key.upArrow) editPick((old) => ({ ...old, index: Math.max(0, old.index - 1) }));
+      else if (key.downArrow) editPick((old) => ({ ...old, index: Math.min(pickChoices.length - 1, old.index + 1) }));
+      else if (input === "/") editPick((old) => ({ ...old, filtering: true }));
       else if (key.return) chooseProject();
       return true;
     }
@@ -1290,7 +1298,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay.kind === "notification") content = <NotificationOverlay record={overlay.record} />;
   else if (overlay.kind === "work-preview") content = <WorkPreview preview={overlay.preview} width={previewWidth} height={previewHeight} offset={overlay.offset} onWheel={(direction) => { setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.max(0, Math.min(previewMaxOffset, current.offset + direction * Math.max(1, previewHeight - 1))) } : current); }} />;
   else if (overlay.kind === "work-detail") content = workDetail === null ? <Message text="This work item is no longer available. Go back and refresh." /> : <WorkDetailOverlay detail={workDetail} choice={overlay.choice} onPick={(index, name) => { setOverlay({ kind: "work-detail", key: overlay.key, choice: index }); void previewWorkAction(name); }} />;
-  else if (overlay.kind === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
+  else if (overlay.kind === "projects") content = <ProjectPicker choices={pickChoices} selected={overlay.index} search={overlay.search} filtering={overlay.filtering} limit={visibleRows} />;
   else if (overlay.kind === "help") content = <HelpOverlay />;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={editing === "Work"} searchText={workFilters.text} {...listInteraction} />;
   else if (view === "Sessions") content = split ? <Box flexDirection="row" width="100%">
