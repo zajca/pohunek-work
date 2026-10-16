@@ -8,7 +8,7 @@ import { isUnresolvedAction } from "../ink/attention.ts";
 import { sdkFailure, SdkLink } from "./sdk-link.ts";
 import type {
   ControlAction, ControlActionOutcome, ControlClient, ControlClientOptions, ControlError,
-  ControlActivityPage, ControlActivityScope, ControlHost, ControlNotificationChange, ControlNotification, ControlProject, ControlResult, ControlSession, ControlSnapshot, ControlSnapshotError,
+  ControlActivityCursor, ControlActivityPage, ControlActivityScope, ControlHost, ControlNotificationChange, ControlNotification, ControlProject, ControlResult, ControlSession, ControlSnapshot, ControlSnapshotError,
 } from "./types.ts";
 
 export type * from "./types.ts";
@@ -52,18 +52,6 @@ function parseEnvelope(stdout: string, exitCode: number | null): ControlResult<u
   } catch (error) {
     if (error instanceof InvalidControlResponse) { return failure("invalid_response", error.message); }
     throw error;
-  }
-}
-
-/** The cursors of an activity page: each host with more records maps to its next cursor; a host without an entry is complete. */
-function parseActivityCursor(cursor: string): Record<string, string> | null {
-  try {
-    const parsed: unknown = JSON.parse(cursor);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    const entries = Object.entries(parsed);
-    return entries.every(([, value]) => typeof value === "string" && value !== "") ? Object.fromEntries(entries) : null;
-  } catch {
-    return null;
   }
 }
 
@@ -233,31 +221,53 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     return link;
   }
 
-  async function readActivity(route: string, scope: ControlActivityScope, cursor: string | null): Promise<{ readonly route: string; readonly result: ControlResult<{ readonly records: readonly ControlNotification[]; readonly next: string | null }> }> {
+  async function readActivity(route: string, scope: ControlActivityScope, cursor: string | null): Promise<ControlResult<{ readonly records: readonly ControlNotification[]; readonly next: string | null }>> {
     try {
-      return { route, result: await linkFor(route).activityPage(scope, options.notificationsPageSize, cursor) };
+      return await linkFor(route).activityPage(scope, options.notificationsPageSize, cursor);
     } catch (error) {
-      return { route, result: { ok: false, error: sdkFailure(error) } };
+      return { ok: false, error: sdkFailure(error) };
     }
   }
 
-  /** The activity scope of every host, one page per host; a host that fails fails the page, which keeps the records shown before. */
-  async function activity(scope: ControlActivityScope, cursor: string | null): Promise<ControlResult<ControlActivityPage>> {
-    const previous = cursor === null ? {} : parseActivityCursor(cursor);
-    if (previous === null) return failure("command_failed", "activity cursor is not valid");
-    const routes = cursor === null
-      ? hosts.filter(item => item.classification === "local" || item.classification === "reachable_daemon").map(item => item.route)
-      : Object.keys(previous);
-    const pages = await Promise.all(routes.map(route => readActivity(route, scope, previous[route] ?? null)));
-    const records: ControlNotification[] = [];
-    const next: Record<string, string> = {};
-    for (const { route, result } of pages) {
-      if (!result.ok) return result;
-      records.push(...result.data.records);
-      if (result.data.next !== null) next[route] = result.data.next;
+  /**
+   * The activity scope across the hosts, globally newest first: a k-way merge over one buffer per host. A host's next
+   * page is read only when its buffer runs dry and the merge still needs a record from it, so a host with many newer
+   * records does not put older records of another host before them.
+   */
+  async function activity(scope: ControlActivityScope, cursor: ControlActivityCursor | null): Promise<ControlResult<ControlActivityPage>> {
+    const routes = hosts.filter(item => item.classification === "local" || item.classification === "reachable_daemon").map(item => item.route);
+    const states = new Map<string, { buffered: ControlNotification[]; next: string | null; done: boolean }>();
+    for (const route of routes) {
+      const kept = cursor === null ? undefined : cursor.hosts[route];
+      if (cursor !== null && kept === undefined) continue;
+      states.set(route, kept === undefined ? { buffered: [], next: null, done: false } : { buffered: [...kept.buffered], next: kept.next, done: kept.done });
     }
-    records.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    return { ok: true, data: { records, cursor: Object.keys(next).length === 0 ? null : JSON.stringify(next) } };
+    const shown: ControlNotification[] = [];
+    while (shown.length < options.notificationsPageSize) {
+      const refills = [...states].filter(([, entry]) => entry.buffered.length === 0 && !entry.done);
+      const pages = await Promise.all(refills.map(([route, entry]) => readActivity(route, scope, entry.next)));
+      for (const [index, [, entry]] of refills.entries()) {
+        const page = pages[index];
+        if (page === undefined || !page.ok) return page ?? failure("invalid_response", "activity page is missing");
+        entry.buffered = [...page.data.records].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        entry.next = page.data.next;
+        entry.done = page.data.next === null;
+      }
+      let newest: { route: string; head: ControlNotification } | null = null;
+      for (const [route, entry] of states) {
+        const head = entry.buffered[0];
+        if (head !== undefined && (newest === null || head.createdAt.localeCompare(newest.head.createdAt) > 0)) newest = { route, head };
+      }
+      if (newest === null) break;
+      states.get(newest.route)?.buffered.shift();
+      shown.push(newest.head);
+    }
+    const hostsLeft: Record<string, { buffered: readonly ControlNotification[]; next: string | null; done: boolean }> = {};
+    for (const [route, entry] of states) {
+      if (entry.buffered.length > 0 || !entry.done) hostsLeft[route] = { buffered: entry.buffered, next: entry.next, done: entry.done };
+    }
+    const more = Object.keys(hostsLeft).length > 0;
+    return { ok: true, data: { records: shown, cursor: more ? { hosts: hostsLeft } : null } };
   }
 
   function assemble(): ControlSnapshot {

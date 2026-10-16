@@ -11,7 +11,7 @@ import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
 import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveOutcome } from "../util/exec.ts";
 import { handover } from "./handover.ts";
-import type { ControlActivityScope } from "../control/types.ts";
+import type { ControlActivityCursor, ControlActivityScope } from "../control/types.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
 import { ATTACH_HOST, ATTACH_VALUE, renderAttachArgv } from "../tui/attach-template.ts";
 import { coalesce } from "./coalesce.ts";
@@ -21,7 +21,7 @@ import { MouseProvider, MouseZone, parseMouseEvent, setMouseTracking, useMouseDi
 import { FILTER_FOOTER, FORM_FOOTER, LayoutProvider, MAIN_FOOTER, SESSIONS_FOOTER, useLayout } from "./layout.tsx";
 import { decodeDoEnvelope, type DoOutcome } from "../tui/decode.ts";
 import { LiveOutput } from "./live-output.ts";
-import { ActivityView, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
+import { ActivityView, activityMatches, applyActivityChange, filterSessions, HostsView, hostTerms, LinkChooser, listWindowStart, orderedSessions, ProjectPicker, projectChoices, RecoveryConfirmation, recordTerms, SessionsView, SessionDetail, WorkPreview, WorkView, sessionDetailMaxOffset, sessionGroup, workPreviewMaxOffset, type ActivityScope, type ViewName } from "./views.tsx";
 import { formPick, INTENTS, LAST_PICK_FIELD, type PickItem } from "./form-pick.ts";
 import { fuzzyFilter, pastedText, typedText } from "../tui/search.ts";
 import { keyPresses, splitKey } from "./key-presses.ts";
@@ -286,7 +286,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [pick, setPick] = useState({ index: 0, search: "", filtering: false });
   const [scope, setScope] = useState<ActivityScope>("Recent");
   // The records of the Activity scope shown, one page at a time; `cursor` is null when the list is complete.
-  const [activity, setActivity] = useState<{ scope: ActivityScope; records: readonly ControlNotification[]; cursor: string | null }>({ scope: "Recent", records: [], cursor: null });
+  const [activity, setActivity] = useState<{ scope: ActivityScope; records: readonly ControlNotification[]; cursor: ControlActivityCursor | null }>({ scope: "Recent", records: [], cursor: null });
   const activityGeneration = useRef(0);
   // The notifications of the session the detail or the panel shows, read by session; `key` says which session they belong to.
   const [sessionNotes, setSessionNotes] = useState<{ key: string; records: readonly ControlNotification[] }>({ key: "", records: [] });
@@ -401,18 +401,38 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [control, noteHost, noteId, bumpStatus]);
 
   // The Activity list reads its scope's first page when the view or the scope is shown; more pages are read on demand.
-  const readActivityPage = useCallback(async (target: ActivityScope, cursor: string | null): Promise<void> => {
+  const readActivityPage = useCallback(async (target: ActivityScope, cursor: ControlActivityCursor | null): Promise<void> => {
     const generation = ++activityGeneration.current;
     const result = await control.activity(CONTROL_SCOPE[target], cursor);
     if (!alive.current || generation !== activityGeneration.current) return;
     // A failed read keeps the records already shown.
     if (!result.ok) { bumpStatus(`Activity read failed: ${result.error.message}`); return; }
-    setActivity((previous) => ({
-      scope: target,
-      records: cursor === null || previous.scope !== target ? result.data.records : [...previous.records, ...result.data.records],
-      cursor: result.data.cursor,
-    }));
+    setActivity((previous) => {
+      if (cursor === null || previous.scope !== target) return { scope: target, records: result.data.records, cursor: result.data.cursor };
+      // A page can repeat a record a refresh already put in the list; each record is shown once.
+      const shown = new Set(previous.records.map((record) => `${record.host}/${record.id}`));
+      const more = result.data.records.filter((record) => !shown.has(`${record.host}/${record.id}`));
+      return { scope: target, records: [...previous.records, ...more], cursor: result.data.cursor };
+    });
   }, [bumpStatus, control]);
+  // A refresh re-reads the first page of the open scope. The loaded records older than that page are kept, minus any
+  // that left the scope, because the next page reads from where the first page ends.
+  const reconcileActivity = useCallback(async (target: ActivityScope): Promise<void> => {
+    const generation = ++activityGeneration.current;
+    const result = await control.activity(CONTROL_SCOPE[target], null);
+    if (!alive.current || generation !== activityGeneration.current || !result.ok) return;
+    setActivity((previous) => {
+      if (previous.scope !== target) return previous;
+      if (result.data.cursor === null) return { scope: target, records: result.data.records, cursor: null };
+      const fresh = result.data.records;
+      const tail = fresh[fresh.length - 1]?.createdAt ?? "";
+      const shown = new Set(fresh.map((record) => `${record.host}/${record.id}`));
+      const older = previous.records.filter((record) => record.createdAt < tail && !shown.has(`${record.host}/${record.id}`) && activityMatches(target, record));
+      return { scope: target, records: [...fresh, ...older], cursor: result.data.cursor };
+    });
+  }, [control]);
+  const activityView = useRef<{ view: ViewName; scope: ActivityScope }>({ view: "Work", scope: "Recent" });
+  activityView.current = { view, scope };
   useEffect(() => {
     if (view !== "Activity") return;
     setActivity({ scope, records: [], cursor: null });
@@ -423,9 +443,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   }, [activity, readActivityPage, scope]);
 
   // A notification that changes while Activity is open updates the loaded page; the page is not read again.
+  // The session notes follow the same events: a change to the session's record replaces it, and a removal drops it.
   useEffect(() => control.subscribeNotifications((change) => {
     if (!alive.current) return;
-    setActivity((previous) => ({ ...previous, records: applyActivityChange(previous.records, previous.scope, change) }));
+    setActivity((previous) => ({ ...previous, records: applyActivityChange(previous.records, previous.scope, change, previous.cursor === null) }));
+    setSessionNotes((previous) => {
+      const others = previous.records.filter((record) => !(record.host === change.host && record.id === change.id));
+      const record = change.record;
+      if (record !== null && `${record.host}/${record.sessionId}` === previous.key) return { key: previous.key, records: [...others, record] };
+      return { key: previous.key, records: others };
+    });
   }), [control]);
 
   const panelMaxOffset = selectedSession === null ? 0 : sessionDetailMaxOffset(selectedSession, panelScreen, detailHeight, detailNotifications, linksOf(selectedSession), noLinkReason(selectedSession, work, originOf(selectedSession)));
@@ -528,11 +555,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (nextControl.ok) {
       // A read that started before a mutation completed is superseded by the follow-up read that the mutation queued.
       if (mutationEpoch.current === epoch) applySnapshot(nextControl.value, actionSeq.current === started);
+      if (activityView.current.view === "Activity") void reconcileActivity(activityView.current.scope);
     } else {
       setStale(true);
       if (actionSeq.current === started) setStatus(`Control refresh failed: ${defaultStatus(nextControl.reason)}`);
     }
-  }), [applySnapshot, control]);
+  }), [applySnapshot, control, reconcileActivity]);
 
   const refreshWork = useMemo(() => coalesce(async (): Promise<void> => {
     if (options.mode !== "main") return;

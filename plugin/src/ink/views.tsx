@@ -22,13 +22,19 @@ export function activityMatches(scope: ActivityScope, record: ControlNotificatio
  * Applies a live change to a loaded page: a record that enters the scope goes to the top, one already shown changes in
  * place, and a record that left the scope or was deleted is removed.
  */
-export function applyActivityChange(records: readonly ControlNotification[], scope: ActivityScope, change: ControlNotificationChange): ControlNotification[] {
+export function applyActivityChange(records: readonly ControlNotification[], scope: ActivityScope, change: ControlNotificationChange, complete: boolean): ControlNotification[] {
   const index = records.findIndex((item) => item.host === change.host && item.id === change.id);
   if (change.record === null || !activityMatches(scope, change.record)) {
     return index < 0 ? [...records] : records.filter((_, position) => position !== index);
   }
-  if (index >= 0) return records.map((item, position) => position === index ? change.record ?? item : item);
-  return [change.record, ...records];
+  const record = change.record;
+  if (index >= 0) return records.map((item, position) => position === index ? record : item);
+  // A record enters at its place in time order. Older records are read by the next page, so one older than the loaded
+  // tail is left for that page.
+  const last = records[records.length - 1];
+  if (!complete && last !== undefined && record.createdAt < last.createdAt) return [...records];
+  const at = records.findIndex((item) => item.createdAt < record.createdAt);
+  return at < 0 ? [...records, record] : [...records.slice(0, at), record, ...records.slice(at)];
 }
 
 export function sessionGroup(session: ControlSession, notifications: readonly ControlNotification[]): string {

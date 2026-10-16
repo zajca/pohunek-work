@@ -111,8 +111,16 @@ export interface ControlNotificationChange { readonly host: string; readonly id:
 /** Scope of the activity list; `recent` is every notification but the archived and deleted ones. */
 export type ControlActivityScope = "recent" | "unread" | "archived";
 
-/** One page of the activity list across hosts; `cursor` is passed back for the next page and is null when the list is complete. */
-export interface ControlActivityPage { readonly records: readonly ControlNotification[]; readonly cursor: string | null }
+/**
+ * Where an activity list continues. Each host that has records left keeps the records it has read and not yet shown
+ * (newest first) and the daemon cursor of its next page; `done` means the host has no further page.
+ */
+export interface ControlActivityCursor {
+  readonly hosts: Readonly<Record<string, { readonly buffered: readonly ControlNotification[]; readonly next: string | null; readonly done: boolean }>>;
+}
+
+/** One page of the activity list across hosts, globally newest first; `cursor` is null when the list is complete. */
+export interface ControlActivityPage { readonly records: readonly ControlNotification[]; readonly cursor: ControlActivityCursor | null }
 
 export interface ControlClient {
   refresh(): Promise<ControlSnapshot>;
@@ -130,7 +138,7 @@ export interface ControlClient {
   /** Calls the listener with each notification change the event stream carries; returns the unsubscribe. */
   subscribeNotifications(listener: (change: ControlNotificationChange) => void): () => void;
   /** One page of an activity scope across the hosts, newest first; `cursor` is null for the first page. */
-  activity(scope: ControlActivityScope, cursor: string | null): Promise<ControlResult<ControlActivityPage>>;
+  activity(scope: ControlActivityScope, cursor: ControlActivityCursor | null): Promise<ControlResult<ControlActivityPage>>;
   /** The first page of a session's notifications on its host. */
   sessionNotifications(host: string, sessionId: string): Promise<ControlResult<readonly ControlNotification[]>>;
 }

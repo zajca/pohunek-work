@@ -330,11 +330,12 @@ export class SdkLink {
     }
   }
 
-  /** The first page of a session's notifications on this host, under every status. */
+  /** Every notification of a session on this host, under every status. */
   public async sessionNotifications(sessionId: string, pageSize: number): Promise<ControlResult<readonly ControlNotification[]>> {
+    const records: ControlNotification[] = [];
     try {
-      const page = await this.listPage({ session_id: sessionId }, pageSize, null);
-      return { ok: true, data: page.records };
+      await this.listAll({ session_id: sessionId }, pageSize, (record) => records.push(record));
+      return { ok: true, data: records };
     } catch (error) {
       return { ok: false, error: sdkFailure(error) };
     }
