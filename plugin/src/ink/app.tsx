@@ -78,9 +78,18 @@ type OverlayKind = "none" | "links" | "session" | "host" | "notification" | "for
 /** Where Esc or a finished action returns to. */
 type ReturnKind = "none" | "session";
 /** The open overlay; `kind` is what the views switch on. A confirm carries its target, so it cannot open without one. */
+/** The session and highlighted link of the link chooser; `url` is null when the session has no link to highlight. */
+interface LinkChoice { readonly host: string; readonly id: string; readonly url: string | null; readonly returnTo: ReturnKind }
+
 type Overlay =
-  | { readonly kind: Exclude<OverlayKind, "confirm"> }
-  | { readonly kind: "confirm"; readonly action: ConfirmAction; readonly session: ControlSession; readonly returnTo: ReturnKind };
+  | { readonly kind: Exclude<OverlayKind, "confirm" | "recovery" | "links" | "host" | "notification" | "work-detail" | "work-preview"> }
+  | { readonly kind: "confirm"; readonly action: ConfirmAction; readonly session: ControlSession; readonly returnTo: ReturnKind }
+  | { readonly kind: "recovery"; readonly request: RecoveryRequest }
+  | { readonly kind: "links"; readonly chooser: LinkChoice }
+  | { readonly kind: "host"; readonly capabilities: ControlHostCapabilities | null; readonly governance: ControlGovernance | null }
+  | { readonly kind: "notification"; readonly record: ControlNotification }
+  | { readonly kind: "work-detail"; readonly key: string; readonly choice: number }
+  | { readonly kind: "work-preview"; readonly key: string; readonly choice: number; readonly preview: DoOutcome | string; readonly offset: number };
 /** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
 interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: ReturnKind }
 
@@ -163,9 +172,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   useEffect(() => { setEditing((old) => old === null || old === view ? old : null); }, [view]);
   const [queries, setQueries] = useState<Record<"Sessions" | "Hosts" | "Activity", string>>({ Sessions: "", Hosts: "", Activity: "" });
   const [workKey, setWorkKey] = useState<string | null>(null);
-  const [workDetailKey, setWorkDetailKey] = useState<string | null>(null);
-  const [workPreview, setWorkPreview] = useState<DoOutcome | string | null>(null);
-  const [previewOffset, setPreviewOffset] = useState(0);
   const { status, setStatus, busy, setBusy, mutationNotice, mutationEpoch, actionSeq, bumpStatus } = useStatus();
   // Set when a fork did not answer: its outcome is unknown, so another fork waits for the owner to look at the list.
   const [forkUnknown, setForkUnknown] = useState(false);
@@ -185,23 +191,17 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [detailOffset, setDetailOffset] = useState(0);
   // The panel and the session overlay follow the newest output until the owner scrolls away from its end.
   const [followOutput, setFollowOutput] = useState(true);
-  const [hostDetail, setHostDetail] = useState<ControlHostCapabilities | null>(null);
-  const [governance, setGovernance] = useState<ControlGovernance | null>(null);
-  const [notificationDetail, setNotificationDetail] = useState<ControlNotification | null>(null);
   const notificationSelectionGeneration = useRef(0);
   const [formLoading, setFormLoading] = useState(false);
   const formLoadingRef = useRef(false);
   const formGeneration = useRef(0);
-  const [recovery, setRecovery] = useState<RecoveryRequest | null>(null);
   const [edit, setEdit] = useState("");
   const [form, setForm] = useState<LaunchForm>(EMPTY_FORM);
   const [launchOptions, setLaunchOptions] = useState<LaunchOptions | null>(null);
   const [actions, setActions] = useState<readonly ActionChoice[]>([]);
   const [created, setCreated] = useState<CreatedSession | null>(null);
-  const [workChoice, setWorkChoice] = useState(0);
   // The link chooser of `l`: the session, the highlighted line and the overlay it returns to on Esc or a pick.
   // The chooser names its session by host and id and its highlight by URL, so a refresh re-resolves both.
-  const [linkChoice, setLinkChoice] = useState<{ host: string; id: string; url: string | null; returnTo: "none" | "session" } | null>(null);
   // The ref the control data calls after each control read. It is set below, once the activity page is declared.
   const afterControlRead = useRef<() => void>(() => undefined);
   const { alive, snapshot, setSnapshot, work, stale, refresh } = useControlData(control, options, { setStatus, actionSeq, mutationEpoch, mutationNotice }, afterControlRead);
@@ -225,12 +225,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const hostRows = useMemo(() => snapshot === null ? [] : fuzzyFilter(snapshot.hosts, queries.Hosts, hostTerms), [snapshot, queries.Hosts]);
   const workRows = useMemo(() => work?.payload === null || work === null ? null : filterRows(work.payload, workFilters, staleCutoff(Date.now(), options.stalePrDays)), [work, workFilters, options.stalePrDays]);
   const selectedWork = workRows?.find((item) => rowId(item) === workKey) ?? selectedAt(workRows ?? [], cursor.Work);
-  const workDetail = work?.payload?.items.find((item) => rowId(item) === workDetailKey) ?? null;
+  // The item and the action choice exist only while the work detail or its preview is open.
+  const workOverlay = overlay.kind === "work-detail" || overlay.kind === "work-preview" ? overlay : null;
+  const workDetail = work?.payload?.items.find((item) => rowId(item) === workOverlay?.key) ?? null;
   const originOf = useCallback((session: ControlSession): string | null => snapshot?.projects.find((entry) => entry.host === session.host && entry.id === session.projectId)?.originUrl ?? null, [snapshot]);
   const linksOf = useCallback((session: ControlSession): SessionLink[] => sessionLinks(session, work?.payload?.items ?? null, originOf(session)), [originOf, work]);
-  const selectedWorkAction = workDetail?.actions[workChoice];
-  const previewMatchesSelection = workPreview !== null && typeof workPreview !== "string" && workPreview.kind === "ok" &&
-    workDetail !== null && selectedWorkAction !== undefined && workPreview.key === workDetail.key && workPreview.action === selectedWorkAction.name;
+  const selectedWorkAction = workDetail?.actions[workOverlay?.choice ?? 0];
+  const previewMatchesSelection = overlay.kind === "work-preview" && typeof overlay.preview !== "string" && overlay.preview.kind === "ok" &&
+    workDetail !== null && selectedWorkAction !== undefined && overlay.preview.key === workDetail.key && overlay.preview.action === selectedWorkAction.name;
   const selectedWorkIndex = selectedWork === null ? 0 : workRows?.indexOf(selectedWork) ?? 0;
   const selectedSession = sessions.find((session) => `${session.host}/${session.id}` === sessionKey) ?? selectedAt(sessions, cursor.Sessions);
   const split = options.mode === "main" && stdout.columns >= options.detailMinWidth;
@@ -348,7 +350,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   };
   const previewHeight = Math.max(4, stdout.rows - layout.previewReservedRows);
   const previewWidth = Math.max(20, stdout.columns - 4);
-  const previewMaxOffset = workPreview === null ? 0 : workPreviewMaxOffset(workPreview, previewWidth, previewHeight);
+  const previewMaxOffset = overlay.kind === "work-preview" ? workPreviewMaxOffset(overlay.preview, previewWidth, previewHeight) : 0;
   const sessionWritable = sessionDetail !== null && isWritable(sessionDetail);
   const sessionMutable = sessionDetail !== null && isMutable(sessionDetail);
   const sessionActive = sessionDetail !== null && isActive(sessionDetail);
@@ -516,19 +518,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const [capabilities, policy] = await Promise.all([
         control.inspectHost(host.route), control.inspectGovernance(host.route),
       ]);
-      setHostDetail(capabilities.ok ? capabilities.data : null);
-      setGovernance(policy.ok ? policy.data : null);
       const failures = [capabilities.ok ? null : capabilities.error.message, policy.ok ? null : policy.error.message].filter((message): message is string => message !== null);
       if (failures.length > 0) bumpStatus(failures.join("; "));
-      setOverlay({ kind: "host" });
+      setOverlay({ kind: "host", capabilities: capabilities.ok ? capabilities.data : null, governance: policy.ok ? policy.data : null });
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [control]);
 
   const openNotification = useCallback(async (record: ControlNotification): Promise<void> => {
     const generation = ++notificationSelectionGeneration.current;
-    setNotificationDetail(record);
-    setOverlay({ kind: "notification" });
+    setOverlay({ kind: "notification", record });
     if (record.status === "unread") {
       if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
         bumpStatus("Notification data is stale; it was not marked read");
@@ -540,7 +539,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
           } else {
             if (result.data.kind === "read" && notificationSelectionGeneration.current === generation) {
               const updated = result.data.notification;
-              setNotificationDetail((current) => current?.host === record.host && current.id === record.id ? updated : current);
+              setOverlay((current) => current.kind === "notification" && current.record.host === record.host && current.record.id === record.id ? { kind: "notification", record: updated } : current);
             }
             await refresh();
           }
@@ -564,7 +563,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
           const updated = result.data.notification;
           setSnapshot((previous) => previous === null ? previous : { ...previous, notifications: previous.notifications.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) });
           setActivity((previous) => ({ ...previous, records: previous.records.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) }));
-          setNotificationDetail((current) => current !== null && current.host === updated.host && current.id === updated.id ? updated : current);
+          setOverlay((current) => current.kind === "notification" && current.record.host === updated.host && current.record.id === updated.id ? { kind: "notification", record: updated } : current);
         }
         bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
         await refresh();
@@ -648,8 +647,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (!isWritable(latest.data)) { bumpStatus("This runtime is read-only"); return; }
       if (latest.data.nativeTarget.status === "invalid") { bumpStatus(`Recovery target unavailable: ${latest.data.nativeTarget.reason}`); return; }
       if (kind === "fork" ? !latest.data.canFork : !latest.data.canResume) { bumpStatus(`This session cannot be ${kind === "fork" ? "forked" : "resumed"}`); return; }
-      setRecovery({ kind, session: latest.data, returnTo });
-      setOverlay({ kind: "recovery" });
+      setOverlay({ kind: "recovery", request: { kind, session: latest.data, returnTo } });
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [busy, control, snapshot, stale]);
@@ -712,8 +710,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (links.length === 0) { bumpStatus(`No link: ${noLinkReason(session, work, originOf(session))}`); return; }
     const only = links[0];
     if (links.length === 1 && only !== undefined) { openLink(only.url); return; }
-    setLinkChoice({ host: session.host, id: session.id, url: links[0]?.url ?? null, returnTo });
-    setOverlay({ kind: "links" });
+    setOverlay({ kind: "links", chooser: { host: session.host, id: session.id, url: links[0]?.url ?? null, returnTo } });
   }, [linksOf, openLink, originOf, work]);
 
   // The picker opens on the current project filter with its full list, so a stale search cannot hide that project.
@@ -795,9 +792,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     setBusy(true);
     try {
       const preview = await previewWork(options.selfBin, options.listTimeoutMs, workDetail.key, action, workDetail.project);
-      setWorkPreview(preview);
-      setPreviewOffset(0);
-      setOverlay({ kind: "work-preview" });
+      // The choice is the one the owner has now, when the detail is still open; Esc from the preview returns to it.
+      setOverlay((current) => ({ kind: "work-preview", key: rowId(workDetail), choice: current.kind === "work-detail" ? current.choice : 0, preview, offset: 0 }));
     } catch (error) { bumpStatus(`Plan preview: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
   }, [busy, options.listTimeoutMs, options.selfBin, workDetail]);
@@ -846,9 +842,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (view === "Work") {
       const item = workRows?.[targetIndex];
       if (item === undefined) return;
-      setWorkDetailKey(rowId(item));
-      setWorkChoice(0);
-      setOverlay({ kind: "work-detail" });
+      setOverlay({ kind: "work-detail", key: rowId(item), choice: 0 });
     } else if (view === "Sessions") {
       const session = sessions[targetIndex];
       if (session !== undefined) void inspectSessionAt(session.host, session.id);
@@ -991,9 +985,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       setOverlay({ kind: overlay.returnTo }); return;
     }
     if (overlay.kind === "recovery") {
-      const request = recovery;
-      setRecovery(null); setOverlay({ kind: request?.returnTo ?? "none" });
-      if (input.toLowerCase() === "y" && request !== null) confirmRecovery(request);
+      const request = overlay.request;
+      setOverlay({ kind: request.returnTo });
+      if (input.toLowerCase() === "y") confirmRecovery(request);
       return;
     }
     if (overlay.kind === "rename" || overlay.kind === "metadata") {
@@ -1065,34 +1059,33 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     if (overlay.kind === "work-preview") {
-      if (key.escape) setOverlay({ kind: "work-detail" });
-      else if (key.pageDown || key.downArrow) setPreviewOffset((old) => Math.min(previewMaxOffset, old + Math.max(1, previewHeight - 1)));
-      else if (key.pageUp || key.upArrow) setPreviewOffset((old) => Math.max(0, old - Math.max(1, previewHeight - 1)));
+      if (key.escape) setOverlay({ kind: "work-detail", key: overlay.key, choice: overlay.choice });
+      else if (key.pageDown || key.downArrow) setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.min(previewMaxOffset, current.offset + Math.max(1, previewHeight - 1)) } : current);
+      else if (key.pageUp || key.upArrow) setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.max(0, current.offset - Math.max(1, previewHeight - 1)) } : current);
       else if ((key.return || input === "r") && previewMatchesSelection) void workHandover(selectedWorkAction.name);
       return;
     }
     if (overlay.kind === "work-detail") {
       if (key.escape) { setOverlay({ kind: "none" }); return; }
-      if (key.upArrow || input === "k") setWorkChoice((old) => Math.max(0, old - 1));
-      else if (key.downArrow || input === "j") setWorkChoice((old) => Math.min((workDetail?.actions.length ?? 1) - 1, old + 1));
-      else if (key.return || input === "p") { const action = workDetail?.actions[workChoice]; if (action !== undefined) void previewWorkAction(action.name); }
-      else if (input === "r") { const action = workDetail?.actions[workChoice]; if (action !== undefined) void workHandover(action.name); }
+      if (key.upArrow || input === "k") setOverlay((current) => current.kind === "work-detail" ? { ...current, choice: Math.max(0, current.choice - 1) } : current);
+      else if (key.downArrow || input === "j") setOverlay((current) => current.kind === "work-detail" ? { ...current, choice: Math.min((workDetail?.actions.length ?? 1) - 1, current.choice + 1) } : current);
+      else if (key.return || input === "p") { if (selectedWorkAction !== undefined) void previewWorkAction(selectedWorkAction.name); }
+      else if (input === "r") { if (selectedWorkAction !== undefined) void workHandover(selectedWorkAction.name); }
       else if (input === "o" && workDetail !== null) { const url = workDetail.pull_request?.url ?? workDetail.issue?.url; if (url !== undefined) openLink(url); }
       return;
     }
     if (overlay.kind === "links") {
-      const choice = linkChoice;
-      if (choice === null) { setOverlay({ kind: "none" }); return; }
+      const choice = overlay.chooser;
       const chosen = snapshot?.sessions.find((session) => session.host === choice.host && session.id === choice.id) ?? null;
       const links = chosen === null ? [] : linksOf(chosen);
-      const close = (): void => { setLinkChoice(null); setOverlay({ kind: choice.returnTo }); };
+      const close = (): void => { setOverlay({ kind: choice.returnTo }); };
       if (chosen === null) {
         close();
         bumpStatus("The session of this chooser is no longer listed; no link opened");
         return;
       }
       const highlighted = Math.max(0, links.findIndex((link) => link.url === choice.url));
-      const highlight = (index: number): void => { setLinkChoice({ ...choice, url: links[index]?.url ?? null }); };
+      const highlight = (index: number): void => { setOverlay({ kind: "links", chooser: { ...choice, url: links[index]?.url ?? null } }); };
       // A refresh can change the links while the chooser is open; a pick that no longer has its link says so instead of failing silently.
       const missing = (number: number): void => {
         if (links.length === 0) { close(); bumpStatus(`No link ${String(number)} on this session anymore; none are left`); return; }
@@ -1140,9 +1133,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return;
     }
     if (overlay.kind === "notification") {
+      const { record } = overlay;
       if (key.escape) setOverlay({ kind: "none" });
-      else if (notificationDetail !== null && input === "o" && notificationDetail.sessionId !== null) void inspectSessionAt(notificationDetail.host, notificationDetail.sessionId);
-      else if (notificationDetail !== null && (input === "a" || input === "x")) void updateNotification(notificationDetail, input === "a" ? "ack" : "archive");
+      else if (input === "o" && record.sessionId !== null) void inspectSessionAt(record.host, record.sessionId);
+      else if (input === "a" || input === "x") void updateNotification(record, input === "a" ? "ack" : "archive");
       return;
     }
     if (overlay.kind === "host") { if (key.escape) setOverlay({ kind: "none" }); return; }
@@ -1238,18 +1232,19 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   else if (overlay.kind === "session" && sessionDetail !== null) content = <SessionDetail session={sessionDetail} screen={screen} notifications={detailNotifications} links={linksOf(sessionDetail)} noLinks={noLinkReason(sessionDetail, work, originOf(sessionDetail))}
     offset={overlayOffset} height={detailHeight} onWheel={(direction) => { scrollDetail(overlayOffset + direction * Math.max(1, detailHeight - 1), detailMaxOffset); }}
     onOpenLink={(index) => { openLinkNumber(sessionDetail, index + 1); }} />;
-  else if (overlay.kind === "links" && linkChoice !== null) {
-    const chosen = snapshot?.sessions.find((session) => session.host === linkChoice.host && session.id === linkChoice.id) ?? null;
+  else if (overlay.kind === "links") {
+    const { chooser } = overlay;
+    const chosen = snapshot?.sessions.find((session) => session.host === chooser.host && session.id === chooser.id) ?? null;
     const chosenLinks = chosen === null ? [] : linksOf(chosen);
-    content = <LinkChooser links={chosenLinks} selected={Math.max(0, chosenLinks.findIndex((link) => link.url === linkChoice.url))} />;
+    content = <LinkChooser links={chosenLinks} selected={Math.max(0, chosenLinks.findIndex((link) => link.url === chooser.url))} />;
   }
-  else if (overlay.kind === "recovery" && recovery !== null) content = <RecoveryConfirmation action={recovery.kind} session={recovery.session} />;
+  else if (overlay.kind === "recovery") content = <RecoveryConfirmation action={overlay.request.kind} session={overlay.request.session} />;
   else if (overlay.kind === "confirm" && overlay.returnTo !== "none") content = <Message color="red" text={confirmText(overlay.action, overlay.session)} />;
   else if (overlay.kind === "rename" || overlay.kind === "metadata") content = <Text>{`${overlay.kind === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
-  else if (overlay.kind === "host") content = <HostOverlay capabilities={hostDetail} governance={governance} />;
-  else if (overlay.kind === "notification" && notificationDetail !== null) content = <NotificationOverlay record={notificationDetail} />;
-  else if (overlay.kind === "work-preview" && workPreview !== null) content = <WorkPreview preview={workPreview} width={previewWidth} height={previewHeight} offset={previewOffset} onWheel={(direction) => { setPreviewOffset((old) => Math.max(0, Math.min(previewMaxOffset, old + direction * Math.max(1, previewHeight - 1)))); }} />;
-  else if (overlay.kind === "work-detail") content = workDetail === null ? <Message text="This work item is no longer available. Go back and refresh." /> : <WorkDetailOverlay detail={workDetail} choice={workChoice} onPick={(index, name) => { setWorkChoice(index); void previewWorkAction(name); }} />;
+  else if (overlay.kind === "host") content = <HostOverlay capabilities={overlay.capabilities} governance={overlay.governance} />;
+  else if (overlay.kind === "notification") content = <NotificationOverlay record={overlay.record} />;
+  else if (overlay.kind === "work-preview") content = <WorkPreview preview={overlay.preview} width={previewWidth} height={previewHeight} offset={overlay.offset} onWheel={(direction) => { setOverlay((current) => current.kind === "work-preview" ? { ...current, offset: Math.max(0, Math.min(previewMaxOffset, current.offset + direction * Math.max(1, previewHeight - 1))) } : current); }} />;
+  else if (overlay.kind === "work-detail") content = workDetail === null ? <Message text="This work item is no longer available. Go back and refresh." /> : <WorkDetailOverlay detail={workDetail} choice={overlay.choice} onPick={(index, name) => { setOverlay({ kind: "work-detail", key: overlay.key, choice: index }); void previewWorkAction(name); }} />;
   else if (overlay.kind === "projects") content = <ProjectPicker choices={pickChoices} selected={pick.index} search={pick.search} filtering={pick.filtering} limit={visibleRows} />;
   else if (overlay.kind === "help") content = <HelpOverlay />;
   else if (view === "Work") content = <WorkView rows={workRows} selected={selectedWorkIndex} start={workStart} limit={visibleRows} filter={`Actor ${workFilters.actor}  Project ${workFilters.project ?? "all"}  Search ${workFilters.text || "none"}  Hide stale ${workFilters.hideStale ? "on" : "off"}${work?.partial ? "  PARTIAL" : ""}`} warning={work?.warning ?? null} searchActive={editing === "Work"} searchText={workFilters.text} {...listInteraction} />;
@@ -1304,12 +1299,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   </Box>;
   else if (overlay.kind === "work-preview") toolbar = <Box gap={1} flexWrap="wrap">
     {previewMatchesSelection && <ActionButton label={`Run ${selectedWorkAction.name}`} onClick={() => { void workHandover(selectedWorkAction.name); }} primary />}
-    <ActionButton label="Back to item" onClick={() => { setOverlay({ kind: "work-detail" }); }} />
+    <ActionButton label="Back to item" onClick={() => { setOverlay({ kind: "work-detail", key: overlay.key, choice: overlay.choice }); }} />
   </Box>;
-  else if (overlay.kind === "notification" && notificationDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
-    {notificationDetail.sessionId !== null && <ActionButton label="Open session" onClick={() => { if (notificationDetail.sessionId !== null) void inspectSessionAt(notificationDetail.host, notificationDetail.sessionId); }} primary />}
-    <ActionButton label="Acknowledge" onClick={() => void updateNotification(notificationDetail, "ack")} />
-    <ActionButton label="Archive" onClick={() => void updateNotification(notificationDetail, "archive")} />
+  else if (overlay.kind === "notification") toolbar = <Box gap={1} flexWrap="wrap">
+    {overlay.record.sessionId !== null && <ActionButton label="Open session" onClick={() => { if (overlay.record.sessionId !== null) void inspectSessionAt(overlay.record.host, overlay.record.sessionId); }} primary />}
+    <ActionButton label="Acknowledge" onClick={() => void updateNotification(overlay.record, "ack")} />
+    <ActionButton label="Archive" onClick={() => void updateNotification(overlay.record, "archive")} />
     <ActionButton label="Back" onClick={() => { setOverlay({ kind: "none" }); }} />
   </Box>;
   else if (overlay.kind === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
@@ -1327,9 +1322,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     {sessionWritable && <ActionButton label="Remove" onClick={() => { requestConfirm(sessionDetail, "remove", "session"); }} />}
     <ActionButton label="Back" onClick={() => { setOverlay({ kind: "none" }); }} />
   </Box>;
-  else if (overlay.kind === "recovery" && recovery !== null) toolbar = <Box gap={1}>
-    <ActionButton label={`Confirm ${recovery.kind}`} onClick={() => { const request = recovery; setRecovery(null); setOverlay({ kind: request.returnTo }); confirmRecovery(request); }} primary />
-    <ActionButton label="Cancel" onClick={() => { const returnTo = recovery.returnTo; setRecovery(null); setOverlay({ kind: returnTo }); }} />
+  else if (overlay.kind === "recovery") toolbar = <Box gap={1}>
+    <ActionButton label={`Confirm ${overlay.request.kind}`} onClick={() => { const { request } = overlay; setOverlay({ kind: request.returnTo }); confirmRecovery(request); }} primary />
+    <ActionButton label="Cancel" onClick={() => { setOverlay({ kind: overlay.request.returnTo }); }} />
   </Box>;
   else if (overlay.kind === "confirm") toolbar = <Box gap={1}>
     <ActionButton label={`Confirm ${overlay.action}`} onClick={() => { const { action, session, returnTo } = overlay; setOverlay({ kind: returnTo }); void runSessionAction({ kind: action, host: session.host, sessionId: session.id }, session); }} primary />
