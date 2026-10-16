@@ -416,7 +416,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       // A page can repeat a record a refresh already put in the list; each record is shown once.
       const shown = new Set(previous.records.map((record) => `${record.host}/${record.id}`));
       const more = result.data.records.filter((record) => !shown.has(`${record.host}/${record.id}`));
-      return { scope: target, records: [...previous.records, ...more], cursor: result.data.cursor };
+      return { scope: target, records: [...previous.records, ...more].sort(compareActivityOrder), cursor: result.data.cursor };
     });
   }, [bumpStatus, control]);
   // A refresh re-reads the first page of the open scope. The loaded records after that page in the activity order are
@@ -434,7 +434,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       const failedHosts = new Set(result.data.errors.map((item) => item.host));
       const shown = new Set(fresh.map((record) => `${record.host}/${record.id}`));
       const older = previous.records.filter((record) => !shown.has(`${record.host}/${record.id}`) && activityMatches(target, record)
-        && (failedHosts.has(record.host) || tail === undefined || compareActivityOrder(record, tail) > 0));
+        && (failedHosts.has(record.host) || (tail !== undefined && compareActivityOrder(record, tail) > 0)));
       return { scope: target, records: [...fresh, ...older].sort(compareActivityOrder), cursor: result.data.cursor };
     });
   }, [control]);
