@@ -3,13 +3,11 @@
 #
 # usage: stage-archive <component> <version> <target> <input> <output-dir>
 #
-# <component> is gui, web, launchers, or plugin. <input> is the built input of
-# that component: the directory holding the `pohunek-gui` binary (a
-# `Pohunek.app` bundle instead for the macOS gui component), the input tree
-# assembled by web/release/package.sh, the `launchers/` source directory, or the
-# repository root for the plugin (its sources import files from `launchers/`,
-# so the archive keeps the `plugin/` and `launchers/` sibling layout). The staging
-# directory <output-dir>/<name> is created fresh and the archive name
+# <component> is web, launchers, or plugin. <input> is the built input of that
+# component: the input tree assembled by web/release/package.sh, the `launchers/`
+# source directory, or the repository root for the plugin (its sources import
+# files from `launchers/`, so the archive keeps the `plugin/` and `launchers/`
+# sibling layout). The staging directory <output-dir>/<name> is created fresh and the archive name
 # `<prefix>-<version>-<target>` is printed on stdout. Run from the repository
 # root: the README and the license texts are copied from it.
 #
@@ -31,7 +29,6 @@ input=$4
 output=$5
 
 case $component in
-    gui) prefix=pohunek-gui ;;
     web) prefix=pohunek-web ;;
     launchers) prefix=pohunek-launchers ;;
     plugin) prefix=pohunek-work-plugin ;;
@@ -66,18 +63,10 @@ copy_member() {
 }
 
 case $component in
-    gui)
-        case $target in
-            *-apple-darwin)
-                [ -d "$input/Pohunek.app" ] || fail "built app bundle is missing: $input/Pohunek.app"
-                cp -Rp "$input/Pohunek.app" "$staging/Pohunek.app"
-                ;;
-            *) copy_member pohunek-gui ;;
-        esac
-        ;;
     web)
         # The web archive is assembled by web/release/package.sh; <input> is
         # its input tree (backend executable, frontend, installer, README).
+        [ -f "$input/pohunek-web" ] || fail "required input file is missing: $input/pohunek-web"
         cp -Rp "$input/." "$staging/"
         mkdir -p "$staging/packaging"
         cp packaging/verify-archive "$staging/packaging/"
@@ -87,7 +76,7 @@ case $component in
         # and prompt templates, and the two guides.
         for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue \
             templates/launcher.conf templates/sway-dropin.conf.tmpl \
-            templates/prompts/issue.tmpl templates/prompts/pr.tmpl templates/prompts/review.tmpl \
+            templates/prompts/issue.tmpl templates/prompts/pr.tmpl \
             docs/launcher.md docs/debug-launcher.md; do
             copy_member "$member"
         done
@@ -107,7 +96,7 @@ case $component in
         done
         for member in lib.sh pohunek-launch-issue pohunek-launch-pr pohunek-rofi pohunek-rofi-issue \
             templates/launcher.conf templates/sway-dropin.conf.tmpl templates/sway-issue-binding.conf.tmpl \
-            templates/prompts/issue.tmpl templates/prompts/pr.tmpl templates/prompts/review.tmpl; do
+            templates/prompts/issue.tmpl templates/prompts/pr.tmpl; do
             copy_member "launchers/$member"
         done
         ;;

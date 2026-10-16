@@ -6,6 +6,5 @@ logs/
 .env.*
 .claude/*
 !.claude/skills/
-native/target/
 __pycache__/
 plugin/.core-binaries/

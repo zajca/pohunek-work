@@ -8,7 +8,7 @@
 # directory argument) must be
 #   - a thin arm64 image (no universal binary, no x86_64, no arm64e);
 #   - built for macOS (not iOS, tvOS, or watchOS) with a deployment target no newer than --minimum-os (default: the
-#     value in native/packaging/macos/DEPLOYMENT_TARGET);
+#     value in packaging/macos/DEPLOYMENT_TARGET);
 #   - linked only against system libraries under /usr/lib or /System/Library,
 #     with no @rpath/@executable_path/@loader_path library and no LC_RPATH;
 #   - free of build-machine paths: the strings below, plus every
@@ -39,7 +39,7 @@ fail() {
     exit 2
 }
 
-minimum_os=$(tr -d ' \n' < "$script_dir/../../native/packaging/macos/DEPLOYMENT_TARGET")
+minimum_os=$(tr -d ' \n' < "$script_dir/DEPLOYMENT_TARGET")
 forbidden=$DEFAULT_FORBIDDEN_STRINGS
 required=
 string_scan=yes

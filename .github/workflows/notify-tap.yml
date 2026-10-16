@@ -1,6 +1,6 @@
 name: Notify the Homebrew tap
 
-# Tells the tap zajca/homebrew-pohunek to bump a formula after a `gui-vX.Y.Z` or
+# Tells the tap zajca/homebrew-pohunek to bump a formula after a
 # `web-vX.Y.Z` release has been published. It is a separate workflow so that
 # `release.yml` keeps no secret: the only credential here is the dispatch token,
 # which can only start a workflow in the tap. The job checks out nothing, runs
@@ -33,7 +33,6 @@ jobs:
         run: |
           set -euo pipefail
           case "$TAG" in
-            gui-v[0-9]*) formula=pohunek-gui ;;
             web-v[0-9]*) formula=pohunek-web ;;
             *)
               echo "tag $TAG has no formula; nothing to dispatch"
