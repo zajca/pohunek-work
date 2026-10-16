@@ -938,6 +938,22 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   });
 
 
+  // The work filters and the activity scope change the same way from a key and from a button.
+  const cycleActor = useCallback((): void => {
+    setWorkFilters((old) => ({ ...old, actor: ACTOR_FILTERS[(ACTOR_FILTERS.indexOf(old.actor) + 1) % ACTOR_FILTERS.length] ?? "all" }));
+  }, []);
+  const cycleProject = useCallback((): void => {
+    if (work?.payload === null || work === null) return;
+    const projects = projectLabels(work.payload);
+    const index = projects.indexOf(workFilters.project ?? "");
+    setWorkFilters((old) => ({ ...old, project: projects[index + 1] ?? null }));
+  }, [work, workFilters.project]);
+  const toggleStale = useCallback((): void => { setWorkFilters((old) => ({ ...old, hideStale: !old.hideStale })); }, []);
+  const cycleScope = useCallback((): void => {
+    setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent");
+    setCursor((old) => ({ ...old, Activity: 0 }));
+  }, []);
+
   const handleKey = (input: string, key: Key): void => {
     const mouse = parseMouseEvent(input);
     // Input that arrives while an action runs is refused on the status line, so the owner sees why nothing happened.
@@ -1148,13 +1164,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(); return; }
     if (view === "Work") {
       if (input === "m") setWorkFilters((old) => ({ ...old, actor: old.actor === "me" ? "all" : "me" }));
-      else if (input === "f") setWorkFilters((old) => ({ ...old, actor: ACTOR_FILTERS[(ACTOR_FILTERS.indexOf(old.actor) + 1) % ACTOR_FILTERS.length] ?? "all" }));
-      else if (input === "P" && work?.payload !== null && work !== null) {
-        const projects = projectLabels(work.payload);
-        const index = projects.indexOf(workFilters.project ?? "");
-        setWorkFilters((old) => ({ ...old, project: projects[index + 1] ?? null }));
-      }
-      else if (input === "h") setWorkFilters((old) => ({ ...old, hideStale: !old.hideStale }));
+      else if (input === "f") cycleActor();
+      else if (input === "P") cycleProject();
+      else if (input === "h") toggleStale();
       else if (key.return || input === "a") openRow(selectedWorkIndex);
       else if (input === "n") openForm(false);
       else if (input === "s") setView("Sessions");
@@ -1175,7 +1187,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     } else if (view === "Hosts") {
       if (key.return) openRow(cursor.Hosts);
     } else {
-      if (input === "c") { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }
+      if (input === "c") cycleScope();
       else if (input === "m") loadMoreActivity();
       else if (key.return) openRow(cursor.Activity);
     }
@@ -1263,15 +1275,10 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (view === "Work") toolbar = <Box gap={1} flexWrap="wrap">
       {selectedWork !== null && <ActionButton label="Open item" onClick={() => { openRow(selectedWorkIndex); }} primary />}
       <ActionButton label="New session" onClick={() => { openForm(false); }} />
-      <ActionButton label={`Actor: ${workFilters.actor}`} onClick={() => { setWorkFilters((old) => ({ ...old, actor: ACTOR_FILTERS[(ACTOR_FILTERS.indexOf(old.actor) + 1) % ACTOR_FILTERS.length] ?? "all" })); }} />
-      <ActionButton label={`Project: ${shorten(workFilters.project ?? "all", 12)}`} onClick={() => {
-        if (work?.payload === null || work === null) return;
-        const projects = projectLabels(work.payload);
-        const index = projects.indexOf(workFilters.project ?? "");
-        setWorkFilters((old) => ({ ...old, project: projects[index + 1] ?? null }));
-      }} />
+      <ActionButton label={`Actor: ${workFilters.actor}`} onClick={cycleActor} />
+      <ActionButton label={`Project: ${shorten(workFilters.project ?? "all", 12)}`} onClick={cycleProject} />
       <ActionButton label="Search /" onClick={() => { setEditing("Work"); }} />
-      <ActionButton label={`Stale: ${workFilters.hideStale ? "hide" : "show"}`} onClick={() => { setWorkFilters((old) => ({ ...old, hideStale: !old.hideStale })); }} />
+      <ActionButton label={`Stale: ${workFilters.hideStale ? "hide" : "show"}`} onClick={toggleStale} />
       <ActionButton label="Refresh" onClick={() => void refresh()} />
       <ActionButton label="Help ?" onClick={() => { setOverlay({ kind: "help" }); }} />
     </Box>;
@@ -1286,7 +1293,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     </Box>;
     else if (view === "Hosts") toolbar = <Box gap={1}>{selectedHost !== null && <ActionButton label="Open host" onClick={() => { openRow(cursor.Hosts); }} primary />}<ActionButton label="Search /" onClick={() => { setEditing("Hosts"); }} /><ActionButton label="Refresh" onClick={() => void refresh()} /></Box>;
     else toolbar = <Box gap={1} flexWrap="wrap">
-      <ActionButton label={`Scope: ${scope}`} onClick={() => { setScope((old) => SCOPES[(SCOPES.indexOf(old) + 1) % SCOPES.length] ?? "Recent"); setCursor((old) => ({ ...old, Activity: 0 })); }} />
+      <ActionButton label={`Scope: ${scope}`} onClick={cycleScope} />
       <ActionButton label="Search /" onClick={() => { setEditing("Activity"); }} />
       {activity.cursor !== null && <ActionButton label="Load more" onClick={() => { loadMoreActivity(); }} />}
       {selectedRecord !== null && <ActionButton label="Open notification" onClick={() => { openRow(cursor.Activity); }} primary />}
