@@ -7,9 +7,14 @@
 // Files: `<key>.json` holds the last good result and the last failed attempt, `<key>.lock` the holder
 // of a fetch, `backoff-<provider>.json` the instant before which the provider is not asked. Writes go
 // through a temporary file and a rename, so a reader sees the old file or the new one, never a part.
+//
+// A lock names its owner by pid and a random token. The holder refreshes the lock's mtime every
+// `lock_poll_ms` while its fetch runs, so a lock is abandoned only when its holder is gone or has
+// stopped refreshing it for `lock_timeout_ms`; a slow fetch of a live process is never taken over. A result
+// is stored only when its fetch started after the stored one, so a late result cannot overwrite newer data.
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, stat, unlink, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import type { CacheConfig } from "../types/config.ts";
 import type { SourceErrorCode, SourceName, SourceResult } from "../types/sources.ts";
@@ -78,7 +83,7 @@ interface BackoffFile {
 
 interface LockFile {
   readonly pid: number;
-  readonly acquiredAtMs: number;
+  readonly token: string;
 }
 
 export function createSharedCache(options: SharedCacheOptions): SharedCache {
@@ -129,12 +134,11 @@ export function createSharedCache(options: SharedCacheOptions): SharedCache {
   }
 
   /** Writes the outcome of a fetch that started at `startedAtMs` into the entry and, on a rate limit, into the back-off. */
-  async function record<T>(
-    request: CacheRequest<T>,
-    previous: EntryFile | null,
-    startedAtMs: number,
-    result: SourceResult<T>,
-  ): Promise<void> {
+  async function record<T>(request: CacheRequest<T>, startedAtMs: number, result: SourceResult<T>): Promise<void> {
+    // A result that started before the stored one was read, possibly by a process that lost its lock; the stored one is newer.
+    const latest = await readEntry(request.key);
+    const latestSuccessAt = latest?.success?.fetchedAtMs ?? null;
+    if (latestSuccessAt !== null && startedAtMs <= latestSuccessAt) return;
     if (result.ok) {
       const success: SuccessRecord = { fetchedAtMs: startedAtMs, value: request.encode(result.data) };
       await writeAtomic(entryPath(request.key), { version: ENTRY_VERSION, success, failure: null });
@@ -146,47 +150,107 @@ export function createSharedCache(options: SharedCacheOptions): SharedCache {
       message: result.message,
       retryAtMs: result.retryAtMs ?? null,
     };
-    await writeAtomic(entryPath(request.key), { version: ENTRY_VERSION, success: previous?.success ?? null, failure });
+    await writeAtomic(entryPath(request.key), { version: ENTRY_VERSION, success: latest?.success ?? null, failure });
     if (result.code === "rate_limited") {
       const untilMs = result.retryAtMs ?? now() + config.fallbackBackoffMs;
       await writeAtomic(backoffPath(request.provider), { version: ENTRY_VERSION, untilMs });
     }
   }
 
-  /** Acquires the lock of a result: the file is created exclusively and holds the owner's pid. */
-  async function tryLock(key: string): Promise<boolean> {
-    let handle;
+  /**
+   * Acquires the lock of a result and returns its token, or null when another process holds it. The lock
+   * appears only with its content (a temporary file linked into place), so a reader never sees an empty lock.
+   */
+  async function tryLock(key: string): Promise<string | null> {
+    const token = randomBytes(16).toString("hex");
+    const temporary = `${lockPath(key)}.${token}.tmp`;
+    const body: LockFile = { pid: process.pid, token };
+    const handle = await open(temporary, "wx", FILE_MODE);
     try {
-      handle = await open(lockPath(key), "wx", FILE_MODE);
-    } catch (error) {
-      if (isErrnoCode(error, "EEXIST")) return false;
-      throw error;
-    }
-    try {
-      const holder: LockFile = { pid: process.pid, acquiredAtMs: now() };
-      await handle.writeFile(JSON.stringify(holder));
+      await handle.writeFile(JSON.stringify(body));
+      await handle.sync();
     } finally {
       await handle.close();
     }
-    return true;
+    try {
+      await link(temporary, lockPath(key));
+      return token;
+    } catch (error) {
+      if (isErrnoCode(error, "EEXIST")) return null;
+      throw error;
+    } finally {
+      await unlinkIfPresent(temporary);
+    }
   }
 
-  async function unlock(key: string): Promise<void> {
-    await unlinkIfPresent(lockPath(key));
+  /** Refreshes the lock's mtime every `lock_poll_ms` while the fetch runs, as long as the lock still carries `token`. */
+  function startHeartbeat(key: string, token: string): () => void {
+    const timer = setInterval(() => {
+      void touchIfOwner(key, token);
+    }, config.lockPollMs);
+    return () => { clearInterval(timer); };
   }
 
-  /** A lock is abandoned when its holder is gone or it is older than `lock_timeout_ms`. */
-  async function isAbandoned(key: string): Promise<boolean> {
+  /** A refresh that fails leaves the lock to expire; the fetch it guards still completes. */
+  async function touchIfOwner(key: string, token: string): Promise<void> {
+    try {
+      if ((await readLockToken(key)) !== token) return;
+      const at = new Date(now());
+      await utimes(lockPath(key), at, at);
+    } catch {
+      // Expiry of the lock is the recovery path; the heartbeat itself must not end the process.
+    }
+  }
+
+  async function readLockToken(key: string): Promise<string | null> {
+    return (await readJson(lockPath(key), parseLock))?.token ?? null;
+  }
+
+  /** Removes the lock only while it still carries `token`: a lock taken over after this one expired is not ours. */
+  async function releaseLock(key: string, token: string): Promise<void> {
+    if ((await readLockToken(key)) === token) await unlinkIfPresent(lockPath(key));
+  }
+
+  /**
+   * The token of a lock whose holder is gone or has not refreshed it for `lock_timeout_ms`; null for a live
+   * holder. A lock that cannot be read is judged by its age alone.
+   */
+  async function abandonedToken(key: string): Promise<{ readonly token: string | null } | null> {
     let info;
     try {
       info = await stat(lockPath(key));
     } catch (error) {
-      if (isErrnoCode(error, "ENOENT")) return false;
+      if (isErrnoCode(error, "ENOENT")) return null;
       throw error;
     }
-    if (now() - info.mtimeMs > config.lockTimeoutMs) return true;
     const holder = await readJson(lockPath(key), parseLock);
-    return holder !== null && !isProcessAlive(holder.pid);
+    const stale = now() - info.mtimeMs > config.lockTimeoutMs;
+    if (holder === null) return stale ? { token: null } : null;
+    if (stale || !isProcessAlive(holder.pid)) return { token: holder.token };
+    return null;
+  }
+
+  /**
+   * Replaces an abandoned lock. The lock is renamed away first, so the takeover never deletes a lock that a
+   * third process created after the check: a moved lock that is not the observed one is linked back.
+   */
+  async function takeOver(key: string, observedToken: string | null): Promise<void> {
+    const tombstone = `${lockPath(key)}.${randomBytes(8).toString("hex")}.stale`;
+    try {
+      await rename(lockPath(key), tombstone);
+    } catch (error) {
+      if (isErrnoCode(error, "ENOENT")) return;
+      throw error;
+    }
+    const moved = await readJson(tombstone, parseLock);
+    if ((moved?.token ?? null) !== observedToken) {
+      try {
+        await link(tombstone, lockPath(key));
+      } catch (error) {
+        if (!isErrnoCode(error, "EEXIST")) throw error;
+      }
+    }
+    await unlinkIfPresent(tombstone);
   }
 
   /** Serves the stored data, the outcome of a fetch that started after the request, or nothing when neither applies. */
@@ -224,22 +288,28 @@ export function createSharedCache(options: SharedCacheOptions): SharedCache {
         if (backoffUntil !== null) {
           return backedOff(request, entry, backoffUntil);
         }
-        if (await tryLock(request.key)) {
+        const token = await tryLock(request.key);
+        if (token !== null) {
+          const stopHeartbeat = startHeartbeat(request.key, token);
           try {
-            // Another process may have finished the fetch between the read above and the lock.
+            // Another process may have finished a fetch, or written a back-off, between the reads above and the lock.
             const current = await readEntry(request.key);
             const again = acceptable(request, current, requestedAtMs);
             if (again !== null) return again;
+            const blockedUntil = await readBackoffUntil(request.provider);
+            if (blockedUntil !== null) return backedOff(request, current, blockedUntil);
             const startedAtMs = now();
             const result = await request.fetch();
-            await record(request, current, startedAtMs, result);
+            await record(request, startedAtMs, result);
             return result.ok ? { ...result, fetchedAtMs: startedAtMs } : withLastGood(request, current, result, startedAtMs);
           } finally {
-            await unlock(request.key);
+            stopHeartbeat();
+            await releaseLock(request.key, token);
           }
         }
-        if (await isAbandoned(request.key)) {
-          await unlock(request.key);
+        const abandoned = await abandonedToken(request.key);
+        if (abandoned !== null) {
+          await takeOver(request.key, abandoned.token);
           continue;
         }
         await new Promise((resolve) => setTimeout(resolve, config.lockPollMs));
@@ -367,8 +437,8 @@ function parseBackoff(raw: unknown): BackoffFile | null {
 }
 
 function parseLock(raw: unknown): LockFile | null {
-  if (!isRecord(raw) || typeof raw["pid"] !== "number" || typeof raw["acquiredAtMs"] !== "number") return null;
-  return { pid: raw["pid"], acquiredAtMs: raw["acquiredAtMs"] };
+  if (!isRecord(raw) || typeof raw["pid"] !== "number" || typeof raw["token"] !== "string") return null;
+  return { pid: raw["pid"], token: raw["token"] };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

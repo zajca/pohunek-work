@@ -105,8 +105,10 @@ again. `list --refresh` (the TUI `r` key) bypasses the max age and stays coalesc
 source marked failed (`stale` in `freshness`); a rate-limit response stops every
 process from asking the provider until the reset time GitHub reports, or
 `[cache] fallback_backoff_secs` when it reports none. The required keys are
-`max_age_secs`, `lock_timeout_ms` (a lock older than this is taken over),
-`lock_poll_ms` (below `lock_timeout_ms`) and `fallback_backoff_secs`. The `list
+`max_age_secs`, `lock_timeout_ms` (a lock its holder has not refreshed for this
+long, or whose holder process is gone, is taken over; a live holder refreshes its
+lock every `lock_poll_ms`, so a slow fetch is never taken over), `lock_poll_ms`
+(below `lock_timeout_ms`) and `fallback_backoff_secs`. The `list
 --json` envelope carries the per-source `freshness` (fetch instant, stale, retry
 instant). The field is additive, so the list contract stays at version 4.
 
