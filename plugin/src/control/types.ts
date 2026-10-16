@@ -119,8 +119,18 @@ export interface ControlActivityCursor {
   readonly hosts: Readonly<Record<string, { readonly buffered: readonly ControlNotification[]; readonly next: string | null; readonly done: boolean }>>;
 }
 
-/** One page of the activity list across hosts, globally newest first; `cursor` is null when the list is complete. */
-export interface ControlActivityPage { readonly records: readonly ControlNotification[]; readonly cursor: ControlActivityCursor | null }
+/** A host whose activity records could not be read; its records are missing from the page and it is read again on the next load. */
+export interface ControlActivityError { readonly host: string; readonly error: ControlError }
+
+/**
+ * One page of the activity list across hosts, globally newest first; `cursor` is null when the list is complete.
+ * `errors` names the hosts that failed; the records of the other hosts are still shown.
+ */
+export interface ControlActivityPage {
+  readonly records: readonly ControlNotification[];
+  readonly cursor: ControlActivityCursor | null;
+  readonly errors: readonly ControlActivityError[];
+}
 
 export interface ControlClient {
   refresh(): Promise<ControlSnapshot>;

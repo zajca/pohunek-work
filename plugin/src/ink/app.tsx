@@ -12,6 +12,7 @@ import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from ".
 import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveOutcome } from "../util/exec.ts";
 import { handover } from "./handover.ts";
 import type { ControlActivityCursor, ControlActivityScope } from "../control/types.ts";
+import { compareActivityOrder } from "../control/order.ts";
 import { openAttachWindow } from "../tui/attach-window.ts";
 import { ATTACH_HOST, ATTACH_VALUE, renderAttachArgv } from "../tui/attach-template.ts";
 import { coalesce } from "./coalesce.ts";
@@ -407,6 +408,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (!alive.current || generation !== activityGeneration.current) return;
     // A failed read keeps the records already shown.
     if (!result.ok) { bumpStatus(`Activity read failed: ${result.error.message}`); return; }
+    // The records of the hosts that answered are shown; a failed host is read again by the next load or refresh.
+    const [firstError] = result.data.errors;
+    if (firstError !== undefined) bumpStatus(`Activity read failed on ${firstError.host}: ${firstError.error.message}`);
     setActivity((previous) => {
       if (cursor === null || previous.scope !== target) return { scope: target, records: result.data.records, cursor: result.data.cursor };
       // A page can repeat a record a refresh already put in the list; each record is shown once.
@@ -415,8 +419,9 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       return { scope: target, records: [...previous.records, ...more], cursor: result.data.cursor };
     });
   }, [bumpStatus, control]);
-  // A refresh re-reads the first page of the open scope. The loaded records older than that page are kept, minus any
-  // that left the scope, because the next page reads from where the first page ends.
+  // A refresh re-reads the first page of the open scope. The loaded records after that page in the activity order are
+  // kept, minus any that left the scope, because the next page reads from where the first page ends. The records of a
+  // host the refresh could not read are kept too, since the refresh does not show them again.
   const reconcileActivity = useCallback(async (target: ActivityScope): Promise<void> => {
     const generation = ++activityGeneration.current;
     const result = await control.activity(CONTROL_SCOPE[target], null);
@@ -425,10 +430,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (previous.scope !== target) return previous;
       if (result.data.cursor === null) return { scope: target, records: result.data.records, cursor: null };
       const fresh = result.data.records;
-      const tail = fresh[fresh.length - 1]?.createdAt ?? "";
+      const tail = fresh[fresh.length - 1];
+      const failedHosts = new Set(result.data.errors.map((item) => item.host));
       const shown = new Set(fresh.map((record) => `${record.host}/${record.id}`));
-      const older = previous.records.filter((record) => record.createdAt < tail && !shown.has(`${record.host}/${record.id}`) && activityMatches(target, record));
-      return { scope: target, records: [...fresh, ...older], cursor: result.data.cursor };
+      const older = previous.records.filter((record) => !shown.has(`${record.host}/${record.id}`) && activityMatches(target, record)
+        && (failedHosts.has(record.host) || tail === undefined || compareActivityOrder(record, tail) > 0));
+      return { scope: target, records: [...fresh, ...older].sort(compareActivityOrder), cursor: result.data.cursor };
     });
   }, [control]);
   const activityView = useRef<{ view: ViewName; scope: ActivityScope }>({ view: "Work", scope: "Recent" });

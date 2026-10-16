@@ -4,6 +4,9 @@
 // The TUI reads live output through the SDK, which talks to the socket directly, so only a process on the
 // socket can produce these conditions. The session list the TUI polls is read the same way, so a snapshot without
 // the session can only be produced here: the relay answers the list with nothing while its flag file exists.
+// Two more conditions are produced here. A `notification.list` page that carries a cursor is held while a flag file
+// exists, so a scenario can change a record between the pages of one read. The `created_at` of every listed record can
+// be pinned to one value: the daemon stamps records with nanoseconds, so only a relay can list records that share a time.
 import { appendFileSync, existsSync } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,7 +15,7 @@ import { join } from "node:path";
 export interface RelayOptions {
   /** The method whose reply is held; `session.output` when absent. */
   readonly holdMethod?: string;
-  readonly holdSessionId: string;
+  readonly holdSessionId?: string;
   readonly holdMs: number;
   /** Output reads of the session that pass before the first held one. */
   readonly skipCount: number;
@@ -23,6 +26,13 @@ export interface RelayOptions {
    * switch the scenario flips, because the relay runs in its own process.
    */
   readonly emptySessionListFlag?: string;
+  /**
+   * While this file exists, every `notification.list` page that carries a cursor is held until the file is removed. The
+   * relay writes `<flag>.held` when it holds a page, so the scenario can wait for the hold before it changes a record.
+   */
+  readonly holdCursorFlag?: string;
+  /** Every notification listed through the relay carries this `created_at`. */
+  readonly notificationCreatedAt?: string;
 }
 
 export interface SocketRelay {
@@ -66,7 +76,11 @@ interface Link {
   clientPending: string;
   daemonPending: string;
   readonly held: Set<string>;
+  readonly heldCursorPages: Set<string>;
 }
+
+/** How often a held cursor page checks whether its flag file is gone. */
+const RELEASE_POLL_MS = 20;
 
 /** Runs as the relay process: `socket target options-json`. */
 function serve(listenPath: string, targetPath: string, options: RelayOptions): void {
@@ -78,7 +92,7 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
     unix: listenPath,
     socket: {
       open(client) {
-        const link: Link = { client, upstream: null, queue: Promise.resolve(), clientPending: "", daemonPending: "", held: new Set() };
+        const link: Link = { client, upstream: null, queue: Promise.resolve(), clientPending: "", daemonPending: "", held: new Set(), heldCursorPages: new Set() };
         client.data = link;
         link.queue = Bun.connect<Link>({
           unix: targetPath,
@@ -117,7 +131,12 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
         const id = request["id"];
         if (typeof id === "string" || typeof id === "number") emptyLists.add(String(id));
       }
-      if (request !== null && request["method"] === (options.holdMethod ?? "session.output") && (request["params"] as { session_id?: unknown } | null)?.session_id === options.holdSessionId) {
+      if (request !== null && request["method"] === "notification.list" && options.holdCursorFlag !== undefined && existsSync(options.holdCursorFlag)) {
+        const id = request["id"];
+        const params = request["params"] as { cursor?: unknown } | null;
+        if ((typeof id === "string" || typeof id === "number") && typeof params?.cursor === "string") link.heldCursorPages.add(String(id));
+      }
+      if (request !== null && request["method"] === (options.holdMethod ?? "session.output") && options.holdSessionId !== undefined && (request["params"] as { session_id?: unknown } | null)?.session_id === options.holdSessionId) {
         if (skipsLeft > 0) skipsLeft -= 1;
         else if (holdsLeft > 0) {
           const id = request["id"];
@@ -137,6 +156,17 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
       link.daemonPending = link.daemonPending.slice(newline + 1);
       const reply = parse(line);
       const id = reply?.["id"];
+      const out = reply !== null && options.notificationCreatedAt !== undefined && pinCreatedAt(reply, options.notificationCreatedAt) ? JSON.stringify(reply) + "\n" : line;
+      if ((typeof id === "string" || typeof id === "number") && link.heldCursorPages.delete(String(id))) {
+        // The page is released when the flag is gone; the other replies of the connection keep flowing meanwhile.
+        const release = setInterval(() => {
+          if (existsSync(options.holdCursorFlag ?? "")) return;
+          clearInterval(release);
+          try { link.client.write(out); } catch { /* the owner closed the connection meanwhile */ }
+        }, RELEASE_POLL_MS);
+        appendFileSync(`${options.holdCursorFlag ?? ""}.held`, "held\n");
+        continue;
+      }
       if ((typeof id === "string" || typeof id === "number") && emptyLists.delete(String(id))) {
         link.client.write(JSON.stringify({ v: reply?.["v"], id, ok: [] }) + "\n");
         // The scenario counts these replies through the flag's sibling file, since the relay is another process.
@@ -148,10 +178,18 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
         if (options.refuseHealthAfterHold && holdsLeft === 0) refusingHealth = true;
         setTimeout(() => { try { link.client.write(line); } catch { /* the owner closed the connection meanwhile */ } }, options.holdMs);
       } else {
-        link.client.write(line);
+        link.client.write(out);
       }
     }
   }
+}
+
+/** Sets `created_at` of every record in a `notification.list` reply and reports whether the reply had records. */
+function pinCreatedAt(reply: Record<string, unknown>, createdAt: string): boolean {
+  const ok = reply["ok"] as { notifications?: unknown } | null | undefined;
+  if (!Array.isArray(ok?.notifications)) return false;
+  for (const record of ok.notifications as Record<string, unknown>[]) record["created_at"] = createdAt;
+  return true;
 }
 
 function parse(line: string): Record<string, unknown> | null {

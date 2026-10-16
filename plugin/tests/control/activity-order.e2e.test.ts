@@ -8,18 +8,24 @@ import { join } from "node:path";
 import { connectLocal, type Client } from "@pohunek/sdk";
 import { createControlClient, type ControlClient } from "../../src/control/index.ts";
 import { DAEMON_STOP_HOOK_TIMEOUT_MS, daemonLocalSocket, startCoreDaemon, type CoreDaemon } from "../helpers/core-daemon.ts";
+import { startSocketRelay, type SocketRelay } from "../ink/support/socket-relay.ts";
 import { startTcpRelay, type TcpRelay } from "../ink/support/tcp-relay.ts";
 
 const SCENARIO_TIMEOUT_MS = 60_000;
 const PAGE_SIZE = 10;
 const REMOTE_RECORDS = 3;
 const LOCAL_RECORDS = 25;
+// Fewer local records than a page, so the page of the Activity list has to read the failing host to fill it.
+const PARTIAL_LOCAL_RECORDS = 4;
 const SESSION_RECORDS = 25;
 const CREATED_BEFORE_MS = 20;
+const HOLD_POLL_MS = 20;
+const HOLD_WAIT_MS = 10_000;
 
 const daemons: CoreDaemon[] = [];
 let control: ControlClient | null = null;
 let relay: TcpRelay | null = null;
+let socketRelay: SocketRelay | null = null;
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -27,6 +33,8 @@ afterEach(async () => {
   control = null;
   await relay?.stop();
   relay = null;
+  await socketRelay?.stop();
+  socketRelay = null;
   for (const daemon of daemons.splice(0)) await daemon.stop();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 }, DAEMON_STOP_HOOK_TIMEOUT_MS);
@@ -121,3 +129,106 @@ test("the notifications of a session are read to the end of the session", async 
   if (!notes.ok) throw new Error(notes.error.message);
   expect(notes.data).toHaveLength(SESSION_RECORDS);
 }, SCENARIO_TIMEOUT_MS);
+
+test("a host that cannot be read leaves the other hosts' Activity in place, and is read again on the next load", async () => {
+  const local = await startCoreDaemon();
+  const remote = await startCoreDaemon();
+  daemons.push(local, remote);
+  const root = await mkdtemp(join(tmpdir(), "activity-partial-"));
+  roots.push(root);
+
+  const remoteClient = await connect(remote);
+  await createNotifications(remoteClient, REMOTE_RECORDS, "remote");
+  await remoteClient.close();
+  const localClient = await connect(local);
+  await createNotifications(localClient, PARTIAL_LOCAL_RECORDS, "local");
+  await localClient.close();
+
+  relay = startTcpRelay(daemonLocalSocket(remote));
+  const binary = await discoveringCli(root, join(local.coreDir, "pohunek"), [{
+    name: "remote-daemon", fqdn: "remote.example", address: "127.0.0.1", port: relay.port, overlay: "netbird", peer_id: "remote-peer",
+    classification: "reachable_daemon", daemon_version: "0.34.2",
+  }]);
+  control = createControlClient({
+    binary, timeoutMs: 10_000, notificationsPageSize: PAGE_SIZE, reconnectMaxMs: 1_000, localSocket: daemonLocalSocket(local), env: local.clientEnv,
+  });
+  const snapshot = await control.refresh();
+  const remoteRoute = snapshot.hosts.find((host) => host.name === "remote-daemon")?.route;
+  if (remoteRoute === undefined) throw new Error(`the remote host was not discovered: ${JSON.stringify(snapshot.errors)}`);
+
+  // The relay refuses the remote host from here on, so its page fails while the local host's page is read.
+  relay.setFailing(true);
+  const partial = await control.activity("recent", null);
+  if (!partial.ok) throw new Error(partial.error.message);
+  expect(partial.data.records.map((record) => record.host)).toEqual(Array.from({ length: PARTIAL_LOCAL_RECORDS }, () => "local"));
+  expect(partial.data.errors.map((item) => item.host)).toEqual([remoteRoute]);
+  // The remote host keeps its place in the cursor, so the next load reads it again.
+  expect(partial.data.cursor).not.toBeNull();
+
+  // The link to the host reconnects after its back-off, so the next load is read again until the host answers.
+  relay.setFailing(false);
+  let cursor = partial.data.cursor;
+  let retried = await control.activity("recent", cursor);
+  const deadline = Date.now() + HOLD_WAIT_MS;
+  while (retried.ok && retried.data.errors.length > 0 && Date.now() < deadline) {
+    await Bun.sleep(HOLD_POLL_MS);
+    cursor = retried.data.cursor ?? cursor;
+    retried = await control.activity("recent", cursor);
+  }
+  if (!retried.ok) throw new Error(retried.error.message);
+  expect(retried.data.errors).toEqual([]);
+  expect(retried.data.records.map((record) => record.host)).toEqual(Array.from({ length: REMOTE_RECORDS }, () => remoteRoute));
+  expect(retried.data.cursor).toBeNull();
+}, SCENARIO_TIMEOUT_MS);
+
+test("an archive that arrives while a session's notes are read between pages is not overwritten by the older read", async () => {
+  const daemon = await startCoreDaemon();
+  daemons.push(daemon);
+  const root = await mkdtemp(join(tmpdir(), "session-notes-race-"));
+  roots.push(root);
+  const created = await daemon.pohunek(["session", "new", "--agent", "shell", "--cwd", daemon.root, "--name", "notes-race", "--json"]);
+  const sessionId = (JSON.parse(created.stdout) as { ok?: { id?: string } }).ok?.id;
+  if (sessionId === undefined) throw new Error(`session new failed: ${created.stdout}${created.stderr}`);
+  const client = await connect(daemon);
+  await createNotifications(client, SESSION_RECORDS, "race", sessionId);
+
+  // The newest record is on the first page of the read, so an archive of it lands after that page was read.
+  const newest = await client.call("notification.list", { session_id: sessionId, limit: 1 }) as { notifications: { id: string }[] };
+  const newestId = newest.notifications[0]?.id;
+  if (newestId === undefined) throw new Error("the session has no notification");
+
+  // The second page of the read is held at the relay until the flag is removed.
+  const flag = join(root, "hold-cursor");
+  await writeFile(flag, "");
+  socketRelay = await startSocketRelay(daemonLocalSocket(daemon), { holdMs: 0, skipCount: 0, holdCount: 0, refuseHealthAfterHold: false, holdCursorFlag: flag });
+  control = createControlClient({
+    binary: join(daemon.coreDir, "pohunek"), timeoutMs: 10_000, notificationsPageSize: PAGE_SIZE, reconnectMaxMs: 1_000, localSocket: socketRelay.socket, env: daemon.clientEnv,
+  });
+  const archived = new Promise<void>((resolve) => {
+    const unsubscribe = control?.subscribeNotifications((change) => {
+      if (change.id !== newestId || change.record?.status !== "archived") return;
+      unsubscribe?.();
+      resolve();
+    });
+  });
+  const reading = control.sessionNotifications("local", sessionId);
+  await waitForFile(`${flag}.held`);
+
+  await client.call("notification.update", { id: newestId, status: "archived" });
+  await client.close();
+  await archived;
+  await rm(flag);
+
+  const notes = await reading;
+  if (!notes.ok) throw new Error(notes.error.message);
+  expect(notes.data).toHaveLength(SESSION_RECORDS);
+  expect(notes.data.find((record) => record.id === newestId)?.status).toBe("archived");
+}, SCENARIO_TIMEOUT_MS);
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + HOLD_WAIT_MS;
+  while (!(await Bun.file(path).exists())) {
+    if (Date.now() > deadline) throw new Error(`${path} was not written within ${String(HOLD_WAIT_MS)} ms`);
+    await Bun.sleep(HOLD_POLL_MS);
+  }
+}

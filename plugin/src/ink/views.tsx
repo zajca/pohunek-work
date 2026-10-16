@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { ListItem } from "../types/item.ts";
 import type { DoOutcome } from "../tui/decode.ts";
 import type { ControlHost, ControlNotification, ControlNotificationChange, ControlScreen, ControlSession, ControlSnapshot, ControlSubagent } from "../control/types.ts";
+import { compareActivityOrder } from "../control/order.ts";
 import { MenuRow, Message, safeText, Section, shorten } from "./components.tsx";
 import { MouseZone } from "./mouse.tsx";
 import { isUnresolvedAction } from "./attention.ts";
@@ -32,8 +33,8 @@ export function applyActivityChange(records: readonly ControlNotification[], sco
   // A record enters at its place in time order. Older records are read by the next page, so one older than the loaded
   // tail is left for that page.
   const last = records[records.length - 1];
-  if (!complete && last !== undefined && record.createdAt < last.createdAt) return [...records];
-  const at = records.findIndex((item) => item.createdAt < record.createdAt);
+  if (!complete && last !== undefined && compareActivityOrder(record, last) > 0) return [...records];
+  const at = records.findIndex((item) => compareActivityOrder(item, record) > 0);
   return at < 0 ? [...records, record] : [...records.slice(0, at), record, ...records.slice(at)];
 }
 

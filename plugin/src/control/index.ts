@@ -5,6 +5,7 @@ import {
   notification, object, project, projectDetail, screen, session, string,
 } from "./decode.ts";
 import { isUnresolvedAction } from "../ink/attention.ts";
+import { compareActivityOrder } from "./order.ts";
 import { sdkFailure, SdkLink } from "./sdk-link.ts";
 import type {
   ControlAction, ControlActionOutcome, ControlClient, ControlClientOptions, ControlError,
@@ -119,6 +120,20 @@ function applyNotificationChange(records: readonly ControlNotification[], change
   return change.record === null ? others : [...others, change.record];
 }
 
+/** A session's notifications with one change applied; a record that is no longer in the session is dropped. */
+function applySessionChange(records: readonly ControlNotification[], sessionId: string, change: NotificationChange): ControlNotification[] {
+  const others = records.filter(record => record.id !== change.id);
+  const record = change.record;
+  return record !== null && record.sessionId === sessionId ? [...others, record] : others;
+}
+
+/** A session notification read in flight; the changes that events deliver to its host meanwhile are applied to its result. */
+interface SessionRead {
+  readonly route: string;
+  readonly sessionId: string;
+  readonly changes: NotificationChange[];
+}
+
 function bareIdError(id: string): ControlError | null {
   let hasControl = false;
   for (let index = 0; index < id.length; index += 1) {
@@ -175,6 +190,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   const notificationReading = new Map<string, { again: boolean; done: Promise<void> }>();
   // Changes that events deliver during a full notification read; they are applied on top of the records it returns.
   const bufferedChanges = new Map<string, NotificationChange[]>();
+  const sessionReadsInFlight = new Set<SessionRead>();
   const projectReads = new Map<string, ControlResult<readonly ControlProject[]>>();
   // A scheduled read per route; events that arrive before it runs join it instead of postponing it.
   const settling = new Map<string, { notifications: boolean; timer: ReturnType<typeof setTimeout> }>();
@@ -243,20 +259,23 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       states.set(route, kept === undefined ? { buffered: [], next: null, done: false } : { buffered: [...kept.buffered], next: kept.next, done: kept.done });
     }
     const shown: ControlNotification[] = [];
+    // A host whose page failed keeps its cursor and is not read again within this page, so the merge does not loop on it.
+    const failed = new Map<string, ControlError>();
     while (shown.length < options.notificationsPageSize) {
-      const refills = [...states].filter(([, entry]) => entry.buffered.length === 0 && !entry.done);
+      const refills = [...states].filter(([route, entry]) => entry.buffered.length === 0 && !entry.done && !failed.has(route));
       const pages = await Promise.all(refills.map(([route, entry]) => readActivity(route, scope, entry.next)));
-      for (const [index, [, entry]] of refills.entries()) {
+      for (const [index, [route, entry]] of refills.entries()) {
         const page = pages[index];
-        if (page === undefined || !page.ok) return page ?? failure("invalid_response", "activity page is missing");
-        entry.buffered = [...page.data.records].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        if (page === undefined) return failure("invalid_response", "activity page is missing");
+        if (!page.ok) { failed.set(route, page.error); continue; }
+        entry.buffered = [...page.data.records].sort(compareActivityOrder);
         entry.next = page.data.next;
         entry.done = page.data.next === null;
       }
       let newest: { route: string; head: ControlNotification } | null = null;
       for (const [route, entry] of states) {
         const head = entry.buffered[0];
-        if (head !== undefined && (newest === null || head.createdAt.localeCompare(newest.head.createdAt) > 0)) newest = { route, head };
+        if (head !== undefined && (newest === null || compareActivityOrder(head, newest.head) < 0)) newest = { route, head };
       }
       if (newest === null) break;
       states.get(newest.route)?.buffered.shift();
@@ -267,7 +286,8 @@ export function createControlClient(options: ControlClientOptions): ControlClien
       if (entry.buffered.length > 0 || !entry.done) hostsLeft[route] = { buffered: entry.buffered, next: entry.next, done: entry.done };
     }
     const more = Object.keys(hostsLeft).length > 0;
-    return { ok: true, data: { records: shown, cursor: more ? { hosts: hostsLeft } : null } };
+    const errors = [...failed].map(([host, error]) => ({ host, error }));
+    return { ok: true, data: { records: shown, cursor: more ? { hosts: hostsLeft } : null, errors } };
   }
 
   function assemble(): ControlSnapshot {
@@ -380,6 +400,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     const change = notificationChange(kind, event, route);
     if (change === null) { scheduleRead(route, true); return; }
     for (const listener of notificationListeners) listener({ host: route, id: change.id, record: change.record });
+    for (const read of sessionReadsInFlight) if (read.route === route) read.changes.push(change);
     // The attention list keeps the unresolved actions only; a change to any other record removes it from the list.
     const attention: NotificationChange = { id: change.id, record: change.record !== null && isUnresolvedAction(change.record) ? change.record : null };
     const buffer = bufferedChanges.get(route);
@@ -440,10 +461,18 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   }
 
   async function readSessionNotifications(host: string, id: string): Promise<ControlResult<readonly ControlNotification[]>> {
+    // The pages of a session are read one after another, so an event can land between them; its change is applied on top
+    // of the result, which would otherwise show the record as it was before the event.
+    const read: SessionRead = { route: host, sessionId: id, changes: [] };
+    sessionReadsInFlight.add(read);
     try {
-      return await linkFor(host).sessionNotifications(id, options.notificationsPageSize);
+      const result = await linkFor(host).sessionNotifications(id, options.notificationsPageSize);
+      if (!result.ok) return result;
+      return { ok: true, data: read.changes.reduce((records, change) => applySessionChange(records, id, change), result.data) };
     } catch (error) {
       return { ok: false, error: sdkFailure(error) };
+    } finally {
+      sessionReadsInFlight.delete(read);
     }
   }
 
