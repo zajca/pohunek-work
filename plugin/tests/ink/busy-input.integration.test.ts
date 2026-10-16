@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUSY_REFUSAL } from "../../src/ink/app.tsx";
+import { BUSY_REFUSAL } from "../../src/ink/use-status.ts";
 import { keys, type PtyStep } from "./support/pty.ts";
 import { startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 
