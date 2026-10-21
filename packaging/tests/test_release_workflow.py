@@ -477,6 +477,7 @@ class SurfaceSelectionTest(unittest.TestCase):
         self.assertIn("bun build src/main.ts --target bun --outfile pohunek-work.js", job)
         self.assertIn("bun plugin/pohunek-work.js", job)
         self.assertIn("script -e -q -c", job)
+        self.assertIn("stty rows 40 cols 120; env POHUNEK_WORK_CONFIG_DIR", job)
         self.assertIn("plugin/pohunek-work.js' tui", job)
         self.assertIn("name: release-plugin", job)
         self.assertIn("bun-version-file: plugin/package.json", job)
