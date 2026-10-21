@@ -34,7 +34,6 @@ LAUNCHER_FILES = (
     "templates/sway-dropin.conf.tmpl",
     "templates/prompts/issue.tmpl",
     "templates/prompts/pr.tmpl",
-    "templates/prompts/review.tmpl",
     "docs/launcher.md",
     "docs/debug-launcher.md",
 )
@@ -51,7 +50,6 @@ PLUGIN_LAUNCHER_FILES = (
     "templates/sway-issue-binding.conf.tmpl",
     "templates/prompts/issue.tmpl",
     "templates/prompts/pr.tmpl",
-    "templates/prompts/review.tmpl",
 )
 PLUGIN_FILES = (
     "plugin/package.json",
@@ -81,7 +79,7 @@ def run(args, cwd=None, env=None, check=True):
 
 
 class Workspace:
-    """A repository-root-like directory with a built GUI binary and launchers."""
+    """A repository-root-like directory with web and launcher release inputs."""
 
     def __init__(self, test):
         self.root = Path(tempfile.mkdtemp(prefix="pohunek-packaging-"))
@@ -89,11 +87,19 @@ class Workspace:
         self.bindir = self.root / "bin"
         self.out = self.root / "dist"
         self.launchers = self.root / "launchers"
+        # The input tree `web/release/package.sh --input-only` assembles.
+        self.web = self.root / "web-input"
+        (self.web / "frontend").mkdir(parents=True)
+        backend = self.web / "pohunek-web"
+        backend.write_text("#!/bin/sh\nexit 0\n")
+        backend.chmod(0o755)
+        (self.web / "frontend" / "index.html").write_text("<html></html>\n")
+        installer = self.web / "install.sh"
+        installer.write_text("#!/bin/sh\n")
+        installer.chmod(0o755)
+        (self.web / "README.md").write_text("installer guide\n")
         for directory in (self.bindir, self.out, self.launchers):
-            directory.mkdir(parents=True)
-        path = self.bindir / "pohunek-gui"
-        path.write_text("#!/bin/sh\nexit 0\n")
-        path.chmod(0o755)
+            directory.mkdir()
         for member in LAUNCHER_FILES:
             file = self.launchers / member
             file.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +113,7 @@ class Workspace:
 
     def stage(self, component, target=TARGET, input_dir=None):
         if input_dir is None:
-            input_dir = self.launchers if component == "launchers" else self.bindir
+            input_dir = {"web": self.web, "launchers": self.launchers, "plugin": self.root}[component]
         result = run(
             [PACKAGING / "stage-archive", component, VERSION, target, input_dir, self.out],
             cwd=self.root,
@@ -134,33 +140,33 @@ def plugin_workspace(test):
 
 
 class StageArchiveTest(unittest.TestCase):
-    def test_gui_archive_holds_the_binary_the_readme_and_the_licenses(self):
+    def test_web_archive_holds_the_input_with_the_verifier_and_the_licenses(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
-        self.assertEqual(name, f"pohunek-gui-{VERSION}-{TARGET}")
+        name = ws.stage("web")
+        self.assertEqual(name, f"pohunek-web-{VERSION}-{TARGET}")
         staging = ws.out / name
-        for member in ("pohunek-gui", "README.md", "LICENSES/pohunek-core-MIT.txt"):
+        for member in (
+            "pohunek-web",
+            "frontend/index.html",
+            "install.sh",
+            "README.md",
+            "packaging/verify-archive",
+            "LICENSES/pohunek-core-MIT.txt",
+        ):
             self.assertTrue((staging / member).is_file(), member)
-        self.assertFalse((staging / "docs").exists())
+        self.assertEqual((staging / "README.md").read_text(), "installer guide\n")
+        self.assertTrue(os.access(staging / "install.sh", os.X_OK))
 
-    def test_macos_gui_archive_holds_the_app_bundle(self):
+    def test_a_web_input_without_the_backend_is_refused(self):
         ws = Workspace(self)
-        app = ws.bindir / "Pohunek.app" / "Contents" / "MacOS"
-        app.mkdir(parents=True)
-        (app / "pohunek-gui").write_text("binary\n")
-        staging = ws.out / ws.stage("gui", "aarch64-apple-darwin")
-        self.assertTrue((staging / "Pohunek.app/Contents/MacOS/pohunek-gui").is_file())
-        self.assertFalse((staging / "pohunek-gui").exists())
-
-    def test_macos_gui_archive_without_a_bundle_is_refused(self):
-        ws = Workspace(self)
+        (ws.web / "pohunek-web").unlink()
         result = run(
-            [PACKAGING / "stage-archive", "gui", VERSION, "aarch64-apple-darwin", ws.bindir, ws.out],
+            [PACKAGING / "stage-archive", "web", VERSION, TARGET, ws.web, ws.out],
             cwd=ws.root,
             check=False,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("built app bundle is missing", result.stderr)
+        self.assertIn("required input file is missing", result.stderr)
 
     def test_launchers_archive_holds_the_scripts_templates_and_guides_only(self):
         ws = Workspace(self)
@@ -234,47 +240,36 @@ class StageArchiveTest(unittest.TestCase):
 
     def test_web_archive_wraps_the_input_tree_with_the_verifier_and_the_licenses(self):
         ws = Workspace(self)
-        web = ws.root / "web-input"
-        (web / "frontend").mkdir(parents=True)
-        (web / "pohunek-web").write_text("binary\n")
-        (web / "frontend" / "index.html").write_text("<html></html>\n")
-        (web / "install.sh").write_text("#!/bin/sh\n")
-        (web / "README.md").write_text("installer guide\n")
-        name = ws.stage("web", "aarch64-apple-darwin", web)
+        name = ws.stage("web", "aarch64-apple-darwin", ws.web)
         self.assertEqual(name, "pohunek-web-%s-aarch64-apple-darwin" % VERSION)
         staging = ws.out / name
-        for member in (
-            "pohunek-web",
-            "frontend/index.html",
-            "install.sh",
-            "packaging/verify-archive",
-            "LICENSES/pohunek-core-MIT.txt",
-        ):
+        for member in ("pohunek-web", "frontend/index.html", "install.sh", "README.md"):
             self.assertTrue((staging / member).is_file(), member)
+        self.assertTrue((staging / "packaging/verify-archive").is_file())
+        self.assertTrue((staging / "LICENSES/pohunek-core-MIT.txt").is_file())
         self.assertEqual((staging / "README.md").read_text(), "installer guide\n")
 
     def test_the_output_directory_is_created_when_missing(self):
         ws = Workspace(self)
         out = ws.root / "fresh" / "dist"
         run(
-            [PACKAGING / "stage-archive", "gui", VERSION, TARGET, ws.bindir, out],
+            [PACKAGING / "stage-archive", "web", VERSION, TARGET, ws.web, out],
             cwd=ws.root,
         )
-        self.assertTrue((out / ("pohunek-gui-%s-%s" % (VERSION, TARGET)) / "pohunek-gui").is_file())
+        self.assertTrue((out / ("pohunek-web-%s-%s" % (VERSION, TARGET)) / "pohunek-web").is_file())
 
-    def test_a_missing_binary_or_bad_argument_is_refused(self):
+    def test_a_missing_web_input_or_bad_argument_is_refused(self):
         ws = Workspace(self)
-        (ws.bindir / "pohunek-gui").unlink()
         result = run(
-            [PACKAGING / "stage-archive", "gui", VERSION, TARGET, ws.bindir, ws.out],
+            [PACKAGING / "stage-archive", "web", VERSION, TARGET, ws.root / "absent", ws.out],
             cwd=ws.root,
             check=False,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("required input file is missing", result.stderr)
-        for args in (("cli", VERSION, TARGET), ("gui", "1.2", TARGET), ("gui", VERSION, "X/Y")):
+        self.assertIn("not a directory", result.stderr)
+        for args in (("daemon", VERSION, TARGET), ("web", "1.2", TARGET), ("web", VERSION, "X/Y")):
             result = run(
-                [PACKAGING / "stage-archive", *args, ws.bindir, ws.out],
+                [PACKAGING / "stage-archive", *args, ws.web, ws.out],
                 cwd=ws.root,
                 check=False,
             )
@@ -285,7 +280,7 @@ class StageArchiveTest(unittest.TestCase):
         (ws.root / "LICENSES" / "pohunek-core-MIT.txt").unlink()
         (ws.root / "LICENSES").rmdir()
         result = run(
-            [PACKAGING / "stage-archive", "gui", VERSION, TARGET, ws.bindir, ws.out],
+            [PACKAGING / "stage-archive", "web", VERSION, TARGET, ws.web, ws.out],
             cwd=ws.root,
             check=False,
         )
@@ -302,14 +297,14 @@ class WriteManifestTest(unittest.TestCase):
 
     def test_manifest_lists_every_file_with_its_digest(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
-        self.manifest(ws, name, "gui", VERSION, TARGET, "none")
+        name = ws.stage("web")
+        self.manifest(ws, name, "web", VERSION, TARGET, "none")
         lines = (ws.out / name / "MANIFEST").read_text().splitlines()
         self.assertEqual(
             lines[:5],
             [
                 "pohunek-archive-manifest 1",
-                "component gui",
+                "component web",
                 f"version {VERSION}",
                 f"target {TARGET}",
                 "signing none",
@@ -326,41 +321,41 @@ class WriteManifestTest(unittest.TestCase):
         for path, digest in entries.items():
             data = (ws.out / name / path).read_bytes()
             self.assertEqual(hashlib.sha256(data).hexdigest(), digest, path)
-        self.assertIn("pohunek-gui", entries)
+        self.assertIn("pohunek-web", entries)
 
     def test_darwin_manifest_records_the_minimum_os(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
-        self.manifest(ws, name, "gui", VERSION, "aarch64-apple-darwin", "unsigned-development", "14.0")
+        name = ws.stage("web")
+        self.manifest(ws, name, "web", VERSION, "aarch64-apple-darwin", "unsigned-development", "14.0")
         text = (ws.out / name / "MANIFEST").read_text()
         self.assertIn("signing unsigned-development\n", text)
         self.assertIn("minimum-macos 14.0\n", text)
 
     def test_an_adhoc_manifest_records_the_signing_state(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
-        self.manifest(ws, name, "gui", VERSION, "aarch64-apple-darwin", "adhoc", "14.0")
+        name = ws.stage("web")
+        self.manifest(ws, name, "web", VERSION, "aarch64-apple-darwin", "adhoc", "14.0")
         text = (ws.out / name / "MANIFEST").read_text()
         self.assertIn("signing adhoc\n", text)
         self.assertIn("minimum-macos 14.0\n", text)
 
     def test_signing_states_that_no_tool_produces_are_refused(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         for state in ("developer-id", "notarized"):
-            result = self.manifest(ws, name, "gui", VERSION, "aarch64-apple-darwin", state, "14.0", check=False)
+            result = self.manifest(ws, name, "web", VERSION, "aarch64-apple-darwin", state, "14.0", check=False)
             self.assertNotEqual(result.returncode, 0, state)
             self.assertIn("unsupported signing state", result.stderr)
         self.assertFalse((ws.out / name / "MANIFEST").exists())
 
     def test_invalid_input_is_refused_and_leaves_no_manifest(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         for args, message in (
-            (("gui", VERSION, "aarch64-apple-darwin", "none"), "needs <minimum-macos>"),
-            (("gui", VERSION, TARGET, "none", "14.0"), "applies only to an apple-darwin"),
-            (("gui", "1.2", TARGET, "none"), "version must be"),
-            (("gui", VERSION, TARGET, "signed"), "unsupported signing state"),
+            (("web", VERSION, "aarch64-apple-darwin", "none"), "needs <minimum-macos>"),
+            (("web", VERSION, TARGET, "none", "14.0"), "applies only to an apple-darwin"),
+            (("web", "1.2", TARGET, "none"), "version must be"),
+            (("web", VERSION, TARGET, "signed"), "unsupported signing state"),
             (("nope", VERSION, TARGET, "none"), "unsupported component"),
         ):
             result = self.manifest(ws, name, *args, check=False)
@@ -371,51 +366,51 @@ class WriteManifestTest(unittest.TestCase):
 
     def test_symlinks_and_unsafe_names_are_refused(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         link = ws.out / name / "link"
-        link.symlink_to("pohunek-gui")
-        result = self.manifest(ws, name, "gui", VERSION, TARGET, "none", check=False)
+        link.symlink_to("pohunek-web")
+        result = self.manifest(ws, name, "web", VERSION, TARGET, "none", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("symbolic link", result.stderr)
         link.unlink()
         (ws.out / name / "bad name").write_text("x")
-        result = self.manifest(ws, name, "gui", VERSION, TARGET, "none", check=False)
+        result = self.manifest(ws, name, "web", VERSION, TARGET, "none", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsupported character", result.stderr)
 
     def test_rewriting_replaces_the_previous_manifest(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
-        self.manifest(ws, name, "gui", VERSION, TARGET, "none")
+        name = ws.stage("web")
+        self.manifest(ws, name, "web", VERSION, TARGET, "none")
         first = (ws.out / name / "MANIFEST").read_text()
-        self.manifest(ws, name, "gui", VERSION, TARGET, "none")
+        self.manifest(ws, name, "web", VERSION, TARGET, "none")
         self.assertEqual((ws.out / name / "MANIFEST").read_text(), first)
 
 
 class CoreVersionTest(unittest.TestCase):
     def manifest(self, ws, name, core, *, check=True):
         return run(
-            [PACKAGING / "write-manifest", "--core", core, ws.out / name, "gui", VERSION, TARGET, "none"],
+            [PACKAGING / "write-manifest", "--core", core, ws.out / name, "web", VERSION, TARGET, "none"],
             check=check,
         )
 
     def test_the_manifest_records_a_core_tag_or_commit_after_the_signing_state(self):
         for core in (CORE_REF, CORE_COMMIT):
             ws = Workspace(self)
-            name = ws.stage("gui")
+            name = ws.stage("web")
             self.manifest(ws, name, core)
             lines = (ws.out / name / "MANIFEST").read_text().splitlines()
             self.assertEqual(lines[4:6], ["signing none", f"core {core}"])
 
     def test_a_manifest_without_the_option_has_no_core_line(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
-        run([PACKAGING / "write-manifest", ws.out / name, "gui", VERSION, TARGET, "none"])
+        name = ws.stage("web")
+        run([PACKAGING / "write-manifest", ws.out / name, "web", VERSION, TARGET, "none"])
         self.assertNotIn("\ncore ", (ws.out / name / "MANIFEST").read_text())
 
     def test_a_malformed_core_version_is_refused(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         for core in ("", "main", "v1.2", "v1.2.x", CORE_COMMIT[:39], CORE_COMMIT.upper(), "../v1.2.3"):
             result = self.manifest(ws, name, core, check=False)
             self.assertNotEqual(result.returncode, 0, core)
@@ -432,7 +427,7 @@ class CoreVersionTest(unittest.TestCase):
 class VerifyArchiveTest(unittest.TestCase):
     def extract(self, core):
         ws = Workspace(self)
-        name = ws.stage("web", TARGET, ws.launchers)
+        name = ws.stage("web", TARGET, ws.web)
         args = ["--core", core] if core else []
         run([PACKAGING / "write-manifest", *args, ws.out / name, "web", VERSION, TARGET, "none"])
         run([PACKAGING / "archive", ws.out, name, ws.out], env={"SOURCE_DATE_EPOCH": EPOCH})
@@ -443,7 +438,7 @@ class VerifyArchiveTest(unittest.TestCase):
         return home / name
 
     def verify(self, directory):
-        return run([directory / "packaging" / "verify-archive", directory, "web", "lib.sh"], check=False)
+        return run([directory / "packaging" / "verify-archive", directory, "web", "pohunek-web"], check=False)
 
     def test_a_manifest_with_a_valid_core_version_verifies(self):
         for core in (CORE_REF, CORE_COMMIT, None):
@@ -454,6 +449,7 @@ class VerifyArchiveTest(unittest.TestCase):
     def test_an_unlisted_file_is_refused(self):
         for relative in ("extra", "templates/extra.js"):
             directory = self.extract(CORE_REF)
+            (directory / relative).parent.mkdir(parents=True, exist_ok=True)
             (directory / relative).write_text("x")
             result = self.verify(directory)
             self.assertEqual(result.returncode, 1, relative)
@@ -461,10 +457,10 @@ class VerifyArchiveTest(unittest.TestCase):
 
     def test_a_missing_listed_file_is_refused(self):
         directory = self.extract(CORE_REF)
-        (directory / "templates" / "launcher.conf").unlink()
+        (directory / "install.sh").unlink()
         result = self.verify(directory)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("missing or not a regular file: templates/launcher.conf", result.stderr)
+        self.assertIn("missing or not a regular file: install.sh", result.stderr)
 
     def test_a_special_file_is_refused(self):
         directory = self.extract(CORE_REF)
@@ -532,15 +528,15 @@ class MakeArchiveTest(unittest.TestCase):
 
     def test_the_archive_is_reproducible(self):
         first, second = Workspace(self), Workspace(self)
-        a = Path(self.make(first, "gui", TARGET, first.bindir).stdout.strip()).read_bytes()
-        b = Path(self.make(second, "gui", TARGET, second.bindir).stdout.strip()).read_bytes()
+        a = Path(self.make(first, "web", TARGET, first.web).stdout.strip()).read_bytes()
+        b = Path(self.make(second, "web", TARGET, second.web).stdout.strip()).read_bytes()
         self.assertEqual(a, b)
 
     def test_a_missing_core_pin_is_refused_and_leaves_no_archive(self):
         ws = Workspace(self)
         env = {k: v for k, v in os.environ.items() if k != "POHUNEK_CORE_REF"}
         result = subprocess.run(
-            [str(PACKAGING / "make-archive"), "gui", VERSION, TARGET, str(ws.bindir), str(ws.out)],
+            [str(PACKAGING / "make-archive"), "web", VERSION, TARGET, str(ws.web), str(ws.out)],
             cwd=ws.root,
             env=dict(env, SOURCE_DATE_EPOCH=EPOCH),
             stdout=subprocess.PIPE,
@@ -566,17 +562,17 @@ class HashFailureTest(unittest.TestCase):
 
     def test_a_failing_hash_tool_fails_the_manifest_and_the_archive(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         for body in ("exit 3\n", "echo not-a-digest file\n"):
             env = self.shims(body)
             result = run(
-                [PACKAGING / "write-manifest", ws.out / name, "gui", VERSION, TARGET, "none"],
+                [PACKAGING / "write-manifest", ws.out / name, "web", VERSION, TARGET, "none"],
                 env=env,
                 check=False,
             )
             self.assertNotEqual(result.returncode, 0, body)
             self.assertFalse((ws.out / name / "MANIFEST").exists())
-        run([PACKAGING / "write-manifest", ws.out / name, "gui", VERSION, TARGET, "none"])
+        run([PACKAGING / "write-manifest", ws.out / name, "web", VERSION, TARGET, "none"])
         result = run(
             [PACKAGING / "archive", ws.out, name, ws.out],
             env=dict(self.shims("exit 3\n"), SOURCE_DATE_EPOCH=EPOCH),
@@ -601,11 +597,11 @@ class ArchiveTest(unittest.TestCase):
 
     def test_equal_trees_give_byte_identical_archives_whatever_the_host_state(self):
         first = Workspace(self)
-        name = first.stage("gui")
-        run([PACKAGING / "write-manifest", first.out / name, "gui", VERSION, TARGET, "none"])
+        name = first.stage("web")
+        run([PACKAGING / "write-manifest", first.out / name, "web", VERSION, TARGET, "none"])
         second = Workspace(self)
-        second.stage("gui")
-        run([PACKAGING / "write-manifest", second.out / name, "gui", VERSION, TARGET, "none"])
+        second.stage("web")
+        run([PACKAGING / "write-manifest", second.out / name, "web", VERSION, TARGET, "none"])
         # Different file times and modes on the way in must not show.
         for path in (second.out / name).rglob("*"):
             os.utime(path, (1_000_000_000, 1_000_000_000))
@@ -620,7 +616,7 @@ class ArchiveTest(unittest.TestCase):
 
     def test_members_are_sorted_root_owned_dated_and_mode_normalized(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         archive = self.build(ws, name, ws.root / "o")
         with tarfile.open(archive) as tar:
             members = tar.getmembers()
@@ -633,7 +629,7 @@ class ArchiveTest(unittest.TestCase):
             if member.isdir():
                 self.assertEqual(member.mode, 0o755, member.name)
         modes = {m.name.rsplit("/", 1)[-1]: m.mode for m in members if m.isfile()}
-        self.assertEqual(modes["pohunek-gui"], 0o755)
+        self.assertEqual(modes["pohunek-web"], 0o755)
         self.assertEqual(modes["README.md"], 0o644)
         # No AppleDouble or extended-header members.
         self.assertFalse([n for n in names if "/._" in n or "PaxHeaders" in n])
@@ -642,8 +638,8 @@ class ArchiveTest(unittest.TestCase):
         # The release workflow calls `archive dist "$name" dist` from the
         # repository root.
         ws = Workspace(self)
-        name = ws.stage("gui")
-        run([PACKAGING / "write-manifest", ws.out / name, "gui", VERSION, TARGET, "none"])
+        name = ws.stage("web")
+        run([PACKAGING / "write-manifest", ws.out / name, "web", VERSION, TARGET, "none"])
         run(
             [PACKAGING / "archive", "dist", name, "dist"],
             cwd=ws.root,
@@ -655,21 +651,21 @@ class ArchiveTest(unittest.TestCase):
 
     def test_the_output_directory_is_created_when_missing(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         out = ws.root / "new" / "out"
         run([PACKAGING / "archive", ws.out, name, out], env={"SOURCE_DATE_EPOCH": EPOCH})
         self.assertTrue((out / (name + ".tar.gz")).is_file())
 
     def test_a_different_commit_time_changes_the_archive(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         a = self.build(ws, name, ws.root / "a").read_bytes()
         b = self.build(ws, name, ws.root / "b", epoch="1700000001").read_bytes()
         self.assertNotEqual(a, b)
 
     def test_a_missing_epoch_or_bad_name_is_refused(self):
         ws = Workspace(self)
-        name = ws.stage("gui")
+        name = ws.stage("web")
         env = {k: v for k, v in os.environ.items() if k != "SOURCE_DATE_EPOCH"}
         result = subprocess.run(
             [str(PACKAGING / "archive"), str(ws.out), name, str(ws.out)],

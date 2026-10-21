@@ -28,8 +28,7 @@ does not implement scope itself.
    by integration or end-to-end tests (that exercise collaborating production
    components through a public interface; unit tests are prohibited),
    no hardcoded tuning values, no silent defaults, secrets never in code or logs,
-   comments that state behavior and never history, and for `native/` the
-   `.agents/rust-guidelines/` rules. Check the boundary: no import of core
+   comments that state behavior and never history. Check the boundary: no import of core
    internals. For a deeper pass run specialist reviewers in parallel
    (`security-reviewer`, `silent-failure-hunter`, `devils-advocate`,
    `performance-reviewer` for data-heavy diffs) and synthesize before reporting.
