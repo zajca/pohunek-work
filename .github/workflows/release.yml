@@ -285,8 +285,10 @@ jobs:
           fi
           pty_log="$(mktemp)"
           trap 'rm -rf "$extract_dir" "$pty_log"' EXIT
+          # A runner has no controlling terminal, so `script` opens a 0x0 PTY
+          # in which Ink draws nothing; give it a real size first.
           (sleep 2; printf q) | timeout 15s script -e -q -c \
-            "env POHUNEK_WORK_CONFIG_DIR='$GITHUB_WORKSPACE/plugin/tests/fixtures/config' bun '$root/plugin/pohunek-work.js' tui" \
+            "stty rows 40 cols 120; env POHUNEK_WORK_CONFIG_DIR='$GITHUB_WORKSPACE/plugin/tests/fixtures/config' bun '$root/plugin/pohunek-work.js' tui" \
             "$pty_log" >/dev/null
           if ! grep -a -q 'Sessions' "$pty_log" || ! grep -a -q 'Hosts' "$pty_log"; then
             echo "::error::the packaged TUI did not render its navigation"
