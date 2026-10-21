@@ -40,7 +40,7 @@ async function json(step: SetupStep, extra: Partial<SetupOptions>, deps: typeof 
 test("setup scripts prints one line per installed script", async () => {
   const { stdout } = await runSetup(options("scripts"), { env, ...LINUX });
   const lines = stdout.trimEnd().split("\n");
-  expect(lines).toHaveLength(5);
+  expect(lines).toHaveLength(6);
   expect(lines.every((line) => line.startsWith("installed script: "))).toBe(true);
   const again = await runSetup(options("scripts"), { env, ...LINUX });
   expect(again.stdout.split("\n")[0]).toStartWith("unchanged script: ");
@@ -52,7 +52,7 @@ test("setup scripts --json carries the envelope, the directory and per-file outc
   expect(envelope.protocol).toEqual({ minimum: 1, maximum: 1 });
   expect(envelope.ok["step"]).toBe("scripts");
   expect(envelope.ok["dir"]).toBe(join(root, "data", "pohunek", "bin"));
-  expect((envelope.ok["files"] as { outcome: string }[]).map((file) => file.outcome)).toEqual(["created", "created", "created", "created", "created"]);
+  expect((envelope.ok["files"] as { outcome: string }[]).map((file) => file.outcome)).toEqual(["created", "created", "created", "created", "created", "created"]);
 });
 
 test("setup scripts --force replaces a symlink without changing its target", async () => {
@@ -92,6 +92,8 @@ test("setup sway binds the issue picker only with --issue-project", async () => 
   const plain = await json("sway", { print: true });
   expect(plain.ok["issue_binding"]).toBe(false);
   expect(plain.ok["snippet"]).not.toContain("pohunek-rofi-issue");
+  expect(plain.ok["snippet"]).toContain("bindsym $mod+n exec exec ");
+  expect(plain.ok["snippet"]).toContain("pohunek-new-session");
 
   const bound = await json("sway", { print: true, issueProject: "ui", issueSource: "github", issueKeybind: "$mod+g" });
   expect(bound.ok["issue_binding"]).toBe(true);

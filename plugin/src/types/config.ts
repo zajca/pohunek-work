@@ -103,6 +103,8 @@ export interface PolicyConfig {
 export type ProfilesConfig = Readonly<Record<string, string>>;
 
 export type TuiInitialView = "mine" | "all";
+/** How `attach` opens a session: in this terminal, or in a window started by `attach_command`. */
+export type TuiAttachMode = "inline" | "window";
 
 export interface TuiConfig {
   /** Absolute path of the `pohunek-work` binary the TUI runs `list` and `do` with. */
@@ -120,13 +122,34 @@ export interface TuiConfig {
   readonly bellOnTransition: boolean;
   /** Absolute path of the URL opener (`o`). */
   readonly openCommand: string;
+  /** Optional executable that copies stdin to the clipboard. */
+  readonly clipboardCommand?: string;
   /** Hosts `o` may open; compared exactly against the URL host name. */
   readonly openUrlHosts: readonly string[];
   /** Child stderr lines kept for display. */
   readonly stderrMaxLines: number;
-  /** Columns below which the detail pane is shown full screen on Tab. */
+  /** Columns from which the session detail sits beside the list; narrower terminals show it full screen. */
   readonly detailMinWidth: number;
+  /** Interval of the full session and notification reconcile, in seconds. */
+  readonly sessionReconcileSecs: number;
+  /** Cap of the retry backoff after the daemon event subscription drops, in seconds. */
+  readonly reconnectMaxSecs: number;
+  /** Output limit of a captured action child, in bytes. */
+  readonly actionCaptureBytes: number;
+  /** Longest wait of one live output read at the end of a session's output, in milliseconds. */
+  readonly outputWaitMs: number;
+  /** Inline attaches in this terminal; window attaches in the terminal that `attachCommand` starts. */
+  readonly attachMode: TuiAttachMode;
+  /** Window mode: the terminal's argv template, split with POSIX quoting; placeholders are filled per attach. */
+  readonly attachCommand?: readonly string[];
+  /** Window mode: a terminal that exits within this many milliseconds is a failed launch. */
+  readonly attachLaunchCheckMs?: number;
+  /** Bytes of a session's retained output requested per live read. */
+  readonly outputMaxBytes: number;
+  /** Longest gap between two presses on one list row that still counts as a double click, in milliseconds. */
+  readonly doubleClickMs: number;
 }
+
 
 /** `pohunek-work manager start`: where the manager session runs and which agent it starts. */
 export interface ManagerConfig {

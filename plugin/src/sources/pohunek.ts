@@ -557,7 +557,8 @@ export function createPohunekClient(config: PohunekConfig, deps: PohunekClientDe
     attach: (sessionId) =>
       wrap(async () => {
         try {
-          return { ok: true, data: await runInteractive([config.bin, "attach", sessionId]) };
+          const outcome = await runInteractive([config.bin, "attach", "--", sessionId]);
+          return { ok: true, data: outcome.kind === "exited" ? outcome.code : null };
         } catch (error) {
           if (error instanceof SpawnError) {
             return fail("unavailable", `cannot start ${config.bin}`);

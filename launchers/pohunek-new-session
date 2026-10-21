@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$script_dir/lib.sh"
+
+[ "$#" -eq 0 ] || pohunek_fail "usage: pohunek-new-session"
+terminal_bin="$(pohunek_optional_config terminal "${TERMINAL:-}")"
+work_bin="$(pohunek_optional_config pohunek_work_bin pohunek-work)"
+[ -n "$terminal_bin" ] || pohunek_fail "missing terminal config key and TERMINAL is unset"
+pohunek_need_cmd "$terminal_bin"
+pohunek_need_cmd "$work_bin"
+exec "$terminal_bin" -e "$work_bin" new-session

@@ -32,15 +32,36 @@ export class SpawnError extends Error {
 
 export type Exec = (argv: readonly string[], options: ExecOptions) => Promise<ExecResult>;
 
-/** Runs a child on the caller's terminal and resolves with its exit code (null when a signal ended it). */
-export type InteractiveExec = (argv: readonly string[]) => Promise<number | null>;
+/** How an interactive child ended: its exit code, the end watch that stopped it, or a signal sent from elsewhere. */
+export type InteractiveOutcome =
+  | { readonly kind: "exited"; readonly code: number }
+  | { readonly kind: "ended" }
+  | { readonly kind: "signaled"; readonly signal: string };
+
+/**
+ * Reports when the work an interactive child serves is over. `watch` calls `onEnded` at most once and returns the
+ * function that stops watching; `graceMs` is how long the child has to exit after its SIGTERM before it is killed.
+ */
+export interface ChildEnd {
+  readonly watch: (onEnded: () => void) => () => void;
+  readonly graceMs: number;
+}
+
+/** Resolves with the exit code, or null when a signal or the `end` watch ended the child. */
+export type InteractiveExec = (argv: readonly string[], end?: ChildEnd) => Promise<InteractiveOutcome>;
+
+export interface InteractiveCaptureResult {
+  readonly exitCode: number | null;
+  readonly stdout: string | null;
+}
 
 /**
  * The child shares the terminal and the foreground process group: a child in
  * its own group would be stopped by SIGTTIN when it reads the terminal. There
  * is no timeout because the owner ends the child (for example by detaching).
  */
-export const execInteractive: InteractiveExec = async (argv) => {
+/** Runs a child on the caller's terminal; the outcome says whether the end watch stopped it. */
+export const execInteractive: InteractiveExec = async (argv, end) => {
   const [binary, ...args] = argv;
   if (binary === undefined) {
     throw new TypeError("execInteractive requires a non-empty argv");
@@ -51,9 +72,56 @@ export const execInteractive: InteractiveExec = async (argv) => {
   } catch (cause) {
     throw new SpawnError(binary, cause);
   }
-  await child.exited;
-  return child.exitCode;
+  if (end === undefined) {
+    await child.exited;
+    return outcomeOf(child, false);
+  }
+  // The child is asked to stop once its work is over; it is killed when it is still running after the grace time.
+  const ending: { ended: boolean; killTimer?: ReturnType<typeof setTimeout> } = { ended: false };
+  const stopWatching = end.watch(() => {
+    if (ending.ended) return;
+    ending.ended = true;
+    child.kill("SIGTERM");
+    ending.killTimer = setTimeout(() => { child.kill("SIGKILL"); }, end.graceMs);
+  });
+  try {
+    await child.exited;
+  } finally {
+    stopWatching();
+    clearTimeout(ending.killTimer);
+  }
+  return outcomeOf(child, ending.ended);
 };
+
+function outcomeOf(child: Bun.Subprocess, ended: boolean): InteractiveOutcome {
+  if (ended) return { kind: "ended" };
+  if (child.exitCode !== null) return { kind: "exited", code: child.exitCode };
+  return { kind: "signaled", signal: child.signalCode ?? "unknown" };
+}
+
+/** Keeps stdin on the terminal while forwarding and retaining bounded stdout. */
+export async function execInteractiveCapture(argv: readonly string[], maxOutputBytes: number): Promise<InteractiveCaptureResult> {
+  const [binary, ...args] = argv;
+  if (binary === undefined || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) {
+    throw new TypeError("execInteractiveCapture requires argv and a positive output limit");
+  }
+  let child: Bun.Subprocess<"inherit", "pipe", "inherit">;
+  try {
+    child = Bun.spawn([binary, ...args], { stdin: "inherit", stdout: "pipe", stderr: "inherit" });
+  } catch (cause) {
+    throw new SpawnError(binary, cause);
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of child.stdout) {
+    const data = Buffer.from(chunk);
+    process.stdout.write(data);
+    size += data.length;
+    if (size <= maxOutputBytes) chunks.push(data);
+  }
+  await child.exited;
+  return { exitCode: child.exitCode, stdout: size <= maxOutputBytes ? Buffer.concat(chunks).toString("utf8") : null };
+}
 
 /** Ends the child's whole process group; falls back to the child alone when the group is gone. */
 function killGroup(child: Bun.Subprocess): void {

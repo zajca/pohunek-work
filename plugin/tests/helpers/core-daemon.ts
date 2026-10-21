@@ -9,6 +9,7 @@ import { closeSync, openSync } from "node:fs";
 import { access, chmod, constants, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveDaemonSocket } from "@pohunek/sdk";
 import { CORE_BINARIES, CORE_DIR_ENV } from "../../scripts/core-binaries.ts";
 import { exec, type ExecResult } from "../../src/util/exec.ts";
 
@@ -63,6 +64,10 @@ export interface CoreDaemon {
   registerProject(label: string, repo: string): Promise<void>;
   /** Stops the daemon (SIGTERM, then SIGKILL after a deadline) and removes the root; safe to call twice. */
   stop(): Promise<void>;
+  /** Stops the daemon process and keeps the root, so `restart()` can bring it back on the same state and socket. */
+  interrupt(): Promise<void>;
+  /** Starts the daemon again on the root after `interrupt()` and waits until it reports healthy. */
+  restart(): Promise<void>;
 }
 
 /** The core binaries directory, or an error that names how to install it. */
@@ -132,7 +137,6 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
       if (runtimeDir !== null) await rm(runtimeDir, { recursive: true, force: true });
     }
   };
-  let daemon: Bun.Subprocess | null = null;
   try {
     const runtime = await realpath(await mkdtemp(join(await realpath(SOCKET_BASE), "pw-")));
     runtimeDir = runtime;
@@ -140,6 +144,10 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
     const longestSocketPath = workerSocketPath(runtime, LONGEST_SESSION_ID);
     checkSocketPathLength(longestSocketPath);
     for (const name of PRIVATE_DIRS) await mkdir(dir(name), { mode: 0o700 });
+    // `pohunek host discover` creates this directory with the umask's mode (zajca/pohunek#962), and the
+    // daemon refuses a worker start while it is not private; the fixture creates it private before any client runs.
+    await mkdir(join(dir("cache"), "pohunek"), { mode: 0o700 });
+    await chmod(join(dir("cache"), "pohunek"), 0o700);
     // The daemon's PATH holds only this directory; it runs git for project and worktree work.
     await writeFile(join(dir("bin"), "git"), `#!/bin/sh\nexec '${git.replaceAll("'", "'\\''")}' "$@"\n`);
     await chmod(join(dir("bin"), "git"), 0o755);
@@ -157,32 +165,42 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
       LANG: "C.UTF-8",
     };
     const logPath = join(root, "daemon.log");
-    // One append descriptor for both streams keeps the daemon's lines in order; the child holds its own copy.
-    const logFd = openSync(logPath, "a", 0o600);
-    try {
-      daemon = Bun.spawn([join(coreDir, "pohunekd")], {
-        env: { ...clientEnv, POHUNEK_WORKER_LAUNCHER: "subprocess", POHUNEK_WORKER_BIN: join(coreDir, "pohunek-sessiond") },
-        stdin: "ignore",
-        stdout: logFd,
-        stderr: logFd,
-      });
-    } finally {
-      closeSync(logFd);
-    }
-    const child = daemon;
     const pohunek = (args: readonly string[]): Promise<ExecResult> =>
       exec([join(coreDir, "pohunek"), ...args], { timeoutMs: CLI_TIMEOUT_MS, env: clientEnv });
-
-    const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS;
-    for (;;) {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`pohunekd exited during start (${String(child.exitCode ?? child.signalCode)}):\n${await readFile(logPath, "utf8")}`);
+    // A launch reads the same root and socket every time, so a restart after `interrupt()` finds the state it left.
+    const launch = async (): Promise<Bun.Subprocess> => {
+      // One append descriptor for both streams keeps the daemon's lines in order; the child holds its own copy.
+      const logFd = openSync(logPath, "a", 0o600);
+      let started: Bun.Subprocess;
+      try {
+        started = Bun.spawn([join(coreDir, "pohunekd")], {
+          env: { ...clientEnv, POHUNEK_WORKER_LAUNCHER: "subprocess", POHUNEK_WORKER_BIN: join(coreDir, "pohunek-sessiond") },
+          stdin: "ignore",
+          stdout: logFd,
+          stderr: logFd,
+        });
+      } finally {
+        closeSync(logFd);
       }
-      const health = parseOk((await pohunek(["health", "--json"])).stdout);
-      if (health?.["status"] === "ok") break;
-      if (Date.now() > deadline) throw new Error(`pohunekd did not report healthy within ${String(DAEMON_READY_TIMEOUT_MS)} ms:\n${await readFile(logPath, "utf8")}`);
-      await Bun.sleep(POLL_INTERVAL_MS);
-    }
+      const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS;
+      try {
+        for (;;) {
+          if (started.exitCode !== null || started.signalCode !== null) {
+            throw new Error(`pohunekd exited during start (${String(started.exitCode ?? started.signalCode)}):\n${await readFile(logPath, "utf8")}`);
+          }
+          const health = parseOk((await pohunek(["health", "--json"])).stdout);
+          if (health?.["status"] === "ok") break;
+          if (Date.now() > deadline) throw new Error(`pohunekd did not report healthy within ${String(DAEMON_READY_TIMEOUT_MS)} ms:\n${await readFile(logPath, "utf8")}`);
+          await Bun.sleep(POLL_INTERVAL_MS);
+        }
+      } catch (error) {
+        // The start error is the one reported; a daemon that cannot be stopped does not replace it.
+        await stopProcess(started).catch(() => undefined);
+        throw error;
+      }
+      return started;
+    };
+    let child = await launch();
 
     const gitEnv = { ...clientEnv, GIT_CONFIG_NOSYSTEM: "1" };
     const runGit = async (args: readonly string[]): Promise<void> => {
@@ -216,13 +234,17 @@ export async function startCoreDaemon(): Promise<CoreDaemon> {
           await removeDirs();
         }
       },
+      async interrupt() {
+        await stopProcess(child);
+      },
+      async restart() {
+        if (stopped) throw new Error("the daemon was stopped; its root is gone");
+        if (child.exitCode === null && child.signalCode === null) throw new Error("the daemon is running; interrupt it before restart");
+        child = await launch();
+      },
     };
   } catch (error) {
-    try {
-      if (daemon !== null) await stopProcess(daemon);
-    } finally {
-      await removeDirs();
-    }
+    await removeDirs();
     throw error;
   }
 }
@@ -292,9 +314,12 @@ function setTableValue(text: string, table: string, key: string, value: string |
   const next = lines.findIndex((line, index) => index > start && line.startsWith("["));
   const end = next === -1 ? lines.length : next;
   const matches = lines.flatMap((line, index) => (index > start && index < end && line.startsWith(`${key} = `) ? [index] : []));
+  const rendered = `${key} = ${typeof value === "number" ? String(value) : JSON.stringify(value)}`;
+  // A key the fixture leaves out is added to its table; a key it has once is replaced.
+  if (matches.length > 1) throw new Error(`the fixture has ${String(matches.length)} lines for ${table}.${key}, expected at most 1`);
   const [only] = matches;
-  if (only === undefined || matches.length !== 1) throw new Error(`the fixture has ${String(matches.length)} lines for ${table}.${key}, expected 1`);
-  lines[only] = `${key} = ${typeof value === "number" ? String(value) : JSON.stringify(value)}`;
+  if (only === undefined) lines.splice(start + 1, 0, rendered);
+  else lines[only] = rendered;
   return lines.join("\n");
 }
 
@@ -344,6 +369,14 @@ export async function installAgentProfile(daemon: CoreDaemon, name: string, scri
   const agents = join(daemon.root, "config", "pohunek", "agents");
   await mkdir(agents, { recursive: true, mode: 0o700 });
   await writeFile(join(agents, `${name}.toml`), `base = ${JSON.stringify(base ?? "shell")}\nprogram = ${JSON.stringify(program)}\nargs = []\n`, { mode: 0o600 });
+}
+
+/**
+ * The local socket of `daemon` as the plugin resolves it: the SDK route for this user and the daemon's
+ * client environment, so a test passes the socket the TUI would connect to.
+ */
+export function daemonLocalSocket(daemon: CoreDaemon): string {
+  return resolveDaemonSocket({ platform: process.platform === "darwin" ? "macos" : "linux", effectiveUid: process.getuid?.() ?? 0 }, daemon.clientEnv);
 }
 
 /** pgrep exit status when no process matched. */

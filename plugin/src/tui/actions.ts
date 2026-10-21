@@ -55,6 +55,20 @@ export function attachArgv(selfBin: string, key: string, project: string): ArgvR
 
 export type OpenUrlResult = { readonly ok: true; readonly href: string; readonly host: string } | { readonly ok: false; readonly reason: string };
 
+// The GitHub origin forms git stores for a repository: scp-like SSH, `ssh://` and HTTPS, with an optional `.git`.
+const GITHUB_ORIGIN = /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
+
+/**
+ * The page of `branch` on the GitHub repository named by `origin`, or null when either is unknown or the origin is
+ * not GitHub. The repository is never guessed from the project label.
+ */
+export function githubBranchUrl(origin: string | null, branch: string | null): string | null {
+  if (origin === null || branch === null || branch === "") return null;
+  const repository = GITHUB_ORIGIN.exec(origin);
+  if (repository === null) return null;
+  return `https://github.com/${repository[1] ?? ""}/${repository[2] ?? ""}/tree/${branch.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 /** Only `https:` URLs without credentials whose host is exactly in the allowlist. */
 export function checkOpenUrl(url: string, hosts: readonly string[]): OpenUrlResult {
   let parsed: URL;
