@@ -157,7 +157,10 @@ export async function execInteractiveRelay(argv: readonly string[], end: ChildEn
     throw new SpawnError(binary, cause);
   }
   const terminal = child.terminal;
-  if (terminal === undefined) throw new SpawnError(binary, new Error("the child has no pseudo-terminal"));
+  if (terminal === undefined) {
+    child.kill("SIGKILL");
+    throw new SpawnError(binary, new Error("the child has no pseudo-terminal"));
+  }
   // Ink reads the terminal in paused mode through `readable` and may have set an encoding, so input is read the same
   // way: a `data` listener on a stream once read through `readable` receives nothing.
   const onReadable = (): void => {
@@ -175,10 +178,16 @@ export async function execInteractiveRelay(argv: readonly string[], end: ChildEn
     child.kill("SIGTERM");
     ending.killTimer = setTimeout(() => { child.kill("SIGKILL"); }, end.graceMs);
   });
-  stdin.setRawMode(true);
-  stdin.ref();
-  stdin.on("readable", onReadable);
-  stdout.on("resize", onResize);
+  try {
+    stdin.setRawMode(true);
+    stdin.ref();
+    stdin.on("readable", onReadable);
+    stdout.on("resize", onResize);
+  } catch (error) {
+    // A child whose input cannot be relayed is not left running without a way to reach it.
+    child.kill("SIGKILL");
+    throw error;
+  }
   try {
     await child.exited;
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
