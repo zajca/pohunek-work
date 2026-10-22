@@ -1,3 +1,15 @@
+<p align="center">
+  <img src=".github/assets/readme-hero.png" alt="pohunek-work: workflow plugin, control TUI, web control center and Sway launchers. Engraving of a farm girl keeping a chalk table of turns while the farmhand calls the next server cabinet." />
+</p>
+
+<p align="center">
+  <a href="https://pohunek.dev/plugins/">pohunek.dev/plugins</a>
+  ·
+  <a href="https://pohunek.dev/surfaces/">Surfaces</a>
+  ·
+  <a href="https://pohunek.dev/docs/">Pohunek docs</a>
+</p>
+
 # pohunek-work
 
 Home of the pohunek user surfaces. Each surface owns a top-level folder with
