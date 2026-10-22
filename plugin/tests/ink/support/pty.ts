@@ -10,6 +10,7 @@ export type PtyStep =
   | { readonly send: string; readonly settle?: number }
   | { readonly pause: number }
   | { readonly clear: true }
+  | { readonly resize: readonly [rows: number, cols: number] }
   | { readonly absent: string; readonly pause?: number };
 
 export interface PtyRun {

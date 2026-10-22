@@ -332,6 +332,14 @@ quoting and run without a shell: the program word must be an absolute path, and
 argument; `$VAR`, `~` and globs stay literal, and `{id}` must appear. The owner's
 native line works unchanged:
 `attach_command = "/usr/bin/alacritty -e {bin} --host={host} attach -- {id}"`.
+`detach_sequence` is optional and only used in inline mode: 2 to 16 printable
+ASCII characters without space (for example `"~."`). With it, an inline attach runs
+`pohunek attach` in a pseudo-terminal the TUI owns and relays, and typing the sequence
+detaches as Ctrl-] does, so terminals that cannot send Ctrl-] (phone SSH apps) can
+return to the TUI. Characters that begin the sequence are held until the next key;
+a key that breaks the match sends them on. Keys inside escape sequences and pasted
+text never match, and Ctrl-] still detaches. Without the key, `pohunek attach` uses
+the terminal directly.
 `pohunek-work tui --attach inline|window` and `new-session --attach` override the mode
 for one run; `--attach window` without `attach_command` fails at startup. A new-session
 in window mode exits once its session is open in a window and prints

@@ -93,7 +93,8 @@ export const execInteractive: InteractiveExec = async (argv, end) => {
   return outcomeOf(child, ending.ended);
 };
 
-function outcomeOf(child: Bun.Subprocess, ended: boolean): InteractiveOutcome {
+/** The outcome of an interactive child that exited; `ended` says whether the end watch stopped it. */
+export function outcomeOf(child: Bun.Subprocess, ended: boolean): InteractiveOutcome {
   if (ended) return { kind: "ended" };
   if (child.exitCode !== null) return { kind: "exited", code: child.exitCode };
   return { kind: "signaled", signal: child.signalCode ?? "unknown" };
