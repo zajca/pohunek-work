@@ -28,6 +28,10 @@ export interface PtyResult {
   readonly failed: number;
   readonly exit: number | null;
   readonly output: string;
+  /** Every byte the command wrote, hex encoded. */
+  readonly raw: string;
+  /** Length of the raw output when each resize step changed the size. */
+  readonly resizedAt: readonly number[];
 }
 
 const DRIVER = new URL("./pty-driver.py", import.meta.url).pathname;

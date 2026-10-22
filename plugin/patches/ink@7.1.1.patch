@@ -1,0 +1,23 @@
+diff --git a/build/ink.js b/build/ink.js
+index 0082666b281ec2db77b875d6b8460bcc19a59ce7..7e01b309416de132869d7bc571be2dcecb036a35 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -278,7 +278,17 @@ export default class Ink {
+     }
+     resized = () => {
+         const currentWidth = getWindowSize(this.options.stdout).columns;
+-        if (currentWidth < this.lastTerminalWidth) {
++        if (this.alternateScreen && this.interactive && !this.isSuspended) {
++            // Terminals move the cursor and the content differently on a resize (a phone keyboard changes only the
++            // height), so the relative erase of the next frame cannot be trusted: clear the alternate screen
++            // absolutely and draw the next frame from the top.
++            this.writeBestEffort(this.options.stdout, ansiEscapes.eraseScreen + ansiEscapes.cursorTo(0, 0));
++            this.log.reset();
++            this.lastOutput = '';
++            this.lastOutputToRender = '';
++            this.lastOutputHeight = 0;
++        }
++        else if (currentWidth < this.lastTerminalWidth) {
+             // We clear the screen when decreasing terminal width to prevent duplicate overlapping re-renders.
+             this.log.clear();
+             this.lastOutput = '';

@@ -29,5 +29,8 @@
     "ink": "7.1.1",
     "react": "19.2.4",
     "react-devtools-core": "7.0.1"
+  },
+  "patchedDependencies": {
+    "ink@7.1.1": "patches/ink@7.1.1.patch"
   }
 }

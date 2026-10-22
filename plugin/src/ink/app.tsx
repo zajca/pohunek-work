@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { Box, render, Text, useApp, useInput, usePaste, useStdout, type Key } from "ink";
+import { Box, render, Text, useApp, useInput, usePaste, useStdout, useWindowSize, type Key } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createControlClient, type ControlAction, type ControlHost, type ControlNotification, type ControlSession, type ControlSnapshot } from "../control/index.ts";
 import { createSessionLauncher, type ActionChoice, type LaunchOptions, type LaunchRequest, type CreatedSession } from "../session-launch/index.ts";
@@ -121,6 +121,8 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const layout = useLayout();
   const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
+  // The screen reads the terminal size while it renders, so a resize renders it again at once.
+  useWindowSize();
   const dispatchMouse = useMouseDispatch();
   const control = useMemo(() => createControlClient({ binary: options.pohunekBin, timeoutMs: options.timeoutMs, notificationsPageSize: options.notificationsPageSize, localSocket: options.localSocket, reconnectMaxMs: options.reconnectMaxMs }), [options.pohunekBin, options.timeoutMs, options.notificationsPageSize, options.reconnectMaxMs]);
   // Every inline attach runs through this; with a detach sequence the child gets a pseudo-terminal relayed by the TUI.

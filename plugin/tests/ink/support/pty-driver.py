@@ -3,6 +3,7 @@
 # the run's timeoutS; {"send": hex} writes bytes;
 # {"clear": true} makes later expectations match only output printed after it; {"pause": ms} sleeps;
 # {"resize": [rows, cols]} sets the terminal size, which signals the command's foreground group with SIGWINCH.
+# Besides the plain output, the result carries the raw output (hex) and its length at each resize step.
 # The plain output (ANSI sequences removed) is printed as JSON with the index of the failing step, or -1 when every step completed.
 import fcntl, json, os, pty, re, select, signal, struct, subprocess, sys, termios, time
 
@@ -27,6 +28,7 @@ os.set_blocking(master, False)
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[=>78]")
 output = bytearray()
 mark = 0
+resized_at = []
 failed = -1
 # No step outlives the run: a step that never matches ends the run with its frame, before the test runner kills the driver.
 run_deadline = time.monotonic() + spec.get("timeoutS", 20)
@@ -73,6 +75,7 @@ for index, step in enumerate(spec["steps"]):
         pump(step["pause"] / 1000)
     elif "resize" in step:
         rows, cols = step["resize"]
+        resized_at.append(len(output))
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         pump(0.3)
     elif "clear" in step:
@@ -84,4 +87,4 @@ try:
 except ProcessLookupError:
     pass
 child.wait()
-print(json.dumps({"failed": failed, "exit": child.returncode, "output": plain()}))
+print(json.dumps({"failed": failed, "exit": child.returncode, "output": plain(), "raw": bytes(output).hex(), "resizedAt": resized_at}))
