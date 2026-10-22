@@ -79,9 +79,9 @@ test("the session's terminal follows a resize of the TUI's terminal", async () =
     ...openSession,
     { resize: [31, 97] },
     { pause: 500 },
-    // The session's shell has no PATH; bash keeps LINES and COLUMNS at the size of its terminal.
-    keys("echo \"<$LINES/$COLUMNS>\"\r"),
-    { expect: "<31/97>" },
+    // The session's shell has no PATH, so stty is named by its path, which Linux and macOS share.
+    keys("/bin/stty size\r"),
+    { expect: "31 97" },
     keys(SEQUENCE),
     { expect: "SESSIONS  1" },
     keys("q"),
