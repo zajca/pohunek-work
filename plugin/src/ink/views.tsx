@@ -38,8 +38,13 @@ export function applyActivityChange(records: readonly ControlNotification[], sco
   return at < 0 ? [...records, record] : [...records.slice(0, at), record, ...records.slice(at)];
 }
 
+/** Session states the daemon never leaves; such a session has nothing left to answer. */
+const FINAL_STATES: ReadonlySet<string> = new Set(["stopped", "done", "failed"]);
+
 export function sessionGroup(session: ControlSession, notifications: readonly ControlNotification[]): string {
   if (session.external || session.runtimeState === "lost" || session.runtimeState === "conflicting" || session.runtimeState === "incompatible") return "Unavailable";
+  // The notifications an ended session left behind stay in Activity; they do not make the session need the owner.
+  if (FINAL_STATES.has(session.state)) return "Unavailable";
   if (notifications.some((record) => record.host === session.host && record.sessionId === session.id && isUnresolvedAction(record))) return "Needs you";
   if (session.state === "blocked" || session.activity === "blocked") return "Needs you";
   if (session.state === "running" || session.state === "working" || session.state === "starting" || session.state === "reconnecting") {
