@@ -32,12 +32,12 @@ test("sections head the list and the highlighted session's panel follows the sel
   const steps: PtyStep[] = [
     { expect: "CONTROL CENTER" },
     keys("2"),
-    { expect: "NEEDS YOU  1" },
     { expect: "RUNNING  1" },
+    { expect: "UNAVAILABLE  1" },
     // Steps match in order of output and a panel heading is drawn once per change, so the heading of the
     // session the owner moves to is the check that the panel follows the selection.
     keys("\x1b[B"),
-    { expect: "alpha-panel · local · shell" },
+    { expect: "broken-panel · local · shell" },
     keys("q"),
   ];
   const result = await scenario.run(steps, { ...WIDE, timeoutS: 40 });
