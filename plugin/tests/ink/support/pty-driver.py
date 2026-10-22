@@ -1,7 +1,8 @@
 # Runs a command in a pseudo-terminal and drives it with a list of steps read from a JSON spec.
 # Steps: {"expect": text, "timeout": seconds} waits for text after the previous expect, for at most the step's timeout and
 # the run's timeoutS; {"send": hex} writes bytes;
-# {"clear": true} makes later expectations match only output printed after it; {"pause": ms} sleeps.
+# {"clear": true} makes later expectations match only output printed after it; {"pause": ms} sleeps;
+# {"resize": [rows, cols]} sets the terminal size, which signals the command's foreground group with SIGWINCH.
 # The plain output (ANSI sequences removed) is printed as JSON with the index of the failing step, or -1 when every step completed.
 import fcntl, json, os, pty, re, select, signal, struct, subprocess, sys, termios, time
 
@@ -70,6 +71,10 @@ for index, step in enumerate(spec["steps"]):
             break
     elif "pause" in step:
         pump(step["pause"] / 1000)
+    elif "resize" in step:
+        rows, cols = step["resize"]
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        pump(0.3)
     elif "clear" in step:
         # Later expectations match only output printed after this point.
         mark = len(plain())

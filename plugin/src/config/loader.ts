@@ -29,6 +29,7 @@ import { fitsLinearComplexity, LINEAR_MAX_COMPLEXITY } from "../util/linear-budg
 import { estimateIssueSearchNodes, estimateRequestNodes, GITHUB_MAX_NODES } from "../util/github-budget.ts";
 import { ConfigError } from "./errors.ts";
 import { checkAttachWords, splitAttachTemplate } from "../tui/attach-template.ts";
+import { isDetachSequence } from "../util/pty-relay.ts";
 import {
   fail,
   readStringAllowEmpty,
@@ -398,6 +399,7 @@ function parseTui(root: Table, file: string): TuiConfig {
       "attach_mode",
       "attach_command",
       "attach_launch_check_ms",
+      "detach_sequence",
     ],
     file,
     path,
@@ -432,15 +434,23 @@ function parseTui(root: Table, file: string): TuiConfig {
   };
 }
 
-/** Window mode requires `attach_command` and `attach_launch_check_ms`; inline mode rejects both. */
-function parseTuiAttach(table: Table, mode: TuiAttachMode, file: string, path: KeyPath): Pick<TuiConfig, "attachCommand" | "attachLaunchCheckMs"> {
+/**
+ * Window mode requires `attach_command` and `attach_launch_check_ms`; inline mode rejects both. `detach_sequence` is
+ * optional in inline mode and rejected in window mode.
+ */
+function parseTuiAttach(table: Table, mode: TuiAttachMode, file: string, path: KeyPath): Pick<TuiConfig, "attachCommand" | "attachLaunchCheckMs" | "detachSequence"> {
   const hasCommand = table["attach_command"] !== undefined;
   const hasCheck = table["attach_launch_check_ms"] !== undefined;
+  const hasSequence = table["detach_sequence"] !== undefined;
   if (mode === "inline") {
     if (hasCommand) throw fail(file, [...path, "attach_command"], "is only used with attach_mode = \"window\"");
     if (hasCheck) throw fail(file, [...path, "attach_launch_check_ms"], "is only used with attach_mode = \"window\"");
-    return {};
+    if (!hasSequence) return {};
+    const sequence = readString(table, "detach_sequence", file, path);
+    if (!isDetachSequence(sequence)) throw fail(file, [...path, "detach_sequence"], "must be 2 to 16 printable ASCII characters without space");
+    return { detachSequence: sequence };
   }
+  if (hasSequence) throw fail(file, [...path, "detach_sequence"], "is only used with attach_mode = \"inline\"");
   if (!hasCommand) throw fail(file, [...path, "attach_command"], "is required with attach_mode = \"window\"");
   if (!hasCheck) throw fail(file, [...path, "attach_launch_check_ms"], "is required with attach_mode = \"window\"");
   const command = readString(table, "attach_command", file, path);

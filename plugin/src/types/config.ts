@@ -144,6 +144,8 @@ export interface TuiConfig {
   readonly attachCommand?: readonly string[];
   /** Window mode: a terminal that exits within this many milliseconds is a failed launch. */
   readonly attachLaunchCheckMs?: number;
+  /** Inline mode: typed characters that detach as Ctrl-] does; when absent the attach child inherits the terminal. */
+  readonly detachSequence?: string;
   /** Bytes of a session's retained output requested per live read. */
   readonly outputMaxBytes: number;
   /** Longest gap between two presses on one list row that still counts as a double click, in milliseconds. */

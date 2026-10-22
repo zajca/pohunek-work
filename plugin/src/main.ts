@@ -481,6 +481,7 @@ async function terminalUiCommand(mode: InkTuiOptions["mode"], argv: readonly str
       doubleClickMs: config.global.tui.doubleClickMs,
       detailMinWidth: config.global.tui.detailMinWidth,
       attachMode,
+      ...(config.global.tui.detachSequence === undefined ? {} : { detachSequence: config.global.tui.detachSequence }),
       ...(attachCommand === undefined || config.global.tui.attachLaunchCheckMs === undefined ? {} : {
         attachCommand,
         attachLaunchCheckMs: config.global.tui.attachLaunchCheckMs,

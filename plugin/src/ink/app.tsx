@@ -9,7 +9,8 @@ import { noLinkReason, sessionLinks, type SessionLink } from "./links.ts";
 import type { TuiAttachMode } from "../types/config.ts";
 import { staleCutoff } from "../output/stale.ts";
 import { ACTOR_FILTERS, filterRows, projectLabels, rowId, type Filters } from "../tui/rows.ts";
-import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveOutcome } from "../util/exec.ts";
+import { exec, execInteractive, execInteractiveCapture, type ChildEnd, type InteractiveExec, type InteractiveOutcome } from "../util/exec.ts";
+import { execInteractiveRelay } from "../util/pty-relay.ts";
 import { handover, openExternal, suspendForChild as suspendChild } from "./handover.ts";
 import { useControlData } from "./use-control-data.ts";
 import { useLiveOutput } from "./use-live-output.ts";
@@ -57,6 +58,8 @@ export interface InkTuiOptions {
   readonly onWindowOpened?: (line: string) => void;
   readonly attachCommand?: readonly string[];
   readonly attachLaunchCheckMs?: number;
+  /** Inline mode: typed characters that detach as Ctrl-] does, relayed through a pseudo-terminal the TUI owns. */
+  readonly detachSequence?: string;
   readonly outputWaitMs: number;
   readonly outputMaxBytes: number;
   /** Longest gap between two presses on one list row that counts as a double click. */
@@ -120,7 +123,16 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const { stdout } = useStdout();
   const dispatchMouse = useMouseDispatch();
   const control = useMemo(() => createControlClient({ binary: options.pohunekBin, timeoutMs: options.timeoutMs, notificationsPageSize: options.notificationsPageSize, localSocket: options.localSocket, reconnectMaxMs: options.reconnectMaxMs }), [options.pohunekBin, options.timeoutMs, options.notificationsPageSize, options.reconnectMaxMs]);
-  const newLauncher = useCallback(() => createSessionLauncher({ bin: options.pohunekBin, queryTimeoutMs: options.timeoutMs, launchTimeoutMs: options.launchTimeoutMs, launchKillMarginMs: options.launchKillMarginMs }), [options.pohunekBin, options.timeoutMs, options.launchTimeoutMs, options.launchKillMarginMs]);
+  // Every inline attach runs through this; with a detach sequence the child gets a pseudo-terminal relayed by the TUI.
+  const runAttach = useMemo<InteractiveExec>(() => {
+    const sequence = options.detachSequence;
+    if (sequence === undefined) return execInteractive;
+    return (argv, end) => execInteractiveRelay(argv, end, { detachSequence: sequence, drainMs: options.timeoutMs });
+  }, [options.detachSequence, options.timeoutMs]);
+  const newLauncher = useCallback(() => createSessionLauncher(
+    { bin: options.pohunekBin, queryTimeoutMs: options.timeoutMs, launchTimeoutMs: options.launchTimeoutMs, launchKillMarginMs: options.launchKillMarginMs },
+    { execInteractive: runAttach },
+  ), [options.pohunekBin, options.timeoutMs, options.launchTimeoutMs, options.launchKillMarginMs, runAttach]);
   const [launcher, setLauncher] = useState(newLauncher);
   const [view, setView] = useState<ViewName>("Work");
   /** The last press on a list row, which a press on the same row within `doubleClickMs` turns into a double click. */
@@ -588,14 +600,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       {
         const resumed = outcome.data.session;
         try {
-          const windowed = await attachSession(resumed.host, resumed.id, (end) => execInteractive([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id], end));
+          const windowed = await attachSession(resumed.host, resumed.id, (end) => runAttach([options.pohunekBin, "attach", "--host", resumed.host, "--", resumed.id], end));
           if (windowed !== null) bumpStatus(windowed);
         } catch (error) { bumpStatus(`Session resumed at ${resumed.host}/${resumed.id}; attach failed: ${defaultStatus(error)}`); }
       }
       void refresh();
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
-  }, [attachSession, busy, control, options.pohunekBin, refresh, sessionDetail, snapshot, stale]);
+  }, [attachSession, busy, control, options.pohunekBin, refresh, runAttach, sessionDetail, snapshot, stale]);
 
   const requestRecovery = useCallback(async (kind: RecoveryRequest["kind"], target: ControlSession, returnTo: ReturnKind): Promise<void> => {
     if (busy || stale || sessionsUnreadable(snapshot, target.host)) {
@@ -635,13 +647,13 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     }
     setBusy(true);
     try {
-      const windowed = await attachSession(target.host, target.id, (end) => execInteractive([options.pohunekBin, "attach", "--host", target.host, "--", target.id], end));
+      const windowed = await attachSession(target.host, target.id, (end) => runAttach([options.pohunekBin, "attach", "--host", target.host, "--", target.id], end));
       if (windowed !== null) bumpStatus(windowed);
       // Not awaited inside the busy window: the work list can take seconds, and input must not wait for it.
       void refresh();
     } catch (error) { bumpStatus(`Attach: ${defaultStatus(error)}`); }
     finally { setBusy(false); }
-  }, [attachSession, options.pohunekBin, overlay.kind, refresh, requestRecovery, selectedSession, sessionDetail]);
+  }, [attachSession, options.pohunekBin, overlay.kind, refresh, requestRecovery, runAttach, selectedSession, sessionDetail]);
 
   const openLink = useCallback((raw: string): void => {
     const checked = checkOpenUrl(raw, options.openUrlHosts);
@@ -719,7 +731,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
         if (id === undefined) throw new Error("the attach plan names no session");
         const attached: { outcome?: InteractiveOutcome } = {};
         const windowed = await attachSession("local", id, async (end) => {
-          attached.outcome = await execInteractive([options.pohunekBin, "attach", "--host", "local", "--", id], end);
+          attached.outcome = await runAttach([options.pohunekBin, "attach", "--host", "local", "--", id], end);
           return attached.outcome;
         });
         if (windowed !== null) report = windowed;
@@ -753,7 +765,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     await refresh();
     // A mutation that started during the read may have set its own result; that result takes precedence.
     if (actionSeq.current === started) setStatus(report);
-  }, [attachSession, busy, options.listTimeoutMs, options.pohunekBin, options.selfBin, refresh, suspendForChild, workDetail]);
+  }, [attachSession, busy, options.listTimeoutMs, options.pohunekBin, options.selfBin, refresh, runAttach, suspendForChild, workDetail]);
 
   const previewWorkAction = useCallback(async (action: string): Promise<void> => {
     if (workDetail === null || busy) return;
