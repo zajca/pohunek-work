@@ -104,6 +104,27 @@ class MultiSurfaceFixtureTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("already has a section for 0.8.0", result.stderr)
 
+    def test_only_release_and_prerelease_versions_are_folded(self):
+        for version in ("0.8.0", "0.8.0-pre.1"):
+            result = run(self.root, "notes", version, "--surface", "plugin")
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("the version must be", result.stderr)
+        for version in ("0.8", "v0.8.0", "0.8.0-rc1", "0.8.0-pre.01", "0.8.0-pre"):
+            result = run(self.root, "fold", version, "--surface", "plugin", "--date", "2026-10-24")
+            self.assertEqual(result.returncode, 1, version)
+            self.assertIn("the version must be X.Y.Z or X.Y.Z-pre.N", result.stderr)
+        self.assertEqual(run(self.root, "fold", "0.8.0-pre.1", "--surface", "plugin", "--date", "2026-10-24").returncode, 0)
+
+    def test_a_fragment_body_line_that_looks_like_the_header_is_left_alone(self):
+        (self.root / "changelog.d" / "33-header-like.md").write_text(
+            "---\nkind: fixed\nsurfaces: plugin, web\n---\nsurfaces: plugin, web\n"
+        )
+        self.assertEqual(run(self.root, "fold", "0.8.0", "--surface", "plugin", "--date", "2026-10-24").returncode, 0)
+        self.assertEqual(
+            (self.root / "changelog.d" / "33-header-like.md").read_text(),
+            "---\nkind: fixed\nsurfaces: web\n---\nsurfaces: plugin, web\n",
+        )
+
     def test_notes_refuse_a_surface_with_fragments_left_after_its_fold(self):
         self.assertEqual(run(self.root, "fold", "0.8.0", "--surface", "plugin", "--date", "2026-10-24").returncode, 0)
         (self.root / "changelog.d" / "33-late.md").write_text("---\nkind: fixed\nsurfaces: plugin\n---\nA late fix.\n")
