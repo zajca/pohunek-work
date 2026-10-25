@@ -536,12 +536,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # A dry run of a version without a section shows the body the release would
+      # publish: the fold runs on a scratch copy, so the checkout is untouched. A
+      # tag build never folds; its notes fail unless the section is already there.
       - name: Build the release body
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           body_dir="$RUNNER_TEMP/notes-body"
           mkdir -p "$body_dir"
-          packaging/changelog notes "$VERSION" --surface "$SURFACE" > "$body_dir/release-notes.md"
+          notes_root="$GITHUB_WORKSPACE"
+          changelog="$(jq -r --arg surface "$SURFACE" '.surfaces[$surface].changelog' packaging/surfaces.json)"
+          if [ "$EVENT_NAME" = workflow_dispatch ] && ! grep -qF "## ${VERSION} - " "$changelog"; then
+            notes_root="$RUNNER_TEMP/dry-run"
+            rm -rf "$notes_root"
+            mkdir -p "$notes_root"
+            cp -R . "$notes_root/"
+            packaging/changelog fold "$VERSION" --surface "$SURFACE" --root "$notes_root"
+          fi
+          packaging/changelog notes "$VERSION" --surface "$SURFACE" --root "$notes_root" > "$body_dir/release-notes.md"
           {
             echo
             echo "Release ${VERSION} of the pohunek ${SURFACE} surface (tag \`${TAG}\`)."

@@ -478,6 +478,15 @@ class ReleaseNotesTest(unittest.TestCase):
         self.assertIn("name: notes-body", self.notes)
         self.assertIn("gh attestation verify", self.notes)
 
+    def test_a_dry_run_folds_a_scratch_copy_and_a_tag_build_stays_strict(self):
+        script = "\n".join(run_scripts(self.notes)[0])
+        self.assertIn('if [ "$EVENT_NAME" = workflow_dispatch ]', script)
+        self.assertIn('packaging/changelog fold "$VERSION" --surface "$SURFACE" --root "$notes_root"', script)
+        self.assertLess(script.index("cp -R . "), script.index("packaging/changelog fold"))
+        self.assertIn('--root "$notes_root" > "$body_dir/release-notes.md"', script)
+        self.assertNotIn("packaging/changelog fold", script.split("fi\n", 1)[1])
+        self.assertIn("EVENT_NAME: ${{ github.event_name }}", self.notes)
+
     def test_untrusted_values_reach_the_script_only_through_env(self):
         script = "\n".join(run_scripts(self.notes)[0])
         self.assertNotIn("${{", script)
