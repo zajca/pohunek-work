@@ -42,7 +42,10 @@ jobs:
             echo "changelog: the no-changelog label is set; no fragment is required"
             exit 0
           fi
-          changed="$(git diff --name-only --diff-filter=AMR "$BASE_SHA...$HEAD_SHA" -- 'changelog.d/*.md')"
+          # A git pathspec glob also matches dotfiles, which the tool ignores, so the
+          # names are filtered with the fragment name pattern instead.
+          changed="$(git diff --name-only --diff-filter=AMR "$BASE_SHA...$HEAD_SHA" \
+            | grep -E '^changelog\.d/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*\.md$' || true)"
           if [ -z "$changed" ]; then
             echo "::error::this pull request adds no changelog fragment; add changelog.d/<N>-<slug>.md or label it no-changelog"
             exit 1

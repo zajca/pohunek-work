@@ -105,6 +105,14 @@ class RequirementStepTest(unittest.TestCase):
         head = self.commit("fold without a new fragment")
         self.assertEqual(self.run_step(head, "[]").returncode, 1)
 
+    def test_a_dotfile_or_a_misnamed_file_in_the_folder_does_not_count(self):
+        (self.repo / "changelog.d" / ".31-foo.md").write_text("---\nkind: fixed\nsurfaces: web\n---\nIgnored.\n")
+        (self.repo / "changelog.d" / "x-foo.md").write_text("---\nkind: fixed\nsurfaces: web\n---\nBad name.\n")
+        head = self.commit("dotfile and bad name")
+        result = self.run_step(head, "[]")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("adds no changelog fragment", result.stdout)
+
     def test_the_no_changelog_label_passes_without_a_fragment(self):
         (self.repo / "README.md").write_text("ci only\n")
         head = self.commit("ci")
