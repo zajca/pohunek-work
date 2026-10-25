@@ -97,8 +97,9 @@ workaround here.
 
 Each surface is released by its own tag and version: `web-vX.Y.Z`,
 `launchers-vX.Y.Z` and `plugin-vX.Y.Z` (no bare `vX.Y.Z` tag).
-`.github/workflows/release.yml` runs only the jobs of the tagged surface:
-`prepare` (the only job that reads the tag name or the dispatch inputs) calls
+`.github/workflows/release.yml` runs only the jobs of the tagged surface;
+`release-notes` builds the release body from that surface's changelog section
+(see [Changelog](#changelog)). `prepare` (the only job that reads the tag name or the dispatch inputs) calls
 `packaging/resolve-release`, which fails unless the tag's version equals the
 version in the surface's sources (`web/package.json`, `launchers/package.json`,
 `plugin/package.json`); `gate` fails the release
@@ -123,6 +124,32 @@ only workflow with a secret, `TAP_DISPATCH_PAT`) sends the tap a
 `pohunek-work-release` repository dispatch with the formula and the tag; the tap
 bumps that formula. `packaging/tests/test_notify_tap_workflow.py` pins it. Verify a release asset
 with `gh attestation verify <archive> --repo zajca/pohunek-work`.
+
+## Changelog
+
+Each surface publishes its user-facing changes in its GitHub release body
+(pohunek.dev reads that block). A change a user can see adds one fragment
+`changelog.d/<N>-<slug>.md`, where `N` is the issue number in this repository and
+`slug` is lowercase words joined by hyphens:
+
+```
+---
+kind: added            # added, changed, deprecated, removed, fixed or security
+breaking: true         # only for a breaking change; absent means false
+surfaces: plugin, web  # one or more of plugin, launchers, web
+---
+What changes for the user: one paragraph of one to three sentences, present tense.
+```
+
+The body is one paragraph with Markdown inline syntax only (no blank line, no
+heading). `packaging/changelog check` validates every fragment, and the
+`Changelog` workflow requires a fragment in each pull request unless it carries
+the `no-changelog` label. Label CI, tests, refactors, internal docs and release
+preparation `no-changelog`. Only the release preparation folds fragments
+(`packaging/changelog fold`, see `.claude/skills/release/SKILL.md`); the
+release workflow publishes the folded section and fails when fragments of the
+surface remain. The format is the ecosystem changelog contract, version 1
+(zajca/pohunek#1588).
 
 ## Conventions
 
