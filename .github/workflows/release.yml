@@ -19,6 +19,12 @@ name: Release
 # A manual run (workflow_dispatch) builds one surface at the given version and
 # publishes and attests nothing: it is the dry run.
 #
+# The release body starts with the surface's changelog section from the tagged
+# commit (`packaging/changelog notes`), followed by the verification text. The
+# `release-notes` job builds it with read access only and hands it to `publish`
+# as a file; `publish` fails before it creates the release when the section is
+# missing or when fragments for the surface remain.
+#
 # `prepare` selects the surface; every surface's jobs are skipped unless
 # `prepare` selected it, and `gate` fails the release unless exactly the selected
 # surface's jobs ran and succeeded, so one surface's tag never builds or
@@ -508,6 +514,71 @@ jobs:
           test -f "$ARCHIVE_ROOT/packaging/verify-archive"
           bun run release/smoke.ts "$ARCHIVE_ROOT/pohunek-web" "$ARCHIVE_ROOT/frontend"
 
+  # Builds the release body with read access only. The changelog tool fails when
+  # the tagged commit has no section for the version or still holds fragments of
+  # the surface, so `publish` never attaches notes that would drop changes. The
+  # body is attached to `publish` as a file, never interpolated into a script.
+  release-notes:
+    name: Write the release notes
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SURFACE: ${{ needs.prepare.outputs.surface }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      CORE_REF: ${{ needs.prepare.outputs.core_ref }}
+      CORE_REV: ${{ needs.prepare.outputs.core_rev }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # A dry run of a version without a section shows the body the release would
+      # publish: the fold runs on a scratch copy, so the checkout is untouched. A
+      # tag build never folds; its notes fail unless the section is already there.
+      - name: Build the release body
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          body_dir="$RUNNER_TEMP/notes-body"
+          mkdir -p "$body_dir"
+          notes_root="$GITHUB_WORKSPACE"
+          changelog="$(jq -r --arg surface "$SURFACE" '.surfaces[$surface].changelog' packaging/surfaces.json)"
+          if [ "$EVENT_NAME" = workflow_dispatch ] && ! grep -q "^## ${VERSION//./\.} - " "$changelog"; then
+            notes_root="$RUNNER_TEMP/dry-run"
+            rm -rf "$notes_root"
+            mkdir -p "$notes_root"
+            cp -R . "$notes_root/"
+            packaging/changelog fold "$VERSION" --surface "$SURFACE" --root "$notes_root"
+          fi
+          packaging/changelog notes "$VERSION" --surface "$SURFACE" --root "$notes_root" > "$body_dir/release-notes.md"
+          {
+            echo
+            echo "Release ${VERSION} of the pohunek ${SURFACE} surface (tag \`${TAG}\`)."
+            echo
+            echo "Pinned core release: \`${CORE_REF}\`${CORE_REV:+ (commit \`${CORE_REV}\`)}."
+            echo "Every archive has a \`.sha256\` file and a \`MANIFEST\` that records the core version."
+            echo
+            echo "A macOS archive is ad-hoc signed. Every archive and checksum has a GitHub build-provenance attestation:"
+            echo "\`gh attestation verify <archive> --repo ${GITHUB_REPOSITORY}\`."
+            echo
+            echo "Download with \`gh release download ${TAG} -R ${GITHUB_REPOSITORY} -p '<archive>*'\`"
+            echo "(needs \`gh auth login\`), or fetch the asset URL directly while the repository is public."
+          } >> "$body_dir/release-notes.md"
+          cat "$body_dir/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the release body
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notes-body
+          path: ${{ runner.temp }}/notes-body/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
   # A skipped dependency skips its dependents, so the jobs that attest and
   # publish wait for this one job instead. It fails unless the jobs of the
   # selected surface succeeded and every other surface's job was skipped. It
@@ -598,12 +669,13 @@ jobs:
   # never reaches it.
   publish:
     name: Publish the release
-    needs: [prepare, gate, attest]
+    needs: [prepare, gate, attest, release-notes]
     if: >-
       ${{ always() && github.event_name == 'push' && github.ref_type == 'tag'
       && needs.prepare.result == 'success'
       && needs.gate.result == 'success'
-      && needs.attest.result == 'success' }}
+      && needs.attest.result == 'success'
+      && needs.release-notes.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -613,7 +685,6 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG: ${{ needs.prepare.outputs.tag }}
       CORE_REF: ${{ needs.prepare.outputs.core_ref }}
-      CORE_REV: ${{ needs.prepare.outputs.core_rev }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -673,26 +744,26 @@ jobs:
           fi
           sha256sum -c ./*.sha256
 
-      - name: Write the release notes
+      - name: Download the release notes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: notes-body
+          path: ${{ runner.temp }}/notes-body
+
+      # The body is data from the read-only release-notes job; it must open with
+      # the changelog marker block.
+      - name: Check the release notes
+        shell: bash
         run: |
           set -euo pipefail
-          {
-            echo "Release ${VERSION} of the pohunek ${SURFACE} surface (tag \`${TAG}\`)."
-            echo
-            echo "Pinned core release: \`${CORE_REF}\`${CORE_REV:+ (commit \`${CORE_REV}\`)}."
-            echo "Every archive has a \`.sha256\` file and a \`MANIFEST\` that records the core version."
-            echo
-            echo "A macOS archive is ad-hoc signed. Every archive and checksum has a GitHub build-provenance attestation:"
-            echo "\`gh attestation verify <archive> --repo ${GITHUB_REPOSITORY}\`."
-            echo
-            echo "Download with \`gh release download ${TAG} -R ${GITHUB_REPOSITORY} -p '<archive>*'\`"
-            echo "(needs \`gh auth login\`), or fetch the asset URL directly while the repository is public."
-          } > "$RUNNER_TEMP/release-notes.md"
+          notes="$RUNNER_TEMP/notes-body/release-notes.md"
+          test -f "$notes"
+          test "$(head -n 1 "$notes")" = "<!-- pohunek-changelog:start -->"
 
       - name: Create the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          body_path: ${{ runner.temp }}/release-notes.md
+          body_path: ${{ runner.temp }}/notes-body/release-notes.md
           fail_on_unmatched_files: true
           files: |
             ${{ runner.temp }}/release/*.tar.gz
