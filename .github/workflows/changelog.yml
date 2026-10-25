@@ -1,0 +1,53 @@
+name: Changelog
+
+# A pull request with a user-visible effect adds a fragment under changelog.d/.
+# This check validates every fragment in the tree and requires one unless the
+# pull request carries the `no-changelog` label. It runs on `pull_request` and
+# never on `pull_request_target`: it runs the pull request's own checkout and
+# uses no secret. The label events re-evaluate the requirement.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fragments:
+    name: Changelog fragments
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The full history holds the base commit, which the requirement diffs against.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate every fragment
+        run: packaging/changelog check
+
+      - name: Require a fragment unless the pull request is labeled no-changelog
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          if printf '%s' "$LABELS" | jq -e 'index("no-changelog") != null' > /dev/null; then
+            echo "changelog: the no-changelog label is set; no fragment is required"
+            exit 0
+          fi
+          # A git pathspec glob also matches dotfiles, which the tool ignores, so the
+          # names are filtered with the fragment name pattern instead.
+          changed="$(git diff --name-only --diff-filter=AMR "$BASE_SHA...$HEAD_SHA" \
+            | grep -E '^changelog\.d/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*\.md$' || true)"
+          if [ -z "$changed" ]; then
+            echo "::error::this pull request adds no changelog fragment; add changelog.d/<N>-<slug>.md or label it no-changelog"
+            exit 1
+          fi
+          printf 'changelog: fragments added or changed:\n%s\n' "$changed"
