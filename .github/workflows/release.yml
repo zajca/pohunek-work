@@ -548,7 +548,7 @@ jobs:
           mkdir -p "$body_dir"
           notes_root="$GITHUB_WORKSPACE"
           changelog="$(jq -r --arg surface "$SURFACE" '.surfaces[$surface].changelog' packaging/surfaces.json)"
-          if [ "$EVENT_NAME" = workflow_dispatch ] && ! grep -qF "## ${VERSION} - " "$changelog"; then
+          if [ "$EVENT_NAME" = workflow_dispatch ] && ! grep -q "^## ${VERSION//./\.} - " "$changelog"; then
             notes_root="$RUNNER_TEMP/dry-run"
             rm -rf "$notes_root"
             mkdir -p "$notes_root"
