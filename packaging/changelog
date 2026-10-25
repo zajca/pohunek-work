@@ -258,12 +258,25 @@ def fold(root: Path, config: Config, version: str, surface: str, day: str) -> No
         lines[fragment.surfaces_line] = "surfaces: " + ", ".join(left)
         rewrites[fragment.path] = "\n".join(lines)
 
-    changelog.write_text(new_text.rstrip("\n") + "\n", encoding="utf-8")
+    # Every new content is written to a sibling temporary file first, so a failed
+    # write leaves the tree as it was; the replacements then run in one pass.
+    staged = {changelog: new_text.rstrip("\n") + "\n"}
+    staged.update({path: content for path, content in rewrites.items() if content is not None})
+    temporary = {}
+    try:
+        for target, content in staged.items():
+            tmp = target.with_name(target.name + ".fold-tmp")
+            tmp.write_text(content, encoding="utf-8")
+            temporary[target] = tmp
+    except OSError as error:
+        for tmp in temporary.values():
+            tmp.unlink(missing_ok=True)
+        raise ChangelogError(f"cannot write the fold, nothing was changed: {error}") from error
+    for target, tmp in temporary.items():
+        tmp.replace(target)
     for path, content in rewrites.items():
         if content is None:
             path.unlink()
-        else:
-            path.write_text(content, encoding="utf-8")
 
 
 def notes(root: Path, config: Config, version: str, surface: str) -> str:
@@ -288,6 +301,8 @@ def notes(root: Path, config: Config, version: str, surface: str) -> str:
     content = (rest[: following.start()] if following else rest).split("\n")
     while content and content[-1].strip() == "":
         content.pop()
+    if not any(line.strip() for line in content):
+        raise ChangelogError(f"{name} has an empty section for {version}")
     return "\n".join([NOTES_START, *content, NOTES_END]) + "\n"
 
 
@@ -328,7 +343,7 @@ def main(argv: list) -> int:
             fold(args.root, config, args.version, args.surface, day)
         else:
             sys.stdout.write(notes(args.root, config, args.version, args.surface))
-    except ChangelogError as error:
+    except (ChangelogError, OSError, UnicodeDecodeError) as error:
         for line in str(error).split("\n"):
             print(f"changelog: {line}", file=sys.stderr)
         return 1

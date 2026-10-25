@@ -6,6 +6,7 @@ single-product fixture runs as the surface `web` of a multi-surface repository: 
 """
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -124,6 +125,38 @@ class MultiSurfaceFixtureTest(unittest.TestCase):
             (self.root / "changelog.d" / "33-header-like.md").read_text(),
             "---\nkind: fixed\nsurfaces: web\n---\nsurfaces: plugin, web\n",
         )
+
+    def test_a_fold_that_cannot_write_changes_nothing(self):
+        if os.geteuid() == 0:
+            self.skipTest("root writes into read-only directories")
+        (self.root / "changelog.d" / "2-open.md").write_text("---\nkind: fixed\nsurfaces: plugin\n---\nOpen.\n")
+        before = fragments(self.root)
+        changelog = (self.root / "plugin" / "CHANGELOG.md").read_bytes()
+        plugin = self.root / "plugin"
+        plugin.chmod(0o555)
+        self.addCleanup(plugin.chmod, 0o755)
+        result = run(self.root, "fold", "0.8.0", "--surface", "plugin", "--date", "2026-10-24")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nothing was changed", result.stderr)
+        self.assertEqual(fragments(self.root), before)
+        self.assertEqual((self.root / "plugin" / "CHANGELOG.md").read_bytes(), changelog)
+        self.assertEqual(list(plugin.glob("*.fold-tmp")), [])
+
+    def test_an_unreadable_fragment_is_reported_as_a_changelog_line(self):
+        (self.root / "changelog.d" / "3-dir.md").mkdir()
+        result = run(self.root, "check")
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith("changelog: "), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_section_with_no_content_is_not_published(self):
+        (self.root / "plugin" / "CHANGELOG.md").write_text("# Changelog\n\n## 0.8.0 - 2026-10-24\n\n## 0.7.0 - 2026-10-01\n\n### Fixed\n\n- Old.\n")
+        for path in (self.root / "changelog.d").iterdir():
+            path.unlink()
+        result = run(self.root, "notes", "0.8.0", "--surface", "plugin")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("has an empty section for 0.8.0", result.stderr)
 
     def test_notes_refuse_a_surface_with_fragments_left_after_its_fold(self):
         self.assertEqual(run(self.root, "fold", "0.8.0", "--surface", "plugin", "--date", "2026-10-24").returncode, 0)
