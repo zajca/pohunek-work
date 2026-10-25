@@ -265,9 +265,10 @@ def fold(root: Path, config: Config, version: str, surface: str, day: str) -> No
     temporary = {}
     try:
         for target, content in staged.items():
+            # Registered before the write, so a partly written file is removed too.
             tmp = target.with_name(target.name + ".fold-tmp")
-            tmp.write_text(content, encoding="utf-8")
             temporary[target] = tmp
+            tmp.write_text(content, encoding="utf-8")
     except OSError as error:
         for tmp in temporary.values():
             tmp.unlink(missing_ok=True)

@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -141,6 +143,28 @@ class MultiSurfaceFixtureTest(unittest.TestCase):
         self.assertEqual(fragments(self.root), before)
         self.assertEqual((self.root / "plugin" / "CHANGELOG.md").read_bytes(), changelog)
         self.assertEqual(list(plugin.glob("*.fold-tmp")), [])
+
+    def test_a_fold_that_fails_while_writing_removes_its_partial_file(self):
+        if os.geteuid() == 0:
+            self.skipTest("root is not limited by the file size limit")
+        (self.root / "changelog.d" / "2-long.md").write_text("---\nkind: fixed\nsurfaces: plugin\n---\n" + "x" * 4096 + "\n")
+        before = fragments(self.root)
+        changelog = (self.root / "plugin" / "CHANGELOG.md").read_bytes()
+        plugin_tmp = self.root / "plugin" / "CHANGELOG.md.fold-tmp"
+        previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        self.addCleanup(signal.signal, signal.SIGXFSZ, previous)
+        code = (
+            "import resource,sys;"
+            "resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024));"
+            f"sys.argv=[{str(CHANGELOG)!r},'fold','0.8.0','--surface','plugin','--date','2026-10-24','--root',{str(self.root)!r}];"
+            "import runpy;runpy.run_path(sys.argv[0],run_name='__main__')"
+        )
+        result = subprocess.run([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("nothing was changed", result.stderr)
+        self.assertFalse(plugin_tmp.exists())
+        self.assertEqual(fragments(self.root), before)
+        self.assertEqual((self.root / "plugin" / "CHANGELOG.md").read_bytes(), changelog)
 
     def test_an_unreadable_fragment_is_reported_as_a_changelog_line(self):
         (self.root / "changelog.d" / "3-dir.md").mkdir()
