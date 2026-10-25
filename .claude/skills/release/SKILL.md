@@ -28,9 +28,22 @@ Releasing needs the owner's explicit request; `deliver-issue` never releases.
 
 1. **Pick surface and version** from the request. The version source is in
    `.github/agent-workflow.json` (`surfaces`): the surface's `package.json`.
-2. **Bump the version first**, in a small PR through the normal loop (gate of
-   that surface, merge on green). Refresh any lockfile the surface owns.
-   Do not tag before the bump has landed on `main`.
+2. **Bump the version and fold the changelog first**, in one small PR through
+   the normal loop (gate of that surface, merge on green). Refresh any lockfile
+   the surface owns. In the same PR, fold the surface's fragments into its
+   changelog with the release date (UTC):
+
+   ```bash
+   packaging/changelog fold X.Y.Z --surface <surface> --date YYYY-MM-DD
+   packaging/changelog notes X.Y.Z --surface <surface>
+   ```
+
+   The fold writes `## X.Y.Z - YYYY-MM-DD` into `<surface>/CHANGELOG.md` and
+   removes the surface's fragments from `changelog.d/`. The second command prints
+   the release body block and fails when the section is missing or fragments of
+   the surface remain. Label the PR `no-changelog`: it is release preparation,
+   and its only changes are the version, the folded changelog and the removed
+   fragments. Do not tag before the bump has landed on `main`.
 3. **Check the tag against the sources** on the landed commit:
 
    ```bash
@@ -39,7 +52,8 @@ Releasing needs the owner's explicit request; `deliver-issue` never releases.
 
    It prints `surface`, `version`, `tag` and exits 1 on any mismatch.
 4. **Dry run (optional)**: dispatch the Release workflow manually with the
-   surface and version; it builds and publishes and attests nothing.
+   surface and version; it builds and publishes and attests nothing. Its job
+   summary shows the release body that the release would publish.
 5. **Tag and push** from `main`:
 
    ```bash
@@ -62,4 +76,6 @@ Releasing needs the owner's explicit request; `deliver-issue` never releases.
 - Never tag from a red commit or before the bump landed.
 - Do not change a release job's permissions or steps without updating
   `packaging/tests/test_release_workflow.py` on purpose.
+- A release whose tagged commit lacks the version section or holds fragments of
+  the surface fails in the `release-notes` job, before anything is published.
 - Report "released" only after the workflow and the GitHub release are checked.

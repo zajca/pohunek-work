@@ -8,6 +8,7 @@ downloaded code, the signing job runs no program from the staged tree, and the
 CI gate is one reusable workflow.
 """
 
+import json
 from pathlib import Path
 import os
 import re
@@ -393,11 +394,11 @@ class PublishTest(unittest.TestCase):
             if name != "publish":
                 self.assertNotIn("contents: write", job, name)
         self.assertIn("contents: write", self.publish)
-        self.assertEqual(needs_of(self.publish), ["attest", "gate", "prepare"])
+        self.assertEqual(needs_of(self.publish), ["attest", "gate", "prepare", "release-notes"])
 
     def test_publishing_needs_every_job_to_have_succeeded(self):
         condition = self.publish.split("runs-on:", 1)[0]
-        for result in ("prepare", "gate", "attest"):
+        for result in ("prepare", "gate", "attest", "release-notes"):
             self.assertIn(f"needs.{result}.result == 'success'", condition, result)
         self.assertNotIn("skipped", condition)
         self.assertNotIn("vars.", condition)
@@ -442,11 +443,53 @@ class PublishTest(unittest.TestCase):
         self.assertIn("TAG: ${{ needs.prepare.outputs.tag }}", self.publish)
         self.assertIn("SURFACE: ${{ needs.prepare.outputs.surface }}", self.publish)
         self.assertIn('gh release download "$TAG"', self.publish)
-        self.assertIn("gh release download ${TAG}", self.publish)
         self.assertNotIn("gh release download v", self.publish)
 
-    def test_the_release_notes_point_at_the_attestation_check(self):
-        self.assertIn("gh attestation verify", self.publish)
+    def test_the_body_is_attached_as_the_checked_file_from_the_release_notes_job(self):
+        self.assertIn("name: notes-body", self.publish)
+        self.assertIn("body_path: ${{ runner.temp }}/notes-body/release-notes.md", self.publish)
+        self.assertIn('test "$(head -n 1 "$notes")" = "<!-- pohunek-changelog:start -->"', self.publish)
+        self.assertNotIn("Write the release notes", self.publish)
+
+
+class ReleaseNotesTest(unittest.TestCase):
+    def setUp(self):
+        self.notes = RELEASE_JOBS["release-notes"]
+
+    def test_the_body_job_needs_only_prepare_and_holds_read_access(self):
+        self.assertEqual(needs_of(self.notes), ["prepare"])
+        self.assertRegex(self.notes, r"(?m)^    permissions:\n      contents: read\n")
+        self.assertNotIn("contents: write", self.notes)
+        self.assertNotIn("id-token", self.notes)
+        self.assertNotIn("secrets.", self.notes)
+
+    def test_the_body_job_uses_only_pinned_actions(self):
+        for use in re.findall(r"uses: (\S+)", self.notes):
+            self.assertRegex(use, PINNED, use)
+        self.assertEqual(
+            sorted(re.findall(r"uses: (actions/[a-z-]+)@", self.notes)),
+            ["actions/checkout", "actions/upload-artifact"],
+        )
+
+    def test_the_body_is_the_changelog_section_of_the_tagged_surface(self):
+        self.assertIn('packaging/changelog notes "$VERSION" --surface "$SURFACE"', self.notes)
+        self.assertIn("pipefail", self.notes)
+        self.assertIn("GITHUB_STEP_SUMMARY", self.notes)
+        self.assertIn("name: notes-body", self.notes)
+        self.assertIn("gh attestation verify", self.notes)
+
+    def test_untrusted_values_reach_the_script_only_through_env(self):
+        script = "\n".join(run_scripts(self.notes)[0])
+        self.assertNotIn("${{", script)
+        self.assertNotIn("github.event", script)
+
+    def test_the_dispatch_surfaces_are_the_surfaces_declared_in_packaging(self):
+        declared = json.loads((ROOT / "packaging" / "surfaces.json").read_text())["surfaces"]
+        header = RELEASE.split("\njobs:\n", 1)[0]
+        choices = re.search(r"type: choice\n        options:\n((?:          - \S+\n)+)", header.split("workflow_dispatch:", 1)[1])
+        self.assertIsNotNone(choices)
+        self.assertEqual(re.findall(r"- (\S+)", choices.group(1)), list(declared))
+        self.assertEqual(list(declared), list(SURFACES))
 
 
 class SurfaceSelectionTest(unittest.TestCase):
