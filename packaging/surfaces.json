@@ -1,0 +1,17 @@
+{
+  "repository": "zajca/pohunek-work",
+  "surfaces": {
+    "web": {
+      "version": "web/package.json",
+      "changelog": "web/CHANGELOG.md"
+    },
+    "launchers": {
+      "version": "launchers/package.json",
+      "changelog": "launchers/CHANGELOG.md"
+    },
+    "plugin": {
+      "version": "plugin/package.json",
+      "changelog": "plugin/CHANGELOG.md"
+    }
+  }
+}

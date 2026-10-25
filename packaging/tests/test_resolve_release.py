@@ -27,6 +27,9 @@ class ResolveReleaseTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="pohunek-resolve-release-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        surfaces = {surface: {"version": f"{surface}/package.json", "changelog": f"{surface}/CHANGELOG.md"} for surface in VERSIONS}
+        (self.root / "packaging").mkdir()
+        (self.root / "packaging" / "surfaces.json").write_text(json.dumps({"repository": "zajca/pohunek-work", "surfaces": surfaces}))
         for surface in VERSIONS:
             (self.root / surface).mkdir()
             (self.root / surface / "package.json").write_text(json.dumps({"version": VERSIONS[surface]}))
