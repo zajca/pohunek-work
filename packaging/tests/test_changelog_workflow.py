@@ -113,6 +113,22 @@ class RequirementStepTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("adds no changelog fragment", result.stdout)
 
+    def test_only_fragment_names_satisfy_the_requirement(self):
+        body = "---\nkind: fixed\nsurfaces: web\n---\nText.\n"
+        for name, passes in (
+            (".31-foo.md", False),
+            ("x.md", False),
+            ("31-Foo.md", False),
+            ("31-foo.md", True),
+        ):
+            with self.subTest(name=name):
+                (self.repo / "changelog.d" / name).write_text(body)
+                head = self.commit(f"add {name}")
+                result = self.run_step(head, "[]")
+                self.assertEqual(result.returncode, 0 if passes else 1, result.stdout)
+                (self.repo / "changelog.d" / name).unlink()
+                self.git_output("reset", "-q", "--hard", self.base)
+
     def test_the_no_changelog_label_passes_without_a_fragment(self):
         (self.repo / "README.md").write_text("ci only\n")
         head = self.commit("ci")
