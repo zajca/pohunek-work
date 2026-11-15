@@ -469,7 +469,6 @@
             <SessionLifecycleActions
               {workspace}
               entry={{ host, session: detail, attachStreamIds: [], runtimeContinuity }}
-              onfork={onopenterminal}
               onremove={onclose}
             />
             <div class="metadata">

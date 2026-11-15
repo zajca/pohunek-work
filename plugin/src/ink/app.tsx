@@ -147,9 +147,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   useEffect(() => { setEditing((old) => old === null || old === view ? old : null); }, [view]);
   const [queries, setQueries] = useState<Record<"Sessions" | "Hosts" | "Activity", string>>({ Sessions: "", Hosts: "", Activity: "" });
   const [workKey, setWorkKey] = useState<string | null>(null);
-  const { status, setStatus, busy, setBusy, mutationNotice, mutationEpoch, actionSeq, bumpStatus } = useStatus();
-  // Set when a fork did not answer: its outcome is unknown, so another fork waits for the owner to look at the list.
-  const [forkUnknown, setForkUnknown] = useState(false);
+  const { status, setStatus, busy, setBusy, mutationNotice, actionSeq, bumpStatus } = useStatus();
   const [cursor, setCursor] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
   // The first row each list was last drawn from; a selection inside that window never scrolls it.
   const [windowStarts, setWindowStarts] = useState<Record<ViewName, number>>({ Work: 0, Sessions: 0, Hosts: 0, Activity: 0 });
@@ -165,7 +163,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   const [detailOffset, setDetailOffset] = useState(0);
   // The panel and the session overlay follow the newest output until the owner scrolls away from its end.
   const [followOutput, setFollowOutput] = useState(true);
-  const notificationSelectionGeneration = useRef(0);
   const [formLoading, setFormLoading] = useState(false);
   const formLoadingRef = useRef(false);
   const formGeneration = useRef(0);
@@ -178,7 +175,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   // The chooser names its session by host and id and its highlight by URL, so a refresh re-resolves both.
   // The ref the control data calls after each control read. It is set below, once the activity page is declared.
   const afterControlRead = useRef<() => void>(() => undefined);
-  const { alive, snapshot, setSnapshot, work, stale, refresh } = useControlData(control, options, { setStatus, actionSeq, mutationEpoch, mutationNotice }, afterControlRead);
+  const { alive, snapshot, work, stale, refresh } = useControlData(control, options, { setStatus, actionSeq, mutationNotice }, afterControlRead);
 
   useEffect(() => {
     const restore = (): void => { setMouseTracking(false); };
@@ -501,65 +498,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     finally { setBusy(false); }
   }, [control]);
 
-  const openNotification = useCallback(async (record: ControlNotification): Promise<void> => {
-    const generation = ++notificationSelectionGeneration.current;
-    setOverlay({ kind: "notification", record });
-    if (record.status === "unread") {
-      if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
-        bumpStatus("Notification data is stale; it was not marked read");
-      } else {
-        try {
-          const result = await control.act({ kind: "read", host: record.host, notificationId: record.id });
-          if (!result.ok) {
-            if (notificationSelectionGeneration.current === generation) bumpStatus(`Mark read failed: ${result.error.message}`);
-          } else {
-            if (result.data.kind === "read" && notificationSelectionGeneration.current === generation) {
-              const updated = result.data.notification;
-              setOverlay((current) => current.kind === "notification" && current.record.host === record.host && current.record.id === record.id ? { kind: "notification", record: updated } : current);
-            }
-            await refresh();
-          }
-        } catch (error) { if (notificationSelectionGeneration.current === generation) bumpStatus(`Mark read failed: ${defaultStatus(error)}`); }
-      }
-    }
-  }, [control, refresh, snapshot, stale]);
-
-  const updateNotification = useCallback(async (record: ControlNotification, kind: "ack" | "archive"): Promise<void> => {
-    const generation = notificationSelectionGeneration.current;
-    if (stale || snapshot?.errors.some((error) => error.host === record.host && error.scope === "notifications")) {
-      bumpStatus("Notification data is stale; refresh before changing it"); return;
-    }
-    try {
-      const result = await control.act({ kind, host: record.host, notificationId: record.id });
-      if (!result.ok) bumpStatus(`${kind} failed: ${result.error.message}`);
-      else {
-        // The notification the daemon returned is shown at once; the reconcile below supersedes any read still in flight.
-        mutationEpoch.current += 1;
-        if ("notification" in result.data) {
-          const updated = result.data.notification;
-          setSnapshot((previous) => previous === null ? previous : { ...previous, notifications: previous.notifications.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) });
-          setActivity((previous) => ({ ...previous, records: previous.records.map((item) => item.host === updated.host && item.id === updated.id ? updated : item) }));
-          setOverlay((current) => current.kind === "notification" && current.record.host === updated.host && current.record.id === updated.id ? { kind: "notification", record: updated } : current);
-        }
-        bumpStatus(`Notification ${kind === "ack" ? "acknowledged" : "archived"}`);
-        await refresh();
-        // Closes after the list is read, and only if this notification is still the one open: the owner may have
-        // left it and opened another, which has the same overlay name.
-        if (notificationSelectionGeneration.current === generation) setOverlay((current) => current.kind === "notification" ? { kind: "none" } : current);
-      }
-    } catch (error) { bumpStatus(`${kind} failed: ${defaultStatus(error)}`); }
-  }, [control, refresh, snapshot, stale]);
-
   const runSessionAction = useCallback(async (action: ControlAction, expected: ControlSession | null = sessionDetail, confirmed: ControlSession | null = null): Promise<void> => {
     if (expected === null || busy || stale || sessionsUnreadable(snapshot, expected.host)) {
       bumpStatus("Session data is stale or unavailable; refresh before changing it");
       return;
     }
     mutationNotice.current = null;
-    if (action.kind === "fork" && forkUnknown) {
-      bumpStatus("The last fork did not answer, so it may exist; press r to review the Sessions list before forking again");
-      return;
-    }
     actionSeq.current += 1;
     setBusy(true);
     try {
@@ -574,8 +518,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (!outcome.ok) {
         mutationNotice.current = outcome.error.message;
         bumpStatus(outcome.error.message);
-        // The fork's overlay offers Resume on r, so the owner is taken to the list, where r refreshes it.
-        if (outcome.error.code === "outcome_unknown" && action.kind === "fork") { setForkUnknown(true); setOverlay({ kind: "none" }); }
         // What the daemon holds may differ from what the owner sees, so the list is read again after a failed mutation.
         if (outcome.error.code === "outcome_unknown" || action.kind === "remove") await refresh();
         return;
@@ -622,17 +564,14 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       if (!sameSession(target, latest.data)) { bumpStatus("Session changed; review the new state before recovering it"); return; }
       if (!isWritable(latest.data)) { bumpStatus("This runtime is read-only"); return; }
       if (latest.data.nativeTarget.status === "invalid") { bumpStatus(`Recovery target unavailable: ${latest.data.nativeTarget.reason}`); return; }
-      if (kind === "fork" ? !latest.data.canFork : !latest.data.canResume) { bumpStatus(`This session cannot be ${kind === "fork" ? "forked" : "resumed"}`); return; }
+      if (!latest.data.canResume) { bumpStatus("This session cannot be resumed"); return; }
       setOverlay({ kind: "recovery", request: { kind, session: latest.data, returnTo } });
     } catch (error) { bumpStatus(defaultStatus(error)); }
     finally { setBusy(false); }
   }, [busy, control, snapshot, stale]);
 
   const confirmRecovery = useCallback((request: RecoveryRequest): void => {
-    // A fork opens its terminal at the size of this one, so the forked session starts with the owner's dimensions.
-    const action: ControlAction = request.kind === "fork"
-      ? { kind: "fork", host: request.session.host, sessionId: request.session.id, cols: stdout.columns, rows: stdout.rows }
-      : { kind: "resume", host: request.session.host, sessionId: request.session.id };
+    const action: ControlAction = { kind: "resume", host: request.session.host, sessionId: request.session.id };
     void runSessionAction(action, request.session, request.session);
   }, [runSessionAction]);
 
@@ -816,7 +755,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       count: records.length,
       open: (index) => {
         const record = records[index];
-        if (record !== undefined) void openNotification(record);
+        if (record !== undefined) setOverlay({ kind: "notification", record });
       },
     },
   };
@@ -1087,7 +1026,6 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
       openBranch,
       copyValue,
       inspectSessionAt,
-      updateNotification,
     };
     return handleOverlayKeys(ctx, input, key);
   };
@@ -1099,7 +1037,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     if (["1", "2", "3", "4"].includes(input)) { setView(VIEWS[Number(input) - 1] ?? "Work"); return true; }
     if (key.upArrow || input === "k") { move(-1); return true; }
     if (key.downArrow || input === "j") { move(1); return true; }
-    if (input === "r") { setForkUnknown(false); mutationNotice.current = null; void refresh(true); return true; }
+    if (input === "r") { mutationNotice.current = null; void refresh(true); return true; }
     return false;
   };
 
@@ -1223,7 +1161,7 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
     const chosenLinks = chosen === null ? [] : linksOf(chosen);
     content = <LinkChooser links={chosenLinks} selected={Math.max(0, chosenLinks.findIndex((link) => link.url === chooser.url))} />;
   }
-  else if (overlay.kind === "recovery") content = <RecoveryConfirmation action={overlay.request.kind} session={overlay.request.session} />;
+  else if (overlay.kind === "recovery") content = <RecoveryConfirmation session={overlay.request.session} />;
   else if (overlay.kind === "confirm" && overlay.returnTo !== "none") content = <Message color="red" text={confirmText(overlay.action, overlay.session)} />;
   else if (overlay.kind === "rename" || overlay.kind === "metadata") content = <Text>{`${overlay.kind === "rename" ? "Name" : "Metadata key=value"}: ${safeText(edit)}_  Enter save  Esc cancel`}</Text>;
   else if (overlay.kind === "host") content = <HostOverlay capabilities={overlay.capabilities} governance={overlay.governance} />;
@@ -1278,15 +1216,12 @@ function InkApplication({ options, setExitCode }: { readonly options: InkTuiOpti
   </Box>;
   else if (overlay.kind === "notification") toolbar = <Box gap={1} flexWrap="wrap">
     {overlay.record.sessionId !== null && <ActionButton label="Open session" onClick={() => { if (overlay.record.sessionId !== null) void inspectSessionAt(overlay.record.host, overlay.record.sessionId); }} primary />}
-    <ActionButton label="Acknowledge" onClick={() => void updateNotification(overlay.record, "ack")} />
-    <ActionButton label="Archive" onClick={() => void updateNotification(overlay.record, "archive")} />
     <ActionButton label="Back" onClick={() => { setOverlay({ kind: "none" }); }} />
   </Box>;
   else if (overlay.kind === "session" && sessionDetail !== null) toolbar = <Box gap={1} flexWrap="wrap">
     {sessionAttachable && <ActionButton label="Attach" onClick={() => void openSelected()} primary />}
     {sessionRecoverable && <ActionButton label="Resume" onClick={() => void requestRecovery("resume", sessionDetail, "session")} />}
     <ActionButton label="Refresh output" onClick={restartOutput} />
-    {sessionMutable && sessionDetail.canFork && <ActionButton label="Fork" onClick={() => void requestRecovery("fork", sessionDetail, "session")} />}
     {sessionMutable && <ActionButton label="Rename" onClick={() => { setEdit(sessionDetail.name ?? ""); setOverlay({ kind: "rename" }); }} />}
     {sessionMutable && <ActionButton label="Metadata" onClick={() => { setEdit(""); setOverlay({ kind: "metadata" }); }} />}
     {sessionDetail.branch !== null && <ActionButton label="Copy branch" onClick={() => void copyValue(sessionDetail.branch ?? "")} />}

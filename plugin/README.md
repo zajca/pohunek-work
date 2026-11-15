@@ -157,14 +157,12 @@ progress (see [docs/m2-implementation-plan.md](docs/m2-implementation-plan.md)):
   where `1`–`9` or the arrows and Enter pick a link and Esc closes it. Every link goes through the `open_url_hosts` allowlist: a link on another host is refused in the
   status line and nothing is run. A session with no core work link and no Work item shows none; the branch line is
   omitted when the project's origin is not a GitHub repository. Session actions through the SDK are stop, remove, resume,
-  rename, metadata and fork; notifications are read, acknowledged and archived
-  through the SDK too. Fork and resume ask for confirmation after the session is
-  inspected again. Resume, fork and
+  rename and metadata. Resume and
   attach to a stopped session first show the native conversation the core will
   recover (ID or path, last native activity, or Unknown) and wait for `y`; an
   ambiguous reference is refused before the confirmation and a core refusal is
-  shown without starting a worker. Activity has
-  Recent, Unread and Archived scopes.
+  shown without starting a worker. Activity lists notifications with
+  Recent, Unread and Archived scopes; the core offers no read, acknowledge or archive action, so the TUI only lists them.
 
   Key model, the same in this README, `?` and every footer: `/` filters the
   current list (Work, Sessions, Hosts, Activity) and the project picker `P`

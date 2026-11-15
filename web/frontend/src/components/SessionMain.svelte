@@ -13,10 +13,9 @@
     ondetails: (host: string, sessionId: string) => void;
     onclose: () => void;
     onnewsession: () => void;
-    onselect: (host: string, sessionId: string) => void;
   }
 
-  let { workspace, entry, ondetails, onclose, onnewsession, onselect }: Props = $props();
+  let { workspace, entry, ondetails, onclose, onnewsession }: Props = $props();
 
   const canAttach = $derived(
     entry?.session.state === "running"
@@ -117,7 +116,6 @@
           <SessionLifecycleActions
             {workspace}
             {entry}
-            onfork={onselect}
             onremove={onclose}
           />
         {/if}

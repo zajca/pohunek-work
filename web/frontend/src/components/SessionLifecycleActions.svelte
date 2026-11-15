@@ -8,27 +8,22 @@
   interface Props {
     workspace: Workspace;
     entry: HostedSession;
-    onfork: (host: string, sessionId: string) => void;
     onremove: () => void;
   }
 
-  let { workspace, entry, onfork, onremove }: Props = $props();
+  let { workspace, entry, onremove }: Props = $props();
   let renameOpen = $state(false);
-  let forkOpen = $state(false);
   let confirmStop = $state(false);
   let confirmRemove = $state(false);
   let nameDraft = $state("");
-  let forkCols = $state(80);
-  let forkRows = $state(24);
   let pending = $state(false);
-  let recoveryIntent: "resume" | "fork" | undefined = $state();
   let recoverySession: Awaited<ReturnType<Workspace["actions"]["sessionInspect"]>> | undefined = $state();
   let recoveryHost: string | undefined = $state();
   let generation = 0;
 
   const session = $derived(entry.session);
   // Unknown future agents are presentation-only until this client understands
-  // their mutation semantics. Resume and fork remain capability-driven below.
+  // their mutation semantics. Resume remains capability-driven below.
   const writable = $derived(
     session.external !== true
       && hasKnownSessionAgentBases(session.agent_base, session.active_agent_base),
@@ -42,18 +37,10 @@
   );
   const canRecover = $derived(isResumableState(session));
   const canResume = $derived(canResumeSession(session));
-  const canFork = $derived(session.capabilities.fork);
 
   function openRename(): void {
     nameDraft = session.name ?? "";
     renameOpen = true;
-  }
-
-  function openFork(): void {
-    nameDraft = "";
-    forkCols = session.cols;
-    forkRows = session.rows;
-    forkOpen = true;
   }
 
   async function rename(): Promise<void> {
@@ -86,48 +73,35 @@
     });
   }
 
-  async function requestRecovery(intent: "resume" | "fork"): Promise<void> {
+  async function requestResume(): Promise<void> {
     if (pending) {
       return;
     }
     const host = entry.host;
     const id = entry.session.id;
     await mutate(async (): Promise<void> => {
-      let inspected: Awaited<ReturnType<Workspace["actions"]["sessionInspect"]>>;
-      try {
-        inspected = await workspace.actions.sessionInspect(host, id);
-      } catch (error: unknown) {
-        forkOpen = false;
-        throw error;
-      }
+      const inspected = await workspace.actions.sessionInspect(host, id);
       if (entry.host !== host || entry.session.id !== id) {
         return;
       }
-      if ((intent === "resume" && !canResumeSession(inspected))
-        || (intent === "fork" && !inspected.capabilities.fork)) {
-        forkOpen = false;
+      if (!canResumeSession(inspected)) {
         addToast("error", "Recovery is unavailable for the current session state");
         return;
       }
       if (inspected.id !== id) {
-        forkOpen = false;
         addToast("error", "Recovery target unavailable: session.inspect returned a different session");
         return;
       }
       if (!inspected.native_session_id && !inspected.native_session_path) {
-        forkOpen = false;
         addToast("error", "Recovery target unavailable: session.inspect returned no native reference");
         return;
       }
       if (!hasSingleNativeReference(inspected)) {
-        forkOpen = false;
         addToast("error", "Recovery target unavailable: session.inspect returned an invalid target");
         return;
       }
       recoveryHost = host;
       recoverySession = inspected;
-      recoveryIntent = intent;
-      forkOpen = false;
     });
   }
 
@@ -152,16 +126,14 @@
   }
 
   function closeRecovery(): void {
-    recoveryIntent = undefined;
     recoverySession = undefined;
     recoveryHost = undefined;
   }
 
   async function confirmRecovery(): Promise<void> {
-    const intent = recoveryIntent;
     const shown = recoverySession;
     const host = recoveryHost;
-    if (pending || intent === undefined || shown === undefined || host === undefined) {
+    if (pending || shown === undefined || host === undefined) {
       return;
     }
     await mutate(async (): Promise<void> => {
@@ -178,8 +150,7 @@
       }
       if (current.id !== shown.id
         || !hasSingleNativeReference(current)
-        || (intent === "resume" && !canResumeSession(current))
-        || (intent === "fork" && !current.capabilities.fork)) {
+        || !canResumeSession(current)) {
         closeRecovery();
         addToast("error", "Recovery target is no longer available");
         return;
@@ -192,20 +163,8 @@
         return;
       }
       try {
-        if (intent === "resume") {
-          await workspace.actions.sessionResume(host, shown.id);
-          addToast("success", "Session resumed");
-        } else {
-          const result = await workspace.actions.sessionFork(host, {
-            session_id: shown.id,
-            cwd_mode: "same",
-            cols: forkCols,
-            rows: forkRows,
-            ...(nameDraft.trim().length === 0 ? {} : { name: nameDraft.trim() }),
-          });
-          addToast("success", "Session forked");
-          onfork(host, result.id);
-        }
+        await workspace.actions.sessionResume(host, shown.id);
+        addToast("success", "Session resumed");
       } catch (error: unknown) {
         closeRecovery();
         throw error;
@@ -250,7 +209,7 @@
     {#if canStop}
       <button type="button" onclick={() => { confirmStop = true; }} disabled={pending}>Stop</button>
     {:else if canResume}
-      <button type="button" onclick={() => void requestRecovery("resume")} disabled={pending}>Resume</button>
+      <button type="button" onclick={() => void requestResume()} disabled={pending}>Resume</button>
     {:else if canRecover && !session.capabilities.resume}
       <button type="button" disabled title="This session's agent adapter does not support native resume">
         Resume unsupported
@@ -260,17 +219,11 @@
         Resume unavailable
       </button>
     {/if}
-    <button
-      type="button"
-      onclick={openFork}
-      disabled={pending || !canFork}
-      title={canFork ? "Fork this native agent conversation" : "This session's agent adapter does not support native fork"}
-    >{canFork ? "Fork" : "Fork unsupported"}</button>
     <button class="button-danger" type="button" onclick={() => { confirmRemove = true; }} disabled={pending}>
       Remove
     </button>
   </div>
-  {#if canRecover || canFork}
+  {#if canRecover}
     <RecoveryTarget {session} />
   {/if}
 {/if}
@@ -294,35 +247,20 @@
 />
 
 <FormDialog
-  open={renameOpen || forkOpen}
-  title={renameOpen ? "Rename session" : "Fork session"}
+  open={renameOpen}
+  title="Rename session"
   submitting={pending}
-  onclose={() => {
-    renameOpen = false;
-    forkOpen = false;
-  }}
-  onsubmit={() => {
-    if (renameOpen) {
-      void rename();
-    } else {
-      void requestRecovery("fork");
-    }
-  }}
+  onclose={() => { renameOpen = false; }}
+  onsubmit={() => void rename()}
 >
-  {#if renameOpen}
-    <label>Name<input bind:value={nameDraft} /></label>
-  {:else}
-    <label>Display name (optional)<input bind:value={nameDraft} /></label>
-    <label>Columns<input type="number" min="1" bind:value={forkCols} /></label>
-    <label>Rows<input type="number" min="1" bind:value={forkRows} /></label>
-  {/if}
+  <label>Name<input bind:value={nameDraft} /></label>
 </FormDialog>
 
-{#if recoveryIntent !== undefined && recoverySession !== undefined}
+{#if recoverySession !== undefined}
   <FormDialog
     open
-    title={recoveryIntent === "resume" ? "Resume session?" : "Confirm fork target"}
-    submitLabel={recoveryIntent === "resume" ? "Resume session" : "Fork session"}
+    title="Resume session?"
+    submitLabel="Resume session"
     submitting={pending}
     onclose={closeRecovery}
     onsubmit={() => void confirmRecovery()}

@@ -2,7 +2,7 @@
 // cannot produce in CI: a session with a native conversation that resumes (a resumable agent needs an
 // installed agent CLI with its hooks, which CI does not have). Each read or mutation the TUI sends to the
 // socket runs the scenario's own binary with the CLI's arguments and returns that envelope's payload.
-// Limits: health, session list, notification list, notification update, session stop, remove, resume, fork and inspect are answered;
+// Limits: health, session list, notification list, session stop, remove, resume and inspect are answered;
 // `subscribe` is acknowledged and pushes no events; every other method is refused with `stand_in_refused`.
 // Faults make the next replies to one method stall (no reply) or arrive corrupted (a line that is not JSON).
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -40,12 +40,6 @@ function outcome(envelope) {
 // Session mutations take the CLI's argv: the relay is the scenario's CLI, which records them.
 function mutationArgs(request) {
   const params = request.params;
-  if (request.method === "notification.update") {
-    const verbs = { read: "read", acknowledged: "ack", archived: "archive" };
-    const verb = verbs[params.status];
-    return verb === undefined ? null : ["--host", "local", "notifications", verb, params.id, "--json"];
-  }
-  if (request.method === "session.fork") return ["--host", "local", "session", "fork", params.session_id, "--json"];
   const id = typeof params === "string" ? params : params && params.session_id;
   if (request.method === "session.stop") return ["--host", "local", "session", "stop", id, "--json"];
   if (request.method === "session.remove") return ["--host", "local", "session", "rm", id, "--json"];
@@ -54,7 +48,7 @@ function mutationArgs(request) {
   return null;
 }
 async function answer(socket, request) {
-  const reply = (body) => socket.write(JSON.stringify({ v: 4, id: request.id, ...body }) + "\\n");
+  const reply = (body) => socket.write(JSON.stringify({ v: 5, id: request.id, ...body }) + "\\n");
   const fault = faults.find((entry) => entry.method === request.method && entry.times > 0);
   if (fault !== undefined) {
     fault.times -= 1;
@@ -62,7 +56,7 @@ async function answer(socket, request) {
     return;
   }
   try {
-    if (request.method === "daemon.health") return reply({ ok: { status: "ok", daemon_version: "0.34.2", protocol_version: 4 } });
+    if (request.method === "daemon.health") return reply({ ok: { status: "ok", daemon_version: "0.43.1", protocol_version: 5 } });
     if (request.method === "session.list") return reply(outcome(await runRelay(["--host", "local", "session", "list", "--json"])));
     if (request.method === "notification.list") {
       const status = request.params && request.params.status;

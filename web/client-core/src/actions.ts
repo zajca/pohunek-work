@@ -1,21 +1,13 @@
-import type {
-  Methods,
-  NotificationRecord,
-  NotificationUpdateParams,
-} from "@pohunek/protocol";
+import type { Methods } from "@pohunek/protocol";
 
 type ActionMethod =
   | "host.inspect"
-  | "notification.policy.get"
-  | "notification.policy.set"
-  | "notification.update"
   | "project.add"
   | "project.list"
   | "project.remove"
   | "project.rename"
   | "project.show"
   | "session.detach"
-  | "session.fork"
   | "session.inspect"
   | "session.new"
   | "session.remove"
@@ -43,26 +35,11 @@ export interface ActionCaller {
   ): Promise<Methods["session.wait"]["output"]>;
 }
 
-export interface NotificationRollback {
-  readonly host: string;
-  readonly id: string;
-  readonly version: number;
-  readonly previous: NotificationRecord;
-}
-
-export interface OptimisticNotificationCallbacks {
-  begin(host: string, params: NotificationUpdateParams): NotificationRollback | undefined;
-  commit(host: string, record: NotificationRecord): void;
-  rollback(change: NotificationRollback | undefined): void;
-}
-
 export class WorkspaceActions {
   private readonly caller: ActionCaller;
-  private readonly notifications: OptimisticNotificationCallbacks;
 
-  public constructor(caller: ActionCaller, notifications: OptimisticNotificationCallbacks) {
+  public constructor(caller: ActionCaller) {
     this.caller = caller;
-    this.notifications = notifications;
   }
 
   public sessionNew(
@@ -121,34 +98,6 @@ export class WorkspaceActions {
     return this.caller.call(host, "session.detach", params);
   }
 
-  public async notificationUpdate(
-    host: string,
-    params: Methods["notification.update"]["params"],
-  ): Promise<Methods["notification.update"]["output"]> {
-    const rollback = this.notifications.begin(host, params);
-    try {
-      const result = await this.caller.call(host, "notification.update", params);
-      this.notifications.commit(host, result.record);
-      return result;
-    } catch (error: unknown) {
-      this.notifications.rollback(rollback);
-      throw error;
-    }
-  }
-
-  public notificationPolicyGet(
-    host: string,
-  ): Promise<Methods["notification.policy.get"]["output"]> {
-    return this.caller.call(host, "notification.policy.get", null);
-  }
-
-  public notificationPolicySet(
-    host: string,
-    params: Methods["notification.policy.set"]["params"],
-  ): Promise<Methods["notification.policy.set"]["output"]> {
-    return this.caller.call(host, "notification.policy.set", params);
-  }
-
   public hostInspect(
     host: string,
   ): Promise<Methods["host.inspect"]["output"]> {
@@ -181,13 +130,6 @@ export class WorkspaceActions {
     params: Methods["session.resume"]["params"],
   ): Promise<Methods["session.resume"]["output"]> {
     return this.caller.call(host, "session.resume", params);
-  }
-
-  public sessionFork(
-    host: string,
-    params: Methods["session.fork"]["params"],
-  ): Promise<Methods["session.fork"]["output"]> {
-    return this.caller.call(host, "session.fork", params);
   }
 
   public sessionRemove(

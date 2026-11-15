@@ -18,6 +18,7 @@ const LOCAL_RECORDS = 25;
 // Fewer local records than a page, so the page of the Activity list has to read the failing host to fill it.
 const PARTIAL_LOCAL_RECORDS = 4;
 const SESSION_RECORDS = 25;
+const RACE_TITLE = "race arrival";
 const CREATED_BEFORE_MS = 20;
 const HOLD_POLL_MS = 20;
 const HOLD_WAIT_MS = 10_000;
@@ -47,7 +48,7 @@ async function createNotifications(client: Client, count: number, label: string,
   for (let index = 0; index < count; index += 1) {
     await client.call("notification.create", {
       source: { provider: "activity-order-test", provider_event: `${label}-${String(index)}`, host_local_source_id: `${label}-${String(index)}` },
-      kind: "error", severity: "info", title: `${label} ${String(index)}`, body: "created by the scenario",
+      kind: "approval_required", severity: "action_required", title: `${label} ${String(index)}`, body: "created by the scenario",
       ...(sessionId === undefined ? {} : { session_id: sessionId }),
     });
   }
@@ -56,7 +57,7 @@ async function createNotifications(client: Client, count: number, label: string,
 /** A `pohunek` binary that answers `host discover` with the given hosts and runs every other command unchanged. */
 async function discoveringCli(root: string, realBinary: string, hosts: readonly Record<string, unknown>[]): Promise<string> {
   const answer = join(root, "discover.json");
-  await writeFile(answer, JSON.stringify({ cli_version: "0.34.2", protocol: { minimum: 4, maximum: 4 }, ok: hosts }));
+  await writeFile(answer, JSON.stringify({ cli_version: "0.43.1", protocol: { minimum: 5, maximum: 5 }, ok: hosts }));
   const wrapper = join(root, "pohunek");
   await writeFile(wrapper, `#!/bin/sh\nif [ "$1" = "host" ] && [ "$2" = "discover" ]; then /bin/cat '${answer}'; exit 0; fi\nexec '${realBinary}' "$@"\n`);
   await chmod(wrapper, 0o755);
@@ -82,7 +83,7 @@ test("the first activity page is the newest records of every host, not the newes
   relay = startTcpRelay(daemonLocalSocket(remote));
   const binary = await discoveringCli(root, join(local.coreDir, "pohunek"), [{
     name: "remote-daemon", fqdn: "remote.example", address: "127.0.0.1", port: relay.port, overlay: "netbird", peer_id: "remote-peer",
-    classification: "reachable_daemon", daemon_version: "0.34.2",
+    classification: "reachable_daemon", daemon_version: "0.43.1",
   }]);
   control = createControlClient({
     binary, timeoutMs: 10_000, notificationsPageSize: PAGE_SIZE, reconnectMaxMs: 1_000, localSocket: daemonLocalSocket(local), env: local.clientEnv,
@@ -147,7 +148,7 @@ test("a host that cannot be read leaves the other hosts' Activity in place, and 
   relay = startTcpRelay(daemonLocalSocket(remote));
   const binary = await discoveringCli(root, join(local.coreDir, "pohunek"), [{
     name: "remote-daemon", fqdn: "remote.example", address: "127.0.0.1", port: relay.port, overlay: "netbird", peer_id: "remote-peer",
-    classification: "reachable_daemon", daemon_version: "0.34.2",
+    classification: "reachable_daemon", daemon_version: "0.43.1",
   }]);
   control = createControlClient({
     binary, timeoutMs: 10_000, notificationsPageSize: PAGE_SIZE, reconnectMaxMs: 1_000, localSocket: daemonLocalSocket(local), env: local.clientEnv,
@@ -181,7 +182,7 @@ test("a host that cannot be read leaves the other hosts' Activity in place, and 
   expect(retried.data.cursor).toBeNull();
 }, SCENARIO_TIMEOUT_MS);
 
-test("an archive that arrives while a session's notes are read between pages is not overwritten by the older read", async () => {
+test("a record created while a session's notes are read between pages is not lost to the older read", async () => {
   const daemon = await startCoreDaemon();
   daemons.push(daemon);
   const root = await mkdtemp(join(tmpdir(), "session-notes-race-"));
@@ -192,11 +193,6 @@ test("an archive that arrives while a session's notes are read between pages is 
   const client = await connect(daemon);
   await createNotifications(client, SESSION_RECORDS, "race", sessionId);
 
-  // The newest record is on the first page of the read, so an archive of it lands after that page was read.
-  const newest = await client.call("notification.list", { session_id: sessionId, limit: 1 }) as { notifications: { id: string }[] };
-  const newestId = newest.notifications[0]?.id;
-  if (newestId === undefined) throw new Error("the session has no notification");
-
   // The second page of the read is held at the relay until the flag is removed.
   const flag = join(root, "hold-cursor");
   await writeFile(flag, "");
@@ -204,25 +200,29 @@ test("an archive that arrives while a session's notes are read between pages is 
   control = createControlClient({
     binary: join(daemon.coreDir, "pohunek"), timeoutMs: 10_000, notificationsPageSize: PAGE_SIZE, reconnectMaxMs: 1_000, localSocket: socketRelay.socket, env: daemon.clientEnv,
   });
-  const archived = new Promise<void>((resolve) => {
+  const arrived = new Promise<string>((resolve) => {
     const unsubscribe = control?.subscribeNotifications((change) => {
-      if (change.id !== newestId || change.record?.status !== "archived") return;
+      if (change.record?.sessionId !== sessionId || change.record.title !== RACE_TITLE) return;
       unsubscribe?.();
-      resolve();
+      resolve(change.id);
     });
   });
   const reading = control.sessionNotifications("local", sessionId);
   await waitForFile(`${flag}.held`);
 
-  await client.call("notification.update", { id: newestId, status: "archived" });
+  const extra = await client.call("notification.create", {
+    source: { provider: "activity-order-test", provider_event: "race-extra", host_local_source_id: "race-extra" },
+    kind: "approval_required", severity: "action_required", title: RACE_TITLE, body: "created by the scenario", session_id: sessionId,
+  });
   await client.close();
-  await archived;
+  const arrivedId = await arrived;
+  expect(arrivedId).toBe(extra.record.id);
   await rm(flag);
 
   const notes = await reading;
   if (!notes.ok) throw new Error(notes.error.message);
-  expect(notes.data).toHaveLength(SESSION_RECORDS);
-  expect(notes.data.find((record) => record.id === newestId)?.status).toBe("archived");
+  expect(notes.data).toHaveLength(SESSION_RECORDS + 1);
+  expect(notes.data.map((record) => record.id)).toContain(arrivedId);
 }, SCENARIO_TIMEOUT_MS);
 
 async function waitForFile(path: string): Promise<void> {

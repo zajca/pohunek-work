@@ -25,6 +25,8 @@ export const FIXTURE_LOCAL_HOST = "local";
 const FIXTURE_PEER_NAME = "fixture-peer";
 export const FIXTURE_PEER_HOST = `netbird:${externalPeerSelector(FIXTURE_PEER_NAME)}`;
 export const FIXTURE_LOCAL_SESSION_ID = "s-local-seed";
+// Stopped without a runtime, so the browser offers Resume for this seeded session.
+export const FIXTURE_LOCAL_STOPPED_SESSION_ID = "s-local-stopped-seed";
 export const FIXTURE_LOCAL_RECOVERY_ID = "fixture-local-conversation";
 export const FIXTURE_LOCAL_NATIVE_ACTIVITY = "2026-07-22T11:15:00Z";
 export const FIXTURE_PEER_SESSION_ID = "s-peer-seed";
@@ -100,6 +102,7 @@ export async function startFixtureStack(options: FixtureStackOptions = {}): Prom
       host: { discoveredHosts: [peerHostRecord(peerAddress.port)] },
       initialSessions: [
         localSession(),
+        stoppedLocalSession(),
         externalSession(),
         unknownActiveSession(),
         unknownPersistedSession(),
@@ -165,10 +168,34 @@ function localSession(): SessionInfo {
   };
 }
 
+function stoppedLocalSession(): SessionInfo {
+  return {
+    id: FIXTURE_LOCAL_STOPPED_SESSION_ID,
+    capabilities: { resume: true, fork: false },
+    name: "Stopped local session",
+    agent: "codex",
+    agent_base: "codex",
+    cwd: "/tmp/pohunek-testkit/local-stopped",
+    cwd_source: "launch",
+    pid: FIXTURE_LOCAL_PID + 6,
+    native_session_id: FIXTURE_LOCAL_RECOVERY_ID,
+    native_last_activity_at: FIXTURE_LOCAL_NATIVE_ACTIVITY,
+    cols: FIXTURE_TERMINAL_COLS,
+    rows: FIXTURE_TERMINAL_ROWS,
+    state: "stopped",
+    state_source: "process",
+    activity: "idle",
+    created_at: FIXTURE_TIMESTAMP,
+    updated_at: FIXTURE_TIMESTAMP,
+    ended_at: FIXTURE_TIMESTAMP,
+    exit_code: 0,
+  };
+}
+
 function baseLocalSession(): SessionInfo {
   return {
     id: FIXTURE_LOCAL_SESSION_ID,
-    capabilities: { resume: true, fork: true },
+    capabilities: { resume: true, fork: false },
     name: "Local coding session",
     agent: "codex",
     agent_base: "codex",

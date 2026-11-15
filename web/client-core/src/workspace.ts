@@ -1,18 +1,10 @@
 import type {
   Methods,
-  NotificationRecord,
-  NotificationUpdateParams,
   ProtocolEvent,
   TerminalDimensions,
 } from "@pohunek/protocol";
-import { PROTOCOL_VERSION } from "@pohunek/protocol";
 import { ClientError, type CatchAllEvent } from "@pohunek/sdk/browser";
-import {
-  WorkspaceActions,
-  type ActionCaller,
-  type NotificationRollback,
-  type OptimisticNotificationCallbacks,
-} from "./actions";
+import { WorkspaceActions, type ActionCaller } from "./actions";
 import { attachSession, type SessionAttachment } from "./attach";
 import { HostConnection } from "./host-connection";
 import {
@@ -69,7 +61,7 @@ export interface Workspace {
   close(): Promise<void>;
 }
 
-export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNotificationCallbacks {
+export class PohunekWorkspace implements Workspace, ActionCaller {
   public readonly hosts = new MutableSnapshotStore<HostsSnapshot>({});
   public readonly sessions = new MutableSnapshotStore<SessionsSnapshot>({});
   public readonly notifications = new MutableSnapshotStore<NotificationsSnapshot>({
@@ -84,7 +76,6 @@ export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNoti
   private readonly descriptors = new Map<string, HostDescriptor>();
   private readonly connectionStates = new Map<string, HostConnectionState>();
   private readonly hostData = new Map<string, HostDataState>();
-  private readonly notificationVersions = new Map<string, number>();
   private readonly refreshTimer: ReturnType<typeof setInterval>;
   private refreshTask: Promise<void> | undefined;
   private closed = false;
@@ -93,7 +84,7 @@ export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNoti
     validateWorkspaceOptions(options);
     this.baseUrl = options.baseUrl;
     this.hostsSource = options.hosts;
-    this.actions = new WorkspaceActions(this, this);
+    this.actions = new WorkspaceActions(this);
     void this.refreshHosts();
     this.refreshTimer = setInterval((): void => {
       void this.refreshHosts();
@@ -140,38 +131,6 @@ export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNoti
     initialDimensions?: TerminalDimensions,
   ): Promise<SessionAttachment> {
     return attachSession(this.baseUrl, host, sessionId, this, initialDimensions);
-  }
-
-  public begin(host: string, params: NotificationUpdateParams): NotificationRollback | undefined {
-    const state = this.hostData.get(host);
-    const previous = state?.notifications[params.id];
-    if (state === undefined || previous === undefined) {
-      return undefined;
-    }
-
-    const version = this.bumpNotificationVersion(host, params.id);
-    const notification = { ...previous, status: params.status };
-    this.hostData.set(host, {
-      ...state,
-      notifications: { ...state.notifications, [params.id]: notification },
-    });
-    this.publishDataStores();
-    return { host, id: params.id, version, previous: structuredClone(previous) };
-  }
-
-  public commit(host: string, record: NotificationRecord): void {
-    this.replaceNotification(host, record);
-  }
-
-  public rollback(change: NotificationRollback | undefined): void {
-    if (change === undefined) {
-      return;
-    }
-    const key = hostResourceKey(change.host, change.id);
-    if (this.notificationVersions.get(key) !== change.version) {
-      return;
-    }
-    this.replaceNotification(change.host, change.previous);
   }
 
   public async close(): Promise<void> {
@@ -227,7 +186,6 @@ export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNoti
         this.descriptors.delete(host);
         this.connectionStates.delete(host);
         this.hostData.delete(host);
-        this.dropNotificationVersions(host);
       }
     }
 
@@ -282,13 +240,6 @@ export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNoti
   ): void {
     const previous = this.hostData.get(host);
     this.hostData.set(host, hostDataFromSnapshot(sessions, notifications, previous));
-    const ids = new Set([
-      ...Object.keys(previous?.notifications ?? {}),
-      ...notifications.map((notification) => notification.id),
-    ]);
-    for (const id of ids) {
-      this.bumpNotificationVersion(host, id);
-    }
     this.publishDataStores();
   }
 
@@ -302,42 +253,7 @@ export class PohunekWorkspace implements Workspace, ActionCaller, OptimisticNoti
       return;
     }
     this.hostData.set(host, next);
-    const notificationId = notificationIdFromEvent(event);
-    if (notificationId !== undefined) {
-      this.bumpNotificationVersion(host, notificationId);
-    }
     this.publishDataStores();
-  }
-
-  private replaceNotification(host: string, record: NotificationRecord): void {
-    const state = this.hostData.get(host);
-    if (state === undefined) {
-      return;
-    }
-    const event: ProtocolEvent = {
-      v: PROTOCOL_VERSION,
-      event: "notification_updated",
-      record,
-    };
-    const next = reduceHostEvent(state, event);
-    this.hostData.set(host, next);
-    this.bumpNotificationVersion(host, record.id);
-    this.publishDataStores();
-  }
-
-  private bumpNotificationVersion(host: string, id: string): number {
-    const key = hostResourceKey(host, id);
-    const next = (this.notificationVersions.get(key) ?? 0) + 1;
-    this.notificationVersions.set(key, next);
-    return next;
-  }
-
-  private dropNotificationVersions(host: string): void {
-    for (const key of this.notificationVersions.keys()) {
-      if (key.startsWith(`["${escapeJsonKey(host)}",`)) {
-        this.notificationVersions.delete(key);
-      }
-    }
   }
 
   private publishHostsStore(): void {
@@ -476,24 +392,6 @@ function optionalHostDescriptor(
     ...(daemonVersion === undefined ? {} : { daemon_version: daemonVersion }),
     ...(protocolVersion === undefined ? {} : { protocol_version: protocolVersion }),
   };
-}
-
-function notificationIdFromEvent(event: ProtocolEvent | CatchAllEvent): string | undefined {
-  if (event.event === "notification_deleted" && "notification_id" in event) {
-    return typeof event.notification_id === "string" ? event.notification_id : undefined;
-  }
-  if (
-    (event.event === "notification_created" || event.event === "notification_updated")
-    && "record" in event
-    && isRecord(event.record)
-  ) {
-    return typeof event.record["id"] === "string" ? event.record["id"] : undefined;
-  }
-  return undefined;
-}
-
-function escapeJsonKey(value: string): string {
-  return JSON.stringify(value).slice(1, -1);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

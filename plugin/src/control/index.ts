@@ -14,7 +14,7 @@ import type {
 
 export type * from "./types.ts";
 
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 /** Delay between the first event of a host and the read it schedules; the events before that read join it. */
 const EVENT_SETTLE_MS = 100;
 const LOCAL_HOST: ControlHost = { route: "local", dialable: true, name: "Local", classification: "local", daemonVersion: null, address: null, port: null };
@@ -477,9 +477,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   }
 
   /** Session mutations go through the SDK of the pinned release; a live session is stopped before it is removed, as the CLI does. */
-  async function sdkAct(action: ControlAction): Promise<ControlResult<ControlActionOutcome> | null> {
-    if ("notificationId" in action) return notificationAct(action);
-    if (!("sessionId" in action)) return null;
+  async function sdkAct(action: ControlAction): Promise<ControlResult<ControlActionOutcome>> {
     const host = action.host;
     const link = linkFor(host);
     const sessionId = action.sessionId;
@@ -523,13 +521,6 @@ export function createControlClient(options: ControlClientOptions): ControlClien
           worktreesRemoved: count(payload, "worktrees_removed", "$"), worktreesFailed: count(payload, "worktrees_failed", "$") } };
       }
       case "resume": return sessionReply(await link.request("session.resume", sessionId), "resume");
-      case "fork": {
-        // The fork reply is the forked session itself, not an envelope around it.
-        const forked = await link.request("session.fork", {
-          session_id: sessionId, cwd_mode: "same", cols: action.cols, rows: action.rows, ...(action.name === undefined ? {} : { name: action.name }),
-        });
-        return forked.ok ? { ok: true, data: { kind: "fork", session: session(forked.data, "$", host) } } : forked;
-      }
       case "rename": return sessionReply(await link.request("session.rename", action.name === null ? { session_id: sessionId } : { session_id: sessionId, name: action.name }), "rename");
       case "metadata": {
         const set = Object.entries(action.set ?? {});
@@ -541,18 +532,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
         const metadata: Record<string, string | null> = { ...Object.fromEntries(set), ...Object.fromEntries(clear.map(key => [key, null])) };
         return sessionReply(await link.request("session.set_metadata", { session_id: sessionId, metadata }), "metadata");
       }
-      default: return null;
     }
-  }
-
-  /** Notification reads and acknowledgements go through the SDK's update method, one notification per call. */
-  async function notificationAct(action: Extract<ControlAction, { readonly notificationId: string }>): Promise<ControlResult<ControlActionOutcome>> {
-    const status = { read: "read", ack: "acknowledged", archive: "archived" } as const;
-    const link = linkFor(action.host);
-    const result = await link.request("notification.update", { id: action.notificationId, status: status[action.kind] });
-    if (!result.ok) return result;
-    const record = object(result.data, "$")["record"];
-    return { ok: true, data: { kind: action.kind, notification: notification(record, "$.record", action.host) } };
   }
 
   /** A mutation that failed after it was sent may still have been applied; only a definitive daemon refusal is a failure. */
@@ -565,13 +545,9 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   async function act(action: ControlAction): Promise<ControlResult<ControlActionOutcome>> {
     const host = action.host;
     if (host.startsWith("undialable:")) { return failure("unavailable", "the selected host has no dialable identity"); }
-    const invalidTarget = bareIdError("sessionId" in action ? action.sessionId : action.notificationId);
+    const invalidTarget = bareIdError(action.sessionId);
     if (invalidTarget !== null) { return { ok: false, error: invalidTarget }; }
-    const viaSdk = await sdkAct(action);
-    if (viaSdk !== null) return viaSdkOutcome(action, viaSdk);
-    switch (action.kind) {
-      default: return failure("command_failed", `${action.kind} is handled over the SDK`);
-    }
+    return viaSdkOutcome(action, await sdkAct(action));
   }
 
   return {

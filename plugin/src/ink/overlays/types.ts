@@ -23,5 +23,5 @@ export type Overlay =
 
 /** The project picker's highlight, query and whether the query is being typed. */
 export type PickState = { readonly index: number; readonly search: string; readonly filtering: boolean };
-/** A resume or fork waiting for the owner to confirm the native conversation it will recover. */
-export interface RecoveryRequest { readonly kind: "resume" | "fork"; readonly session: ControlSession; readonly returnTo: ReturnKind }
+/** A resume waiting for the owner to confirm the native conversation it will recover. */
+export interface RecoveryRequest { readonly kind: "resume"; readonly session: ControlSession; readonly returnTo: ReturnKind }

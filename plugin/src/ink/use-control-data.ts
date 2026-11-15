@@ -41,10 +41,10 @@ export interface ControlDataState {
 export function useControlData(
   control: ControlClient,
   options: ControlDataOptions,
-  status: Pick<StatusState, "setStatus" | "actionSeq" | "mutationEpoch" | "mutationNotice">,
+  status: Pick<StatusState, "setStatus" | "actionSeq" | "mutationNotice">,
   afterControlRead: MutableRef<() => void>,
 ): ControlDataState {
-  const { setStatus, actionSeq, mutationEpoch, mutationNotice } = status;
+  const { setStatus, actionSeq, mutationNotice } = status;
   const alive = useRef(true);
   const [snapshot, setSnapshot] = useState<ControlSnapshot | null>(null);
   const [work, setWork] = useState<WorkSnapshot | null>(null);
@@ -74,12 +74,10 @@ export function useControlData(
   // A request during an in-flight read is answered by one follow-up read (see coalesce.ts).
   const refreshControl = useMemo(() => coalesce(async (): Promise<void> => {
     const started = actionSeq.current;
-    const epoch = mutationEpoch.current;
     const nextControl = await control.refresh().then((value) => ({ ok: true as const, value }), (reason: unknown) => ({ ok: false as const, reason }));
     if (!alive.current) return;
     if (nextControl.ok) {
-      // A read that started before a mutation completed is superseded by the follow-up read that the mutation queued.
-      if (mutationEpoch.current === epoch) applySnapshot(nextControl.value, actionSeq.current === started);
+      applySnapshot(nextControl.value, actionSeq.current === started);
       afterControlRead.current();
     } else {
       setStale(true);

@@ -319,8 +319,6 @@
 
   <InboxDrawer
     open={$current.kind === "inbox"}
-    {workspace}
-    {hosts}
     {notifications}
     onclose={closeOverlay}
     onopensession={selectSession}

@@ -1,6 +1,6 @@
 import type { Key } from "ink";
 import type { Dispatch, SetStateAction } from "react";
-import type { ControlNotification, ControlSession, ControlSnapshot } from "../../control/index.ts";
+import type { ControlSession, ControlSnapshot } from "../../control/index.ts";
 import type { ListItem } from "../../types/item.ts";
 import type { ProjectChoice } from "../views.tsx";
 import type { SessionLink } from "../links.ts";
@@ -34,7 +34,7 @@ export interface OverlayKeyContext {
   readonly sessionRecoverable: boolean;
   readonly sessionMutable: boolean;
   readonly openSelected: (picked?: ControlSession) => Promise<void>;
-  readonly requestRecovery: (kind: "resume" | "fork", target: ControlSession, returnTo: "none" | "session") => Promise<void>;
+  readonly requestRecovery: (kind: "resume", target: ControlSession, returnTo: "none" | "session") => Promise<void>;
   readonly requestConfirm: (target: ControlSession, kind: "stop" | "remove", returnTo: "none" | "session") => void;
   readonly setEdit: Dispatch<SetStateAction<string>>;
   readonly restartOutput: () => void;
@@ -43,7 +43,6 @@ export interface OverlayKeyContext {
   readonly openBranch: (session: ControlSession) => void;
   readonly copyValue: (value: string) => Promise<void>;
   readonly inspectSessionAt: (host: string, id: string) => Promise<void>;
-  readonly updateNotification: (record: ControlNotification, kind: "ack" | "archive") => Promise<void>;
 }
 
 /**
@@ -55,7 +54,7 @@ export function handleOverlayKeys(ctx: OverlayKeyContext, input: string, key: Ke
     previewWorkAction, previewMaxOffset, previewHeight, previewMatchesSelection, openLink, bumpStatus, snapshot, linksOf,
     sessionDetail, scrollDetail, overlayOffset, detailMaxOffset, detailHeight, sessionAttachable, sessionRecoverable,
     sessionMutable, openSelected, requestRecovery, requestConfirm, setEdit, restartOutput, chooseLink, openFolder,
-    openBranch, copyValue, inspectSessionAt, updateNotification } = ctx;
+    openBranch, copyValue, inspectSessionAt } = ctx;
   if (overlay.kind === "help") { if (key.escape || input === "?" || input === "q") setOverlay({ kind: "none" }); return true; }
   if (overlay.kind === "projects") {
     // Changes the picker only while it is still the open overlay.
@@ -144,7 +143,6 @@ export function handleOverlayKeys(ctx: OverlayKeyContext, input: string, key: Ke
     if (key.pageUp || key.upArrow) { scrollDetail(overlayOffset - Math.max(1, detailHeight - 1), detailMaxOffset); return true; }
     if (input === "o" && sessionAttachable) void openSelected();
     else if (input === "r" && sessionRecoverable) void requestRecovery("resume", sessionDetail, "session");
-    else if (input === "f" && sessionMutable && sessionDetail.canFork) void requestRecovery("fork", sessionDetail, "session");
     else if (input === "x" || input === "D") requestConfirm(sessionDetail, input === "x" ? "stop" : "remove", "session");
     else if ((input === "e" || input === "m") && sessionMutable) { setEdit(input === "e" ? sessionDetail.name ?? "" : ""); setOverlay({ kind: input === "e" ? "rename" : "metadata" }); }
     else if (input === "p") restartOutput();
@@ -159,7 +157,6 @@ export function handleOverlayKeys(ctx: OverlayKeyContext, input: string, key: Ke
     const { record } = overlay;
     if (key.escape) setOverlay({ kind: "none" });
     else if (input === "o" && record.sessionId !== null) void inspectSessionAt(record.host, record.sessionId);
-    else if (input === "a" || input === "x") void updateNotification(record, input === "a" ? "ack" : "archive");
     return true;
   }
   if (overlay.kind === "host") { if (key.escape) setOverlay({ kind: "none" }); return true; }

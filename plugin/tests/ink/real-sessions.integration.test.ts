@@ -3,6 +3,8 @@
 // only synthetic condition is a delayed CLI reply, supplied by the CLI proxy, in the one scenario
 // that is about that delay.
 import { afterEach, expect, test } from "bun:test";
+import { join } from "node:path";
+import { connectLocal } from "@pohunek/sdk";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { keys, type PtyStep } from "./support/pty.ts";
 import type { NotificationRecord as WireNotification } from "@pohunek/protocol";
@@ -15,12 +17,6 @@ afterEach(async () => {
   await scenario?.stop();
   scenario = null;
 });
-
-/** Makes a real shell session fail, which the daemon reports as an unread notification. */
-async function failSession(scenario: TuiScenario, id: string): Promise<void> {
-  const sent = await scenario.daemon.pohunek(["session", "input", id, "exit 1\n", "--json"]);
-  if (!sent.stdout.includes('"ok"')) throw new Error(`session input failed: ${sent.stdout}${sent.stderr}`);
-}
 
 interface NotificationRecord { readonly id: string; readonly title: string; readonly body: string; readonly sessionId: string }
 
@@ -41,7 +37,15 @@ async function notificationsFor(scenario: TuiScenario, sessionIds: readonly stri
 test("clicking a real notification keeps its message visible until Open session is chosen", async () => {
   scenario = await startTuiScenario({ rules: [] });
   const id = await createShellSession(scenario.daemon, "alert-session");
-  await failSession(scenario, id);
+  const client = await connectLocal(join(scenario.daemon.runtimeDir, "pohunek", "daemon.sock"));
+  try {
+    await client.call("notification.create", {
+      source: { provider: "real-sessions-test", provider_event: "alert-0", host_local_source_id: "alert-0" },
+      kind: "approval_required", severity: "action_required", title: "alert record", body: "created by the scenario", session_id: id,
+    });
+  } finally {
+    await client.close();
+  }
   const [record] = await notificationsFor(scenario, [id]);
   if (record === undefined) throw new Error("no notification");
   const steps: PtyStep[] = [
@@ -80,36 +84,4 @@ test("a wheel and a row click select the session the owner picks, which then att
   expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
   const attached = (await scenario.proxy.calls()).filter((call) => call.includes("attach")).map((call) => call.at(-1));
   expect(attached).toEqual([ids[1]]);
-}, REAL_SCENARIO_TIMEOUT_MS);
-
-test("an older notification read response cannot replace the newer detail the owner opened", async () => {
-  scenario = await startTuiScenario({ rules: [] });
-  const first = await createShellSession(scenario.daemon, "older-session");
-  await failSession(scenario, first);
-  await notificationsFor(scenario, [first]);
-  const second = await createShellSession(scenario.daemon, "newer-session");
-  await failSession(scenario, second);
-  const records = await notificationsFor(scenario, [first, second]);
-  const newest = records.find((record) => record.sessionId === second);
-  const older = records.find((record) => record.sessionId === first);
-  if (newest === undefined || older === undefined) throw new Error("missing notifications");
-  // The read of the newest notification answers after the owner has moved on to the older one.
-  await scenario.proxy.setRules([{ match: ["notifications", "read", newest.id], delayMs: 3000 }]);
-  const steps: PtyStep[] = [
-    { expect: "CONTROL CENTER" },
-    keys("4"),
-    { expect: newest.title },
-    keys("\r"),
-    { expect: newest.body },
-    keys("\x1b"),
-    { expect: older.title },
-    keys("\x1b[B"),
-    keys("\r"),
-    { expect: older.body },
-    { pause: 4000 },
-  ];
-  const result = await scenario.run(steps, { cols: 100, timeoutS: 60 });
-  expect(result.failed, `step ${String(result.failed)} failed; output:\n${result.output.slice(-900)}`).toBe(-1);
-  // The late answer for the newest notification must not be the last detail shown.
-  expect(result.output.lastIndexOf(older.body)).toBeGreaterThan(result.output.lastIndexOf(newest.body));
 }, REAL_SCENARIO_TIMEOUT_MS);

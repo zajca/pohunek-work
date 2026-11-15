@@ -276,7 +276,7 @@ const sub = argv.slice(0, 2).join(" ");
 const stdin = sub === "session new" ? await Bun.stdin.text() : "";
 appendFileSync(dir + "/calls.jsonl", JSON.stringify({ argv, stdin }) + "\\n");
 
-const envelope = (ok) => JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 4, maximum: 4 }, ok });
+const envelope = (ok) => JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 5, maximum: 5 }, ok });
 const session = (metadata, warnings) => ({
   id: ${JSON.stringify(SESSION_ID)},
   name: "acme/widgets#7",
@@ -297,7 +297,7 @@ if (sub === "project list") {
 } else if (sub === "notifications list") {
   console.log(envelope({ notifications: [] }));
 } else if (sub === "session new" && existsSync(dir + "/session-new-error")) {
-  console.log(JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 4, maximum: 4 }, err: { class: "transport", code: "request_timeout", msg: "timed out", recover: "" } }));
+  console.log(JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 5, maximum: 5 }, err: { class: "transport", code: "request_timeout", msg: "timed out", recover: "" } }));
   process.exit(2);
 } else if (sub === "session new") {
   const metadata = {};

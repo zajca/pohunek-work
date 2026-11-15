@@ -125,7 +125,6 @@ export function session(raw: unknown, path: string, hostRoute: string): ControlS
     branch: nullableString(obj, "branch", path), worktreePath: nullableString(obj, "worktree_path", path),
     external: obj["external"] === undefined || obj["external"] === null ? false : boolean(obj, "external", path),
     canResume: caps === null ? false : boolean(caps, "resume", `${path}.capabilities`),
-    canFork: caps === null ? false : boolean(caps, "fork", `${path}.capabilities`),
     nativeTarget: nativeTarget(obj, path), nativeLastActivityAt: nullableString(obj, "native_last_activity_at", path),
     metadata, subagents, subagentCount: subagents.length,
   };

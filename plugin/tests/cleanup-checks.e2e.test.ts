@@ -34,12 +34,12 @@ const SCENARIO_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 100;
 const EXIT_ERROR = 2;
 /**
- * Host agent profile based on `claude` whose program shows claude's tool-approval prompt and then sleeps. The
- * daemon's claude screen detection reports such a session as activity `blocked`, and after its attention debounce
- * it records an unread `agent_blocked` notification for it.
+ * Host agent profile whose program prints a terminal approval notice and then sleeps. The daemon records the
+ * notice as an unread `approval_required` notification of the session.
  */
 const APPROVAL_PROFILE = "approval";
-const APPROVAL_PROMPT = "Do you want to proceed?\\n\\u276f 1. Yes\\n  2. No, and tell Claude what to do differently (esc)\\n";
+// An OSC 777 notice that asks for approval; the daemon records it as an approval_required notification of the session.
+const APPROVAL_PROMPT = "\\033]777;notify;Approval requested;Do you want to proceed?\\007";
 /** How long the approval agent sleeps; longer than any scenario, the daemon's stop ends it. */
 const APPROVAL_SLEEP_SECS = 3600;
 /** Upper bound for the daemon to report the approval session blocked and to record its notification. */
@@ -195,18 +195,18 @@ async function startSharer(state: Setup, agent: string): Promise<string> {
 async function installApprovalAgent(core: CoreDaemon): Promise<void> {
   const sleep = Bun.which("sleep");
   if (sleep === null) throw new Error("sleep is not on PATH; the approval agent profile needs it");
-  await installAgentProfile(core, APPROVAL_PROFILE, `#!/bin/sh\nprintf '${APPROVAL_PROMPT}'\nexec ${sleep} ${String(APPROVAL_SLEEP_SECS)}\n`, "claude");
+  await installAgentProfile(core, APPROVAL_PROFILE, `#!/bin/sh\nprintf '${APPROVAL_PROMPT}'\nexec ${sleep} ${String(APPROVAL_SLEEP_SECS)}\n`);
 }
 
-/** Polls until the daemon lists an unread `agent_blocked` notification of `sessionId`. */
-async function waitForBlockedNotification(core: CoreDaemon, sessionId: string): Promise<void> {
+/** Polls until the daemon lists an unread `approval_required` notification of `sessionId`. */
+async function waitForApprovalNotification(core: CoreDaemon, sessionId: string): Promise<void> {
   const deadline = Date.now() + BLOCKED_TIMEOUT_MS;
   for (;;) {
     const listed = await core.pohunek(["notifications", "list", "--status", "unread", "--json"]);
     const envelope = JSON.parse(listed.stdout) as { ok?: { notifications: { kind: string; session_id?: string }[] } };
     if (envelope.ok === undefined) throw new Error(`notifications list failed: ${listed.stdout}${listed.stderr}`);
-    if (envelope.ok.notifications.some((n) => n.kind === "agent_blocked" && n.session_id === sessionId)) return;
-    if (Date.now() > deadline) throw new Error(`no unread agent_blocked notification of ${sessionId}: ${listed.stdout}`);
+    if (envelope.ok.notifications.some((n) => n.kind === "approval_required" && n.session_id === sessionId)) return;
+    if (Date.now() > deadline) throw new Error(`no unread approval_required notification of ${sessionId}: ${listed.stdout}`);
     await Bun.sleep(POLL_INTERVAL_MS);
   }
 }
@@ -299,21 +299,21 @@ test("not_awaiting_owner fails for a session that waits on an approval", async (
   const state = await setUpIssueProject(resources);
   await installApprovalAgent(state.core);
   await startIssueSession(state, APPROVAL_PROFILE);
-  await waitForSession(state.core, state.sessionId, (s) => s.state === "running" && s.activity === "blocked", BLOCKED_TIMEOUT_MS);
+  await waitForApprovalNotification(state.core, state.sessionId);
   await routeOriginToBare(state);
 
   await expectRefusedBeforeStop(state, {
-    session_finished: 'session state is "running" with activity "blocked"; only a finished or idle session is cleaned up',
-    not_awaiting_owner: "the session is blocked and waits for the owner",
+    session_finished: 'session state is "running" with activity null; only a finished or idle session is cleaned up',
+    not_awaiting_owner: "1 agent_blocked or approval_required notification(s) name the session or a session sharing its worktree",
   });
   await stopAndCheckWorkers(state.core);
 }, SCENARIO_TIMEOUT_MS);
 
-test("not_awaiting_owner fails for a pending agent_blocked notification of a session sharing the worktree", async () => {
+test("not_awaiting_owner fails for a pending approval_required notification of a session sharing the worktree", async () => {
   const state = await idleIssueSession();
   await installApprovalAgent(state.core);
   const sharer = await startSharer(state, APPROVAL_PROFILE);
-  await waitForBlockedNotification(state.core, sharer);
+  await waitForApprovalNotification(state.core, sharer);
   await routeOriginToBare(state);
 
   await expectRefusedBeforeStop(state, {

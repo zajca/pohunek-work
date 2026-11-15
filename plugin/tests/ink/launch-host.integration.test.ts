@@ -20,7 +20,7 @@ afterEach(async () => {
 test("a submission during a host switch waits for that host's options and creates on that host", async () => {
   scenario = await startTuiScenario({
     rules: [
-      { match: ["host", "list"], appendOk: [{ name: PEER, fqdn: "delayed.netbird.example", address: "100.64.0.9", port: 18722, overlay: "netbird", peer_id: PEER, classification: "reachable_daemon", daemon_version: "0.34.2" }] },
+      { match: ["host", "list"], appendOk: [{ name: PEER, fqdn: "delayed.netbird.example", address: "100.64.0.9", port: 18722, overlay: "netbird", peer_id: PEER, classification: "reachable_daemon", daemon_version: "0.43.1" }] },
       { match: [ROUTE], delayMs: 4000 },
       { match: [], aliasPrefix: { from: "netbird:", to: "local" } },
     ],
@@ -53,7 +53,7 @@ test("a submission during a host switch waits for that host's options and create
 test("switching hosts clears branch fields typed for the previous host", async () => {
   scenario = await startTuiScenario({
     rules: [
-      { match: ["host", "list"], appendOk: [{ name: PEER, fqdn: "delayed.netbird.example", address: "100.64.0.9", port: 18722, overlay: "netbird", peer_id: PEER, classification: "reachable_daemon", daemon_version: "0.34.2" }] },
+      { match: ["host", "list"], appendOk: [{ name: PEER, fqdn: "delayed.netbird.example", address: "100.64.0.9", port: 18722, overlay: "netbird", peer_id: PEER, classification: "reachable_daemon", daemon_version: "0.43.1" }] },
       { match: [ROUTE], delayMs: 4000 },
       { match: [], aliasPrefix: { from: "netbird:", to: "local" } },
     ],

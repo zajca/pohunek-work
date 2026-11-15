@@ -1,9 +1,5 @@
 export { WorkspaceActions } from "./actions";
-export type {
-  ActionCaller,
-  NotificationRollback,
-  OptimisticNotificationCallbacks,
-} from "./actions";
+export type { ActionCaller } from "./actions";
 export { attachSession } from "./attach";
 export type { AttachCaller, SessionAttachment } from "./attach";
 export {

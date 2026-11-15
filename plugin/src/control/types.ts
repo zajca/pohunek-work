@@ -24,7 +24,7 @@ export interface ControlSession {
   readonly runtimeState: string | null; readonly updatedAt: string;
   readonly projectId: string | null; readonly projectLabel: string | null;
   readonly branch: string | null; readonly worktreePath: string | null;
-  readonly external: boolean; readonly canResume: boolean; readonly canFork: boolean;
+  readonly external: boolean; readonly canResume: boolean;
   readonly nativeTarget: ControlNativeTarget; readonly nativeLastActivityAt: string | null;
   readonly metadata: Readonly<Record<string, string>>;
   readonly subagents: readonly ControlSubagent[];
@@ -85,15 +85,12 @@ export interface ControlSnapshot {
 export type ControlAction =
   | { readonly kind: "stop" | "remove" | "resume"; readonly host: string; readonly sessionId: string }
   | { readonly kind: "rename"; readonly host: string; readonly sessionId: string; readonly name: string | null }
-  | { readonly kind: "fork"; readonly host: string; readonly sessionId: string; readonly name?: string; readonly cols: number; readonly rows: number }
-  | { readonly kind: "metadata"; readonly host: string; readonly sessionId: string; readonly set?: Readonly<Record<string, string>>; readonly clear?: readonly string[] }
-  | { readonly kind: "read" | "ack" | "archive"; readonly host: string; readonly notificationId: string };
+  | { readonly kind: "metadata"; readonly host: string; readonly sessionId: string; readonly set?: Readonly<Record<string, string>>; readonly clear?: readonly string[] };
 export type ControlActionOutcome =
   | { readonly kind: "stop"; readonly stopped: boolean }
   | { readonly kind: "remove"; readonly removed: boolean; readonly stopped: boolean; readonly worktreesRemoved: number; readonly worktreesFailed: number }
-  | { readonly kind: "resume" | "rename" | "fork"; readonly session: ControlSession }
-  | { readonly kind: "metadata"; readonly session: ControlSession }
-  | { readonly kind: "read" | "ack" | "archive"; readonly notification: ControlNotification };
+  | { readonly kind: "resume" | "rename"; readonly session: ControlSession }
+  | { readonly kind: "metadata"; readonly session: ControlSession };
 export interface ControlClientOptions {
   readonly binary: string;
   readonly timeoutMs: number;

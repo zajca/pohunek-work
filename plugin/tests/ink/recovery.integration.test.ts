@@ -110,7 +110,7 @@ const session = {
   metadata: {}, subagents: [], capabilities: { resume: true, fork: true }, runtime: { state: "stopped" },
   native_session_id: "native-1", native_last_activity_at: "2026-10-09T09:00:00Z",
 };
-const ok = (value) => console.log(JSON.stringify({cli_version:"0.34.2",protocol:{minimum:4,maximum:4},ok:value}));
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.43.1",protocol:{minimum: 5, maximum: 5},ok:value}));
 if (args[0] === "host" && args[1] === "discover") ok([]);
 else if (args[2] === "session" && args[3] === "list") ok([session]);
 else if (args[2] === "session" && args[3] === "inspect") ok(session);

@@ -319,8 +319,8 @@ export function LinkChooser({ links, selected }: { readonly links: readonly Sess
   </Box>;
 }
 
-/** What a resume or fork will recover, as the owner confirms it. An unknown target is shown as such, never guessed. */
-export function RecoveryConfirmation({ action, session }: { readonly action: "resume" | "fork"; readonly session: ControlSession }): ReactNode {
+/** What a resume will recover, as the owner confirms it. An unknown target is shown as such, never guessed. */
+export function RecoveryConfirmation({ session }: { readonly session: ControlSession }): ReactNode {
   const target = session.nativeTarget;
   const reference = target.status === "verified" ? `${target.kind === "id" ? "ID" : "path"}: ${target.value}` : "Unknown";
   return <Box flexDirection="column">
@@ -328,7 +328,7 @@ export function RecoveryConfirmation({ action, session }: { readonly action: "re
       <Text wrap="wrap">{safeText(`Native conversation ${reference}`)}</Text>
       <Text dimColor wrap="wrap">{safeText(`Last native activity: ${session.nativeLastActivityAt ?? "Unknown"}`)}</Text>
     </Section>
-    <Message color="red" text={safeText(`Confirm ${action} of ${session.name ?? session.id}? y/N`)} />
+    <Message color="red" text={safeText(`Confirm resume of ${session.name ?? session.id}? y/N`)} />
   </Box>;
 }
 

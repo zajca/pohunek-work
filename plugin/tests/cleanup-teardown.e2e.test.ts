@@ -245,7 +245,7 @@ const argv = process.argv.slice(2);
 const sub = argv.slice(0, 2).join(" ");
 appendFileSync(dir + "/calls.jsonl", JSON.stringify({ argv }) + "\\n");
 
-const envelope = (ok) => JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 4, maximum: 4 }, ok });
+const envelope = (ok) => JSON.stringify({ cli_version: "0.0.0", protocol: { minimum: 5, maximum: 5 }, ok });
 const removed = existsSync(dir + "/removed");
 const session = {
   id: ${JSON.stringify(SESSION_ID)},
