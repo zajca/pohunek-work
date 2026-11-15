@@ -1,18 +1,18 @@
 {
-  "release": "v0.34.2",
+  "release": "v0.43.1",
   "assetBaseUrl": "https://github.com/zajca/pohunek/releases/download",
   "targets": [
     {
       "platform": "linux",
       "arch": "x64",
-      "archive": "pohunek-daemon-0.34.2-x86_64-unknown-linux-musl.tar.gz",
-      "sha256": "864095801866ba05d83252b4b6753e4c6cb80ca0124f39604222642546af22bd"
+      "archive": "pohunek-daemon-0.43.1-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "0666238c3ae26c6b334477e1db8aee76fdfa7b93c61dbff8455ab373fae198d6"
     },
     {
       "platform": "darwin",
       "arch": "arm64",
-      "archive": "pohunek-daemon-0.34.2-aarch64-apple-darwin.tar.gz",
-      "sha256": "e55fe3a963a0f13ad8ca2ac10d65cf7ad26ea0a9c4068dac923baa35ce2595b6"
+      "archive": "pohunek-daemon-0.43.1-aarch64-apple-darwin.tar.gz",
+      "sha256": "a360f97fb95985f83f5b1f48822bde6720a8e35035aca5d88390136fb35547da"
     }
   ]
 }

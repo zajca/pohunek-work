@@ -28,7 +28,7 @@ const rules = JSON.parse(readFileSync(${JSON.stringify(rulesPath)}, "utf8"));
 const rule = rules.find((entry) => JSON.stringify(entry.args) === JSON.stringify(args));
 if (!rule) { process.stderr.write("unexpected argv: " + JSON.stringify(args)); process.exit(70); }
 if (rule.delayMs) await Bun.sleep(rule.delayMs);
-process.stdout.write(rule.stdout ?? JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},...(rule.err ? {err:rule.err} : {ok:rule.ok})}));
+process.stdout.write(rule.stdout ?? JSON.stringify({cli_version:"0.43.1",protocol:{minimum: 5, maximum: 5},...(rule.err ? {err:rule.err} : {ok:rule.ok})}));
 process.exit(rule.exit ?? (rule.err ? 1 : 0));
 `);
   await chmod(binary, 0o755);
@@ -41,14 +41,12 @@ process.exit(rule.exit ?? (rule.err ? 1 : 0));
 const session = {
   id: "s1", name: "Fix test", agent: "claude", cwd: "/repo", state: "running", activity: "working",
   updated_at: "2026-10-09T10:00:00Z", project_id: "p1", project_label: "repo", branch: "fix",
-  worktree_path: "/repo/fix", capabilities: { resume: true, fork: true },
+  worktree_path: "/repo/fix", capabilities: { resume: true, fork: false },
   metadata: { "work.url": "https://example.test/issue/1" },
   subagents: [{ id: "sub1", provider: "claude", lifecycle: "running", revision: 1,
     started_at_ms: 1, updated_at_ms: 2 }],
 };
 const project = { id: "p1", label: "repo", repo_root: "/repo", git_common_dir: "/repo/.git" };
-const notification = { id: "n1", kind: "approval_required", severity: "action_required", status: "unread", title: "Ready",
-  body: "Review needed", created_at: "2026-10-09T10:00:00Z", session_id: "s1", project_id: "p1" };
 
 describe("control CLI process boundary", () => {
   test("reads session, screen, project and host details through JSON CLI calls", async () => {
@@ -56,7 +54,7 @@ describe("control CLI process boundary", () => {
       { args: ["--host", "local", "session", "inspect", "s1", "--json"], ok: session },
       { args: ["--host", "local", "session", "screen", "s1", "--json"], ok: { session_id: "s1", visible_lines: ["hello"] } },
       { args: ["--host", "local", "project", "show", "p1", "--json"], ok: { project, worktrees: [{ path: "/repo/fix", branch: "fix", head: "abc", session_id: "s1" }] } },
-      { args: ["host", "inspect", "local", "--json"], ok: { daemon_version: "0.33.1", protocol_version: 4, supported_agents: ["claude"],
+      { args: ["host", "inspect", "local", "--json"], ok: { daemon_version: "0.43.1", protocol_version: 5, supported_agents: ["claude"],
         git_available: true, worktree_supported: true, terminal_read_supported: true, output_read_supported: true } },
       { args: ["host", "governance", "inspect", "local", "--json"], ok: {
         host_id: "host_opaque", enrollment: null, owner: null, owner_revision: null,
@@ -71,33 +69,10 @@ describe("control CLI process boundary", () => {
     expect((await client.inspectGovernance("local")).ok).toBe(true);
   });
 
-  test("executes notification mutations through the daemon socket without cleanup acceptance", async () => {
-    const rules: Rule[] = [
-      ...(["read", "ack", "archive"] as const).map(kind => ({ args: ["--host", "local", "notifications", kind, "n1", "--json"], ok: { record: notification } })),
-    ];
-    const stub = await cli(rules);
-    standIn = await startSdkStandIn(stub.binary);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
-    for (const kind of ["read", "ack", "archive"] as const) {
-      expect((await client.act({ kind, host: "local", notificationId: "n1" })).ok).toBe(true);
-    }
-    expect((await stub.calls()).flat().includes("--accept-unconfirmed-cleanup")).toBe(false);
-  });
-
-  test("forks a session through the daemon socket and returns the forked session", async () => {
-    const forked = { ...session, id: "s2", name: "Fork" };
-    const stub = await cli([{ args: ["--host", "local", "session", "fork", "s1", "--json"], ok: forked }]);
-    standIn = await startSdkStandIn(stub.binary);
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
-    const result = await client.act({ kind: "fork", host: "local", sessionId: "s1", cols: 100, rows: 30 });
-    expect(result.ok ? result.data.kind : null).toBe("fork");
-    expect(result.ok && result.data.kind === "fork" ? result.data.session.id : null).toBe("s2");
-  });
-
   test("classifies CLI errors, protocol mismatch and malformed payloads", async () => {
     const stub = await cli([
       { args: ["--host", "local", "session", "inspect", "timeout", "--json"], err: { class: "timeout", code: "request_timeout", msg: "late" } },
-      { args: ["--host", "local", "session", "inspect", "mismatch", "--json"], stdout: JSON.stringify({ cli_version: "future", protocol: { minimum: 5, maximum: 6 }, ok: session }) },
+      { args: ["--host", "local", "session", "inspect", "mismatch", "--json"], stdout: JSON.stringify({ cli_version: "future", protocol: { minimum: 6, maximum: 7 }, ok: session }) },
       { args: ["--host", "local", "session", "inspect", "broken", "--json"], ok: { ...session, state: 42 } },
     ]);
     const client = createControlClient({ binary: stub.binary, timeoutMs: 2_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: null });
@@ -248,17 +223,6 @@ describe("control CLI process boundary", () => {
     const outcome = await client.act({ kind: "remove", host: "local", sessionId: session.id });
     expect(outcome.ok ? "" : outcome.error.code).toBe("outcome_unknown");
     expect(outcome.ok ? "" : outcome.error.message).toContain("session stopped; removal outcome is unknown");
-    await client.close();
-  }, 15_000);
-
-  // A fork whose reply does not come back has an unknown outcome: the fork may exist, so it is not reported as failed.
-  test("a fork that does not answer in time reports an unknown outcome", async () => {
-    const stub = await cli([{ args: ["host", "discover", "--json"], ok: [] }]);
-    standIn = await startSdkStandIn(stub.binary, { faults: [{ method: "session.fork", kind: "stall", times: 1 }] });
-    const client = createControlClient({ binary: stub.binary, timeoutMs: 1_000, notificationsPageSize: 2, reconnectMaxMs: 1_000, localSocket: standIn.socket });
-    const outcome = await client.act({ kind: "fork", host: "local", sessionId: session.id, cols: 80, rows: 24 });
-    expect(outcome.ok ? "" : outcome.error.code).toBe("outcome_unknown");
-    expect(outcome.ok ? "" : outcome.error.message).toContain("fork outcome is unknown");
     await client.close();
   }, 15_000);
 

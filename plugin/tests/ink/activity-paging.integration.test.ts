@@ -23,7 +23,7 @@ test("the Activity view shows one page of notifications and loads the next page 
     for (let index = 0; index < NOTIFICATION_COUNT; index += 1) {
       await client.call("notification.create", {
         source: { provider: "activity-paging-test", provider_event: `event-${String(index)}`, host_local_source_id: `source-${String(index)}` },
-        kind: "error", severity: "info", title: `activity ${String(index)}`, body: "created by the scenario",
+        kind: "approval_required", severity: "action_required", title: `activity ${String(index)}`, body: "created by the scenario",
       });
     }
   } finally {

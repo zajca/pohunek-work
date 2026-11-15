@@ -27,8 +27,8 @@ const argv = process.argv.slice(2);
 const input = argv.includes("--input-stdin") ? await Bun.stdin.text() : "";
 const prior = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse) : [];
 appendFileSync(trace, JSON.stringify({ argv, stdin: input }) + "\\n");
-const ok = (payload) => console.log(JSON.stringify({ cli_version: "0.33.1", protocol: { minimum: 4, maximum: 4 }, ok: payload }));
-const fail = (code) => { console.log(JSON.stringify({ cli_version: "0.33.1", protocol: { minimum: 4, maximum: 4 }, err: { class: "request", code, msg: "rejected" } })); process.exit(2); };
+const ok = (payload) => console.log(JSON.stringify({ cli_version: "0.43.1", protocol: { minimum: 5, maximum: 5 }, ok: payload }));
+const fail = (code) => { console.log(JSON.stringify({ cli_version: "0.43.1", protocol: { minimum: 5, maximum: 5 }, err: { class: "request", code, msg: "rejected" } })); process.exit(2); };
 if (argv[0] === "host" && argv[1] === "list") ok([
   { name: "devbox", fqdn: "devbox.example.test", peer_id: "peer-1", address: null, overlay: "netbird", port: 4827, classification: "reachable_daemon" },
   { name: "nameless-route", fqdn: null, peer_id: null, address: null, overlay: "netbird", port: 4827, classification: "reachable_daemon" },

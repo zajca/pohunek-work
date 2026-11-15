@@ -282,7 +282,6 @@
       {ondetails}
       {onclose}
       {onnewsession}
-      onselect={onselect}
     />
   </div>
 </div>

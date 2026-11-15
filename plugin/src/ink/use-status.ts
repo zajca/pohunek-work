@@ -17,7 +17,6 @@ export interface StatusState {
   readonly busy: boolean;
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
   readonly mutationNotice: MutableRef<string | null>;
-  readonly mutationEpoch: MutableRef<number>;
   readonly actionSeq: MutableRef<number>;
   readonly bumpStatus: (message: string | null) => void;
 }
@@ -27,13 +26,11 @@ export function useStatus(): StatusState {
   // The message of the last mutation that failed. Snapshots that arrive afterwards keep it on the status line.
   const mutationNotice = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Bumped when a mutation completes; a read that started before it must not replace the state the mutation showed.
-  const mutationEpoch = useRef(0);
   // Counts the actions that started; a read that completes later checks it before it reports its own result.
   const actionSeq = useRef(0);
   // A status written by a user action; it counts as newer than any refresh read that started before it.
   const bumpStatus = useCallback((message: string | null): void => { actionSeq.current += 1; setStatus(message); }, []);
   // The refusal on the status line is for the action that was running, so it goes once that action ends.
   useEffect(() => { if (!busy) setStatus((old) => old === BUSY_REFUSAL ? null : old); }, [busy]);
-  return { status, setStatus, busy, setBusy, mutationNotice, mutationEpoch, actionSeq, bumpStatus };
+  return { status, setStatus, busy, setBusy, mutationNotice, actionSeq, bumpStatus };
 }

@@ -36,7 +36,7 @@ async function createRecords(client: Client, label: string, count: number): Prom
   for (let index = 0; index < count; index += 1) {
     await client.call("notification.create", {
       source: { provider: "activity-partial-test", provider_event: `${label}-${String(index)}`, host_local_source_id: `${label}-${String(index)}` },
-      kind: "error", severity: "info", title: `${label}-${String(index)}`, body: "created by the scenario",
+      kind: "approval_required", severity: "action_required", title: `${label}-${String(index)}`, body: "created by the scenario",
     });
   }
 }
@@ -54,7 +54,7 @@ test("a host whose first Activity page fails keeps the list newest first when it
   const tcp = relay;
   const remoteHost = {
     name: "remote-daemon", fqdn: "remote.example", address: "127.0.0.1", port: tcp.port, overlay: "netbird", peer_id: PEER,
-    classification: "reachable_daemon", daemon_version: "0.34.2",
+    classification: "reachable_daemon", daemon_version: "0.43.1",
   };
   scenario = await startTuiScenario({
     rules: [{ match: ["host", "discover"], appendOk: [remoteHost] }],

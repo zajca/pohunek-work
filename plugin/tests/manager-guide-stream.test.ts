@@ -99,11 +99,11 @@ test("the guide's stream command passes only new unread events of a launched ses
   if (result.exitCode !== 0) throw new Error(`the stream command failed (${String(result.exitCode)}): ${result.stderr}`);
 
   const kept = result.stdout.trim().split("\n").map((line) => (JSON.parse(line) as { record: { kind: string } }).record.kind);
-  expect(kept).toEqual(["turn_completed", "agent_blocked", "approval_required", "approval_required"]);
+  expect(kept).toEqual(["agent_blocked", "approval_required", "approval_required"]);
 });
 
 test("the guide's stream command delivers a matching line while the producer is still open", async () => {
-  const dir = await shimDir([event("turn_completed", "unread", SESSION_ID)], HOLD_OPEN_SECS);
+  const dir = await shimDir([event("agent_blocked", "unread", SESSION_ID)], HOLD_OPEN_SECS);
   const started = Date.now();
   // detached makes the shell a process-group leader on POSIX (Linux and macOS), so cleanup can end the shim, sleep and jq as well.
   const child = spawn("bash", ["-c", await streamBlock()], {
@@ -116,7 +116,7 @@ test("the guide's stream command delivers a matching line while the producer is 
   const exited = once(child, "exit");
   try {
     const received = await firstLine(child.stdout, DELIVERY_DEADLINE_MS);
-    expect(received).toContain(`"kind":"turn_completed"`);
+    expect(received).toContain(`"kind":"agent_blocked"`);
     // The line arrived before the producer's hold ended, so the pipeline did not wait for the producer to exit.
     expect(Date.now() - started).toBeLessThan(HOLD_OPEN_SECS * 1000);
   } finally {

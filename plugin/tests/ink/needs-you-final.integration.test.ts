@@ -1,11 +1,10 @@
-// Regression: a session that ended keeps its unread failure notification, and the Sessions view grouped it under
-// Needs you although nothing in it can be answered. A live session with an open approval stays under Needs you.
+// Regression: an ended session is listed as unavailable, never under Needs you although nothing in it can be answered.
+// A live session with an open approval stays under Needs you.
 import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { connectLocal } from "@pohunek/sdk";
 import { createShellSession, REAL_SCENARIO_TIMEOUT_MS, startTuiScenario, type TuiScenario } from "./support/scenario.ts";
 import { keys, type PtyStep } from "./support/pty.ts";
-import type { NotificationRecord as WireNotification } from "@pohunek/protocol";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 100;
@@ -25,7 +24,7 @@ async function waitFor(what: string, check: () => Promise<boolean>): Promise<voi
   }
 }
 
-test("an ended session with an unread failure is not under Needs you, a live one with an approval is", async () => {
+test("an ended session is not under Needs you, a live one with an approval is", async () => {
   scenario = await startTuiScenario({ rules: [] });
   const running = scenario;
   const ended = await createShellSession(running.daemon, "ended-session");
@@ -35,11 +34,6 @@ test("an ended session with an unread failure is not under Needs you, a live one
   await waitFor("the failed state", async () => {
     const inspected = await running.daemon.pohunek(["session", "inspect", ended, "--json"]);
     return (JSON.parse(inspected.stdout) as { ok?: { state?: unknown } }).ok?.state === "failed";
-  });
-  await waitFor("the failure notification", async () => {
-    const listed = await running.daemon.pohunek(["notifications", "list", "--json"]);
-    const wire = (JSON.parse(listed.stdout) as { ok?: { notifications?: WireNotification[] } }).ok?.notifications ?? [];
-    return wire.some((record) => record.session_id === ended && record.status === "unread");
   });
   const client = await connectLocal(join(running.daemon.runtimeDir, "pohunek", "daemon.sock"));
   try {

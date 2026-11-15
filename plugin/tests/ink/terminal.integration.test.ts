@@ -612,7 +612,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
 const calls = readFileSync(${JSON.stringify(trace)}, "utf8").trim().split("\\n").map(JSON.parse);
-const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.43.1",protocol:{minimum: 5, maximum: 5},ok:value}));
 if (args[0] === "host" && (args[1] === "discover" || args[1] === "list")) ok([]);
 else if (args[0] === "host" && args[1] === "inspect") ok({runtimes:[{agent:"shell",agent_base:"shell",available:true},{agent:"codex",agent_base:"codex",available:true,supported:true}]});
 else if (args[0] === "project" && args[1] === "list") ok([]);
@@ -691,7 +691,7 @@ test("a lost session offers recovery and removal without offering direct attachm
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
-const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.43.1",protocol:{minimum: 5, maximum: 5},ok:value}));
 const session = {id:"lost-1",name:"Lost session",agent:"codex",cwd:"/repo",state:"running",activity:"working",runtime:{state:"lost"},capabilities:{resume:true,fork:false},updated_at:"2026-10-09T10:00:00Z",project_id:"p1",project_label:"repo",branch:"main",metadata:{},subagents:[]};
 if (args[0] === "host" && args[1] === "discover") ok([]);
 else if (args[2] === "session" && args[3] === "list") ok([session]);
@@ -732,7 +732,7 @@ test("switching from a template to blank clears its launch fields", async () => 
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
-const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.43.1",protocol:{minimum: 5, maximum: 5},ok:value}));
 if (args[0] === "host" && (args[1] === "discover" || args[1] === "list")) ok([]);
 else if (args[0] === "host" && args[1] === "inspect") ok({runtimes:[{agent:"codex",agent_base:"codex",available:true,supported:true}]});
 else if (args[0] === "project" && args[1] === "list") ok([{id:"p1",label:"repo",repo_root:"/repo",git_common_dir:"/repo/.git"}]);
@@ -777,7 +777,7 @@ test("clicking the focused template field does not change the selected template"
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
-const ok = (value) => console.log(JSON.stringify({cli_version:"0.33.1",protocol:{minimum:4,maximum:4},ok:value}));
+const ok = (value) => console.log(JSON.stringify({cli_version:"0.43.1",protocol:{minimum: 5, maximum: 5},ok:value}));
 if (args[0] === "host" && (args[1] === "discover" || args[1] === "list")) ok([]);
 else if (args[0] === "host" && args[1] === "inspect") ok({runtimes:[{agent:"codex",agent_base:"codex",available:true,supported:true}]});
 else if (args[0] === "project" && args[1] === "list") ok([{id:"p1",label:"repo",repo_root:"/repo",git_common_dir:"/repo/.git"}]);

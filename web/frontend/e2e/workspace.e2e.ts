@@ -126,7 +126,7 @@ test("renders and launches Hermes with resume-only lifecycle capabilities", asyn
   await createDialog.getByRole("button", { name: "Create and attach" }).click();
 
   await expect(page.getByRole("heading", { name: "Browser Hermes session" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Fork unsupported", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Fork/ })).toHaveCount(0);
   const hermesRow = page.getByTestId("session-row").filter({ hasText: "Browser Hermes session" });
   const sessionId = await hermesRow.getAttribute("data-session-id");
   if (sessionId === null) throw new Error("Hermes session row did not expose its session id");
@@ -165,7 +165,7 @@ test("keeps a known session with an unknown active agent presentation-only", asy
   await expect(row).toContainText("Unknown active agent session");
   await row.click();
   await expect(page.getByTestId("session-summary")).toContainText("future-profile · Unknown agent (future-agent)");
-  for (const name of ["Rename", "Stop", "Resume", "Fork", "Fork unsupported", "Remove"]) {
+  for (const name of ["Rename", "Stop", "Resume", "Remove"]) {
     await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
   }
 });

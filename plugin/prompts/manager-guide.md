@@ -149,26 +149,25 @@ miss an event that happened in between. Each line is one JSON object:
 - `notification_deleted` carries only `notification_id`.
 
 Act on `notification_created` and `notification_updated` lines whose `record.status`
-is `unread`, whose `record.kind` is `turn_completed`, `agent_blocked` or
-`approval_required`, and whose `record.session_id` is one of the launched sessions.
-The pinned core (0.34.2) has no `--session`, `--kind` or `--status` option on
-`watch`, so filter the lines with `jq`:
+is `unread`, whose `record.kind` is `agent_blocked` or `approval_required`, and whose
+`record.session_id` is one of the launched sessions. The inbox holds no other kind:
+turn ends are not notifications (step 3 detects them). The pinned core (0.43.1)
+`watch` takes one `--session`, `--kind` or `--status` value, and the filter needs
+several sessions and kinds, so the lines are filtered with `jq`:
 
 ```bash
 set -o pipefail
 pohunek notifications watch --json | jq --unbuffered -c --argjson ids '["<session id>"]' '
   select((.event == "notification_created" or .event == "notification_updated")
     and .record.status == "unread"
-    and ((.record.kind as $k | ["turn_completed","agent_blocked","approval_required"] | index($k)) != null)
+    and ((.record.kind as $k | ["agent_blocked","approval_required"] | index($k)) != null)
     and (.record.session_id as $s | $ids | index($s)) != null)'
 ```
 
 An update can carry a new kind for a record: core upgrades a generic `agent_blocked`
 to `approval_required` in place and sends only `notification_updated`. So a line
 counts as new when its `record.id` and `record.kind` pair has not been reported yet,
-and a repeated pair is dropped. An update that makes a record `acknowledged` (when
-new input reaches a session, its previous `turn_completed` becomes `acknowledged`)
-is not a new finish and is filtered out by the status check.
+and a repeated pair is dropped.
 
 If the background command ends for any reason (the daemon restarts, the connection
 drops, jq stops), the stream is down and the manager has heard nothing since. Report
@@ -183,27 +182,22 @@ them. An event whose change the baseline already shows is still reported once,
 because the owner has not heard of it yet. Old notifications that were already
 acknowledged are never reported as new.
 
-The stream does not replay, so a finish during a disconnect is recovered from the
-notification list: for each launched session, `pohunek notifications list --session
+The stream does not replay, so an attention record raised during a disconnect is
+recovered from the notification list: for each launched session, `pohunek notifications list --session
 <id> --status unread --limit 100 --json` and, while the output has a `next_cursor`,
 the same command with `--cursor <next_cursor>`. The list has no default limit, so
 every request carries `--limit`; the page size keeps one response small. Report the
-records whose kind is one of the three and whose `id` and `kind` pair has not been
+records whose kind is one of the two and whose `id` and `kind` pair has not been
 reported yet. Run this list after every subscription start and every reconnect.
 
 A read in this step that fails, prints no output or does not parse is a failed read:
 retry it once, and if it still fails report that the recovery is unknown. A failure
 on any page makes the whole recovery unknown, never an empty result, and the manager
-keeps the subscription running until the last page has been read. A failed
-`notifications policy get` counts as policy off, so the `activity` poll of step 3
-covers finished turns.
+keeps the subscription running until the last page has been read.
 
-`turn_completed` is off in the default notification policy, so a finished turn
-then produces no line at all. Read `pohunek notifications policy get` at subscribe
-time. When `turn_completed` is off for the session's provider, detect a finished
-turn in the poll of step 3 instead: `activity` of `pohunek session inspect` going
-from `working` to `idle`. Report that the policy is off; enabling it is the
-owner's decision.
+A finished turn produces no notification, so it produces no line at all. Detect it
+in the poll of step 3 instead: `activity` of `pohunek session inspect` going from
+`working` to `idle`.
 
 **3. Poll the sessions and the pull requests, reporting changes only.** Every five
 minutes, read `pohunek session list --json` (`state` and `runtime.state` of each
@@ -215,13 +209,13 @@ works from the manager's own directory, which is outside every project checkout.
 the last values (session state, runtime state, activity, head commit, check state,
 and the latest review by a bot, with the commit it reviewed) and report only a change.
 A `runtime.state` that becomes `lost` is reported at once, and an `activity` that goes
-from `working` to `idle` is a finished turn when the policy is off (step 2). A read
+from `working` to `idle` is a finished turn (step 2). A read
 that fails or returns no output is reported as a failed read; it is never compared as
 a value. A review of an older commit does not count as a review of the current head.
 
-**4. On each event, act and report.** For a new `turn_completed` or
-`agent_blocked`, `approval_required`, or a changed pull request state, read the
-row and the session again, report the result to the owner, and apply the rules
+**4. On each event, act and report.** For a new `agent_blocked` or
+`approval_required` notification, a session whose `activity` went from `working` to
+`idle`, or a changed pull request state, read the row and the session again, report the result to the owner, and apply the rules
 above (never send input to a `blocked` session). A session that finished its turn
 is not a finished task: the pull request decides, as in the previous section.
 

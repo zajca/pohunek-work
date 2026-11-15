@@ -5,8 +5,8 @@
     "": {
       "name": "pohunek-work",
       "dependencies": {
-        "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-protocol-0.34.2.tgz",
-        "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-sdk-0.34.2.tgz",
+        "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.43.1/pohunek-ts-protocol-0.43.1.tgz",
+        "@pohunek/sdk": "https://github.com/zajca/pohunek/releases/download/v0.43.1/pohunek-ts-sdk-0.43.1.tgz",
         "fzf": "0.5.2",
         "ink": "7.1.1",
         "react": "19.2.4",
@@ -62,9 +62,9 @@
 
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
-    "@pohunek/protocol": ["@pohunek/protocol@https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-protocol-0.34.2.tgz", {}, "sha512-ktLZamCTR93KZCtmo9bmFFgfT1UIXL8EqCrucDSznwe/p/dSEbQqkO2JbQbJU1ActK4axYkVwgK2eXUrbaGIpA=="],
+    "@pohunek/protocol": ["@pohunek/protocol@https://github.com/zajca/pohunek/releases/download/v0.43.1/pohunek-ts-protocol-0.43.1.tgz", {}, "sha512-0N97KnLsr33gwgmFh668+3PCXoqgm/P24Dq3KmEYnXvAEOS1BUS7e3HkMh6oV3DY8YE/WlqUYKn/3HPtTCdohw=="],
 
-    "@pohunek/sdk": ["@pohunek/sdk@https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-sdk-0.34.2.tgz", { "dependencies": { "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.34.2/pohunek-ts-protocol-0.34.2.tgz" } }, "sha512-yfzkpFfB404Kt/Tjww76fjy6JyQwzkMD0lG6nEG7SJPaSLEeTl40CR6WBWZrRfhGAtPzu/GDMCOOYQnymnZUqg=="],
+    "@pohunek/sdk": ["@pohunek/sdk@https://github.com/zajca/pohunek/releases/download/v0.43.1/pohunek-ts-sdk-0.43.1.tgz", { "dependencies": { "@pohunek/protocol": "https://github.com/zajca/pohunek/releases/download/v0.43.1/pohunek-ts-protocol-0.43.1.tgz" } }, "sha512-Vd2+i++zRKa5E9NJPNN++45xmxCauPbAXyj2wRCTnUV7WWNsGl48HB5tFef0BBMprld07IeZHpLduvNXRR32Gg=="],
 
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 

@@ -386,7 +386,7 @@ function remoteRoute(port: number): string {
  */
 function remoteRules(port: number, outageMarker: string | null): ProxyRule[] {
   const discovery: ProxyRule = outageMarker === null
-    ? { match: ["host", "discover"], appendOk: [{ name: REMOTE, fqdn: "remote.netbird.example", address: "127.0.0.1", port, overlay: "netbird", peer_id: REMOTE, classification: "reachable_daemon", daemon_version: "0.34.2" }] }
+    ? { match: ["host", "discover"], appendOk: [{ name: REMOTE, fqdn: "remote.netbird.example", address: "127.0.0.1", port, overlay: "netbird", peer_id: REMOTE, classification: "reachable_daemon", daemon_version: "0.43.1" }] }
     : { match: ["host", "discover"], failWith: 1 };
   const refusal: ProxyRule[] = outageMarker === null ? [] : [{
     match: ["session", "inspect", remoteRoute(port)],

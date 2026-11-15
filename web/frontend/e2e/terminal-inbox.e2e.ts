@@ -35,7 +35,7 @@ test("keeps the session rail visible while attaching and switching terminals", a
   await expect(page.locator(".xterm-accessibility-tree")).toContainText("second-attach-echo");
 });
 
-test("opens a notification's session from the inbox and acknowledges live records", async ({ page, stack }) => {
+test("opens a notification's session from the inbox and drops live records the daemon resolves", async ({ page, stack }) => {
   await page.goto(stack.backend.url);
   await expect(page.getByTestId("unread-count")).toHaveText("1");
   await page.getByRole("button", { name: /Inbox/ }).click();
@@ -52,7 +52,8 @@ test("opens a notification's session from the inbox and acknowledges live record
   await expect(sessionRow(page, FIXTURE_LOCAL_HOST, FIXTURE_LOCAL_SESSION_ID))
     .toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("terminal-status")).toContainText("Attached");
-  await expect(page.getByTestId("unread-count")).toHaveCount(0);
+  // Opening a session leaves the record's status unchanged; only the daemon resolves records.
+  await expect(page.getByTestId("unread-count")).toHaveText("1");
 
   const live = stack.local.scenario.createNotification({
     id: "n-browser-live",
@@ -61,19 +62,20 @@ test("opens a notification's session from the inbox and acknowledges live record
       provider_event: "browser-e2e",
       host_local_source_id: "browser-live-notification",
     },
-    kind: "system",
+    kind: "approval_required",
     severity: "info",
     title: "Live browser notification",
     body: "Delivered through the active subscription.",
   });
-  await expect(page.getByTestId("unread-count")).toHaveText("1");
+  await expect(page.getByTestId("unread-count")).toHaveText("2");
   await page.getByRole("button", { name: /Inbox/ }).click();
 
   const liveCard = notificationCard(inbox, live.id);
   await expect(liveCard).toContainText("Live browser notification");
-  await liveCard.getByRole("button", { name: "Acknowledge" }).click();
+  // The fixture stands in for the daemon resolving the record and emits notification_updated.
+  stack.local.scenario.acknowledgeNotification(live.id);
   await expect(liveCard).toBeHidden();
-  await expect(page.getByTestId("unread-count")).toHaveCount(0);
+  await expect(page.getByTestId("unread-count")).toHaveText("1");
 });
 
 function hostMarker(page: Page, host: string): Locator {

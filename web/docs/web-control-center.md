@@ -40,15 +40,17 @@ After daemon replacement the browser must compare `worker_instance_id`: the same
 generation may reconnect and repaint, while a changed generation is explicit
 native recovery. Lost, conflicting, incompatible, and observe-only sessions
 show a summary instead. The
-terminal toolbar can rename, stop, resume, fork, or permanently remove eligible
+terminal toolbar can rename, stop, resume, or permanently remove eligible
 sessions, while the inspector edits individual metadata keys. External observed
 sessions never expose mutating controls. When provider lifecycle hooks have
 reported Claude/Codex subagents, a durable status strip above the terminal shows
 their type and running or terminal lifecycle. Removal always requires confirmation
 and warns when it will also stop a live PTY. Session creation is a modal that
 measures terminal geometry invisibly and attaches after creation, and the Inbox
-is an unread-first drawer. Opening a session-backed notification marks it read
-and selects that session. A failed peer remains marked as an error without
+is an unread-first drawer. Opening a session-backed notification selects that
+session. The Inbox has no read, acknowledge, archive, or policy controls: the
+daemon keeps only `agent_blocked` and `approval_required` notifications, and
+resolved records leave the inbox when the daemon expires them. A failed peer remains marked as an error without
 disabling reachable hosts.
 
 The host-scoped Projects screen registers a repository using an explicit
@@ -70,8 +72,8 @@ Agent presentation is capability- and inventory-driven. The creation dialog can
 show Hermes and Hermes-based profiles only when the selected host reports a
 known `agent_base` and a supported runtime; an unavailable, unsupported, or
 unknown future base is display-only. Lifecycle controls use each session's
-advertised resume/fork capabilities, so Hermes shows resume only when the
-session can recover and never offers fork.
+advertised resume capability, so Hermes shows resume only when the session can
+recover. The daemon never offers session fork, so the UI has no fork control.
 
 On mobile and short touch viewports, the rail is an accessible off-canvas
 drawer and the terminal expands to the available visual viewport. A touch

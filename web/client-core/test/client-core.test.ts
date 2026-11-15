@@ -251,8 +251,8 @@ describe("@pohunek/client-core", () => {
       await waitFor(() => workspace.notifications.snapshot().records[notificationKey] !== undefined);
       expect(workspace.notifications.snapshot().unreadCount).toBe(1);
 
-      await workspace.actions.notificationUpdate("events", { id: notification.id, status: "read" });
-      await waitFor(() => workspace.notifications.snapshot().records[notificationKey]?.notification.status === "read");
+      daemon.scenario.acknowledgeNotification(notification.id);
+      await waitFor(() => workspace.notifications.snapshot().records[notificationKey]?.notification.status === "acknowledged");
       expect(workspace.notifications.snapshot().unreadCount).toBe(0);
 
       daemon.scenario.deleteNotification(notification.id);
@@ -266,36 +266,20 @@ describe("@pohunek/client-core", () => {
     }
   });
 
-  test("rolls back optimistic notification updates and preserves typed daemon errors", async () => {
-    const archived = notification("n-archived", "archived");
-    const daemon = await startTcpFixture({ initialNotifications: [archived] });
-    const relay = await relayFor(new Map([["notifications", tcpTarget(daemon)]]));
-    const workspace = workspaceFor(relay, [host("notifications")]);
-    const key = hostResourceKey("notifications", archived.id);
-    const observedStatuses: string[] = [];
-    const unsubscribe = workspace.notifications.subscribe((snapshot): void => {
-      const status = snapshot.records[key]?.notification.status;
-      if (status !== undefined) {
-        observedStatuses.push(status);
-      }
-    });
+  test("preserves typed daemon errors from a rejected action", async () => {
+    const daemon = await startTcpFixture({});
+    const relay = await relayFor(new Map([["errors", tcpTarget(daemon)]]));
+    const workspace = workspaceFor(relay, [host("errors")]);
 
     try {
-      await waitFor(() => connectionKind(workspace, "notifications") === "connected");
+      await waitFor(() => connectionKind(workspace, "errors") === "connected");
       const error = await expectClientError(
-        workspace.actions.notificationUpdate("notifications", {
-          id: archived.id,
-          status: "read",
-        }),
+        workspace.actions.sessionInspect("errors", "s-missing"),
       );
 
       expect(error.kind).toBe("remoteProtocol");
-      expect(error.toProtocolError().code).toBe("invalid_notification_transition");
-      expect(workspace.notifications.snapshot().records[key]?.notification.status).toBe("archived");
-      expect(observedStatuses.includes("read")).toBe(true);
-      expect(observedStatuses.at(-1)).toBe("archived");
+      expect(error.toProtocolError().code).toBe("session_not_found");
     } finally {
-      unsubscribe();
       await workspace.close();
       await relay.close();
       await daemon.close();
@@ -392,8 +376,6 @@ describe("@pohunek/client-core", () => {
       const created = await workspace.actions.sessionNew("parity", { agent: "codex", cols: TEST_COLS, rows: TEST_ROWS });
       await workspace.actions.sessionRename("parity", { session_id: created.id, name: "Renamed" });
       await workspace.actions.sessionSetMetadata("parity", { session_id: created.id, metadata: { work_item: "ABC-1" } });
-      const fork = await workspace.actions.sessionFork("parity", { session_id: created.id, cwd_mode: "same", cols: RESIZED_COLS, rows: RESIZED_ROWS });
-      await waitFor(() => workspace.sessions.snapshot()[hostResourceKey("parity", fork.id)] !== undefined);
       await workspace.actions.sessionStop("parity", created.id);
       await workspace.actions.sessionResume("parity", created.id);
       await workspace.actions.sessionRemove("parity", created.id);
@@ -524,7 +506,7 @@ function host(name: string): HostDescriptor {
 function session(id: string, runtimeId?: string): SessionInfo {
   return {
     id,
-    capabilities: { resume: true, fork: true },
+    capabilities: { resume: true, fork: false },
     agent: "codex",
     agent_base: "codex",
     cwd: "/tmp/pohunek-client-core-test",
@@ -558,7 +540,7 @@ function notification(id: string, status: NotificationRecord["status"]): Notific
       provider_event: "client-core-test",
       host_local_source_id: id,
     },
-    kind: "system",
+    kind: "agent_blocked",
     severity: "info",
     status,
     title: "Client core test",

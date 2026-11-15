@@ -124,7 +124,7 @@ function serve(listenPath: string, targetPath: string, options: RelayOptions): v
       link.clientPending = link.clientPending.slice(newline + 1);
       const request = parse(line);
       if (request !== null && request["method"] === "daemon.health" && refusingHealth) {
-        link.client.write(JSON.stringify({ v: 4, id: request["id"], err: { class: "daemon", code: "relay_refused", msg: "the relay refuses health", recover: "" } }) + "\n");
+        link.client.write(JSON.stringify({ v: 5, id: request["id"], err: { class: "daemon", code: "relay_refused", msg: "the relay refuses health", recover: "" } }) + "\n");
         continue;
       }
       if (request !== null && request["method"] === "session.list" && options.emptySessionListFlag !== undefined && existsSync(options.emptySessionListFlag)) {

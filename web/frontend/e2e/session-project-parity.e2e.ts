@@ -5,6 +5,7 @@ import {
   FIXTURE_LOCAL_NATIVE_ACTIVITY,
   FIXTURE_LOCAL_RECOVERY_ID,
   FIXTURE_LOCAL_SESSION_ID,
+  FIXTURE_LOCAL_STOPPED_SESSION_ID,
   FIXTURE_OWNED_WORKTREE_PATH,
   FIXTURE_PEER_HOST,
 } from "../../scripts/fixture-stack";
@@ -33,28 +34,11 @@ test("manages a session lifecycle and keeps observed sessions read-only", async 
   await expect(inspector).toContainText("work_item");
   await inspector.getByRole("button", { name: "Close session details" }).click();
 
-  await page.getByRole("button", { name: "Fork", exact: true }).click();
-  const fork = page.getByRole("dialog", { name: "Fork session" });
-  await fork.getByRole("textbox", { name: "Display name (optional)" }).fill("Forked browser session");
-  await fork.getByRole("spinbutton", { name: "Columns" }).fill("132");
-  await fork.getByRole("spinbutton", { name: "Rows" }).fill("43");
-  await fork.getByRole("button", { name: "Save" }).click();
-  const confirmFork = page.getByRole("dialog", { name: "Confirm fork target" });
-  await expect(confirmFork).toContainText(FIXTURE_LOCAL_RECOVERY_ID);
-  await expect(confirmFork).toContainText(FIXTURE_LOCAL_NATIVE_ACTIVITY);
-  await expect(page.getByRole("heading", { name: "Forked browser session" })).toHaveCount(0);
-  await confirmFork.getByRole("button", { name: "Fork session" }).click();
-  await expect(page.getByRole("heading", { name: "Forked browser session" })).toBeVisible();
-  const forkedRow = page.getByTestId("session-row").filter({ hasText: "Forked browser session" });
-  const forkedId = await forkedRow.getAttribute("data-session-id");
-  if (forkedId === null) throw new Error("forked fixture session has no id");
-  await page.getByRole("button", { name: "Stop", exact: true }).click();
-  await page.getByRole("dialog", { name: "Stop this session?" }).getByRole("button", { name: "Stop session" }).click();
-  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+  await page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${FIXTURE_LOCAL_STOPPED_SESSION_ID}"]`).click();
   await page.getByRole("button", { name: "Resume", exact: true }).click();
   const confirmResume = page.getByRole("dialog", { name: "Resume session?" });
-  await expect(confirmResume).toContainText(`fixture-native-${forkedId}`);
-  await expect(confirmResume.locator("dd").nth(1)).toHaveText("Unknown");
+  await expect(confirmResume).toContainText(FIXTURE_LOCAL_RECOVERY_ID);
+  await expect(confirmResume).toContainText(FIXTURE_LOCAL_NATIVE_ACTIVITY);
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await confirmResume.getByRole("button", { name: "Resume session" }).click();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
@@ -64,7 +48,7 @@ test("manages a session lifecycle and keeps observed sessions read-only", async 
 
   await page.locator(`[data-testid="session-row"][data-host="${FIXTURE_LOCAL_HOST}"][data-session-id="${FIXTURE_EXTERNAL_SESSION_ID}"]`).click();
   await expect(page.getByTestId("session-summary")).toContainText("Observe-only session");
-  for (const name of ["Open terminal", "Stop", "Resume", "Rename", "Fork", "Remove"]) {
+  for (const name of ["Open terminal", "Stop", "Resume", "Rename", "Remove"]) {
     await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
   }
 });
